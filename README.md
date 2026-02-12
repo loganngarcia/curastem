@@ -20,9 +20,7 @@
 
 # 🩵 Curastem — Omegle for mentorship
 
-**The future of mentorship lives here.**
-
-[Curastem.org](https://curastem.org) is a 501(c)(3) non-profit platform connecting students with mentors in real-time. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
+[**Curastem.org**](https://curastem.org) is a 501(c)(3) non-profit platform connecting students with mentors in real-time. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
 
 This isn't just a chatbot. It's a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
 
