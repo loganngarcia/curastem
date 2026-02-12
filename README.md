@@ -22,7 +22,7 @@
 
 **The future of mentorship lives here.**
 
-web.tsx is the heart of [Curastem.org](https://curastem.org) — a single, powerful Framer component that brings real-time mentorship to the web. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
+[Curastem.org](https://curastem.org) is a 501(c)(3) non-profit platform connecting students with mentors in real-time. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
 
 This isn't just a chatbot. It's a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
 
@@ -48,6 +48,14 @@ By making this component open source, we're inviting the world to help us scale 
 - **Collaborative tools** — Whiteboard (Tldraw), document editor, mini IDE
 - **Shareable sessions** — Unique links (`#aeb-cid-xyz`) for easy sharing
 - **Mobile-first** — Built for the devices students actually use
+
+---
+
+## About web.tsx
+
+`web.tsx` is the heart of Curastem — a single, powerful Framer component that brings our entire mentorship platform to the web. This isn't just a chatbot. It's a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
+
+Everything you see on [Curastem.org](https://curastem.org) is powered by this component. By open-sourcing it, we're inviting developers everywhere to help us build the future of accessible mentorship.
 
 ---
 
