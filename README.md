@@ -1,4 +1,4 @@
-# Curastem
+# 🩵 Curastem — Omegle for mentorship
 <img width="256" height="256" alt="Curastem org" src="https://github.com/user-attachments/assets/48317dcc-0b09-41b7-9b3a-41d4ec6ddcf1" />
 
 
@@ -8,6 +8,10 @@
 web.tsx is the heart of [Curastem](https://curastem.org) — a single, powerful Framer component that brings real-time mentorship to the web. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
 
 This isn't just a chatbot. It's a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
+
+*Pssst. Hey, you, join our stargazers ⭐️*
+
+[![GitHub stars](https://img.shields.io/github/stars/loganngarcia/curastem?style=social)](https://github.com/loganngarcia/curastem)
 
 ---
 
