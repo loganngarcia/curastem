@@ -1,7 +1,19 @@
+<p align="center">
+  <img width="256" height="256" alt="Curastem org" src="https://github.com/user-attachments/assets/48317dcc-0b09-41b7-9b3a-41d4ec6ddcf1" />
+</p>
 # 🩵 Curastem — Omegle for mentorship
-<img width="256" height="256" alt="Curastem org" src="https://github.com/user-attachments/assets/48317dcc-0b09-41b7-9b3a-41d4ec6ddcf1" />
 
-
+<p align="center">
+  <a href="https://github.com/loganngarcia/curastem/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/license-AGPL--3.0-007AFF?style=for-the-badge&labelColor=2C2C2E&color=007AFF" alt="License: AGPL-3.0" />
+  </a>
+  <a href="https://curastem.org">
+    <img src="https://img.shields.io/badge/Visit-curastem.org-007AFF?style=for-the-badge&labelColor=2C2C2E&color=007AFF" alt="Visit Curastem" />
+  </a>
+  <a href="https://linkedin.com/company/curastem">
+    <img src="https://img.shields.io/badge/Follow%20on%20LinkedIn-Curastem-007AFF?style=for-the-badge&logo=linkedin&logoColor=white&color=007AFF" alt="Follow on LinkedIn" />
+  </a>
+</p>
 
 **The future of mentorship lives here.**
 
