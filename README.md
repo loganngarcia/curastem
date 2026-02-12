@@ -1,5 +1,7 @@
 <p align="center">
-  <img width="256" height="256" alt="Curastem org" src="https://github.com/user-attachments/assets/48317dcc-0b09-41b7-9b3a-41d4ec6ddcf1" />
+  <a href="https://curastem.org">
+    <img width="256" height="256" alt="Curastem org" src="https://github.com/user-attachments/assets/48317dcc-0b09-41b7-9b3a-41d4ec6ddcf1" />
+  </a>
 </p>
 
 <p align="center">
@@ -18,7 +20,7 @@
 
 **The future of mentorship lives here.**
 
-web.tsx is the heart of [Curastem](https://curastem.org) — a single, powerful Framer component that brings real-time mentorship to the web. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
+web.tsx is the heart of [Curastem.org](https://curastem.org) — a single, powerful Framer component that brings real-time mentorship to the web. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
 
 This isn't just a chatbot. It's a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
 
@@ -83,3 +85,9 @@ Use Framer's property panel to set your API key, system prompt, accent color, an
 ---
 
 **Built with care by [Curastem](https://curastem.org). For every student who deserves a mentor.**
+
+<p align="right">
+  <a href="#">
+    <img src="https://img.shields.io/badge/Back%20to%20Top-0B87DA?style=for-the-badge&logo=arrow-up&logoColor=white&color=0B87DA" alt="Back to Top" />
+  </a>
+</p>
