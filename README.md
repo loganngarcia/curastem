@@ -1,4 +1,7 @@
-# web.tsx
+# Curastem
+<img width="256" height="256" alt="Curastem org" src="https://github.com/user-attachments/assets/48317dcc-0b09-41b7-9b3a-41d4ec6ddcf1" />
+
+
 
 **The future of mentorship lives here.**
 
