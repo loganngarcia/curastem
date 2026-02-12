@@ -1,241 +1,127 @@
-# Cursor Rules for This Repository
+# Repository Overview
 
-## Project: Framer Code Component — Gemini AI Chat Overlay
-- This repo contains a Framer code component that overlays a Gemini AI chat experience on any website/page.
-- The component supports both mobile and desktop UIs and exposes configurable props via Framer’s property panel (sidebar) for designers to toggle behavior and style without editing code.
-- The assistant should help author and refine TSX Framer components only, following the constraints below.
-
-## How to Collaborate in This Repo
-- You help create or refine Framer TSX Components.
-- Wait for the user to send a TSX file and the requested changes.
-- Respond with full, complete TSX files (not diffs) and briefly explain the reasoning behind changes.
-- Keep components self‑contained (no external npm packages beyond those listed under Allowed Libraries).
-- Favor clarity, strong typing, and Canvas/Preview safety.
-
-## Allowed Libraries and APIs
-- React core: `react`
-- React DOM (only as needed): `react-dom` (`createPortal` allowed)
-- Framer: `framer` (e.g., `addPropertyControls`, `ControlType`, `RenderTarget`, `useIsStaticRenderer`)
-- Framer Motion: `framer-motion`
-- Do NOT import any other libraries (UI kits, utilities, state managers, HTTP clients, etc.).
-
-## Component Contract (Gemini Overlay)
-- Renders a chat launcher and an overlay/sheet containing the Gemini chat UI.
-- Works in both Canvas and Preview/Export; limits heavy effects on Canvas.
-- Mobile and desktop layouts:
-  - Mobile: compact launcher, full-height sheet or bottom drawer.
-  - Desktop: floating window or side panel with resizable container.
-- Exposes property controls for: visibility, launcher position, theme, accent colors, fonts, initial greeting, default prompt, open-on-load, portal target, z-index, border radius, padding, and optional brand avatar/image.
-- Provides optional event controls (open/close events) for prototyping flows.
-- Uses percentage sizing for the root and spreads `props.style` on the root.
-- Guards all browser APIs (`window`, `document`, `localStorage`) behind runtime checks.
-- No external network requests unless explicitly requested by the user; if added, keep them optional and guarded.
-
-## Authoring Requirements (Framer Best Practices)
-- Always provide JSDoc layout annotations on the default export:
-  - `@framerIntrinsicWidth <number>`
-  - `@framerIntrinsicHeight <number>`
-  - `@framerSupportedLayoutWidth fixed|any|any-prefer-fixed|auto`
-  - `@framerSupportedLayoutHeight fixed|any|any-prefer-fixed|auto`
-- Implement property controls with `addPropertyControls(Component, {...})` using `defaultValue` (never React `defaultProps`).
-- Prefer `useIsStaticRenderer()` to skip heavy effects/animations on canvas.
-- Use `RenderTarget.current()` to adapt behavior for `canvas`, `preview`, `export`, `thumbnail`.
-- Wrap non-urgent state updates in `startTransition` where useful.
-- Keep root element `position: "relative"`, `width: "100%"`, `height: "100%"`, `overflow: "hidden"` unless a portal is intentionally used.
-- Maintain accessibility: semantic elements, ARIA labels, focus management, and keyboard navigation for open/close.
-
-## Recommended Property Controls (Gemini Overlay)
-- **Visibility**: `ControlType.Boolean` — show/hide overlay.
-- **UI Mode**: `ControlType.Enum` — "mobile" | "desktop".
-- **Launcher position**: `ControlType.Enum` — bottom-right/left, top-right/left.
-- **Theme**: `ControlType.Enum` — light/dark/system.
-- **Colors**: `ControlType.Color` for background, text, accent.
-- **Fonts**: `ControlType.Font` for title/body.
-- **Text**: `ControlType.String` for launcher label, greeting, placeholder.
-- **Numbers**: `ControlType.Number` for width/height (desktop), border radius, padding, z-index.
-- **Images**: `ControlType.ResponsiveImage` for avatar/brand mark.
-- **Boolean toggles**: openOnLoad, closeOnOutsideClick, showBranding, showMinimized, showShadow.
-- **Portal target**: `ControlType.Enum` — "local" | "document.body" (when using `createPortal`).
-- **Optional events**: `ControlType.EventHandler` — onOpen, onClose (for prototyping only).
-
-## Example Skeleton (Keep self-contained)
-```tsx
-import React, { useEffect, useMemo, useState, useCallback, startTransition } from "react"
-import { addPropertyControls, ControlType, RenderTarget, useIsStaticRenderer } from "framer"
-import { motion, AnimatePresence } from "framer-motion"
-
-interface GeminiOverlayProps {
-	visible?: boolean
-	mode?: "mobile" | "desktop"
-	position?: "bottom-right" | "bottom-left" | "top-right" | "top-left"
-	background?: string
-	textColor?: string
-	accent?: string
-	titleFont?: any
-	bodyFont?: any
-	launcherLabel?: string
-	greeting?: string
-	placeholder?: string
-	widthDesktop?: number
-	heightDesktop?: number
-	radius?: number
-	zIndex?: number
-	openOnLoad?: boolean
-	usePortal?: "local" | "document.body"
-	style?: React.CSSProperties
-}
-
-/**
- * GeminiChatOverlay — Drops a Gemini AI chat overlay with mobile/desktop UIs.
- *
- * @framerIntrinsicWidth 360
- * @framerIntrinsicHeight 640
- * @framerSupportedLayoutWidth any
- * @framerSupportedLayoutHeight any
- */
-export default function GeminiChatOverlay(props: GeminiOverlayProps) {
-	const isStatic = useIsStaticRenderer()
-	const {
-		visible = true,
-		mode = "desktop",
-		position = "bottom-right",
-		background = "#FFFFFF",
-		textColor = "#000000",
-		accent = "#0EA5E9",
-		launcherLabel = "Ask AI",
-		greeting = "Hi! How can I help?",
-		placeholder = "Type a question…",
-		widthDesktop = 420,
-		heightDesktop = 640,
-		radius = 16,
-		zIndex = 1000,
-		openOnLoad = false,
-		style,
-	} = props
-
-	const [open, setOpen] = useState(openOnLoad)
-
-	useEffect(() => {
-		if (typeof window === "undefined") return
-		// Initialize overlay state if needed; avoid heavy work on canvas
-	}, [])
-
-	const isCanvas = RenderTarget.current() === RenderTarget.canvas
-	const containerStyle: React.CSSProperties = {
-		...style,
-		position: "relative",
-		width: "100%",
-		height: "100%",
-	}
-
-	const floatingStyle: React.CSSProperties = {
-		position: "fixed",
-		[(position.includes("bottom") ? "bottom" : "top") as "bottom" | "top"]: 20,
-		[(position.includes("right") ? "right" : "left") as "right" | "left"]: 20,
-		width: mode === "desktop" ? widthDesktop : Math.min(420, typeof window !== "undefined" ? window.innerWidth - 24 : 360),
-		height: mode === "desktop" ? heightDesktop : Math.min(640, typeof window !== "undefined" ? window.innerHeight - 24 : 640),
-		borderRadius: radius,
-		background,
-		color: textColor,
-		boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-		overflow: "hidden",
-		zIndex,
-	}
-
-	const handleToggle = useCallback(() => {
-		startTransition(() => setOpen(v => !v))
-	}, [])
-
-	return (
-		<div style={containerStyle}>
-			{/* Launcher */}
-			<button aria-expanded={open} onClick={handleToggle} style={{ position: "absolute", right: 12, bottom: 12, background: accent, color: "#fff", border: 0, borderRadius: 999, padding: "10px 14px", cursor: "pointer" }}>
-				{launcherLabel}
-			</button>
-
-			{/* Overlay (hidden on canvas to keep it light if desired) */}
-			<AnimatePresence>
-				{!isCanvas && visible && open && (
-					<motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} transition={{ type: "spring", stiffness: 320, damping: 28 }} style={floatingStyle} role="dialog" aria-label="Gemini chat">
-						{/* Replace with actual Gemini chat UI/integration when provided */}
-						<div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%" }}>
-							<header style={{ padding: 12, fontWeight: 600 }}>Gemini</header>
-							<div style={{ flex: 1, padding: 12 }}>
-								<p>{greeting}</p>
-							</div>
-							<footer style={{ padding: 12, borderTop: "1px solid rgba(0,0,0,0.06)" }}>
-								<input aria-label="Message" placeholder={placeholder} style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(0,0,0,0.15)" }} />
-							</footer>
-						</div>
-					</motion.div>
-				)}
-			</AnimatePresence>
-		</div>
-	)
-}
-
-addPropertyControls(GeminiChatOverlay, {
-	visible: { type: ControlType.Boolean, title: "Visible", defaultValue: true },
-	mode: { type: ControlType.Enum, title: "UI Mode", options: ["mobile", "desktop"], optionTitles: ["Mobile", "Desktop"], defaultValue: "desktop" },
-	position: { type: ControlType.Enum, title: "Position", options: ["bottom-right", "bottom-left", "top-right", "top-left"], optionTitles: ["Bottom Right", "Bottom Left", "Top Right", "Top Left"], defaultValue: "bottom-right" },
-	background: { type: ControlType.Color, title: "Background", defaultValue: "#FFFFFF" },
-	textColor: { type: ControlType.Color, title: "Text", defaultValue: "#000000" },
-	accent: { type: ControlType.Color, title: "Accent", defaultValue: "#0EA5E9" },
-	launcherLabel: { type: ControlType.String, title: "Launcher Label", defaultValue: "Ask AI" },
-	greeting: { type: ControlType.String, title: "Greeting", defaultValue: "Hi! How can I help?" },
-	placeholder: { type: ControlType.String, title: "Input Placeholder", defaultValue: "Type a question…" },
-	widthDesktop: { type: ControlType.Number, title: "Width (Desktop)", defaultValue: 420, min: 280, max: 960, step: 10, unit: "px" },
-	heightDesktop: { type: ControlType.Number, title: "Height (Desktop)", defaultValue: 640, min: 320, max: 1200, step: 10, unit: "px" },
-	radius: { type: ControlType.Number, title: "Radius", defaultValue: 16, min: 0, max: 48, step: 1, unit: "px" },
-	zIndex: { type: ControlType.Number, title: "Z Index", defaultValue: 1000, min: 0, max: 999999, step: 1 },
-	openOnLoad: { type: ControlType.Boolean, title: "Open on Load", defaultValue: false },
-})
-```
-
-## Reference Snippets for Property Controls
-```tsx
-addPropertyControls(MyComponent, {
-	// Basics
-	text: { type: ControlType.String, title: "Text", defaultValue: "Hello" },
-	number: { type: ControlType.Number, title: "Size", defaultValue: 16, min: 0, max: 100, step: 1, unit: "px" },
-	toggle: { type: ControlType.Boolean, title: "Enabled", defaultValue: true },
-	color: { type: ControlType.Color, title: "Color", defaultValue: "#000000" },
-	image: { type: ControlType.ResponsiveImage, title: "Image" },
-	option: { type: ControlType.Enum, title: "Option", options: ["one", "two"], optionTitles: ["One", "Two"], defaultValue: "one" },
-	font: { type: ControlType.Font, title: "Font", controls: "extended", defaultFontType: "sans-serif", defaultValue: { fontSize: 16, lineHeight: 1.4, letterSpacing: 0, textAlign: "left", variant: "Regular" } },
-	// Conditional example
-	conditionalProp: { type: ControlType.String, title: "Conditional", defaultValue: "", hidden: (p: any) => !p.toggle },
-})
-```
-
-## Canvas/Preview Safety
-- Use `useIsStaticRenderer()` to avoid running animations/effects on Canvas.
-- Check `RenderTarget.current()` to branch logic per environment.
-- Guard browser APIs: wrap in `if (typeof window !== "undefined") { ... }`.
-- Prefer simpler DOM on Canvas; render full experience in Preview/Export.
-
-## Styling
-- Spread `props.style` into the root element.
-- Prefer multi-line styles and readable variables.
-- Avoid `position: fixed` on the root; if needed, portal the floating overlay so the component still respects layout on the Canvas.
-
-## Accessibility
-- Use semantic elements (`button`, `input`, `form`).
-- Provide labels (e.g., `aria-label` on launcher, input, and close buttons).
-- Keyboard: Space/Enter activates launcher; Esc closes overlay; focus trap while open.
-
-## What Not To Do
-- No external npm packages (UI kits, icons, utils, HTTP).
-- No `defaultProps`; always use `defaultValue` in property controls.
-- Don’t rely on Node types (e.g., `NodeJS.Timeout`); use `number`.
-- Don’t access `window`/`document` without guards.
-
-## Useful Documentation (official)
-- Framer Code Components and Property Controls: `https://www.framer.com/developers/components/`
-- Property Controls API: `https://www.framer.com/developers/components/property-controls/`
-- Render environments (RenderTarget): `https://www.framer.com/developers/components/render-target/`
-- Static rendering (useIsStaticRenderer): `https://www.framer.com/developers/components/use-is-static-renderer/`
-- Framer Motion (animations): `https://www.framer.com/motion/`
+This is a monorepo of **Framer code components** — reusable React 18 compatible TSX components that work seamlessly in the Framer canvas, preview, and published sites.
 
 ---
-These rules are intended to make it fast to iterate on the Gemini chat overlay component while staying within Framer’s constraints and Cursor’s workflow.
+
+## Code Standards
+
+All code must be maintainable for a large open-source community and meet Google-level engineering standards:
+
+- **Clarity over cleverness** — write self-documenting code with clear naming and structure
+- **Strong typing** — leverage TypeScript fully; avoid `any` when possible
+- **Self-contained** — components must work without external dependencies (beyond allowed libraries)
+- **Accessibility first** — semantic HTML, ARIA labels, keyboard navigation, focus management
+- **Canvas-safe** — guard browser APIs and heavy effects; use `useIsStaticRenderer()` for animated components
+- **Well-understood comments** — explain the "why" in comments, not just the "what"
+
+---
+
+## What is Framer and How to Build Code Components
+
+### Overview
+Framer is a design tool where designers build production websites. Code components are React/TSX components that designers can drag onto the canvas and configure through visual controls—no code editing required.
+
+### Core Requirements
+
+**JSDoc layout annotations** (always required on component export):
+- `@framerIntrinsicWidth` and `@framerIntrinsicHeight` — initial size when dropped on canvas
+- `@framerSupportedLayoutWidth` and `@framerSupportedLayoutHeight` — choose from: `auto`, `fixed`, `any`, `any-prefer-fixed`
+  - `auto` — Component dictates its own size based on content
+  - `fixed` — Component fills 100% of a fixed-size container
+  - `any` — Users can toggle between auto and fixed (default)
+  - `any-prefer-fixed` — Same as `any`, but defaults to fixed
+
+**Root element contract:**
+- Spread `props.style` onto the root (enables Framer to control sizing)
+- Use `position: "relative"`, `width: "100%"`, `height: "100%"`
+- Avoid `position: fixed` on root (use portals if needed)
+
+**Property controls:**
+- Use both `defaultValue` in `addPropertyControls()` AND `defaultProps` on your component
+- Property controls only affect canvas; `defaultProps` are for development and non-canvas usage
+- Available control types: `Boolean`, `String`, `Number`, `Color`, `Enum`, `ResponsiveImage`, `Font`, `Padding`, `BorderRadius`, `BoxShadow`, `Date`, `File`, `ComponentInstance`, `EventHandler`, `Transition`, `Link`, `Array`, `Object`, `Border`
+
+### Allowed Libraries (self-contained only)
+- `react` — React core
+- `react-dom` — DOM utilities (e.g., `createPortal`)
+- `framer` — Framer APIs (`addPropertyControls`, `ControlType`, `RenderTarget`, `useIsStaticRenderer`, `useLocaleInfo`)
+- `framer-motion` — Animation library
+
+**No other imports allowed** (no UI kits, icon libraries, HTTP clients, state managers, etc.)
+
+### Environment Detection & Safety
+
+**Multiple render contexts:**
+- `RenderTarget.canvas` — Framer's design editor
+- `RenderTarget.preview` — Live preview or published site
+- `RenderTarget.export` — Export canvas
+- `RenderTarget.thumbnail` — Project thumbnails
+
+**For animated components (WebGL, heavy animations):**
+- Use `useIsStaticRenderer()` — ensures component is static on BOTH Canvas AND Export
+- Prevents performance issues and export problems like unwanted tiling
+
+**For general environment detection:**
+- Use `RenderTarget.current()` to check which context you're in
+
+**Guard browser APIs:**
+- Never access `window`, `document`, or `navigator` during render
+- Always wrap browser API calls inside `useEffect` (runs only client-side)
+- Use `typeof window !== "undefined"` checks before accessing browser APIs
+
+### Common Pitfalls
+
+**Most common error — useEffect returning non-function values:**
+- Arrow functions without curly braces unintentionally return values and cause crashes
+- Always wrap function bodies in curly braces
+
+**Server-side rendering issues:**
+- Never access browser APIs during render (causes optimization failures)
+- Use CSS media queries instead of `window.innerWidth` for responsive behavior
+- Move all browser API calls inside `useEffect`
+
+**Performance optimization:**
+- Use `useMemo` and `useCallback` to prevent unnecessary re-renders
+- Use CSS transforms (`translateX`, `scale`) instead of position changes for animations
+- Only use code components when native Framer layers can't achieve the same result
+- Consolidate multiple event listeners using event delegation
+
+**Dynamic auto-sizing:**
+- Use `useLayoutEffect` (not `useEffect`) for auto-sizing based on state changes
+- Framer's measuring system works best with `useLayoutEffect`
+
+**Measuring component size:**
+- Use `useMeasuredSize` from `https://framer.com/m/framer/useMeasuredSize.js`
+- Warning: impacts performance, use sparingly
+
+### Additional Features
+
+**Localization:**
+- Use `useLocaleInfo()` to access and set locale information
+
+**Event Handlers:**
+- Use `ControlType.EventHandler` to expose events in Smart Components for prototyping interactions
+
+**Error Handling:**
+- Code Boundaries (since March 2025) automatically isolate component errors
+- Components that error are hidden instead of crashing the entire site
+- Overrides with errors are disabled and the original frame renders
+
+### Troubleshooting
+
+**Finding broken components:**
+- Check browser console for `code-crash` identifier
+- Paste identifier into Quick Actions (CMD+K / CTRL+K) to locate the component
+
+**Optimization errors:**
+- If component fails during site optimization, it will retry on page load
+- Common cause: accessing browser APIs during server-side rendering
+- Solution: Move browser API calls into `useEffect` or use placeholders
+
+### Resources
+- [Code Components Introduction](https://www.framer.com/developers/components-introduction)
+- [Property Controls](https://www.framer.com/developers/property-controls)
+- [API Reference](https://www.framer.com/developers/components-reference)
+- [Auto-Sizing](https://www.framer.com/developers/auto-sizing)
+- [Framer Motion](https://motion.dev/docs/framer)

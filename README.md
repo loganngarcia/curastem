@@ -1,96 +1,65 @@
-# Framer Chatbot
-<img width="1026" height="228" alt="45792" src="https://github.com/user-attachments/assets/02647b66-eac1-4f04-a105-42c52130db80" />
+# web.tsx
 
-A Framer component that brings Google's Gemini AI chatbot to your designs with a beautiful, customizable interface.
+**The future of mentorship lives here.**
 
-## Features
+web.tsx is the heart of [Curastem](https://curastem.org) — a single, powerful Framer component that brings real-time mentorship to the web. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
 
-- **AI-Powered Chat**: Powered by Google's Gemini models with streaming responses
-- **Multimodal Input**: Text, image, video, audio, and file upload support
-- **Rich Interactions**: Markdown rendering, text-to-speech, and copy functions
-- **Mobile Optimized**: Touch-friendly with gesture controls
-- **Fully Customizable**: Colors, fonts, animations, and layout
-- **Framer Native**: Seamless integration with Framer's design tools
+This isn't just a chatbot. It's a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
 
-## Quick Start
+---
 
-### 1. Get API Key
+## Why This Matters
+
+Millions of students struggle to find guidance. They don't know where to start with FAFSA, how to write a resume, or how to prepare for college applications. Mentorship has always been gatekept. **Curastem changes that.**
+
+By making this component open source, we're inviting the world to help us scale what works. Every improvement, every fix, every new feature makes mentorship more accessible. That's the mission.
+
+---
+
+## What's Inside
+
+- **Real-time video mentorship** — Connect students with mentors instantly
+- **Gemini AI integration** — Smart, contextual help 24/7
+- **Voice-in, voice-out** — Talk to AI naturally with Gemini Live
+- **Collaborative tools** — Whiteboard (Tldraw), document editor, mini IDE
+- **Shareable sessions** — Unique links (`#aeb-cid-xyz`) for easy sharing
+- **Mobile-first** — Built for the devices students actually use
+
+---
+
+## Join the Community
+
+This project thrives on contributors. Whether you're fixing a bug, improving accessibility, adding a feature, or just telling someone about it — you're part of something bigger.
+
+- **Found a bug?** Open an issue.
+- **Have an idea?** Start a discussion.
+- **Want to contribute?** Check open issues, read the code, and open a PR.
+- **Using it in your project?** We'd love to hear about it.
+
+Curastem is a 501(c)(3) non-profit. Everything we build is for the students who need it most.
+
+---
+
+## Get Started
+
+### 1. Get a Gemini API key
+
 Visit [Google AI Studio](https://aistudio.google.com/apikey) and create an API key.
 
-### 2. Add to Framer
-Copy `gemini.tsx` to your Framer project's components directory.
+### 2. Add to your Framer project
 
-### 3. Basic Usage
-```tsx
-import ChatOverlay from "./gemini"
+Copy `web.tsx` into your Framer project's components directory.
 
-<ChatOverlay
-  geminiApiKey="your-api-key-here"
-  systemPrompt="You are a helpful assistant."
-  welcomeMessage="Hi! How can I help you today?"
-/>
-```
+### 3. Configure and ship
 
-## Props
+Use Framer's property panel to set your API key, system prompt, accent color, and default suggestions. Drop the component onto your page and publish.
 
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| `geminiApiKey` | string | - | Your Gemini API key (required) |
-| `model` | string | "gemini-2.5-flash-lite" | Gemini model ID |
-| `reasoningEffort` | enum | "none" | AI thinking depth: "none", "low", "medium", "high" |
-| `systemPrompt` | string | "You are a helpful assistant." | AI personality and behavior instructions |
-| `welcomeMessage` | string | "Hi, how can I help?" | Initial greeting message |
-| `placeholder` | string | "Ask anything" | Input field placeholder |
-| `enableAiSuggestions` | boolean | true | Generate AI contextual reply suggestions |
-| `suggestedReply1` | string | "Quick facts" | First static suggested reply |
-| `suggestedReply2` | string | "Proven metrics" | Second static suggested reply |
-| `suggestedReply3` | string | "Contact" | Third static suggested reply |
-| `enableScrollReveal` | boolean | true | Scale input bar in from bottom on scroll |
-| `universalBorderRadius` | number | 24 | Corner radius for all elements (0-50px) |
-| `textFont` | font | Inter, 16px | Font family, size, weight, and style |
-| `textColor` | color | rgba(0,0,0,0.95) | Text color for input and messages |
-| `placeholderTextColor` | color | rgba(0,0,0,0.45) | Placeholder text color |
-| `linkColor` | color | #007AFF | Hyperlink color |
-| `iconColor` | color | rgba(0,0,0,0.65) | General icon color |
-| `userMessageBackgroundColor` | color | rgba(0,20,41,0.08) | User message bubble background |
-| `chatAreaBackground` | color | #F5F5F5 | Main chat area background |
-| `inputBarBackground` | color | rgba(255,255,255,0.70) | Collapsed input bar background |
-| `expandedInputAreaBackground` | color | rgba(255,255,255,0.95) | Expanded input area background |
-| `sendBgColor` | color | rgba(0,0,0,0.95) | Send button background color |
-| `sendIconColor` | color | #FFFFFF | Send button icon color |
-| `shadow` | boolean | true | Enable/disable shadows |
-| `sendIconOverrideUrl` | image | - | Custom send button icon |
-| `loadingIconOverrideUrl` | image | - | Custom loading indicator icon |
-
-## Advanced Usage
-
-### Customer Support Bot
-```tsx
-<ChatOverlay
-  geminiApiKey="your-api-key"
-  systemPrompt="You are a customer support assistant for TechCorp."
-  welcomeMessage="Welcome to TechCorp Support!"
-  suggestedReply1="Check order status"
-  suggestedReply2="Return an item"
-/>
-```
-
-### Educational Assistant
-```tsx
-<ChatOverlay
-  geminiApiKey="your-api-key"
-  systemPrompt="You are an educational assistant specializing in mathematics."
-  model="gemini-2.5-flash-lite"
-  reasoningEffort="medium"
-/>
-```
-
-## Requirements
-
-- Framer account
-- Google Gemini API key
-- Modern browser with JavaScript enabled
+---
 
 ## License
 
-Provided as-is for use in Framer projects. Comply with Google's Gemini API terms of service.
+[AGPL-3.0](LICENSE) — Free to use, modify, and distribute. If you modify it and run it on a server, you must share your source. That's how we keep mentorship open for everyone.
+
+---
+
+**Built with care by [Curastem](https://curastem.org). For every student who deserves a mentor.**
