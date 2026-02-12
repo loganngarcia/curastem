@@ -1,3 +1,5 @@
+<a name="top"></a>
+
 <p align="center">
   <a href="https://curastem.org">
     <img width="256" height="256" alt="Curastem org" src="https://github.com/user-attachments/assets/48317dcc-0b09-41b7-9b3a-41d4ec6ddcf1" />
@@ -86,4 +88,4 @@ Use Framer's property panel to set your API key, system prompt, accent color, an
 
 **Built with care by [Curastem](https://curastem.org). For every student who deserves a mentor.**
 
-<a href="#" onclick="window.scrollTo({top: 0, behavior: 'smooth'}); return false;" style="position: fixed; bottom: 20px; right: 20px; background: #0B87DA; color: white; padding: 10px 15px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">↑ Back to top</a>
+<a href="#top" style="position: fixed; bottom: 20px; right: 20px; background: #0B87DA; color: white; padding: 10px 15px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">↑ Back to top</a>
