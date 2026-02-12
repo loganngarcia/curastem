@@ -3,14 +3,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/loganngarcia/curastem/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-AGPL--3.0-FF6B35?style=for-the-badge&labelColor=2C2C2E&color=FF6B35" alt="License: AGPL-3.0" />
-  </a>
   <a href="https://curastem.org">
-    <img src="https://img.shields.io/badge/Visit-curastem.org-0B87DA?style=for-the-badge&labelColor=2C2C2E&color=0B87DA" alt="Visit Curastem" />
+    <img src="https://img.shields.io/badge/Website-curastem.org-0B87DA?style=for-the-badge&labelColor=2C2C2E&color=0B87DA" alt="Website" />
   </a>
   <a href="https://linkedin.com/company/curastem">
     <img src="https://img.shields.io/badge/Follow%20on%20LinkedIn-Curastem-0077B5?style=for-the-badge&logo=linkedin&logoColor=white&color=0077B5" alt="Follow on LinkedIn" />
+  </a>
+  <a href="https://github.com/loganngarcia/curastem/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/license-AGPL--3.0-D97757?style=for-the-badge&labelColor=2C2C2E&color=D97757" alt="License: AGPL-3.0" />
   </a>
 </p>
 
