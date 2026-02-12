@@ -24,7 +24,7 @@
 
 This isn't just a chatbot. It's a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
 
-*Pssst. Hey, you, join our stargazers ⭐️*
+*Psssst. Hey, you, join our stargazers ⭐️*
 
 [![GitHub stars](https://img.shields.io/github/stars/loganngarcia/curastem?style=social)](https://github.com/loganngarcia/curastem)
 
@@ -44,7 +44,7 @@ By making this component open source, we're inviting the world to help us scale 
 - **Gemini AI integration** — Smart, contextual help 24/7
 - **Voice-in, voice-out** — Talk to AI naturally with Gemini Live
 - **Collaborative tools** — Whiteboard (Tldraw), document editor, mini IDE
-- **Shareable sessions** — Unique links (`#aeb-cid-xyz`) for easy sharing
+- **Shareable sessions** — Unique links (`#ilo-vey-ou!`) for easy sharing
 - **Mobile-first** — Built for the devices students actually use
 
 ---
