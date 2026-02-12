@@ -86,8 +86,4 @@ Use Framer's property panel to set your API key, system prompt, accent color, an
 
 **Built with care by [Curastem](https://curastem.org). For every student who deserves a mentor.**
 
-<p align="right">
-  <a href="#">
-    <img src="https://img.shields.io/badge/Back%20to%20Top-0B87DA?style=for-the-badge&logo=arrow-up&logoColor=white&color=0B87DA" alt="Back to Top" />
-  </a>
-</p>
+<a href="#" onclick="window.scrollTo({top: 0, behavior: 'smooth'}); return false;" style="position: fixed; bottom: 20px; right: 20px; background: #0B87DA; color: white; padding: 10px 15px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">↑ Back to top</a>
