@@ -5529,7 +5529,7 @@ const ChatInput = React.memo(function ChatInput({
                         >
                             {isDocOpen || isWhiteboardOpen
                                 ? "Invite people"
-                                : "Invite people to join call"}
+                                : "Invite people to group call"}
                         </div>
                         <div
                             data-layer="description"
@@ -21943,8 +21943,15 @@ PREFERENCES:
                                 >
                                     <div
                                         data-svg-wrapper
-                                        data-layer="icon-wrapper"
-                                        className="IconWrapper"
+                                        data-layer="new chat icon"
+                                        className="NewChatIcon"
+                                        style={{
+                                            width: 16,
+                                            minWidth: 16,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                        }}
                                     >
                                         <svg
                                             width="16"
@@ -21966,14 +21973,14 @@ PREFERENCES:
                                         </svg>
                                     </div>
                                     <div
-                                        data-layer="New chat"
-                                        className="NewChat"
+                                        data-layer="new chat label"
+                                        className="NewChatLabel"
                                         style={{
                                             flex: "1 1 0",
                                             justifyContent: "center",
                                             display: "flex",
                                             flexDirection: "column",
-                                            color: "${themeColors.text.primary}",
+                                            color: themeColors.text.primary,
                                             fontSize: 14,
                                             fontFamily: "Inter",
                                             fontWeight: "400",
@@ -21985,8 +21992,8 @@ PREFERENCES:
                                     </div>
                                 </div>
                                 <div
-                                    data-layer="new chat"
-                                    className="NewChat"
+                                    data-layer="group call"
+                                    className="GroupCall"
                                     tabIndex={isSidebarOpen ? 10 + suggestionCount : undefined}
                                     aria-label={
                                         isMobileLayout
@@ -22060,21 +22067,26 @@ PREFERENCES:
                                 >
                                     <div
                                         data-svg-wrapper
-                                        data-layer="icon-wrapper"
-                                        className="IconWrapper"
+                                        data-layer="group call icon"
+                                        className="GroupCallIcon"
+                                        style={{
+                                            width: 16,
+                                            minWidth: 16,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                        }}
                                     >
                                         <svg
                                             width="16"
-                                            height="18"
-                                            viewBox="0 0 16 18"
+                                            height="16"
+                                            viewBox="0 0 17 16"
                                             fill="none"
                                             xmlns="http://www.w3.org/2000/svg"
                                         >
                                             <path
-                                                d="M0.90625 16.6C1.15799 11.6536 5.40086 9.45122 9.20677 9.99276M9.36 13.7048H15.0923M12.3708 10.8677V16.6M11.5346 4.0622C11.5346 2.17646 9.95814 0.600006 8.0724 0.600006C6.18665 0.600006 4.6102 2.17646 4.6102 4.0622C4.6102 5.94794 6.18665 7.52439 8.0724 7.52439C9.95814 7.52439 11.5346 5.94794 11.5346 4.0622Z"
-                                                stroke={
-                                                    themeColors.text.primary
-                                                }
+                                                d="M0.601562 11.75V4.25C0.601562 3.71957 0.812276 3.21086 1.18735 2.83579C1.56242 2.46071 2.07113 2.25 2.60156 2.25H8.10156C8.632 2.25 9.1407 2.46071 9.51578 2.83579C9.89085 3.21086 10.1016 3.71957 10.1016 4.25V11.75C10.1016 12.2804 9.89085 12.7891 9.51578 13.1642C9.1407 13.5393 8.632 13.75 8.10156 13.75H2.60156C2.07113 13.75 1.56242 13.5393 1.18735 13.1642C0.812276 12.7891 0.601562 12.2804 0.601562 11.75ZM14.7696 2.991L10.7696 6.554C10.7168 6.60081 10.6746 6.65825 10.6457 6.72253C10.6167 6.78682 10.6017 6.8565 10.6016 6.927V8.705C10.6017 8.7755 10.6167 8.84518 10.6457 8.90947C10.6746 8.97375 10.7168 9.03119 10.7696 9.078L14.7696 12.641C14.8416 12.705 14.9307 12.7468 15.0259 12.7614C15.1212 12.776 15.2187 12.7627 15.3066 12.7232C15.3945 12.6837 15.4691 12.6196 15.5214 12.5386C15.5738 12.4577 15.6016 12.3634 15.6016 12.267V3.365C15.6016 3.26862 15.5738 3.17429 15.5214 3.09335C15.4691 3.01242 15.3945 2.94834 15.3066 2.90882C15.2187 2.86931 15.1212 2.85604 15.0259 2.87062C14.9307 2.8852 14.8416 2.927 14.7696 2.991Z"
+                                                stroke={themeColors.text.primary}
                                                 strokeOpacity="0.95"
                                                 strokeWidth="1.2"
                                                 strokeLinecap="round"
@@ -22083,14 +22095,14 @@ PREFERENCES:
                                         </svg>
                                     </div>
                                     <div
-                                        data-layer="Add people"
-                                        className="AddPeople"
+                                        data-layer="group call label"
+                                        className="GroupCallLabel"
                                         style={{
                                             flex: "1 1 0",
                                             justifyContent: "center",
                                             display: "flex",
                                             flexDirection: "column",
-                                            color: "${themeColors.text.primary}",
+                                            color: themeColors.text.primary,
                                             fontSize: 14,
                                             fontFamily: "Inter",
                                             fontWeight: "400",
@@ -22098,11 +22110,11 @@ PREFERENCES:
                                             wordWrap: "break-word",
                                         }}
                                     >
-                                        Add people
+                                        Group call
                                     </div>
                                 </div>
                                 <div
-                                    data-layer="You"
+                                    data-layer="you"
                                     className="You"
                                     tabIndex={isSidebarOpen ? 11 + suggestionCount : undefined}
                                     aria-label="Open your profile settings"
@@ -22134,21 +22146,26 @@ PREFERENCES:
                                 >
                                     <div
                                         data-svg-wrapper
-                                        data-layer="icon-wrapper"
-                                        className="IconWrapper"
+                                        data-layer="you icon"
+                                        className="YouIcon"
+                                        style={{
+                                            width: 16,
+                                            minWidth: 16,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                        }}
                                     >
                                         <svg
-                                            width="17"
-                                            height="17"
-                                            viewBox="0 0 17 17"
+                                            width="16"
+                                            height="18"
+                                            viewBox="0 0 16 18"
                                             fill="none"
                                             xmlns="http://www.w3.org/2000/svg"
                                         >
                                             <path
-                                                d="M8.05538 16.1C9.6313 10.5447 10.2524 11.0933 15.5064 8.3493C9.98573 5.51695 9.55693 5.83813 8.05538 0.600006C6.47805 6.15528 5.85559 5.60536 0.601562 8.3493C6.1166 11.1803 6.55663 10.8745 8.05538 16.1Z"
-                                                stroke={
-                                                    themeColors.text.primary
-                                                }
+                                                d="M0.820312 16.6C1.07206 11.6536 5.31492 9.45122 9.12084 9.99276M6.88031 9.99276C10.6862 9.45122 14.9291 11.6536 15.1808 16.6M11.4487 4.0622C11.4487 2.17646 9.8722 0.600006 7.98646 0.600006C6.10072 0.600006 4.52427 2.17646 4.52427 4.0622C4.52427 5.94794 6.10072 7.52439 7.98646 7.52439C9.8722 7.52439 11.4487 5.94794 11.4487 4.0622Z"
+                                                stroke={themeColors.text.primary}
                                                 strokeOpacity="0.95"
                                                 strokeWidth="1.2"
                                                 strokeLinecap="round"
@@ -22157,14 +22174,14 @@ PREFERENCES:
                                         </svg>
                                     </div>
                                     <div
-                                        data-layer="You"
-                                        className="You"
+                                        data-layer="you label"
+                                        className="YouLabel"
                                         style={{
                                             flex: "1 1 0",
                                             justifyContent: "center",
                                             display: "flex",
                                             flexDirection: "column",
-                                            color: "${themeColors.text.primary}",
+                                            color: themeColors.text.primary,
                                             fontSize: 14,
                                             fontFamily: "Inter",
                                             fontWeight: "400",
