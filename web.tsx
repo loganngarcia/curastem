@@ -19743,13 +19743,24 @@ PREFERENCES:
                                                         : themeColors.surface
                                             }}
                                             onFocus={(e) => {
-                                                e.currentTarget.style.outline = `1px solid ${themeColors.semantic.accent}`
-                                                e.currentTarget.style.outlineOffset = "2px"
-                                                e.currentTarget.style.boxShadow = `0 0 0 1px ${themeColors.text.primary}`
+                                                // Only show focus ring for keyboard navigation (Tab), not mouse click
+                                                requestAnimationFrame(() => {
+                                                    if (
+                                                        e.currentTarget.matches(
+                                                            ":focus-visible"
+                                                        )
+                                                    ) {
+                                                        e.currentTarget.style.outline = `1px solid ${themeColors.semantic.accent}`
+                                                        e.currentTarget.style.outlineOffset = "2px"
+                                                        e.currentTarget.style.boxShadow = `0 0 0 1px ${themeColors.text.primary}`
+                                                    }
+                                                })
                                             }}
                                             onBlur={(e) => {
-                                                e.currentTarget.style.outline = "none"
-                                                e.currentTarget.style.boxShadow = "none"
+                                                e.currentTarget.style.outline =
+                                                    "none"
+                                                e.currentTarget.style.boxShadow =
+                                                    "none"
                                             }}
                                         >
                                             <div
