@@ -33,11 +33,41 @@ import {
 // -----------------------------------------------------------------------------
 // Constants for Gemini Live
 // -----------------------------------------------------------------------------
-const SUGGESTION_MODEL_ID = "gemini-2.5-flash-lite"
+const SUGGESTION_MODEL_ID = "gemini-3-flash-preview"
 const MODEL_OUTPUT_SAMPLE_RATE = 24000
 const INPUT_TARGET_SAMPLE_RATE = 16000
 
-/** Default skills API (Cloudflare Worker) - fetches from vercel-labs/agent-skills */
+// -----------------------------------------------------------------------------
+// Agent Skills API — Documentation for developers and LLMs
+// -----------------------------------------------------------------------------
+/**
+ * AGENT SKILLS API
+ *
+ * The Curastem component uses an external "Skills API" to fetch a catalog of
+ * mentorship skills. Each skill is a topic guide (e.g., "Create a resume",
+ * "Find scholarships") that the AI model applies when the user selects it.
+ *
+ * WHAT IT IS:
+ * - A read-only HTTP API (Cloudflare Worker) that returns JSON: [{ id, name, description, path }]
+ * - Skills are stored in a GitHub repo's skills/ directory as SKILL.md files
+ * - Default repo: loganngarcia/curastem. See agent-skills-api/README.md for full docs.
+ *
+ * HOW IT'S USED IN THIS COMPONENT:
+ * 1. User types "/" in chat input → component fetches GET {skillsApiUrl}
+ * 2. Response is cached in localStorage (key: curastem_skills_cache) to avoid repeat fetches
+ * 3. Skills appear in a searchable slash-command menu
+ * 4. User selects one or more skills (e.g., "Create a resume")
+ * 5. On send, selected skills are injected into the message as context:
+ *    [Skill: Create a resume - Write and format resumes...]
+ *    {user message}
+ * 6. The AI model (Gemini) receives this and applies the skill's workflow
+ *
+ * PROPERTY: skillsApiUrl — Framer prop. Override to use your own Skills API Worker.
+ *
+ * EXPECTED API RESPONSE: Array<{ id: string; name: string; description?: string; path?: string }>
+ *
+ * Full documentation: agent-skills-api/README.md
+ */
 const DEFAULT_SKILLS_API_URL =
     "https://agent-skills-api.logangarcia102.workers.dev"
 
@@ -1628,7 +1658,11 @@ interface Props {
     defaultSuggestions?: string[]
 }
 
-/** Agent skill object (from skills API / vercel-labs/agent-skills) */
+/**
+ * Agent skill — catalog item from Skills API.
+ * API returns { id, name, description?, path? }; we map to this shape with
+ * object: "skill" and placeholder version/created_at for compatibility.
+ */
 interface AgentSkill {
     id: string
     object: "skill"
@@ -4997,7 +5031,7 @@ interface ChatInputProps {
     showAddPeopleOverlay?: boolean
     setShowAddPeopleOverlay?: (show: boolean) => void
     children?: React.ReactNode
-    /** Skills API URL (Cloudflare Worker). Defaults to agent-skills-api. */
+    /** Skills API URL — Cloudflare Worker returning skill catalog. See agent-skills-api/README.md. */
     skillsApiUrl?: string
     /** Skills selected to attach to the next message */
     selectedSkills?: Array<{ id: string; name: string; description?: string }>
@@ -24554,7 +24588,7 @@ addPropertyControls(OmegleMentorshipUI, {
         type: ControlType.String,
         title: "Skills API URL",
         description:
-            "Cloudflare Worker URL for agent skills. Defaults to agent-skills-api.",
+            "URL of the Agent Skills API (Cloudflare Worker). Returns a catalog of mentorship skills for the slash-command menu. See agent-skills-api/README.md.",
         defaultValue:
             "https://agent-skills-api.logangarcia102.workers.dev",
     },

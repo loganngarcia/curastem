@@ -6,7 +6,6 @@
  */
 
 const DEFAULT_REPO = "loganngarcia/curastem";
-const FALLBACK_REPO = "vercel-labs/agent-skills";
 
 function corsHeaders(origin: string | null): Record<string, string> {
   return {
@@ -97,8 +96,8 @@ export default {
       const repo = (env.SKILLS_REPO || DEFAULT_REPO).trim();
       const [owner, repoName] = repo.split("/");
       if (!owner || !repoName) throw new Error("Invalid SKILLS_REPO format; use owner/repo");
-      let GITHUB_API = `https://api.github.com/repos/${owner}/${repoName}/contents/skills`;
-      let RAW_BASE = `https://raw.githubusercontent.com/${owner}/${repoName}/main/skills`;
+      const GITHUB_API = `https://api.github.com/repos/${owner}/${repoName}/contents/skills`;
+      const RAW_BASE = `https://raw.githubusercontent.com/${owner}/${repoName}/main/skills`;
 
       const ghHeaders: Record<string, string> = {
         "User-Agent": "agent-skills-api/1.0",
@@ -107,13 +106,7 @@ export default {
       if (env.GITHUB_TOKEN) {
         ghHeaders["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
       }
-      let res = await fetch(GITHUB_API, { headers: ghHeaders });
-      if (!res.ok && res.status === 404 && repo === DEFAULT_REPO) {
-        const [fbOwner, fbRepo] = FALLBACK_REPO.split("/");
-        GITHUB_API = `https://api.github.com/repos/${fbOwner}/${fbRepo}/contents/skills`;
-        RAW_BASE = `https://raw.githubusercontent.com/${fbOwner}/${fbRepo}/main/skills`;
-        res = await fetch(GITHUB_API, { headers: ghHeaders });
-      }
+      const res = await fetch(GITHUB_API, { headers: ghHeaders });
       if (!res.ok) throw new Error(`GitHub API: ${res.status}`);
       const items = (await res.json()) as Array<{ name: string; path: string; type: string }>;
 
