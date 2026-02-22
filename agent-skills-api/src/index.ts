@@ -1,12 +1,12 @@
 /**
  * Agent Skills API - Cloudflare Worker (private)
- * Fetches skills from vercel-labs/agent-skills.
+ * Fetches skills from GitHub. Default: loganngarcia/curastem. Set SKILLS_REPO secret for "owner/repo" to override.
  * Only allows requests from origins in ALLOWED_ORIGINS secret (comma-separated).
  * No key in client = nothing exposed.
  */
 
-const GITHUB_API = "https://api.github.com/repos/vercel-labs/agent-skills/contents/skills";
-const RAW_BASE = "https://raw.githubusercontent.com/vercel-labs/agent-skills/main/skills";
+const DEFAULT_REPO = "loganngarcia/curastem";
+const FALLBACK_REPO = "vercel-labs/agent-skills";
 
 function corsHeaders(origin: string | null): Record<string, string> {
   return {
@@ -20,6 +20,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
 interface Env {
   ALLOWED_ORIGINS: string;
   GITHUB_TOKEN?: string;
+  SKILLS_REPO?: string;
 }
 
 interface Skill {
@@ -93,6 +94,12 @@ export default {
     }
 
     try {
+      const repo = (env.SKILLS_REPO || DEFAULT_REPO).trim();
+      const [owner, repoName] = repo.split("/");
+      if (!owner || !repoName) throw new Error("Invalid SKILLS_REPO format; use owner/repo");
+      let GITHUB_API = `https://api.github.com/repos/${owner}/${repoName}/contents/skills`;
+      let RAW_BASE = `https://raw.githubusercontent.com/${owner}/${repoName}/main/skills`;
+
       const ghHeaders: Record<string, string> = {
         "User-Agent": "agent-skills-api/1.0",
         Accept: "application/vnd.github.v3+json",
@@ -100,7 +107,13 @@ export default {
       if (env.GITHUB_TOKEN) {
         ghHeaders["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
       }
-      const res = await fetch(GITHUB_API, { headers: ghHeaders });
+      let res = await fetch(GITHUB_API, { headers: ghHeaders });
+      if (!res.ok && res.status === 404 && repo === DEFAULT_REPO) {
+        const [fbOwner, fbRepo] = FALLBACK_REPO.split("/");
+        GITHUB_API = `https://api.github.com/repos/${fbOwner}/${fbRepo}/contents/skills`;
+        RAW_BASE = `https://raw.githubusercontent.com/${fbOwner}/${fbRepo}/main/skills`;
+        res = await fetch(GITHUB_API, { headers: ghHeaders });
+      }
       if (!res.ok) throw new Error(`GitHub API: ${res.status}`);
       const items = (await res.json()) as Array<{ name: string; path: string; type: string }>;
 
