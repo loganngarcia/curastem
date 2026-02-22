@@ -29,6 +29,10 @@ const SUGGESTION_MODEL_ID = "gemini-2.5-flash-lite"
 const MODEL_OUTPUT_SAMPLE_RATE = 24000
 const INPUT_TARGET_SAMPLE_RATE = 16000
 
+/** Default skills API (Cloudflare Worker) - fetches from vercel-labs/agent-skills */
+const DEFAULT_SKILLS_API_URL =
+    "https://agent-skills-api.logangarcia102.workers.dev"
+
 const DEFAULT_DOC_CONTENT = `
 <h1>Welcome to Docs </h1>
 <p>You can start typing or ask Curastem to write resumes, make study guides, draft messages, and anything you can imagine </p>
@@ -1605,12 +1609,24 @@ function AdCarousel({
 
 interface Props {
     geminiApiKey: string
+    skillsApiUrl?: string
     systemPrompt: string
     accentColor: string
     model: string
     debugMode?: boolean
     showAds?: boolean
     defaultSuggestions?: string[]
+}
+
+/** Agent skill object (from skills API / vercel-labs/agent-skills) */
+interface AgentSkill {
+    id: string
+    object: "skill"
+    name: string
+    description: string
+    default_version: string
+    latest_version: string
+    created_at: number
 }
 
 interface Attachment {
@@ -4971,6 +4987,16 @@ interface ChatInputProps {
     showAddPeopleOverlay?: boolean
     setShowAddPeopleOverlay?: (show: boolean) => void
     children?: React.ReactNode
+    /** Skills API URL (Cloudflare Worker). Defaults to agent-skills-api. */
+    skillsApiUrl?: string
+    /** Skills selected to attach to the next message */
+    selectedSkills?: Array<{ id: string; name: string; description?: string }>
+    onSelectSkill?: (skill: {
+        id: string
+        name: string
+        description?: string
+    }) => void
+    onRemoveSkill?: (skillId: string) => void
 }
 
 const ChatInput = React.memo(function ChatInput({
@@ -5010,6 +5036,10 @@ const ChatInput = React.memo(function ChatInput({
     showAddPeopleOverlay: propShowAddPeopleOverlay,
     setShowAddPeopleOverlay: propSetShowAddPeopleOverlay,
     children,
+    skillsApiUrl,
+    selectedSkills = [],
+    onSelectSkill,
+    onRemoveSkill,
 }: ChatInputProps) {
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
     const [isAiTooltipHovered, setIsAiTooltipHovered] = React.useState(false)
@@ -5044,6 +5074,14 @@ const ChatInput = React.memo(function ChatInput({
     const menuRef = React.useRef<HTMLDivElement>(null)
     const [canShareScreen, setCanShareScreen] = React.useState(false)
 
+    // Skills menu (slash command: "/" or "/a" etc)
+    const [showSkillsMenu, setShowSkillsMenu] = React.useState(false)
+    const [skillsList, setSkillsList] = React.useState<AgentSkill[]>([])
+    const [skillsLoading, setSkillsLoading] = React.useState(false)
+    const [skillsError, setSkillsError] = React.useState<string | null>(null)
+    const [selectedSkillsIndex, setSelectedSkillsIndex] = React.useState(-1)
+    const skillsMenuRef = React.useRef<HTMLDivElement>(null)
+
     // Create local styles with themeColors
     const localStyles = React.useMemo(
         () => getStyles(themeColors),
@@ -5054,6 +5092,105 @@ const ChatInput = React.memo(function ChatInput({
     React.useEffect(() => {
         if (!showMenu) setSelectedMenuIndex(-1)
     }, [showMenu])
+
+    // Reset skills selection when skills menu opens/closes
+    React.useEffect(() => {
+        if (!showSkillsMenu) setSelectedSkillsIndex(-1)
+    }, [showSkillsMenu])
+
+    // Fetch skills from Skills API when slash command is active
+    const skillsQuery = value.startsWith("/") ? value.slice(1).toLowerCase() : ""
+    const filteredSkills = React.useMemo(() => {
+        if (!skillsQuery) return skillsList.slice(0, 5)
+        const q = skillsQuery.trim()
+        if (!q) return skillsList.slice(0, 5)
+        const fuzzyMatch = (text: string, query: string): boolean => {
+            let i = 0
+            for (let j = 0; j < text.length && i < query.length; j++) {
+                if (text[j] === query[i]) i++
+            }
+            return i === query.length
+        }
+        const scored = skillsList
+            .map((s) => {
+                const name = s.name.toLowerCase()
+                const desc = (s.description || "").toLowerCase()
+                const nameMatch = fuzzyMatch(name, q)
+                const descMatch = fuzzyMatch(desc, q)
+                const exactName = name.includes(q)
+                const exactDesc = desc.includes(q)
+                const score =
+                    (exactName ? 10 : nameMatch ? 5 : 0) +
+                    (exactDesc ? 5 : descMatch ? 2 : 0)
+                return { skill: s, score }
+            })
+            .filter((x) => x.score > 0)
+            .sort((a, b) => b.score - a.score)
+        return scored.map((x) => x.skill).slice(0, 5)
+    }, [skillsList, skillsQuery])
+
+    const skillsFetchedRef = React.useRef(false)
+    React.useEffect(() => {
+        if (
+            typeof window === "undefined" ||
+            !value.startsWith("/")
+        ) {
+            setShowSkillsMenu(false)
+            skillsFetchedRef.current = false
+            setSkillsError(null)
+            return
+        }
+        setShowSkillsMenu(true)
+        if (skillsFetchedRef.current) return
+        skillsFetchedRef.current = true
+        let cancelled = false
+        const apiUrl = skillsApiUrl || DEFAULT_SKILLS_API_URL
+        const fetchSkills = async () => {
+            setSkillsLoading(true)
+            setSkillsError(null)
+            try {
+                const res = await fetch(apiUrl)
+                if (!res.ok) throw new Error(`Skills API: ${res.status}`)
+                const data = (await res.json()) as Array<{
+                    id: string
+                    name: string
+                    description?: string
+                    path?: string
+                }>
+                const list: AgentSkill[] = (data || []).map((s) => ({
+                    id: s.id,
+                    object: "skill" as const,
+                    name: s.name,
+                    description: s.description || "",
+                    default_version: "",
+                    latest_version: "",
+                    created_at: 0,
+                }))
+                if (!cancelled) {
+                    setSkillsList(list)
+                    setSkillsError(null)
+                }
+            } catch (e) {
+                if (!cancelled) {
+                    setSkillsList([])
+                    const msg =
+                        e instanceof Error ? e.message : "Failed to load skills"
+                    setSkillsError(
+                        msg.toLowerCase().includes("fetch") ||
+                            msg.toLowerCase().includes("network")
+                            ? "Cannot reach skills API. Check Skills API URL or use a Worker."
+                            : msg
+                    )
+                }
+            } finally {
+                if (!cancelled) setSkillsLoading(false)
+            }
+        }
+        fetchSkills()
+        return () => {
+            cancelled = true
+        }
+    }, [skillsApiUrl, value.startsWith("/")])
 
     // Clear hover state when menu closes (unless mouse is actually over button)
     React.useEffect(() => {
@@ -5146,7 +5283,6 @@ const ChatInput = React.memo(function ChatInput({
                 menuRef.current &&
                 !menuRef.current.contains(event.target as Node)
             ) {
-                // Check if the click was on the upload button (to prevent immediate toggle off)
                 const uploadBtn = document.getElementById("upload-trigger-btn")
                 if (uploadBtn && uploadBtn.contains(event.target as Node)) {
                     return
@@ -5162,7 +5298,29 @@ const ChatInput = React.memo(function ChatInput({
         }
     }, [showMenu])
 
-    const hasContent = value.trim() || attachments.length > 0
+    // Close skills menu when clicking outside
+    React.useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (
+                skillsMenuRef.current &&
+                !skillsMenuRef.current.contains(event.target as Node) &&
+                !textareaRef.current?.contains(event.target as Node)
+            ) {
+                setShowSkillsMenu(false)
+            }
+        }
+        if (showSkillsMenu) {
+            document.addEventListener("mousedown", handleClickOutside)
+        }
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside)
+        }
+    }, [showSkillsMenu])
+
+    const hasContent =
+        value.trim() ||
+        attachments.length > 0 ||
+        selectedSkills.length > 0
 
     const menuItems = React.useMemo(() => {
         const showReport = isConnected && !isLiveMode
@@ -5905,6 +6063,88 @@ const ChatInput = React.memo(function ChatInput({
                         </div>
                     )}
 
+                    {selectedSkills.length > 0 && (
+                        <div
+                            style={{
+                                display: "flex",
+                                flexDirection: "row",
+                                flexWrap: "wrap",
+                                gap: 8,
+                                width: "100%",
+                                padding: "10px 10px 0px 10px",
+                            }}
+                        >
+                            {selectedSkills.map((skill) => (
+                                <div
+                                    key={skill.id}
+                                    data-layer="skill-chip"
+                                    style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: 6,
+                                        paddingLeft: 10,
+                                        paddingRight: 8,
+                                        paddingTop: 6,
+                                        paddingBottom: 6,
+                                        background:
+                                            themeColors.surfaceHighlight
+                                                ? themeColors.surfaceHighlight
+                                                : themeColors.hover?.subtle ||
+                                                    "rgba(128,128,128,0.15)",
+                                        borderRadius: 16,
+                                        fontSize: 13,
+                                        fontFamily: "Inter",
+                                        fontWeight: "500",
+                                        color: themeColors.text.primary,
+                                    }}
+                                >
+                                    <span
+                                        style={{
+                                            maxWidth: 140,
+                                            overflow: "hidden",
+                                            textOverflow: "ellipsis",
+                                            whiteSpace: "nowrap",
+                                        }}
+                                    >
+                                        {skill.name}
+                                    </span>
+                                    {onRemoveSkill && (
+                                        <div
+                                            style={{
+                                                cursor: "pointer",
+                                                display: "flex",
+                                                padding: 2,
+                                            }}
+                                            onClick={() =>
+                                                onRemoveSkill(skill.id)
+                                            }
+                                            aria-label="Remove skill"
+                                        >
+                                            <svg
+                                                width="12"
+                                                height="12"
+                                                viewBox="0 0 12 12"
+                                                fill="none"
+                                                xmlns="http://www.w3.org/2000/svg"
+                                            >
+                                                <path
+                                                    d="M9 3L3 9M3 3L9 9"
+                                                    stroke={
+                                                        themeColors.text
+                                                            .secondary
+                                                    }
+                                                    strokeWidth="1.2"
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                />
+                                            </svg>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     {/* INPUT ROW: [Plus] [Text] [Send] */}
                     <div
                         style={{
@@ -6190,29 +6430,275 @@ const ChatInput = React.memo(function ChatInput({
                                 alignItems: "center",
                                 paddingTop: 6,
                                 paddingBottom: 6,
+                                position: "relative",
                             }}
                         >
+                            {showSkillsMenu && !skillsLoading && (
+                                <>
+                                    {isMobileLayout && (
+                                        <div
+                                            style={{
+                                                position: "fixed",
+                                                top: 0,
+                                                left: 0,
+                                                right: 0,
+                                                bottom: 0,
+                                                background:
+                                                    themeColors.overlay.black,
+                                                zIndex: 1004,
+                                                pointerEvents: "auto",
+                                            }}
+                                            onClick={() =>
+                                                setShowSkillsMenu(false)
+                                            }
+                                        />
+                                    )}
+                                    <div
+                                        ref={skillsMenuRef}
+                                        style={{
+                                            position: isMobileLayout
+                                                ? "fixed"
+                                                : "absolute",
+                                            bottom: isMobileLayout
+                                                ? 0
+                                                : "calc(100% + 4px)",
+                                            left: isMobileLayout ? 0 : 0,
+                                            right: isMobileLayout ? 0 : "auto",
+                                            zIndex: 2000,
+                                            pointerEvents: "auto",
+                                        }}
+                                    >
+                                        <div
+                                            data-layer="skills-menu"
+                                            className="ConversationActions"
+                                            onMouseLeave={() =>
+                                                setSelectedSkillsIndex(-1)
+                                            }
+                                            style={{
+                                                width: isMobileLayout
+                                                    ? "auto"
+                                                    : 280,
+                                                padding: 10,
+                                                background:
+                                                    themeColors.surfaceMenu,
+                                                boxShadow:
+                                                    "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                borderRadius: isMobileLayout
+                                                    ? "36px 36px 0px 0px"
+                                                    : 28,
+                                                outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                outlineOffset: "-0.1px",
+                                                flexDirection: "column",
+                                                justifyContent: "flex-start",
+                                                alignItems: "flex-start",
+                                                gap: 4,
+                                                display: "flex",
+                                            }}
+                                        >
+                                            {skillsError ? (
+                                                <div
+                                                    style={{
+                                                        padding: 12,
+                                                        color: themeColors
+                                                            .destructive?.light ||
+                                                            "#e57373",
+                                                        fontSize: 14,
+                                                    }}
+                                                >
+                                                    {skillsError}
+                                                </div>
+                                            ) : filteredSkills.length === 0 ? (
+                                                <div
+                                                    style={{
+                                                        padding: 12,
+                                                        color: themeColors.text
+                                                            .secondary,
+                                                        fontSize: 14,
+                                                        lineHeight: 1.4,
+                                                    }}
+                                                >
+                                                    {skillsList.length === 0
+                                                        ? "No skills available. Check Skills API URL or network."
+                                                        : `No skills matching "${skillsQuery}"`}
+                                                </div>
+                                            ) : (
+                                                filteredSkills.map(
+                                                    (skill, index) => (
+                                                        <div
+                                                            key={skill.id}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation()
+                                                                if (
+                                                                    onSelectSkill
+                                                                ) {
+                                                                    onSelectSkill(
+                                                                        {
+                                                                            id: skill.id,
+                                                                            name: skill.name,
+                                                                            description:
+                                                                                skill.description,
+                                                                        }
+                                                                    )
+                                                                    setShowSkillsMenu(
+                                                                        false
+                                                                    )
+                                                                    onChange({
+                                                                        target: {
+                                                                            value: "",
+                                                                        },
+                                                                    } as React.ChangeEvent<HTMLTextAreaElement>)
+                                                                }
+                                                            }}
+                                                            style={{
+                                                                ...localStyles.menuItem,
+                                                                height: isMobileLayout
+                                                                    ? 44
+                                                                    : 36,
+                                                                transition: "none",
+                                                                cursor: "pointer",
+                                                                ...(index ===
+                                                                selectedSkillsIndex
+                                                                    ? localStyles.menuItemHover
+                                                                    : {}),
+                                                            }}
+                                                            onMouseEnter={() => {
+                                                                if (isMobileLayout)
+                                                                    return
+                                                                setSelectedSkillsIndex(
+                                                                    index
+                                                                )
+                                                            }}
+                                                        >
+                                                            <div
+                                                                style={{
+                                                                    flex: "1 1 0",
+                                                                    display: "flex",
+                                                                    flexDirection:
+                                                                        "column",
+                                                                    justifyContent:
+                                                                        "center",
+                                                                }}
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        color: themeColors
+                                                                            .text
+                                                                            .primary,
+                                                                        fontSize: 14,
+                                                                        fontWeight:
+                                                                            "500",
+                                                                    }}
+                                                                >
+                                                                    {skill.name}
+                                                                </span>
+                                                                {skill.description && (
+                                                                    <span
+                                                                        style={{
+                                                                            color: themeColors
+                                                                                .text
+                                                                                .secondary,
+                                                                            fontSize: 12,
+                                                                            marginTop: 2,
+                                                                            overflow: "hidden",
+                                                                            textOverflow:
+                                                                                "ellipsis",
+                                                                            whiteSpace:
+                                                                                "nowrap",
+                                                                        }}
+                                                                    >
+                                                                        {skill.description.slice(
+                                                                            0,
+                                                                            60
+                                                                        )}
+                                                                        {skill
+                                                                            .description
+                                                                            .length >
+                                                                        60
+                                                                            ? "…"
+                                                                            : ""}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                )
+                                            )}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
                             <textarea
                                 ref={textareaRef}
                                 tabIndex={1}
                                 value={value}
                                 onChange={(e) => {
                                     onChange(e)
-                                    // Auto-open menu on trigger
                                     const val = e.target.value
-                                    if (
+                                    // Slash command: "/" or "/a" → skills menu
+                                    if (val.startsWith("/")) {
+                                        setShowSkillsMenu(true)
+                                        setShowMenu(false)
+                                    } else if (
                                         val.endsWith("/") ||
                                         val.endsWith("@")
                                     ) {
                                         setShowMenu(true)
-                                        setSelectedMenuIndex(0) // Default to first option
-                                    } else if (showMenu) {
-                                        // Close if continuing to type something else without selecting
+                                        setSelectedMenuIndex(0)
+                                        setShowSkillsMenu(false)
+                                    } else if (showMenu || showSkillsMenu) {
                                         setShowMenu(false)
+                                        setShowSkillsMenu(false)
                                     }
                                 }}
                                 onPaste={handlePaste}
                                 onKeyDown={(e) => {
+                                    if (showSkillsMenu) {
+                                        if (e.key === "ArrowUp") {
+                                            e.preventDefault()
+                                            setSelectedSkillsIndex((prev) => {
+                                                const len = filteredSkills.length
+                                                if (len === 0) return -1
+                                                if (prev === -1) return len - 1
+                                                return prev <= 0 ? len - 1 : prev - 1
+                                            })
+                                            return
+                                        }
+                                        if (e.key === "ArrowDown") {
+                                            e.preventDefault()
+                                            setSelectedSkillsIndex((prev) => {
+                                                const len = filteredSkills.length
+                                                if (len === 0) return -1
+                                                if (prev === -1) return 0
+                                                return prev >= len - 1 ? 0 : prev + 1
+                                            })
+                                            return
+                                        }
+                                        if (e.key === "Enter") {
+                                            e.preventDefault()
+                                            const idx =
+                                                selectedSkillsIndex === -1
+                                                    ? 0
+                                                    : selectedSkillsIndex
+                                            const skill = filteredSkills[idx]
+                                            if (skill && onSelectSkill) {
+                                                onSelectSkill({
+                                                    id: skill.id,
+                                                    name: skill.name,
+                                                    description: skill.description,
+                                                })
+                                                setShowSkillsMenu(false)
+                                                onChange({
+                                                    target: { value: "" },
+                                                } as React.ChangeEvent<HTMLTextAreaElement>)
+                                            }
+                                            return
+                                        }
+                                        if (e.key === "Escape") {
+                                            e.preventDefault()
+                                            setShowSkillsMenu(false)
+                                            return
+                                        }
+                                    }
                                     if (showMenu) {
                                         if (e.key === "ArrowUp") {
                                             e.preventDefault()
@@ -10919,6 +11405,7 @@ const MiniIDE = React.memo(
 export default function OmegleMentorshipUI(props: Props) {
     const {
         geminiApiKey,
+        skillsApiUrl,
         systemPrompt,
         accentColor,
         model = "gemini-3-flash-preview",
@@ -13780,6 +14267,11 @@ Do not include markdown formatting or explanations.`
     // --- STATE: FILE UPLOADS ---
     const [attachments, setAttachments] = React.useState<Attachment[]>([])
     const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+
+    // --- STATE: SKILLS (Skills API - slash command) ---
+    const [selectedSkills, setSelectedSkills] = React.useState<
+        Array<{ id: string; name: string; description?: string }>
+    >([])
 
     // --- STATE: RESPONSIVE UI ---
     // Initialize height from localStorage if available, else default to 300 (will be auto-sized for new users)
@@ -17979,13 +18471,31 @@ PREFERENCES:
                 return
             }
 
-            if (!textToCheck.trim() && attachments.length === 0) return
+            if (
+                !textToCheck.trim() &&
+                attachments.length === 0 &&
+                selectedSkills.length === 0
+            )
+                return
 
             // Clear AI suggestions when user sends a message
             setAiGeneratedSuggestions([])
 
             let textToSend = sanitizeMessage(textToCheck)
-            // We do NOT inject context here anymore, as it will be injected as hidden system prompt logic in generateAIResponse
+            // Inject selected skills context (Skills API) so the model can use them
+            if (selectedSkills.length > 0) {
+                const skillContext = selectedSkills
+                    .map(
+                        (s) =>
+                            `[Skill: ${s.name}${s.description ? ` - ${s.description}` : ""}]`
+                    )
+                    .join("\n")
+                textToSend =
+                    (textToSend
+                        ? `${skillContext}\n\n${textToSend}`
+                        : skillContext)
+                .trim()
+            }
 
             // Input length check
             if (textToSend.length > MAX_INPUT_LENGTH) {
@@ -18118,6 +18628,7 @@ PREFERENCES:
 
             setInputText("")
             setAttachments([])
+            setSelectedSkills([])
             if (fileInputRef.current) fileInputRef.current.value = ""
 
             // Send to Peer
@@ -18183,6 +18694,7 @@ PREFERENCES:
         [
             inputText,
             attachments,
+            selectedSkills,
             generateAIResponse,
             fetchLocation,
             messages,
@@ -19629,6 +20141,20 @@ PREFERENCES:
                         role={role}
                         hasMessages={messages.length > 0}
                         onClearMessages={handleClearMessages}
+                        skillsApiUrl={skillsApiUrl}
+                        selectedSkills={selectedSkills}
+                        onSelectSkill={(skill) =>
+                            setSelectedSkills((prev) =>
+                                prev.some((s) => s.id === skill.id)
+                                    ? prev
+                                    : [...prev, skill]
+                            )
+                        }
+                        onRemoveSkill={(id) =>
+                            setSelectedSkills((prev) =>
+                                prev.filter((s) => s.id !== id)
+                            )
+                        }
                     >
                         {aiGeneratedSuggestions.length > 0 && (
                             <div
@@ -23483,6 +24009,14 @@ addPropertyControls(OmegleMentorshipUI, {
         description: "Enter your API key from Google AI Studio.",
         defaultValue: "",
         obscured: true,
+    },
+    skillsApiUrl: {
+        type: ControlType.String,
+        title: "Skills API URL",
+        description:
+            "Cloudflare Worker URL for agent skills. Defaults to agent-skills-api.",
+        defaultValue:
+            "https://agent-skills-api.logangarcia102.workers.dev",
     },
     model: {
         type: ControlType.String,
