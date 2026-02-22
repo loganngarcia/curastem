@@ -5083,6 +5083,8 @@ const ChatInput = React.memo(function ChatInput({
     const [skillsError, setSkillsError] = React.useState<string | null>(null)
     const [selectedSkillsIndex, setSelectedSkillsIndex] = React.useState(-1)
     const skillsMenuRef = React.useRef<HTMLDivElement>(null)
+    const [hasExpandedToTwoRows, setHasExpandedToTwoRows] = React.useState(false)
+    const selectionRef = React.useRef({ start: 0, end: 0 })
 
     // Create local styles with themeColors
     const localStyles = React.useMemo(
@@ -5295,15 +5297,51 @@ const ChatInput = React.memo(function ChatInput({
     }, [])
 
     // Auto-resize logic to mimic Gemini's behavior
+    const SINGLE_LINE_HEIGHT = 24
+
+    // Reset expanded state when user clears all text
     React.useEffect(() => {
-        if (textareaRef.current) {
-            textareaRef.current.style.height = "24px" // Reset to calculate correct scrollHeight
-            const scrollHeight = textareaRef.current.scrollHeight
-            // Expand up to ~148px (approx 6 lines)
-            textareaRef.current.style.height =
-                Math.min(scrollHeight, 148) + "px"
-        }
+        if (!value.trim()) setHasExpandedToTwoRows(false)
     }, [value])
+
+    // Mark expanded when user adds skills chips
+    React.useEffect(() => {
+        if (selectedSkills.length > 0) setHasExpandedToTwoRows(true)
+    }, [selectedSkills.length])
+
+    // 2-row layout: chips always, or text has ever wrapped/overflowed (sticky until user clears all text)
+    const useTwoRowLayout =
+        selectedSkills.length > 0 ||
+        (value.trim().length > 0 && hasExpandedToTwoRows)
+
+    // Auto-resize + overflow detection: useLayoutEffect runs before paint so paste/wrap resizes immediately.
+    // useTwoRowLayout in deps so we re-measure when the textarea moves to a different-width container.
+    React.useLayoutEffect(() => {
+        if (!textareaRef.current) return
+        textareaRef.current.style.height = SINGLE_LINE_HEIGHT + "px"
+        const scrollHeight = textareaRef.current.scrollHeight
+        textareaRef.current.style.height = Math.min(scrollHeight, 148) + "px"
+        // Text overflows single line → lock into 2-row for this input session
+        if (scrollHeight > SINGLE_LINE_HEIGHT + 4) {
+            setHasExpandedToTwoRows(true)
+        }
+    }, [value, useTwoRowLayout])
+
+    // Restore cursor/focus when layout switches so users never need to click to continue typing.
+    // focus() MUST come before setSelectionRange() — browsers reset selection when focusing an unfocused element.
+    const prevUseTwoRowLayoutRef = React.useRef(useTwoRowLayout)
+    React.useLayoutEffect(() => {
+        if (prevUseTwoRowLayoutRef.current !== useTwoRowLayout && textareaRef.current) {
+            const { start, end } = selectionRef.current
+            const len = value.length
+            textareaRef.current.focus()
+            textareaRef.current.setSelectionRange(
+                Math.min(start, len),
+                Math.min(end, len)
+            )
+        }
+        prevUseTwoRowLayoutRef.current = useTwoRowLayout
+    }, [useTwoRowLayout, value])
 
     // Close menu when clicking outside
     React.useEffect(() => {
@@ -6092,98 +6130,381 @@ const ChatInput = React.memo(function ChatInput({
                         </div>
                     )}
 
-                    {selectedSkills.length > 0 && (
-                        <div
-                            style={{
-                                display: "flex",
-                                flexDirection: "row",
-                                flexWrap: "wrap",
-                                gap: 8,
-                                width: "100%",
-                                padding: "10px 10px 0px 10px",
-                            }}
-                        >
-                            {selectedSkills.map((skill) => (
-                                <div
-                                    key={skill.id}
-                                    data-layer="skill-chip"
-                                    style={{
-                                        display: "inline-flex",
-                                        alignItems: "center",
-                                        gap: 6,
-                                        paddingLeft: 10,
-                                        paddingRight: 8,
-                                        paddingTop: 6,
-                                        paddingBottom: 6,
-                                        background:
-                                            themeColors.surfaceHighlight
-                                                ? themeColors.surfaceHighlight
-                                                : themeColors.hover?.subtle ||
-                                                    "rgba(128,128,128,0.15)",
-                                        borderRadius: 16,
-                                        fontSize: 13,
-                                        fontFamily: "Inter",
-                                        fontWeight: "500",
-                                        color: themeColors.text.primary,
-                                    }}
-                                >
-                                    <span
-                                        style={{
-                                            maxWidth: 140,
-                                            overflow: "hidden",
-                                            textOverflow: "ellipsis",
-                                            whiteSpace: "nowrap",
-                                        }}
-                                    >
-                                        {skill.name}
-                                    </span>
-                                    {onRemoveSkill && (
+                    {useTwoRowLayout ? (
+                    /* TWO-ROW LAYOUT: textarea above, then [Plus] [Chips] | [Send] [Start AI Live] */
+                    <>
+                    {/* TEXT INPUT (above bottom row when chips present) */}
+                    <div
+                        data-layer="textarea-wrapper"
+                        className="TextAreaWrapper"
+                        style={{
+                            width: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            padding: "16px 16px 0px 16px",
+                            position: "relative",
+                        }}
+                    >
+                        {showSkillsMenu &&
+                            !skillsLoading &&
+                            !skillsError &&
+                            filteredSkills.length > 0 && (
+                                <>
+                                    {isMobileLayout && (
                                         <div
                                             style={{
-                                                cursor: "pointer",
-                                                display: "flex",
-                                                padding: 2,
+                                                position: "fixed",
+                                                top: 0,
+                                                left: 0,
+                                                right: 0,
+                                                bottom: 0,
+                                                background:
+                                                    themeColors.overlay.black,
+                                                zIndex: 1004,
+                                                pointerEvents: "auto",
                                             }}
                                             onClick={() =>
-                                                onRemoveSkill(skill.id)
+                                                setShowSkillsMenu(false)
                                             }
-                                            aria-label="Remove skill"
-                                        >
-                                            <svg
-                                                width="12"
-                                                height="12"
-                                                viewBox="0 0 12 12"
-                                                fill="none"
-                                                xmlns="http://www.w3.org/2000/svg"
-                                            >
-                                                <path
-                                                    d="M9 3L3 9M3 3L9 9"
-                                                    stroke={
-                                                        themeColors.text
-                                                            .secondary
-                                                    }
-                                                    strokeWidth="1.2"
-                                                    strokeLinecap="round"
-                                                    strokeLinejoin="round"
-                                                />
-                                            </svg>
-                                        </div>
+                                        />
                                     )}
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                                    <div
+                                        ref={skillsMenuRef}
+                                        style={{
+                                            position: isMobileLayout
+                                                ? "fixed"
+                                                : "absolute",
+                                            bottom: isMobileLayout
+                                                ? 0
+                                                : "calc(100% + 4px)",
+                                            left: isMobileLayout ? 0 : 0,
+                                            right: isMobileLayout ? 0 : "auto",
+                                            zIndex: 2000,
+                                            pointerEvents: "auto",
+                                        }}
+                                    >
+                                        <div
+                                            data-layer="skills-menu"
+                                            className="ConversationActions"
+                                            onMouseLeave={() =>
+                                                setSelectedSkillsIndex(-1)
+                                            }
+                                            style={{
+                                                width: isMobileLayout
+                                                    ? "auto"
+                                                    : 280,
+                                                padding: 10,
+                                                background:
+                                                    themeColors.surfaceMenu,
+                                                boxShadow:
+                                                    "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                borderRadius: isMobileLayout
+                                                    ? "36px 36px 0px 0px"
+                                                    : 28,
+                                                outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                outlineOffset: "-0.1px",
+                                                flexDirection: "column",
+                                                justifyContent: "flex-start",
+                                                alignItems: "flex-start",
+                                                gap: 4,
+                                                display: "flex",
+                                            }}
+                                        >
+                                            <div
+                                                style={{
+                                                    fontSize: 12,
+                                                    color: themeColors.text
+                                                        .secondary,
+                                                    paddingLeft: 12,
+                                                    paddingBottom: 4,
+                                                    marginTop: 6,
+                                                    alignSelf: "flex-start",
+                                                }}
+                                            >
+                                                Skills
+                                            </div>
+                                            {filteredSkills.map(
+                                                    (skill, index) => (
+                                                        <div
+                                                            key={skill.id}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation()
+                                                                if (
+                                                                    onSelectSkill
+                                                                ) {
+                                                                    onSelectSkill(
+                                                                        {
+                                                                            id: skill.id,
+                                                                            name: skill.name,
+                                                                            description:
+                                                                                skill.description,
+                                                                        }
+                                                                    )
+                                                                    setShowSkillsMenu(
+                                                                        false
+                                                                    )
+                                                                    onChange({
+                                                                        target: {
+                                                                            value: "",
+                                                                        },
+                                                                    } as React.ChangeEvent<HTMLTextAreaElement>)
+                                                                }
+                                                            }}
+                                                            title={
+                                                                skill.description ||
+                                                                undefined
+                                                            }
+                                                            style={{
+                                                                ...localStyles.menuItem,
+                                                                height: isMobileLayout
+                                                                    ? 44
+                                                                    : 36,
+                                                                transition: "none",
+                                                                cursor: "pointer",
+                                                                ...(index ===
+                                                                selectedSkillsIndex
+                                                                    ? localStyles.menuItemHover
+                                                                    : {}),
+                                                            }}
+                                                            onMouseEnter={() => {
+                                                                if (isMobileLayout)
+                                                                    return
+                                                                setSelectedSkillsIndex(
+                                                                    index
+                                                                )
+                                                            }}
+                                                        >
+                                                            <div
+                                                                style={{
+                                                                    flex: "1 1 0",
+                                                                    minWidth: 0,
+                                                                    display: "flex",
+                                                                    flexDirection:
+                                                                        "column",
+                                                                    justifyContent:
+                                                                        "center",
+                                                                    overflow:
+                                                                        "hidden",
+                                                                }}
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        overflow:
+                                                                            "hidden",
+                                                                        textOverflow:
+                                                                            "ellipsis",
+                                                                        whiteSpace:
+                                                                            "nowrap",
+                                                                        fontSize: 14,
+                                                                    }}
+                                                                >
+                                                                    <span
+                                                                        style={{
+                                                                            color: themeColors
+                                                                                .text
+                                                                                .primary,
+                                                                            fontWeight:
+                                                                                "500",
+                                                                        }}
+                                                                    >
+                                                                        {skill.name}
+                                                                    </span>
+                                                                    {skill.description && (
+                                                                        <span
+                                                                            style={{
+                                                                                color: themeColors
+                                                                                    .text
+                                                                                    .secondary,
+                                                                                fontWeight:
+                                                                                    "400",
+                                                                            }}
+                                                                        >
+                                                                            {" — "}
+                                                                            {skill.description}
+                                                                        </span>
+                                                                    )}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                )}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                        <textarea
+                            ref={textareaRef}
+                            tabIndex={1}
+                            value={value}
+                            onSelect={(e) => {
+                                selectionRef.current = {
+                                    start: e.target.selectionStart,
+                                    end: e.target.selectionEnd,
+                                }
+                            }}
+                            onChange={(e) => {
+                                selectionRef.current = {
+                                    start: e.target.selectionStart,
+                                    end: e.target.selectionEnd,
+                                }
+                                onChange(e)
+                                const val = e.target.value
+                                // Slash command: "/" or "/a" → skills menu (close if space)
+                                if (val.startsWith("/") && !val.includes(" ")) {
+                                    setShowSkillsMenu(true)
+                                    setShowMenu(false)
+                                } else if (
+                                    val.endsWith("/") ||
+                                    val.endsWith("@")
+                                ) {
+                                    setShowMenu(true)
+                                    setSelectedMenuIndex(0)
+                                    setShowSkillsMenu(false)
+                                } else if (showMenu || showSkillsMenu) {
+                                    setShowMenu(false)
+                                    setShowSkillsMenu(false)
+                                }
+                            }}
+                            onPaste={handlePaste}
+                            onKeyDown={(e) => {
+                                if (showSkillsMenu) {
+                                    if (e.key === "ArrowUp") {
+                                        e.preventDefault()
+                                        setSelectedSkillsIndex((prev) => {
+                                            const len = filteredSkills.length
+                                            if (len === 0) return -1
+                                            if (prev === -1) return len - 1
+                                            return prev <= 0 ? len - 1 : prev - 1
+                                        })
+                                        return
+                                    }
+                                    if (e.key === "ArrowDown") {
+                                        e.preventDefault()
+                                        setSelectedSkillsIndex((prev) => {
+                                            const len = filteredSkills.length
+                                            if (len === 0) return -1
+                                            if (prev === -1) return 0
+                                            return prev >= len - 1 ? 0 : prev + 1
+                                        })
+                                        return
+                                    }
+                                    if (e.key === "Enter") {
+                                        e.preventDefault()
+                                        const idx =
+                                            selectedSkillsIndex === -1
+                                                ? 0
+                                                : selectedSkillsIndex
+                                        const skill = filteredSkills[idx]
+                                        if (skill && onSelectSkill) {
+                                            onSelectSkill({
+                                                id: skill.id,
+                                                name: skill.name,
+                                                description: skill.description,
+                                            })
+                                            setShowSkillsMenu(false)
+                                            onChange({
+                                                target: { value: "" },
+                                            } as React.ChangeEvent<HTMLTextAreaElement>)
+                                        }
+                                        return
+                                    }
+                                    if (e.key === "Escape") {
+                                        e.preventDefault()
+                                        setShowSkillsMenu(false)
+                                        return
+                                    }
+                                }
+                                if (showMenu) {
+                                    if (e.key === "ArrowUp") {
+                                        e.preventDefault()
+                                        setSelectedMenuIndex((prev) => {
+                                            if (prev === -1)
+                                                return menuItems.length - 1
+                                            return prev <= 0
+                                                ? menuItems.length - 1
+                                                : prev - 1
+                                        })
+                                        return
+                                    }
+                                    if (e.key === "ArrowDown") {
+                                        e.preventDefault()
+                                        setSelectedMenuIndex((prev) => {
+                                            if (prev === -1) return 0
+                                            return prev ===
+                                                menuItems.length - 1
+                                                ? 0
+                                                : prev + 1
+                                        })
+                                        return
+                                    }
+                                    if (e.key === "Enter") {
+                                        e.preventDefault()
+                                        const index =
+                                            selectedMenuIndex === -1
+                                                ? 0
+                                                : selectedMenuIndex
+                                        if (menuItems[index]) {
+                                            menuItems[index].onClick()
+                                        }
+                                        return
+                                    }
+                                    if (e.key === "Escape") {
+                                        e.preventDefault()
+                                        setShowMenu(false)
+                                        return
+                                    }
+                                }
 
-                    {/* INPUT ROW: [Plus] [Text] [Send] */}
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault()
+                                    if (hasContent && !isLoading) onSend()
+                                }
+                            }}
+                            placeholder={placeholder}
+                            disabled={false}
+                            className="ChatTextInput"
+                            style={{
+                                flex: "1 1 0",
+                                color: themeColors.text.primary,
+                                fontSize: 16,
+                                fontFamily: "Inter",
+                                fontWeight: "400",
+                                lineHeight: "24px",
+                                background: "transparent",
+                                border: "none",
+                                outline: "none",
+                                resize: "none",
+                                height: 24,
+                                padding: 0,
+                                margin: 0,
+                                width: "100%",
+                            }}
+                        />
+                    </div>
+
+                    {/* BOTTOM ROW: [Plus + Skills chips] (fills width) | [Send] [Start AI Live] (right) */}
                     <div
                         style={{
                             display: "flex",
                             alignItems: "flex-end",
+                            justifyContent: "space-between",
                             gap: 8,
                             width: "100%",
                             padding: "0 10px 10px 10px",
                         }}
                     >
+                        {/* LEFT: Plus + Skills chips (flexbox that fills width) */}
+                        <div
+                            style={{
+                                display: "flex",
+                                flexDirection: "row",
+                                flexWrap: "wrap",
+                                alignItems: "center",
+                                gap: 8,
+                                flex: "1 1 0",
+                                minWidth: 0,
+                            }}
+                        >
                         {/* UPLOAD ICON (the button to open the + menu) */}
                         <div
                             id="upload-trigger-btn"
@@ -6448,347 +6769,99 @@ const ChatInput = React.memo(function ChatInput({
                             </div>
                         </div>
 
-                        {/* TEXT INPUT */}
-                        <div
-                            data-layer="textarea-wrapper"
-                            className="TextAreaWrapper"
-                            style={{
-                                flex: "1 1 0",
-                                alignSelf: "stretch",
-                                display: "flex",
-                                alignItems: "center",
-                                paddingTop: 6,
-                                paddingBottom: 6,
-                                position: "relative",
-                            }}
-                        >
-                            {showSkillsMenu &&
-                                !skillsLoading &&
-                                !skillsError &&
-                                filteredSkills.length > 0 && (
-                                <>
-                                    {isMobileLayout && (
-                                        <div
-                                            style={{
-                                                position: "fixed",
-                                                top: 0,
-                                                left: 0,
-                                                right: 0,
-                                                bottom: 0,
-                                                background:
-                                                    themeColors.overlay.black,
-                                                zIndex: 1004,
-                                                pointerEvents: "auto",
-                                            }}
-                                            onClick={() =>
-                                                setShowSkillsMenu(false)
-                                            }
-                                        />
-                                    )}
+                        {/* SKILLS CHIPS (to the right of + button) */}
+                        {selectedSkills.length > 0 && (
+                            <div
+                                style={{
+                                    display: "flex",
+                                    flexDirection: "row",
+                                    flexWrap: "wrap",
+                                    gap: 8,
+                                    flex: "1 1 0",
+                                    minWidth: 0,
+                                    alignItems: "center",
+                                }}
+                            >
+                                {selectedSkills.map((skill) => (
                                     <div
-                                        ref={skillsMenuRef}
+                                        key={skill.id}
+                                        data-layer="skill-chip"
                                         style={{
-                                            position: isMobileLayout
-                                                ? "fixed"
-                                                : "absolute",
-                                            bottom: isMobileLayout
-                                                ? 0
-                                                : "calc(100% + 4px)",
-                                            left: isMobileLayout ? 0 : 0,
-                                            right: isMobileLayout ? 0 : "auto",
-                                            zIndex: 2000,
-                                            pointerEvents: "auto",
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            height: 36,
+                                            paddingLeft: 12,
+                                            paddingRight: 12,
+                                            background:
+                                                themeColors.surfaceHighlight
+                                                    ? themeColors.surfaceHighlight
+                                                    : themeColors.hover?.subtle ||
+                                                        "rgba(128,128,128,0.15)",
+                                            borderRadius: 18,
+                                            fontSize: 14,
+                                            fontFamily: "Inter",
+                                            fontWeight: "500",
+                                            color: themeColors.text.primary,
                                         }}
                                     >
-                                        <div
-                                            data-layer="skills-menu"
-                                            className="ConversationActions"
-                                            onMouseLeave={() =>
-                                                setSelectedSkillsIndex(-1)
-                                            }
+                                        <span
                                             style={{
-                                                width: isMobileLayout
-                                                    ? "auto"
-                                                    : 280,
-                                                padding: 10,
-                                                background:
-                                                    themeColors.surfaceMenu,
-                                                boxShadow:
-                                                    "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
-                                                borderRadius: isMobileLayout
-                                                    ? "36px 36px 0px 0px"
-                                                    : 28,
-                                                outline: `0.1px ${themeColors.border.subtle} solid`,
-                                                outlineOffset: "-0.1px",
-                                                flexDirection: "column",
-                                                justifyContent: "flex-start",
-                                                alignItems: "flex-start",
-                                                gap: 4,
-                                                display: "flex",
+                                                maxWidth: 140,
+                                                overflow: "hidden",
+                                                textOverflow: "ellipsis",
+                                                whiteSpace: "nowrap",
                                             }}
                                         >
+                                            {skill.name}
+                                        </span>
+                                        {onRemoveSkill && (
                                             <div
                                                 style={{
-                                                    fontSize: 12,
-                                                    color: themeColors.text
-                                                        .secondary,
-                                                    paddingLeft: 12,
-                                                    paddingBottom: 4,
-                                                    marginTop: 6,
-                                                    alignSelf: "flex-start",
+                                                    cursor: "pointer",
+                                                    display: "flex",
+                                                    padding: 2,
                                                 }}
+                                                onClick={() =>
+                                                    onRemoveSkill(skill.id)
+                                                }
+                                                aria-label="Remove skill"
                                             >
-                                                Skills
+                                                <svg
+                                                    width="12"
+                                                    height="12"
+                                                    viewBox="0 0 12 12"
+                                                    fill="none"
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                >
+                                                    <path
+                                                        d="M9 3L3 9M3 3L9 9"
+                                                        stroke={
+                                                            themeColors.text
+                                                                .secondary
+                                                        }
+                                                        strokeWidth="1.2"
+                                                        strokeLinecap="round"
+                                                        strokeLinejoin="round"
+                                                    />
+                                                </svg>
                                             </div>
-                                            {filteredSkills.map(
-                                                    (skill, index) => (
-                                                        <div
-                                                            key={skill.id}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation()
-                                                                if (
-                                                                    onSelectSkill
-                                                                ) {
-                                                                    onSelectSkill(
-                                                                        {
-                                                                            id: skill.id,
-                                                                            name: skill.name,
-                                                                            description:
-                                                                                skill.description,
-                                                                        }
-                                                                    )
-                                                                    setShowSkillsMenu(
-                                                                        false
-                                                                    )
-                                                                    onChange({
-                                                                        target: {
-                                                                            value: "",
-                                                                        },
-                                                                    } as React.ChangeEvent<HTMLTextAreaElement>)
-                                                                }
-                                                            }}
-                                                            title={
-                                                                skill.description ||
-                                                                undefined
-                                                            }
-                                                            style={{
-                                                                ...localStyles.menuItem,
-                                                                height: isMobileLayout
-                                                                    ? 44
-                                                                    : 36,
-                                                                transition: "none",
-                                                                cursor: "pointer",
-                                                                ...(index ===
-                                                                selectedSkillsIndex
-                                                                    ? localStyles.menuItemHover
-                                                                    : {}),
-                                                            }}
-                                                            onMouseEnter={() => {
-                                                                if (isMobileLayout)
-                                                                    return
-                                                                setSelectedSkillsIndex(
-                                                                    index
-                                                                )
-                                                            }}
-                                                        >
-                                                            <div
-                                                                style={{
-                                                                    flex: "1 1 0",
-                                                                    minWidth: 0,
-                                                                    display: "flex",
-                                                                    flexDirection:
-                                                                        "column",
-                                                                    justifyContent:
-                                                                        "center",
-                                                                    overflow:
-                                                                        "hidden",
-                                                                }}
-                                                            >
-                                                                <span
-                                                                    style={{
-                                                                        overflow:
-                                                                            "hidden",
-                                                                        textOverflow:
-                                                                            "ellipsis",
-                                                                        whiteSpace:
-                                                                            "nowrap",
-                                                                        fontSize: 14,
-                                                                    }}
-                                                                >
-                                                                    <span
-                                                                        style={{
-                                                                            color: themeColors
-                                                                                .text
-                                                                                .primary,
-                                                                            fontWeight:
-                                                                                "500",
-                                                                        }}
-                                                                    >
-                                                                        {skill.name}
-                                                                    </span>
-                                                                    {skill.description && (
-                                                                        <span
-                                                                            style={{
-                                                                                color: themeColors
-                                                                                    .text
-                                                                                    .secondary,
-                                                                                fontWeight:
-                                                                                    "400",
-                                                                            }}
-                                                                        >
-                                                                            {" — "}
-                                                                            {skill.description}
-                                                                        </span>
-                                                                    )}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    )
-                                                )}
-                                        </div>
+                                        )}
                                     </div>
-                                </>
-                            )}
-                            <textarea
-                                ref={textareaRef}
-                                tabIndex={1}
-                                value={value}
-                                onChange={(e) => {
-                                    onChange(e)
-                                    const val = e.target.value
-                                    // Slash command: "/" or "/a" → skills menu (close if space)
-                                    if (val.startsWith("/") && !val.includes(" ")) {
-                                        setShowSkillsMenu(true)
-                                        setShowMenu(false)
-                                    } else if (
-                                        val.endsWith("/") ||
-                                        val.endsWith("@")
-                                    ) {
-                                        setShowMenu(true)
-                                        setSelectedMenuIndex(0)
-                                        setShowSkillsMenu(false)
-                                    } else if (showMenu || showSkillsMenu) {
-                                        setShowMenu(false)
-                                        setShowSkillsMenu(false)
-                                    }
-                                }}
-                                onPaste={handlePaste}
-                                onKeyDown={(e) => {
-                                    if (showSkillsMenu) {
-                                        if (e.key === "ArrowUp") {
-                                            e.preventDefault()
-                                            setSelectedSkillsIndex((prev) => {
-                                                const len = filteredSkills.length
-                                                if (len === 0) return -1
-                                                if (prev === -1) return len - 1
-                                                return prev <= 0 ? len - 1 : prev - 1
-                                            })
-                                            return
-                                        }
-                                        if (e.key === "ArrowDown") {
-                                            e.preventDefault()
-                                            setSelectedSkillsIndex((prev) => {
-                                                const len = filteredSkills.length
-                                                if (len === 0) return -1
-                                                if (prev === -1) return 0
-                                                return prev >= len - 1 ? 0 : prev + 1
-                                            })
-                                            return
-                                        }
-                                        if (e.key === "Enter") {
-                                            e.preventDefault()
-                                            const idx =
-                                                selectedSkillsIndex === -1
-                                                    ? 0
-                                                    : selectedSkillsIndex
-                                            const skill = filteredSkills[idx]
-                                            if (skill && onSelectSkill) {
-                                                onSelectSkill({
-                                                    id: skill.id,
-                                                    name: skill.name,
-                                                    description: skill.description,
-                                                })
-                                                setShowSkillsMenu(false)
-                                                onChange({
-                                                    target: { value: "" },
-                                                } as React.ChangeEvent<HTMLTextAreaElement>)
-                                            }
-                                            return
-                                        }
-                                        if (e.key === "Escape") {
-                                            e.preventDefault()
-                                            setShowSkillsMenu(false)
-                                            return
-                                        }
-                                    }
-                                    if (showMenu) {
-                                        if (e.key === "ArrowUp") {
-                                            e.preventDefault()
-                                            setSelectedMenuIndex((prev) => {
-                                                if (prev === -1)
-                                                    return menuItems.length - 1
-                                                return prev <= 0
-                                                    ? menuItems.length - 1
-                                                    : prev - 1
-                                            })
-                                            return
-                                        }
-                                        if (e.key === "ArrowDown") {
-                                            e.preventDefault()
-                                            setSelectedMenuIndex((prev) => {
-                                                if (prev === -1) return 0
-                                                return prev ===
-                                                    menuItems.length - 1
-                                                    ? 0
-                                                    : prev + 1
-                                            })
-                                            return
-                                        }
-                                        if (e.key === "Enter") {
-                                            e.preventDefault()
-                                            const index =
-                                                selectedMenuIndex === -1
-                                                    ? 0
-                                                    : selectedMenuIndex
-                                            if (menuItems[index]) {
-                                                menuItems[index].onClick()
-                                            }
-                                            return
-                                        }
-                                        if (e.key === "Escape") {
-                                            e.preventDefault()
-                                            setShowMenu(false)
-                                            return
-                                        }
-                                    }
-
-                                    if (e.key === "Enter" && !e.shiftKey) {
-                                        e.preventDefault()
-                                        if (hasContent && !isLoading) onSend()
-                                    }
-                                }}
-                                placeholder={placeholder}
-                                disabled={false}
-                                className="ChatTextInput"
-                                style={{
-                                    flex: "1 1 0",
-                                    color: themeColors.text.primary,
-                                    fontSize: 16,
-                                    fontFamily: "Inter",
-                                    fontWeight: "400",
-                                    lineHeight: "24px",
-                                    background: "transparent",
-                                    border: "none",
-                                    outline: "none",
-                                    resize: "none",
-                                    height: 24,
-                                    padding: 0,
-                                    margin: 0,
-                                    width: "100%",
-                                }}
-                            />
+                                ))}
+                            </div>
+                        )}
                         </div>
 
+                        {/* RIGHT: Send + Start AI Live (top right corner) */}
+                        <div
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                flexShrink: 0,
+                            }}
+                        >
                         {/* SEND / STOP BUTTON */}
                         <div
                             data-svg-wrapper
@@ -6916,7 +6989,444 @@ const ChatInput = React.memo(function ChatInput({
                                     <ChatInputBarAiIcon />
                                 </div>
                             )}
+                        </div>
                     </div>
+                    </>
+                    ) : (
+                    /* SINGLE ROW (no chips): [Plus] [Textarea] [Send] [Start AI Live] - normal layout */
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "flex-end",
+                            gap: 8,
+                            width: "100%",
+                            padding: "0 10px 10px 10px",
+                        }}
+                    >
+                        {/* Plus - same as chips branch, inline in row */}
+                        <div
+                            id="upload-trigger-btn"
+                            data-svg-wrapper
+                            data-layer="upload-button"
+                            className="UploadButton"
+                            tabIndex={2}
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                if (attachments.length < 10) {
+                                    const nextState = !showMenu
+                                    setShowMenu(nextState)
+                                    if (nextState) setIsAddFilesTooltipHovered(false)
+                                }
+                            }}
+                            onMouseEnter={() => {
+                                if (attachments.length < 10 && isHoverCapable()) {
+                                    setIsUploadButtonHovered(true)
+                                    if (!showMenu) setIsAddFilesTooltipHovered(true)
+                                }
+                            }}
+                            onMouseLeave={() => {
+                                setIsUploadButtonHovered(false)
+                                setIsAddFilesTooltipHovered(false)
+                            }}
+                            style={{
+                                cursor: attachments.length >= 10 ? "not-allowed" : "pointer",
+                                pointerEvents: attachments.length >= 10 ? "none" : "auto",
+                                width: 36,
+                                height: 36,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                marginBottom: 0,
+                                position: "relative",
+                                zIndex: 1,
+                                borderRadius: "50%",
+                                background: (showMenu || isUploadButtonHovered) && attachments.length < 10 ? themeColors.hover.subtle : "transparent",
+                            }}
+                        >
+                            {showMenu && (
+                                <>
+                                    {isMobileLayout && (
+                                        <div
+                                            style={{
+                                                position: "fixed",
+                                                top: 0, left: 0, right: 0, bottom: 0,
+                                                background: themeColors.overlay.black,
+                                                zIndex: 1004,
+                                                pointerEvents: "auto",
+                                            }}
+                                            onClick={(e) => { e.stopPropagation(); setShowMenu(false) }}
+                                        />
+                                    )}
+                                    <div
+                                        ref={menuRef}
+                                        style={{
+                                            position: isMobileLayout ? "fixed" : "absolute",
+                                            bottom: isMobileLayout ? 0 : "calc(100% + 4px)",
+                                            left: isMobileLayout ? 0 : "calc(100% - 40px)",
+                                            right: isMobileLayout ? 0 : "auto",
+                                            zIndex: 2000,
+                                            pointerEvents: "auto",
+                                        }}
+                                    >
+                                        <div
+                                            data-layer="conversation actions"
+                                            className="ConversationActions"
+                                            onMouseLeave={() => setSelectedMenuIndex(-1)}
+                                            style={{
+                                                width: isMobileLayout ? "auto" : 196,
+                                                padding: 10,
+                                                background: themeColors.surfaceMenu,
+                                                boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                borderRadius: isMobileLayout ? "36px 36px 0px 0px" : 28,
+                                                outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                outlineOffset: "-0.1px",
+                                                flexDirection: "column",
+                                                justifyContent: "flex-start",
+                                                alignItems: "flex-start",
+                                                gap: 4,
+                                                display: "flex",
+                                            }}
+                                        >
+                                            {menuItems.map((item, index) => (
+                                                <React.Fragment key={item.id}>
+                                                    {item.hasSeparator && (
+                                                        <div
+                                                            data-layer="separator"
+                                                            className="Separator"
+                                                            style={{
+                                                                alignSelf: "stretch",
+                                                                marginLeft: 4, marginRight: 4, marginTop: 2, marginBottom: 2,
+                                                                height: 1,
+                                                                position: "relative",
+                                                                background: themeColors.border.subtle,
+                                                                borderRadius: 4,
+                                                            }}
+                                                        />
+                                                    )}
+                                                    <div
+                                                        className={item.className}
+                                                        onClick={(e) => { e.stopPropagation(); item.onClick() }}
+                                                        style={{
+                                                            ...localStyles.menuItem,
+                                                            height: isMobileLayout ? 44 : 36,
+                                                            transition: "none",
+                                                            ...(index === selectedMenuIndex ? (item.isDestructive ? localStyles.menuItemDestructiveHover : localStyles.menuItemHover) : {}),
+                                                        }}
+                                                        onMouseEnter={() => { if (!isMobileLayout) setSelectedMenuIndex(index) }}
+                                                    >
+                                                        <div data-svg-wrapper className="Icon" style={{ width: 15, display: "flex", justifyContent: "center" }}>
+                                                            {item.icon}
+                                                        </div>
+                                                        <div className="Label" style={{
+                                                            flex: "1 1 0", justifyContent: "center", display: "flex", flexDirection: "column",
+                                                            color: item.isDestructive ? themeColors.destructive.light : themeColors.text.primary,
+                                                            fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.32px", wordWrap: "break-word",
+                                                        }}>
+                                                            {item.label}
+                                                        </div>
+                                                    </div>
+                                                </React.Fragment>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                            {!showMenu && isAddFilesTooltipHovered && (
+                                <Tooltip style={{ bottom: "100%", left: "50%", transform: isMobileLayout ? "translate(-25%, -17px)" : "translate(-50%, -17px)" }}>
+                                    Add files and more
+                                </Tooltip>
+                            )}
+                            <div style={{ opacity: attachments.length >= 10 ? 0.3 : 0.95, display: "flex" }}>
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M12 5V19M5 12H19" stroke={themeColors.text.primary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                            </div>
+                        </div>
+                        {/* TextAreaWrapper - inline, flex: 1 */}
+                        <div
+                            data-layer="textarea-wrapper"
+                            className="TextAreaWrapper"
+                            style={{
+                                flex: "1 1 0",
+                                alignSelf: "stretch",
+                                display: "flex",
+                                alignItems: "center",
+                                paddingTop: 6,
+                                paddingBottom: 6,
+                                position: "relative",
+                            }}
+                        >
+                            {showSkillsMenu &&
+                                !skillsLoading &&
+                                !skillsError &&
+                                filteredSkills.length > 0 && (
+                                <>
+                                    {isMobileLayout && (
+                                        <div
+                                            style={{
+                                                position: "fixed",
+                                                top: 0,
+                                                left: 0,
+                                                right: 0,
+                                                bottom: 0,
+                                                background: themeColors.overlay.black,
+                                                zIndex: 1004,
+                                                pointerEvents: "auto",
+                                            }}
+                                            onClick={() => setShowSkillsMenu(false)}
+                                        />
+                                    )}
+                                    <div
+                                        ref={skillsMenuRef}
+                                        style={{
+                                            position: isMobileLayout ? "fixed" : "absolute",
+                                            bottom: isMobileLayout ? 0 : "calc(100% + 4px)",
+                                            left: isMobileLayout ? 0 : 0,
+                                            right: isMobileLayout ? 0 : "auto",
+                                            zIndex: 2000,
+                                            pointerEvents: "auto",
+                                        }}
+                                    >
+                                        <div
+                                            data-layer="skills-menu"
+                                            className="ConversationActions"
+                                            onMouseLeave={() => setSelectedSkillsIndex(-1)}
+                                            style={{
+                                                width: isMobileLayout ? "auto" : 280,
+                                                padding: 10,
+                                                background: themeColors.surfaceMenu,
+                                                boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                borderRadius: isMobileLayout ? "36px 36px 0px 0px" : 28,
+                                                outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                outlineOffset: "-0.1px",
+                                                flexDirection: "column",
+                                                justifyContent: "flex-start",
+                                                alignItems: "flex-start",
+                                                gap: 4,
+                                                display: "flex",
+                                            }}
+                                        >
+                                            <div style={{ fontSize: 12, color: themeColors.text.secondary, paddingLeft: 12, paddingBottom: 4, marginTop: 6, alignSelf: "flex-start" }}>
+                                                Skills
+                                            </div>
+                                            {filteredSkills.map((skill, index) => (
+                                                <div
+                                                    key={skill.id}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        if (onSelectSkill) {
+                                                            onSelectSkill({ id: skill.id, name: skill.name, description: skill.description })
+                                                            setShowSkillsMenu(false)
+                                                            onChange({ target: { value: "" } } as React.ChangeEvent<HTMLTextAreaElement>)
+                                                        }
+                                                    }}
+                                                    title={skill.description || undefined}
+                                                    style={{
+                                                        ...localStyles.menuItem,
+                                                        height: isMobileLayout ? 44 : 36,
+                                                        transition: "none",
+                                                        cursor: "pointer",
+                                                        ...(index === selectedSkillsIndex ? localStyles.menuItemHover : {}),
+                                                    }}
+                                                    onMouseEnter={() => { if (!isMobileLayout) setSelectedSkillsIndex(index) }}
+                                                >
+                                                    <div style={{ flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "column", justifyContent: "center", overflow: "hidden" }}>
+                                                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14 }}>
+                                                            <span style={{ color: themeColors.text.primary, fontWeight: "500" }}>{skill.name}</span>
+                                                            {skill.description && <span style={{ color: themeColors.text.secondary, fontWeight: "400" }}>{" — "}{skill.description}</span>}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                            <textarea
+                                ref={textareaRef}
+                                tabIndex={1}
+                                value={value}
+                                onSelect={(e) => {
+                                    selectionRef.current = {
+                                        start: e.target.selectionStart,
+                                        end: e.target.selectionEnd,
+                                    }
+                                }}
+                                onChange={(e) => {
+                                    selectionRef.current = {
+                                        start: e.target.selectionStart,
+                                        end: e.target.selectionEnd,
+                                    }
+                                    onChange(e)
+                                    const val = e.target.value
+                                    if (val.startsWith("/") && !val.includes(" ")) {
+                                        setShowSkillsMenu(true)
+                                        setShowMenu(false)
+                                    } else if (val.endsWith("/") || val.endsWith("@")) {
+                                        setShowMenu(true)
+                                        setSelectedMenuIndex(0)
+                                        setShowSkillsMenu(false)
+                                    } else if (showMenu || showSkillsMenu) {
+                                        setShowMenu(false)
+                                        setShowSkillsMenu(false)
+                                    }
+                                }}
+                                onPaste={handlePaste}
+                                onKeyDown={(e) => {
+                                    if (showSkillsMenu) {
+                                        if (e.key === "ArrowUp") {
+                                            e.preventDefault()
+                                            setSelectedSkillsIndex((prev) => {
+                                                const len = filteredSkills.length
+                                                if (len === 0) return -1
+                                                if (prev === -1) return len - 1
+                                                return prev <= 0 ? len - 1 : prev - 1
+                                            })
+                                            return
+                                        }
+                                        if (e.key === "ArrowDown") {
+                                            e.preventDefault()
+                                            setSelectedSkillsIndex((prev) => {
+                                                const len = filteredSkills.length
+                                                if (len === 0) return -1
+                                                if (prev === -1) return 0
+                                                return prev >= len - 1 ? 0 : prev + 1
+                                            })
+                                            return
+                                        }
+                                        if (e.key === "Enter") {
+                                            e.preventDefault()
+                                            const idx = selectedSkillsIndex === -1 ? 0 : selectedSkillsIndex
+                                            const skill = filteredSkills[idx]
+                                            if (skill && onSelectSkill) {
+                                                onSelectSkill({ id: skill.id, name: skill.name, description: skill.description })
+                                                setShowSkillsMenu(false)
+                                                onChange({ target: { value: "" } } as React.ChangeEvent<HTMLTextAreaElement>)
+                                            }
+                                            return
+                                        }
+                                        if (e.key === "Escape") {
+                                            e.preventDefault()
+                                            setShowSkillsMenu(false)
+                                            return
+                                        }
+                                    }
+                                    if (showMenu) {
+                                        if (e.key === "ArrowUp") {
+                                            e.preventDefault()
+                                            setSelectedMenuIndex((prev) => (prev === -1 ? menuItems.length - 1 : prev <= 0 ? menuItems.length - 1 : prev - 1))
+                                            return
+                                        }
+                                        if (e.key === "ArrowDown") {
+                                            e.preventDefault()
+                                            setSelectedMenuIndex((prev) => (prev === -1 ? 0 : prev === menuItems.length - 1 ? 0 : prev + 1))
+                                            return
+                                        }
+                                        if (e.key === "Enter") {
+                                            e.preventDefault()
+                                            const index = selectedMenuIndex === -1 ? 0 : selectedMenuIndex
+                                            if (menuItems[index]) menuItems[index].onClick()
+                                            return
+                                        }
+                                        if (e.key === "Escape") {
+                                            e.preventDefault()
+                                            setShowMenu(false)
+                                            return
+                                        }
+                                    }
+                                    if (e.key === "Enter" && !e.shiftKey) {
+                                        e.preventDefault()
+                                        if (hasContent && !isLoading) onSend()
+                                    }
+                                }}
+                                placeholder={placeholder}
+                                disabled={false}
+                                className="ChatTextInput"
+                                style={{
+                                    flex: "1 1 0",
+                                    color: themeColors.text.primary,
+                                    fontSize: 16,
+                                    fontFamily: "Inter",
+                                    fontWeight: "400",
+                                    lineHeight: "24px",
+                                    background: "transparent",
+                                    border: "none",
+                                    outline: "none",
+                                    resize: "none",
+                                    height: 24,
+                                    padding: 0,
+                                    margin: 0,
+                                    width: "100%",
+                                }}
+                            />
+                        </div>
+                        {/* Send + Start AI Live - reuse from chips branch structure */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                            <div
+                                data-svg-wrapper
+                                data-layer="send-button"
+                                className="SendButton"
+                                aria-label={isLoading ? "Stop generating response" : hasContent ? "Send message" : "Send"}
+                                onClick={() => {
+                                    if (isLoading && onStop) onStop()
+                                    else if (hasContent) onSend()
+                                }}
+                                style={{
+                                    cursor: "pointer",
+                                    display: hasContent || isLoading ? "block" : "none",
+                                    opacity: 1,
+                                    width: 36,
+                                    height: 36,
+                                }}
+                            >
+                                {isLoading ? (
+                                    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                        <rect width="36" height="36" rx="18" fill={themeColors.text.primary} fillOpacity="0.95" />
+                                        <rect x="12" y="12" width="12" height="12" rx="2" fill={themeColors.background} fillOpacity="0.95" />
+                                    </svg>
+                                ) : (
+                                    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                        <rect width="36" height="36" rx="18" fill={themeColors.text.primary} fillOpacity="0.95" />
+                                        <path fillRule="evenodd" clipRule="evenodd" d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z" fill={themeColors.background} fillOpacity="0.95" />
+                                    </svg>
+                                )}
+                            </div>
+                            {!hasContent && !isLoading && (!showEndCall || showAiLiveButton) && onConnectWithAI && (
+                                <div
+                                    data-svg-wrapper
+                                    data-layer="start ai live call"
+                                    className="StartAiLiveCall"
+                                    tabIndex={3}
+                                    onClick={onConnectWithAI}
+                                    onMouseEnter={() => isHoverCapable() && setIsAiTooltipHovered(true)}
+                                    onMouseLeave={() => setIsAiTooltipHovered(false)}
+                                    style={{
+                                        cursor: "pointer",
+                                        width: 36,
+                                        height: 36,
+                                        display: "block",
+                                        position: "relative",
+                                        zIndex: 0,
+                                        borderRadius: "50%",
+                                        WebkitBorderRadius: "50%",
+                                        flexShrink: 0,
+                                        WebkitBackfaceVisibility: "hidden",
+                                        backfaceVisibility: "hidden",
+                                        WebkitTransform: "translateZ(0)",
+                                        transform: "translateZ(0)",
+                                    }}
+                                >
+                                    {isAiTooltipHovered && (
+                                        <Tooltip style={{ bottom: "100%", left: "50%", transform: "translate(-50%, -8px)" }}>
+                                            Connect with AI
+                                        </Tooltip>
+                                    )}
+                                    <ChatInputBarAiIcon />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    )}
                 </div>
 
                 {/* END CALL BUTTON */}
