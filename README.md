@@ -26,7 +26,7 @@ This isn't just a chatbot. It's a full mentorship experience: video calls, AI-po
 
 *Psssst. Hey, you, join our stargazers ⭐️*
 
-[![GitHub stars](https://img.shields.io/github/stars/loganngarcia/curastem?style=social)](https://github.com/loganngarcia/curastem)
+[![GitHub stars](https://img.shields.io/github/stars/loganngarcia/curastem?style=social)](https://github.com/loganngarcia/curastem) <--
 
 ---
 
