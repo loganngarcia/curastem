@@ -1,6 +1,6 @@
 ---
 name: Help with college
-description: Support students with college applications, decisions, and campus life using Curastem's document editor, whiteboard, and resources. Use when asked about "college", "university", "college apps", "admissions", "campus", or "college life".
+description: College apps, essays, supplements, and decision matrices. Use when asked about "college", "university", "college apps", "admissions", "campus", or "college life".
 metadata:
   author: curastem
   version: "1.0.0"

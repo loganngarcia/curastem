@@ -1,6 +1,6 @@
 ---
 name: Apply for FAFSA
-description: Guide students through the FAFSA application process using Curastem's document editor and whiteboard for checklists, timelines, and document prep. Use when asked about "FAFSA", "financial aid", "federal aid", "student aid", or "filling out FAFSA".
+description: FAFSA forms, deadlines, FSA ID, and required documents. Use when asked about "FAFSA", "financial aid", "federal aid", "student aid", or "filling out FAFSA".
 metadata:
   author: curastem
   version: "1.0.0"

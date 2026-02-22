@@ -1,6 +1,6 @@
 ---
 name: Create a portfolio
-description: Help students build professional portfolios using Curastem's mini app builder and document editor. Use when asked about "portfolio", "showcase my work", "portfolio website", "design portfolio", "project portfolio", or "build my portfolio".
+description: Build portfolio websites with mini app, doc, and whiteboard. Use when asked about "portfolio", "showcase my work", "portfolio website", "design portfolio", "project portfolio", or "build my portfolio".
 metadata:
   author: curastem
   version: "1.0.0"

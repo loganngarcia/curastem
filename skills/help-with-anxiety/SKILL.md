@@ -1,6 +1,6 @@
 ---
 name: Help with anxiety
-description: Support students with anxiety and stress using Curastem's document editor and whiteboard for planning, journaling, and visualization. Use when asked about "anxiety", "stress", "overwhelmed", "mental health", "nervous", or "worried".
+description: Coping strategies, breathing exercises, and grounding techniques. Use when asked about "anxiety", "stress", "overwhelmed", "mental health", "nervous", or "worried".
 metadata:
   author: curastem
   version: "1.0.0"

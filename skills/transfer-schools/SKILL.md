@@ -1,6 +1,6 @@
 ---
 name: Transfer schools
-description: Help students plan and execute college transfers using Curastem's document editor, whiteboard, and resources. Use when asked about "transfer", "UC transfer", "CSU transfer", "community college transfer", or "changing schools".
+description: UC/CSU transfer, articulation, prerequisites, and deadlines. Use when asked about "transfer", "UC transfer", "CSU transfer", "community college transfer", or "changing schools".
 metadata:
   author: curastem
   version: "1.0.0"

@@ -1,6 +1,6 @@
 ---
 name: Get student freebies
-description: Help students find and access student discounts, freebies, and offers using Curastem's document editor and resources. Use when asked about "student discounts", "free stuff", "student freebies", "student deals", or "save money as student".
+description: Student discounts, free software, and .edu deals. Use when asked about "student discounts", "free stuff", "student freebies", "student deals", or "save money as student".
 metadata:
   author: curastem
   version: "1.0.0"

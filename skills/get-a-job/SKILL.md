@@ -1,6 +1,6 @@
 ---
 name: Get a job
-description: Help students find and secure jobs using Curastem's document editor, whiteboard, and resources. Use when asked about "get a job", "find work", "job search", "employment", "hiring", or "land a job".
+description: Job search, applications, cover letters, and strategy maps. Use when asked about "get a job", "find work", "job search", "employment", "hiring", or "land a job".
 metadata:
   author: curastem
   version: "1.0.0"

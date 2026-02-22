@@ -1,6 +1,6 @@
 ---
 name: Reduce stress
-description: Help students manage stress using Curastem's document editor and whiteboard for plans, exercises, and visualization. Use when asked about "stress", "overwhelmed", "burnout", "manage stress", or "coping".
+description: Stress plans, breathing exercises, and task breakdowns. Use when asked about "stress", "overwhelmed", "burnout", "manage stress", or "coping".
 metadata:
   author: curastem
   version: "1.0.0"

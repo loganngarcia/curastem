@@ -1,6 +1,6 @@
 ---
 name: Help with loans
-description: Guide students through understanding and managing student loans using Curastem's document editor and whiteboard. Use when asked about "student loans", "loans", "debt", "repayment", "refinancing", or "loan forgiveness".
+description: Student loans, repayment plans, and forgiveness programs. Use when asked about "student loans", "loans", "debt", "repayment", "refinancing", or "loan forgiveness".
 metadata:
   author: curastem
   version: "1.0.0"

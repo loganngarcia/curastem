@@ -1,6 +1,6 @@
 ---
 name: Create a resume
-description: Help students create and refine resumes using Curastem's document editor. Use when asked about "resume", "CV", "curriculum vitae", "job application", or "resume help".
+description: Write and format resumes in the doc editor. Use when asked about "resume", "CV", "curriculum vitae", "job application", or "resume help".
 metadata:
   author: curastem
   version: "1.0.0"

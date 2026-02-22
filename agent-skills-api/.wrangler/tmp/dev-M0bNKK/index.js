@@ -17,8 +17,6 @@ globalThis.fetch = new Proxy(globalThis.fetch, {
 });
 
 // src/index.ts
-var GITHUB_API = "https://api.github.com/repos/vercel-labs/agent-skills/contents/skills";
-var RAW_BASE = "https://raw.githubusercontent.com/vercel-labs/agent-skills/main/skills";
 function corsHeaders(origin) {
   return {
     "Access-Control-Allow-Origin": origin || "*",

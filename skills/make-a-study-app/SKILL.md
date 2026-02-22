@@ -1,6 +1,6 @@
 ---
 name: Make a study app
-description: Help students build interactive study tools using Curastem's mini app builder. Use when asked about "study app", "flashcards", "quiz", "study tool", "practice quiz", or "make an app to study".
+description: Flashcards, quizzes, and interactive study apps in mini app. Use when asked about "study app", "flashcards", "quiz", "study tool", "practice quiz", or "make an app to study".
 metadata:
   author: curastem
   version: "1.0.0"

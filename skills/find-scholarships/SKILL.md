@@ -1,6 +1,6 @@
 ---
 name: Find scholarships
-description: Help students discover and apply for scholarships using Curastem's document editor, whiteboard, and resource retrieval. Use when asked about "scholarships", "financial aid", "free money", "grants", or "pay for college".
+description: Search scholarships, draft essays, and track deadlines. Use when asked about "scholarships", "financial aid", "free money", "grants", or "pay for college".
 metadata:
   author: curastem
   version: "1.0.0"

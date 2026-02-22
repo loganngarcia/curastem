@@ -33,6 +33,8 @@ const INPUT_TARGET_SAMPLE_RATE = 16000
 const DEFAULT_SKILLS_API_URL =
     "https://agent-skills-api.logangarcia102.workers.dev"
 
+const SKILLS_CACHE_KEY = "curastem_skills_cache"
+
 const DEFAULT_DOC_CONTENT = `
 <h1>Welcome to Docs </h1>
 <p>You can start typing or ask Curastem to write resumes, make study guides, draft messages, and anything you can imagine </p>
@@ -5093,11 +5095,6 @@ const ChatInput = React.memo(function ChatInput({
         if (!showMenu) setSelectedMenuIndex(-1)
     }, [showMenu])
 
-    // Reset skills selection when skills menu opens/closes
-    React.useEffect(() => {
-        if (!showSkillsMenu) setSelectedSkillsIndex(-1)
-    }, [showSkillsMenu])
-
     // Fetch skills from Skills API when slash command is active
     const skillsQuery = value.startsWith("/") ? value.slice(1).toLowerCase() : ""
     const filteredSkills = React.useMemo(() => {
@@ -5129,34 +5126,58 @@ const ChatInput = React.memo(function ChatInput({
         return scored.map((x) => x.skill).slice(0, 5)
     }, [skillsList, skillsQuery])
 
+    // Auto-select first skill when menu opens; reset when closed
+    React.useEffect(() => {
+        if (!showSkillsMenu) setSelectedSkillsIndex(-1)
+        else if (filteredSkills.length > 0) setSelectedSkillsIndex(0)
+    }, [showSkillsMenu, filteredSkills])
+
     const skillsFetchedRef = React.useRef(false)
     React.useEffect(() => {
         if (
             typeof window === "undefined" ||
-            !value.startsWith("/")
+            !value.startsWith("/") ||
+            value.includes(" ")
         ) {
             setShowSkillsMenu(false)
-            skillsFetchedRef.current = false
             setSkillsError(null)
             return
         }
         setShowSkillsMenu(true)
         if (skillsFetchedRef.current) return
         skillsFetchedRef.current = true
-        let cancelled = false
         const apiUrl = skillsApiUrl || DEFAULT_SKILLS_API_URL
-        const fetchSkills = async () => {
-            setSkillsLoading(true)
+
+        const applyList = (list: AgentSkill[]) => {
+            setSkillsList(list)
             setSkillsError(null)
-            try {
-                const res = await fetch(apiUrl)
+        }
+
+        try {
+            const cached = localStorage.getItem(SKILLS_CACHE_KEY)
+            if (cached) {
+                const parsed = JSON.parse(cached) as {
+                    apiUrl: string
+                    skills: AgentSkill[]
+                }
+                if (parsed.apiUrl === apiUrl && Array.isArray(parsed.skills)) {
+                    applyList(parsed.skills)
+                    return
+                }
+            }
+        } catch {
+            /* ignore invalid cache */
+        }
+
+        let cancelled = false
+        setSkillsLoading(true)
+        setSkillsError(null)
+        fetch(apiUrl)
+            .then((res) => {
                 if (!res.ok) throw new Error(`Skills API: ${res.status}`)
-                const data = (await res.json()) as Array<{
-                    id: string
-                    name: string
-                    description?: string
-                    path?: string
-                }>
+                return res.json()
+            })
+            .then((data: Array<{ id: string; name: string; description?: string; path?: string }>) => {
                 const list: AgentSkill[] = (data || []).map((s) => ({
                     id: s.id,
                     object: "skill" as const,
@@ -5167,10 +5188,18 @@ const ChatInput = React.memo(function ChatInput({
                     created_at: 0,
                 }))
                 if (!cancelled) {
-                    setSkillsList(list)
-                    setSkillsError(null)
+                    applyList(list)
+                    try {
+                        localStorage.setItem(
+                            SKILLS_CACHE_KEY,
+                            JSON.stringify({ apiUrl, skills: list })
+                        )
+                    } catch {
+                        /* ignore quota exceeded */
+                    }
                 }
-            } catch (e) {
+            })
+            .catch((e) => {
                 if (!cancelled) {
                     setSkillsList([])
                     const msg =
@@ -5182,11 +5211,11 @@ const ChatInput = React.memo(function ChatInput({
                             : msg
                     )
                 }
-            } finally {
+            })
+            .finally(() => {
                 if (!cancelled) setSkillsLoading(false)
-            }
-        }
-        fetchSkills()
+            })
+
         return () => {
             cancelled = true
         }
@@ -6433,7 +6462,10 @@ const ChatInput = React.memo(function ChatInput({
                                 position: "relative",
                             }}
                         >
-                            {showSkillsMenu && !skillsLoading && (
+                            {showSkillsMenu &&
+                                !skillsLoading &&
+                                !skillsError &&
+                                filteredSkills.length > 0 && (
                                 <>
                                     {isMobileLayout && (
                                         <div
@@ -6495,34 +6527,20 @@ const ChatInput = React.memo(function ChatInput({
                                                 display: "flex",
                                             }}
                                         >
-                                            {skillsError ? (
-                                                <div
-                                                    style={{
-                                                        padding: 12,
-                                                        color: themeColors
-                                                            .destructive?.light ||
-                                                            "#e57373",
-                                                        fontSize: 14,
-                                                    }}
-                                                >
-                                                    {skillsError}
-                                                </div>
-                                            ) : filteredSkills.length === 0 ? (
-                                                <div
-                                                    style={{
-                                                        padding: 12,
-                                                        color: themeColors.text
-                                                            .secondary,
-                                                        fontSize: 14,
-                                                        lineHeight: 1.4,
-                                                    }}
-                                                >
-                                                    {skillsList.length === 0
-                                                        ? "No skills available. Check Skills API URL or network."
-                                                        : `No skills matching "${skillsQuery}"`}
-                                                </div>
-                                            ) : (
-                                                filteredSkills.map(
+                                            <div
+                                                style={{
+                                                    fontSize: 12,
+                                                    color: themeColors.text
+                                                        .secondary,
+                                                    paddingLeft: 12,
+                                                    paddingBottom: 4,
+                                                    marginTop: 6,
+                                                    alignSelf: "flex-start",
+                                                }}
+                                            >
+                                                Skills
+                                            </div>
+                                            {filteredSkills.map(
                                                     (skill, index) => (
                                                         <div
                                                             key={skill.id}
@@ -6549,6 +6567,10 @@ const ChatInput = React.memo(function ChatInput({
                                                                     } as React.ChangeEvent<HTMLTextAreaElement>)
                                                                 }
                                                             }}
+                                                            title={
+                                                                skill.description ||
+                                                                undefined
+                                                            }
                                                             style={{
                                                                 ...localStyles.menuItem,
                                                                 height: isMobileLayout
@@ -6572,57 +6594,57 @@ const ChatInput = React.memo(function ChatInput({
                                                             <div
                                                                 style={{
                                                                     flex: "1 1 0",
+                                                                    minWidth: 0,
                                                                     display: "flex",
                                                                     flexDirection:
                                                                         "column",
                                                                     justifyContent:
                                                                         "center",
+                                                                    overflow:
+                                                                        "hidden",
                                                                 }}
                                                             >
                                                                 <span
                                                                     style={{
-                                                                        color: themeColors
-                                                                            .text
-                                                                            .primary,
+                                                                        overflow:
+                                                                            "hidden",
+                                                                        textOverflow:
+                                                                            "ellipsis",
+                                                                        whiteSpace:
+                                                                            "nowrap",
                                                                         fontSize: 14,
-                                                                        fontWeight:
-                                                                            "500",
                                                                     }}
                                                                 >
-                                                                    {skill.name}
-                                                                </span>
-                                                                {skill.description && (
                                                                     <span
                                                                         style={{
                                                                             color: themeColors
                                                                                 .text
-                                                                                .secondary,
-                                                                            fontSize: 12,
-                                                                            marginTop: 2,
-                                                                            overflow: "hidden",
-                                                                            textOverflow:
-                                                                                "ellipsis",
-                                                                            whiteSpace:
-                                                                                "nowrap",
+                                                                                .primary,
+                                                                            fontWeight:
+                                                                                "500",
                                                                         }}
                                                                     >
-                                                                        {skill.description.slice(
-                                                                            0,
-                                                                            60
-                                                                        )}
-                                                                        {skill
-                                                                            .description
-                                                                            .length >
-                                                                        60
-                                                                            ? "…"
-                                                                            : ""}
+                                                                        {skill.name}
                                                                     </span>
-                                                                )}
+                                                                    {skill.description && (
+                                                                        <span
+                                                                            style={{
+                                                                                color: themeColors
+                                                                                    .text
+                                                                                    .secondary,
+                                                                                fontWeight:
+                                                                                    "400",
+                                                                            }}
+                                                                        >
+                                                                            {" — "}
+                                                                            {skill.description}
+                                                                        </span>
+                                                                    )}
+                                                                </span>
                                                             </div>
                                                         </div>
                                                     )
-                                                )
-                                            )}
+                                                )}
                                         </div>
                                     </div>
                                 </>
@@ -6634,8 +6656,8 @@ const ChatInput = React.memo(function ChatInput({
                                 onChange={(e) => {
                                     onChange(e)
                                     const val = e.target.value
-                                    // Slash command: "/" or "/a" → skills menu
-                                    if (val.startsWith("/")) {
+                                    // Slash command: "/" or "/a" → skills menu (close if space)
+                                    if (val.startsWith("/") && !val.includes(" ")) {
                                         setShowSkillsMenu(true)
                                         setShowMenu(false)
                                     } else if (

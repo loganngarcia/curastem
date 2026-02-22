@@ -1,6 +1,6 @@
 ---
 name: Practice for interview
-description: Help students prepare for interviews using Curastem's document editor and whiteboard for Q&A prep, STAR stories, and strategy maps. Use when asked about "interview", "interview prep", "practice interview", "job interview", or "interview questions".
+description: Interview Q&A, STAR stories, and thank-you emails. Use when asked about "interview", "interview prep", "practice interview", "job interview", or "interview questions".
 metadata:
   author: curastem
   version: "1.0.0"

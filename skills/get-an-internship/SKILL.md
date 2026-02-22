@@ -1,6 +1,6 @@
 ---
 name: Get an internship
-description: Help students find and secure internships using Curastem's document editor, whiteboard, and resources. Use when asked about "internship", "intern", "summer internship", "work experience", or "get experience".
+description: Internship search, tailored resumes, and application trackers. Use when asked about "internship", "intern", "summer internship", "work experience", or "get experience".
 metadata:
   author: curastem
   version: "1.0.0"
