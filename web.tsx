@@ -3099,6 +3099,11 @@ const DocEditor = React.memo(function DocEditor({
                 "--doc-font-serif": '"Times New Roman", serif',
                 "--doc-font-sans": "Inter, sans-serif",
                 "--doc-accent": themeColors.semantic.accent,
+                "--doc-text-color": themeColors.text.primary,
+                "--doc-border-color":
+                    themeColors.background === lightColors.background
+                        ? themeColors.border.subtle
+                        : "hsla(0, 0%, 100%, 0.2)",
                 "--doc-current-font":
                     settings.fontStyle === "serif"
                         ? "var(--doc-font-serif)"
@@ -4893,16 +4898,20 @@ const DocEditor = React.memo(function DocEditor({
                             userSelect: "text",
                             WebkitUserSelect: "text",
                             WebkitTouchCallout: "default",
+                            color: themeColors.text.primary,
                         }}
                     />
                 </div>
             </div>
 
             <style>{`
+                .DocEditor, .DocEditor * { color: var(--doc-text-color); }
+                .DocEditor a { color: var(--doc-accent); }
                 .DocEditor h1 { font-size: var(--doc-h1-size); font-weight: 700; margin-top: 1em; margin-bottom: 0.5em; }
-                .DocEditor h2 { font-size: var(--doc-h2-size); font-weight: 700; text-transform: uppercase; border-bottom: 1px solid var(--doc-border-color, ${themeColors.surfaceBlack}); margin-top: 1.2em; margin-bottom: 0.5em; }
+                .DocEditor h2 { font-size: var(--doc-h2-size); font-weight: 700; text-transform: uppercase; border-bottom: 1px solid var(--doc-border-color); margin-top: 1.2em; margin-bottom: 0.5em; }
+                .DocEditor hr { border: 0; height: 1px; background: var(--doc-border-color); margin: 1.5em 0; }
                 .DocEditor ul, .DocEditor ol { padding-left: 24px; margin: 12px 0; }
-                .DocEditor a { color: var(--doc-accent); text-decoration: underline; cursor: pointer; }
+                .DocEditor a { text-decoration: underline; cursor: pointer; }
             `}</style>
 
             {remoteCursors &&
