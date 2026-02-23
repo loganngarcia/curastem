@@ -1685,6 +1685,7 @@ interface Attachment {
 interface Message {
     role: string
     text: string
+    skills?: Array<{ id: string; name: string; description?: string }>
     attachments?: {
         type: "image" | "video" | "file"
         url?: string
@@ -5041,6 +5042,10 @@ interface ChatInputProps {
         description?: string
     }) => void
     onRemoveSkill?: (skillId: string) => void
+    /** Called whenever the contenteditable HTML changes (for P2P sync) */
+    onHtmlChange?: (html: string) => void
+    /** Applied from peer: sets the contenteditable HTML + extracts skills. seq increments each sync. */
+    peerSync?: { html: string; skills: Array<{ id: string; name: string; description?: string }>; seq: number } | null
 }
 
 const ChatInput = React.memo(function ChatInput({
@@ -5084,8 +5089,29 @@ const ChatInput = React.memo(function ChatInput({
     selectedSkills = [],
     onSelectSkill,
     onRemoveSkill,
+    onHtmlChange,
+    peerSync,
 }: ChatInputProps) {
-    const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+    const editableRef = React.useRef<HTMLDivElement | null>(null)
+    // Preserve contenteditable innerHTML across two-row/single-row layout switches
+    const savedEditableContentRef = React.useRef<string>("")
+    // Track whether content came from peer sync or local typing (so we apply peer updates when content is from peer)
+    const contentOriginRef = React.useRef<"peer" | "local" | "empty">("empty")
+    const isApplyingPeerSyncRef = React.useRef(false)
+    // Callback ref so new DOM nodes get content restored after layout switch
+    const setEditableRef = React.useCallback((el: HTMLDivElement | null) => {
+        editableRef.current = el
+        if (el && savedEditableContentRef.current) {
+            el.innerHTML = savedEditableContentRef.current
+            try {
+                const range = document.createRange()
+                range.selectNodeContents(el)
+                range.collapse(false)
+                const sel = window.getSelection()
+                if (sel) { sel.removeAllRanges(); sel.addRange(range) }
+            } catch { /* ignore */ }
+        }
+    }, [])
     const [isAiTooltipHovered, setIsAiTooltipHovered] = React.useState(false)
     const [isAddFilesTooltipHovered, setIsAddFilesTooltipHovered] =
         React.useState(false)
@@ -5125,9 +5151,9 @@ const ChatInput = React.memo(function ChatInput({
     const [skillsError, setSkillsError] = React.useState<string | null>(null)
     const [selectedSkillsIndex, setSelectedSkillsIndex] = React.useState(-1)
     const skillsMenuRef = React.useRef<HTMLDivElement>(null)
+    const selectedSkillRef = React.useRef<HTMLDivElement | null>(null)
+    const savedSlashCursorRef = React.useRef<number | null>(null)
     const [hasExpandedToTwoRows, setHasExpandedToTwoRows] = React.useState(false)
-    const selectionRef = React.useRef({ start: 0, end: 0 })
-
     // Create local styles with themeColors
     const localStyles = React.useMemo(
         () => getStyles(themeColors),
@@ -5139,12 +5165,14 @@ const ChatInput = React.memo(function ChatInput({
         if (!showMenu) setSelectedMenuIndex(-1)
     }, [showMenu])
 
-    // Fetch skills from Skills API when slash command is active
-    const skillsQuery = value.startsWith("/") ? value.slice(1).toLowerCase() : ""
+    // Fetch skills from Skills API when slash command is active (/ can appear anywhere)
+    const lastSlash = value.lastIndexOf("/")
+    const afterSlash = lastSlash >= 0 ? value.slice(lastSlash + 1) : ""
+    const skillsQuery = afterSlash.includes(" ") ? "" : afterSlash.toLowerCase()
     const filteredSkills = React.useMemo(() => {
-        if (!skillsQuery) return skillsList.slice(0, 5)
+        if (!skillsQuery) return skillsList
         const q = skillsQuery.trim()
-        if (!q) return skillsList.slice(0, 5)
+        if (!q) return skillsList
         const fuzzyMatch = (text: string, query: string): boolean => {
             let i = 0
             for (let j = 0; j < text.length && i < query.length; j++) {
@@ -5167,7 +5195,7 @@ const ChatInput = React.memo(function ChatInput({
             })
             .filter((x) => x.score > 0)
             .sort((a, b) => b.score - a.score)
-        return scored.map((x) => x.skill).slice(0, 5)
+        return scored.map((x) => x.skill)
     }, [skillsList, skillsQuery])
 
     // Auto-select first skill when menu opens; reset when closed
@@ -5176,13 +5204,16 @@ const ChatInput = React.memo(function ChatInput({
         else if (filteredSkills.length > 0) setSelectedSkillsIndex(0)
     }, [showSkillsMenu, filteredSkills])
 
+    // Scroll selected skill into view when navigating with keyboard
+    React.useEffect(() => {
+        if (selectedSkillsIndex >= 0 && selectedSkillRef.current) {
+            selectedSkillRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" })
+        }
+    }, [selectedSkillsIndex])
+
     const skillsFetchedRef = React.useRef(false)
     React.useEffect(() => {
-        if (
-            typeof window === "undefined" ||
-            !value.startsWith("/") ||
-            value.includes(" ")
-        ) {
+        if (typeof window === "undefined" || lastSlash < 0 || afterSlash.includes(" ")) {
             setShowSkillsMenu(false)
             setSkillsError(null)
             return
@@ -5263,7 +5294,7 @@ const ChatInput = React.memo(function ChatInput({
         return () => {
             cancelled = true
         }
-    }, [skillsApiUrl, value.startsWith("/")])
+    }, [skillsApiUrl, lastSlash, afterSlash])
 
     // Clear hover state when menu closes (unless mouse is actually over button)
     React.useEffect(() => {
@@ -5272,10 +5303,305 @@ const ChatInput = React.memo(function ChatInput({
         }
     }, [showMenu])
 
-    const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    // Extract text from the contenteditable; include chip text so display value matches what user sees
+    const getEditableText = (el: HTMLElement): string => {
+        let text = ""
+        el.childNodes.forEach((node) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+                text += node.textContent ?? ""
+            } else if (node instanceof HTMLElement) {
+                if (node.dataset.chipId) {
+                    text += node.textContent ?? ""
+                } else {
+                    text += getEditableText(node)
+                }
+            }
+        })
+        return text
+    }
+
+    // Find DOM position for a character index within the editable (walks text nodes in order)
+    const findPositionOfCharacter = (root: Node, targetIndex: number): { node: Node; offset: number } | null => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null)
+        let current = 0
+        let node: Node | null
+        while ((node = walker.nextNode())) {
+            const len = (node.textContent ?? "").length
+            if (current + len >= targetIndex) {
+                return { node, offset: targetIndex - current }
+            }
+            current += len
+        }
+        return null
+    }
+
+    // Insert a skill chip at the current cursor position, replacing the slash query text (/ can be anywhere)
+    const insertChipAtCursor = (skill: { id: string; name: string; description?: string }) => {
+        if (typeof window === "undefined" || !editableRef.current) return
+        const sel = window.getSelection()
+        if (!sel) return
+
+        const editable = editableRef.current
+        // Restore selection if lost (e.g. user clicked menu item — focus may have moved)
+        const saved = savedSlashCursorRef.current
+        if (saved != null) {
+            const hasValidSelection =
+                sel.rangeCount > 0 && editable.contains(sel.getRangeAt(0).startContainer)
+            if (!hasValidSelection) {
+                const pos = findPositionOfCharacter(editable, saved)
+                if (pos) {
+                    const r = document.createRange()
+                    r.setStart(pos.node, pos.offset)
+                    r.collapse(true)
+                    sel.removeAllRanges()
+                    sel.addRange(r)
+                }
+            }
+        }
+        if (sel.rangeCount === 0) return
+
+        const cursorRange = sel.getRangeAt(0).cloneRange()
+
+        // Get text before cursor and find last "/"
+        const beforeRange = document.createRange()
+        beforeRange.setStart(editable, 0)
+        beforeRange.setEnd(cursorRange.startContainer, cursorRange.startOffset)
+        const textBeforeCursor = beforeRange.toString()
+        const lastSlashIdx = textBeforeCursor.lastIndexOf("/")
+        if (lastSlashIdx < 0) return
+
+        // Find DOM position of the "/" and delete from there to cursor
+        const slashPos = findPositionOfCharacter(editable, lastSlashIdx)
+        if (!slashPos) return
+        const delRange = document.createRange()
+        delRange.setStart(slashPos.node, slashPos.offset)
+        delRange.setEnd(cursorRange.startContainer, cursorRange.startOffset)
+        delRange.deleteContents()
+
+        // Build inline skill span: SkillName (bold, editable; editing removes the skill attribute)
+        const skillSpan = document.createElement("span")
+        skillSpan.dataset.chipId = skill.id
+        skillSpan.dataset.chipName = skill.name
+        if (skill.description) skillSpan.title = skill.description
+        skillSpan.className = "InlineSkillChip"
+        skillSpan.textContent = skill.name
+
+        // Insert skill span at the updated cursor position
+        const freshSel = window.getSelection()
+        if (!freshSel || freshSel.rangeCount === 0) return
+        const insertRange = freshSel.getRangeAt(0)
+        insertRange.insertNode(skillSpan)
+
+        // Insert a regular space after the skill so the user can keep typing
+        const spaceNode = document.createTextNode(" ")
+        skillSpan.parentNode?.insertBefore(spaceNode, skillSpan.nextSibling)
+
+        // Place cursor after the inserted space
+        const afterRange = document.createRange()
+        afterRange.setStart(spaceNode, 1)
+        afterRange.collapse(true)
+        freshSel.removeAllRanges()
+        freshSel.addRange(afterRange)
+
+        onSelectSkill?.(skill)
+        savedSlashCursorRef.current = null
+        setShowSkillsMenu(false)
+        savedEditableContentRef.current = editableRef.current.innerHTML
+        const newText = getEditableText(editableRef.current)
+        onChange({ target: { value: newText } } as React.ChangeEvent<HTMLTextAreaElement>)
+        onHtmlChange?.(savedEditableContentRef.current)
+    }
+
+    // Sync contenteditable content to parent on every input event
+    const handleEditableInput = () => {
+        if (!editableRef.current) return
+        if (isApplyingPeerSyncRef.current) return
+        contentOriginRef.current = "local"
+        savedEditableContentRef.current = editableRef.current.innerHTML
+
+        // Check if any skill spans were edited — if text no longer matches skillName, de-attribute
+        const skillSpans = Array.from(editableRef.current.querySelectorAll(".InlineSkillChip"))
+        skillSpans.forEach((el) => {
+            const span = el as HTMLElement
+            const chipName = span.dataset.chipName ?? ""
+            const expectedText = chipName
+            if (span.textContent !== expectedText) {
+                const chipId = span.dataset.chipId ?? ""
+                // Preserve cursor position when replacing (e.g. after backspace within the skill)
+                let savedOffset: number | null = null
+                const sel = window.getSelection()
+                if (sel && sel.rangeCount > 0) {
+                    const range = sel.getRangeAt(0)
+                    if (span.contains(range.startContainer)) {
+                        const startRange = document.createRange()
+                        startRange.selectNodeContents(span)
+                        startRange.setEnd(range.startContainer, range.startOffset)
+                        savedOffset = startRange.toString().length
+                    }
+                }
+                if (chipId) onRemoveSkill?.(chipId)
+                const textNode = document.createTextNode(span.textContent ?? "")
+                span.parentNode?.replaceChild(textNode, span)
+                if (savedOffset !== null && sel) {
+                    const r = document.createRange()
+                    r.setStart(textNode, Math.min(savedOffset, textNode.length))
+                    r.collapse(true)
+                    sel.removeAllRanges()
+                    sel.addRange(r)
+                }
+            }
+        })
+
+        // Check if any chips were deleted by native browser actions (e.g. highlight + backspace)
+        const currentChips = Array.from(editableRef.current.querySelectorAll(".InlineSkillChip"))
+        const currentChipIds = currentChips.map((el) => (el as HTMLElement).dataset.chipId).filter(Boolean)
+        selectedSkills.forEach((skill) => {
+            if (!currentChipIds.includes(skill.id)) {
+                onRemoveSkill?.(skill.id)
+            }
+        })
+
+        // When no skills remain, strip any stray bold (e.g. after select-all+delete from a skill)
+        if (currentChips.length === 0 && editableRef.current.childNodes.length > 0) {
+            const hasFormatting = Array.from(editableRef.current.childNodes).some(
+                (n) => n.nodeType === Node.ELEMENT_NODE
+            )
+            if (hasFormatting) {
+                const sel = window.getSelection()
+                let charOffset = 0
+                if (sel && sel.rangeCount > 0) {
+                    const range = sel.getRangeAt(0)
+                    const preRange = document.createRange()
+                    preRange.setStart(editableRef.current, 0)
+                    preRange.setEnd(range.startContainer, range.startOffset)
+                    charOffset = preRange.toString().length
+                }
+                const plainText = (editableRef.current.innerText || "").trim()
+                editableRef.current.innerHTML = ""
+                if (plainText) {
+                    editableRef.current.appendChild(document.createTextNode(plainText))
+                }
+                if (sel && plainText.length > 0) {
+                    const pos = findPositionOfCharacter(
+                        editableRef.current,
+                        Math.min(charOffset, plainText.length)
+                    )
+                    if (pos) {
+                        const r = document.createRange()
+                        r.setStart(pos.node, pos.offset)
+                        r.collapse(true)
+                        sel.removeAllRanges()
+                        sel.addRange(r)
+                    }
+                }
+                savedEditableContentRef.current = editableRef.current.innerHTML
+            }
+        }
+
+        const text = getEditableText(editableRef.current)
+        onHtmlChange?.(savedEditableContentRef.current)
+        onChange({ target: { value: text } } as React.ChangeEvent<HTMLTextAreaElement>)
+        // Overflow detection: if content height > single line, lock into 2-row
+        if (editableRef.current.scrollHeight > SINGLE_LINE_HEIGHT + 4) {
+            setHasExpandedToTwoRows(true)
+        }
+        // Slash / @ command detection (/ can appear anywhere; show skills if no space after last /)
+        const lastSlashIdx = text.lastIndexOf("/")
+        const afterLastSlash = lastSlashIdx >= 0 ? text.slice(lastSlashIdx + 1) : ""
+        if (lastSlashIdx >= 0 && !afterLastSlash.includes(" ")) {
+            // Save cursor position so we can restore it when user clicks a skill (focus may move)
+            const sel = typeof window !== "undefined" ? window.getSelection() : null
+            if (sel && sel.rangeCount > 0 && editableRef.current) {
+                const range = sel.getRangeAt(0)
+                if (editableRef.current.contains(range.startContainer)) {
+                    const preRange = document.createRange()
+                    preRange.setStart(editableRef.current, 0)
+                    preRange.setEnd(range.startContainer, range.startOffset)
+                    savedSlashCursorRef.current = preRange.toString().length
+                }
+            }
+            setShowSkillsMenu(true)
+            setShowMenu(false)
+        } else if (text.endsWith("/") || text.endsWith("@")) {
+            setShowMenu(true)
+            setSelectedMenuIndex(0)
+            setShowSkillsMenu(false)
+        } else if (showMenu || showSkillsMenu) {
+            setShowMenu(false)
+            setShowSkillsMenu(false)
+        }
+    }
+
+    // Combined keydown handler for the contenteditable
+    const handleEditableKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (showSkillsMenu) {
+            if (e.key === "ArrowUp") {
+                e.preventDefault()
+                setSelectedSkillsIndex((prev) => {
+                    const len = filteredSkills.length
+                    if (len === 0) return -1
+                    if (prev === -1) return len - 1
+                    return prev <= 0 ? len - 1 : prev - 1
+                })
+                return
+            }
+            if (e.key === "ArrowDown") {
+                e.preventDefault()
+                setSelectedSkillsIndex((prev) => {
+                    const len = filteredSkills.length
+                    if (len === 0) return -1
+                    if (prev === -1) return 0
+                    return prev >= len - 1 ? 0 : prev + 1
+                })
+                return
+            }
+            if (e.key === "Enter") {
+                e.preventDefault()
+                const idx = selectedSkillsIndex === -1 ? 0 : selectedSkillsIndex
+                const skill = filteredSkills[idx]
+                if (skill) insertChipAtCursor(skill)
+                return
+            }
+            if (e.key === "Escape") {
+                e.preventDefault()
+                setShowSkillsMenu(false)
+                return
+            }
+        }
+        if (showMenu) {
+            if (e.key === "ArrowUp") {
+                e.preventDefault()
+                setSelectedMenuIndex((prev) => (prev === -1 ? menuItems.length - 1 : prev <= 0 ? menuItems.length - 1 : prev - 1))
+                return
+            }
+            if (e.key === "ArrowDown") {
+                e.preventDefault()
+                setSelectedMenuIndex((prev) => (prev === -1 ? 0 : prev === menuItems.length - 1 ? 0 : prev + 1))
+                return
+            }
+            if (e.key === "Enter") {
+                e.preventDefault()
+                const index = selectedMenuIndex === -1 ? 0 : selectedMenuIndex
+                if (menuItems[index]) menuItems[index].onClick()
+                return
+            }
+            if (e.key === "Escape") {
+                e.preventDefault()
+                setShowMenu(false)
+                return
+            }
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault()
+            if (hasContent && !isLoading) onSend()
+            return
+        }
+    }
+
+    // Paste handler: file pastes go to onPasteFile; text pastes are inserted as plain text
+    const handleEditablePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
         const items = e.clipboardData?.items
         if (!items) return
-
         const files: File[] = []
         for (let i = 0; i < items.length; i++) {
             if (items[i].kind === "file") {
@@ -5283,17 +5609,55 @@ const ChatInput = React.memo(function ChatInput({
                 if (file) files.push(file)
             }
         }
-
         if (files.length > 0) {
             e.preventDefault()
             onPasteFile?.(files)
+            return
         }
+        // Always paste as plain text to prevent HTML injection
+        e.preventDefault()
+        const text = e.clipboardData.getData("text/plain")
+        if (text) document.execCommand("insertText", false, text)
     }
+
+    // The contenteditable element shared between both layout branches
+    const editableJSX = (
+        <div
+            ref={setEditableRef}
+            contentEditable
+            suppressContentEditableWarning
+            tabIndex={1}
+            data-placeholder={placeholder}
+            className="ChatTextInput"
+            onInput={handleEditableInput}
+            onKeyDown={handleEditableKeyDown}
+            onPaste={handleEditablePaste}
+            style={{
+                flex: "1 1 0",
+                color: themeColors.text.primary,
+                fontSize: 16,
+                fontFamily: "Inter",
+                fontWeight: "400",
+                lineHeight: "24px",
+                background: "transparent",
+                border: "none",
+                outline: "none",
+                minHeight: 24,
+                maxHeight: 148,
+                overflowY: "auto",
+                padding: 0,
+                margin: 0,
+                width: "100%",
+                wordBreak: "break-word",
+                whiteSpace: "pre-wrap",
+            }}
+        />
+    )
 
     React.useEffect(() => {
         // Focus cursor on mount if not in canvas
         if (RenderTarget.current() !== RenderTarget.canvas) {
-            textareaRef.current?.focus()
+            editableRef.current?.focus()
 
             // Global key listener for typing
             const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -5316,7 +5680,7 @@ const ChatInput = React.memo(function ChatInput({
                     !e.ctrlKey &&
                     !e.altKey
                 ) {
-                    textareaRef.current?.focus()
+                    editableRef.current?.focus()
                 }
             }
 
@@ -5338,7 +5702,7 @@ const ChatInput = React.memo(function ChatInput({
         }
     }, [])
 
-    // Auto-resize logic to mimic Gemini's behavior
+    // Single-line height for overflow detection
     const SINGLE_LINE_HEIGHT = 24
 
     // Reset expanded state when user clears all text
@@ -5346,44 +5710,32 @@ const ChatInput = React.memo(function ChatInput({
         if (!value.trim()) setHasExpandedToTwoRows(false)
     }, [value])
 
-    // Mark expanded when user adds skills chips
+    // 2-row layout: text has ever wrapped/overflowed (sticky until user clears all text)
+    const useTwoRowLayout = value.trim().length > 0 && hasExpandedToTwoRows
+
+    // Clear contenteditable when parent resets value to "" (e.g. after send)
+    const prevValueRef = React.useRef(value)
     React.useEffect(() => {
-        if (selectedSkills.length > 0) setHasExpandedToTwoRows(true)
-    }, [selectedSkills.length])
-
-    // 2-row layout: chips always, or text has ever wrapped/overflowed (sticky until user clears all text)
-    const useTwoRowLayout =
-        selectedSkills.length > 0 ||
-        (value.trim().length > 0 && hasExpandedToTwoRows)
-
-    // Auto-resize + overflow detection: useLayoutEffect runs before paint so paste/wrap resizes immediately.
-    // useTwoRowLayout in deps so we re-measure when the textarea moves to a different-width container.
-    React.useLayoutEffect(() => {
-        if (!textareaRef.current) return
-        textareaRef.current.style.height = SINGLE_LINE_HEIGHT + "px"
-        const scrollHeight = textareaRef.current.scrollHeight
-        textareaRef.current.style.height = Math.min(scrollHeight, 148) + "px"
-        // Text overflows single line → lock into 2-row for this input session
-        if (scrollHeight > SINGLE_LINE_HEIGHT + 4) {
-            setHasExpandedToTwoRows(true)
+        if (prevValueRef.current !== "" && value === "" && selectedSkills.length === 0 && editableRef.current) {
+            editableRef.current.innerHTML = ""
+            savedEditableContentRef.current = ""
+            contentOriginRef.current = "empty"
         }
-    }, [value, useTwoRowLayout])
+        prevValueRef.current = value
+    }, [value, selectedSkills.length])
 
-    // Restore cursor/focus when layout switches so users never need to click to continue typing.
-    // focus() MUST come before setSelectionRange() — browsers reset selection when focusing an unfocused element.
-    const prevUseTwoRowLayoutRef = React.useRef(useTwoRowLayout)
-    React.useLayoutEffect(() => {
-        if (prevUseTwoRowLayoutRef.current !== useTwoRowLayout && textareaRef.current) {
-            const { start, end } = selectionRef.current
-            const len = value.length
-            textareaRef.current.focus()
-            textareaRef.current.setSelectionRange(
-                Math.min(start, len),
-                Math.min(end, len)
-            )
-        }
-        prevUseTwoRowLayoutRef.current = useTwoRowLayout
-    }, [useTwoRowLayout, value])
+    // Apply incoming peer sync: update contenteditable when content came from peer (not local typing).
+    // contentOriginRef prevents overwriting when the local user is actively typing.
+    React.useEffect(() => {
+        if (!peerSync || !editableRef.current) return
+        if (contentOriginRef.current === "local") return
+        isApplyingPeerSyncRef.current = true
+        editableRef.current.innerHTML = peerSync.html
+        savedEditableContentRef.current = peerSync.html
+        contentOriginRef.current = "peer"
+        isApplyingPeerSyncRef.current = false
+    // seq changes each time a new sync arrives, re-running the effect
+    }, [peerSync?.seq]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Close menu when clicking outside
     React.useEffect(() => {
@@ -5413,7 +5765,7 @@ const ChatInput = React.memo(function ChatInput({
             if (
                 skillsMenuRef.current &&
                 !skillsMenuRef.current.contains(event.target as Node) &&
-                !textareaRef.current?.contains(event.target as Node)
+                !editableRef.current?.contains(event.target as Node)
             ) {
                 setShowSkillsMenu(false)
             }
@@ -5424,6 +5776,11 @@ const ChatInput = React.memo(function ChatInput({
         return () => {
             document.removeEventListener("mousedown", handleClickOutside)
         }
+    }, [showSkillsMenu])
+
+    // Clear saved cursor when skills menu closes
+    React.useEffect(() => {
+        if (!showSkillsMenu) savedSlashCursorRef.current = null
     }, [showSkillsMenu])
 
     const hasContent =
@@ -5732,17 +6089,18 @@ const ChatInput = React.memo(function ChatInput({
         >
             {/* CONVERSATION QUICK ACTIONS MENU */}
             <style>{`
-                .ChatTextInput::placeholder {
+                .ChatTextInput:empty::before {
+                    content: attr(data-placeholder);
                     color: ${themeColors.text.secondary};
+                    pointer-events: none;
                 }
-                .ChatTextInput::-webkit-input-placeholder {
-                    color: ${themeColors.text.secondary};
-                }
-                .ChatTextInput::-moz-placeholder {
-                    color: ${themeColors.text.secondary};
-                }
-                .ChatTextInput:-ms-input-placeholder {
-                    color: ${themeColors.text.secondary};
+                .InlineSkillChip {
+                    display: inline;
+                    font-size: inherit;
+                    font-weight: 700;
+                    color: ${themeColors.text.primary};
+                    user-select: none;
+                    cursor: default;
                 }
             `}</style>
 
@@ -6235,7 +6593,7 @@ const ChatInput = React.memo(function ChatInput({
                                                 width: isMobileLayout
                                                     ? "auto"
                                                     : 280,
-                                                padding: 10,
+                                                padding: "10px 10px 0 10px",
                                                 background:
                                                     themeColors.surfaceMenu,
                                                 boxShadow:
@@ -6265,32 +6623,33 @@ const ChatInput = React.memo(function ChatInput({
                                             >
                                                 Skills
                                             </div>
+                                            <div
+                                                style={{
+                                                    maxHeight: isMobileLayout ? 240 : 200,
+                                                    overflowY: "auto",
+                                                    overflowX: "hidden",
+                                                    width: "100%",
+                                                }}
+                                            >
+                                            <div
+                                                style={{
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    gap: 4,
+                                                    paddingBottom: 10,
+                                                }}
+                                            >
                                             {filteredSkills.map(
                                                     (skill, index) => (
                                                         <div
                                                             key={skill.id}
+                                                            ref={(el) => {
+                                                                if (index === selectedSkillsIndex) selectedSkillRef.current = el
+                                                            }}
+                                                            onMouseDown={(e) => e.preventDefault()}
                                                             onClick={(e) => {
                                                                 e.stopPropagation()
-                                                                if (
-                                                                    onSelectSkill
-                                                                ) {
-                                                                    onSelectSkill(
-                                                                        {
-                                                                            id: skill.id,
-                                                                            name: skill.name,
-                                                                            description:
-                                                                                skill.description,
-                                                                        }
-                                                                    )
-                                                                    setShowSkillsMenu(
-                                                                        false
-                                                                    )
-                                                                    onChange({
-                                                                        target: {
-                                                                            value: "",
-                                                                        },
-                                                                    } as React.ChangeEvent<HTMLTextAreaElement>)
-                                                                }
+                                                                insertChipAtCursor(skill)
                                                             }}
                                                             title={
                                                                 skill.description ||
@@ -6298,9 +6657,9 @@ const ChatInput = React.memo(function ChatInput({
                                                             }
                                                             style={{
                                                                 ...localStyles.menuItem,
-                                                                height: isMobileLayout
-                                                                    ? 44
-                                                                    : 36,
+                                                                height: 36,
+                                                                minHeight: 36,
+                                                                flexShrink: 0,
                                                                 transition: "none",
                                                                 cursor: "pointer",
                                                                 ...(index ===
@@ -6370,158 +6729,13 @@ const ChatInput = React.memo(function ChatInput({
                                                         </div>
                                                     )
                                                 )}
+                                            </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </>
                             )}
-                        <textarea
-                            ref={textareaRef}
-                            tabIndex={1}
-                            value={value}
-                            onSelect={(e) => {
-                                selectionRef.current = {
-                                    start: e.target.selectionStart,
-                                    end: e.target.selectionEnd,
-                                }
-                            }}
-                            onChange={(e) => {
-                                selectionRef.current = {
-                                    start: e.target.selectionStart,
-                                    end: e.target.selectionEnd,
-                                }
-                                onChange(e)
-                                const val = e.target.value
-                                // Slash command: "/" or "/a" → skills menu (close if space)
-                                if (val.startsWith("/") && !val.includes(" ")) {
-                                    setShowSkillsMenu(true)
-                                    setShowMenu(false)
-                                } else if (
-                                    val.endsWith("/") ||
-                                    val.endsWith("@")
-                                ) {
-                                    setShowMenu(true)
-                                    setSelectedMenuIndex(0)
-                                    setShowSkillsMenu(false)
-                                } else if (showMenu || showSkillsMenu) {
-                                    setShowMenu(false)
-                                    setShowSkillsMenu(false)
-                                }
-                            }}
-                            onPaste={handlePaste}
-                            onKeyDown={(e) => {
-                                if (showSkillsMenu) {
-                                    if (e.key === "ArrowUp") {
-                                        e.preventDefault()
-                                        setSelectedSkillsIndex((prev) => {
-                                            const len = filteredSkills.length
-                                            if (len === 0) return -1
-                                            if (prev === -1) return len - 1
-                                            return prev <= 0 ? len - 1 : prev - 1
-                                        })
-                                        return
-                                    }
-                                    if (e.key === "ArrowDown") {
-                                        e.preventDefault()
-                                        setSelectedSkillsIndex((prev) => {
-                                            const len = filteredSkills.length
-                                            if (len === 0) return -1
-                                            if (prev === -1) return 0
-                                            return prev >= len - 1 ? 0 : prev + 1
-                                        })
-                                        return
-                                    }
-                                    if (e.key === "Enter") {
-                                        e.preventDefault()
-                                        const idx =
-                                            selectedSkillsIndex === -1
-                                                ? 0
-                                                : selectedSkillsIndex
-                                        const skill = filteredSkills[idx]
-                                        if (skill && onSelectSkill) {
-                                            onSelectSkill({
-                                                id: skill.id,
-                                                name: skill.name,
-                                                description: skill.description,
-                                            })
-                                            setShowSkillsMenu(false)
-                                            onChange({
-                                                target: { value: "" },
-                                            } as React.ChangeEvent<HTMLTextAreaElement>)
-                                        }
-                                        return
-                                    }
-                                    if (e.key === "Escape") {
-                                        e.preventDefault()
-                                        setShowSkillsMenu(false)
-                                        return
-                                    }
-                                }
-                                if (showMenu) {
-                                    if (e.key === "ArrowUp") {
-                                        e.preventDefault()
-                                        setSelectedMenuIndex((prev) => {
-                                            if (prev === -1)
-                                                return menuItems.length - 1
-                                            return prev <= 0
-                                                ? menuItems.length - 1
-                                                : prev - 1
-                                        })
-                                        return
-                                    }
-                                    if (e.key === "ArrowDown") {
-                                        e.preventDefault()
-                                        setSelectedMenuIndex((prev) => {
-                                            if (prev === -1) return 0
-                                            return prev ===
-                                                menuItems.length - 1
-                                                ? 0
-                                                : prev + 1
-                                        })
-                                        return
-                                    }
-                                    if (e.key === "Enter") {
-                                        e.preventDefault()
-                                        const index =
-                                            selectedMenuIndex === -1
-                                                ? 0
-                                                : selectedMenuIndex
-                                        if (menuItems[index]) {
-                                            menuItems[index].onClick()
-                                        }
-                                        return
-                                    }
-                                    if (e.key === "Escape") {
-                                        e.preventDefault()
-                                        setShowMenu(false)
-                                        return
-                                    }
-                                }
-
-                                if (e.key === "Enter" && !e.shiftKey) {
-                                    e.preventDefault()
-                                    if (hasContent && !isLoading) onSend()
-                                }
-                            }}
-                            placeholder={placeholder}
-                            disabled={false}
-                            className="ChatTextInput"
-                            style={{
-                                flex: "1 1 0",
-                                color: themeColors.text.primary,
-                                fontSize: 16,
-                                fontFamily: "Inter",
-                                fontWeight: "400",
-                                lineHeight: "24px",
-                                background: "transparent",
-                                border: "none",
-                                outline: "none",
-                                resize: "none",
-                                height: 24,
-                                padding: 0,
-                                margin: 0,
-                                width: "100%",
-                            }}
-                        />
+                        {editableJSX}
                     </div>
 
                     {/* BOTTOM ROW: [Plus + Skills chips] (fills width) | [Send] [Start AI Live] (right) */}
@@ -6811,88 +7025,6 @@ const ChatInput = React.memo(function ChatInput({
                             </div>
                         </div>
 
-                        {/* SKILLS CHIPS (to the right of + button) */}
-                        {selectedSkills.length > 0 && (
-                            <div
-                                style={{
-                                    display: "flex",
-                                    flexDirection: "row",
-                                    flexWrap: "wrap",
-                                    gap: 8,
-                                    flex: "1 1 0",
-                                    minWidth: 0,
-                                    alignItems: "center",
-                                }}
-                            >
-                                {selectedSkills.map((skill) => (
-                                    <div
-                                        key={skill.id}
-                                        data-layer="skill-chip"
-                                        style={{
-                                            display: "inline-flex",
-                                            alignItems: "center",
-                                            gap: 8,
-                                            height: 36,
-                                            paddingLeft: 12,
-                                            paddingRight: 12,
-                                            background:
-                                                themeColors.surfaceHighlight
-                                                    ? themeColors.surfaceHighlight
-                                                    : themeColors.hover?.subtle ||
-                                                        "rgba(128,128,128,0.15)",
-                                            borderRadius: 18,
-                                            fontSize: 14,
-                                            fontFamily: "Inter",
-                                            fontWeight: "500",
-                                            color: themeColors.text.primary,
-                                        }}
-                                    >
-                                        <span
-                                            style={{
-                                                maxWidth: 140,
-                                                overflow: "hidden",
-                                                textOverflow: "ellipsis",
-                                                whiteSpace: "nowrap",
-                                            }}
-                                        >
-                                            {skill.name}
-                                        </span>
-                                        {onRemoveSkill && (
-                                            <div
-                                                style={{
-                                                    cursor: "pointer",
-                                                    display: "flex",
-                                                    padding: 2,
-                                                }}
-                                                onClick={() =>
-                                                    onRemoveSkill(skill.id)
-                                                }
-                                                aria-label="Remove skill"
-                                            >
-                                                <svg
-                                                    width="12"
-                                                    height="12"
-                                                    viewBox="0 0 12 12"
-                                                    fill="none"
-                                                    xmlns="http://www.w3.org/2000/svg"
-                                                >
-                                                    <path
-                                                        d="M9 3L3 9M3 3L9 9"
-                                                        stroke={
-                                                            themeColors.text
-                                                                .secondary
-                                                        }
-                                                        strokeWidth="1.2"
-                                                        strokeLinecap="round"
-                                                        strokeLinejoin="round"
-                                                    />
-                                                </svg>
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
                         </div>
 
                         {/* RIGHT: Send + Start AI Live (top right corner) */}
@@ -7235,7 +7367,7 @@ const ChatInput = React.memo(function ChatInput({
                                             onMouseLeave={() => setSelectedSkillsIndex(-1)}
                                             style={{
                                                 width: isMobileLayout ? "auto" : 280,
-                                                padding: 10,
+                                                padding: "10px 10px 0 10px",
                                                 background: themeColors.surfaceMenu,
                                                 boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
                                                 borderRadius: isMobileLayout ? "36px 36px 0px 0px" : 28,
@@ -7251,21 +7383,39 @@ const ChatInput = React.memo(function ChatInput({
                                             <div style={{ fontSize: 12, color: themeColors.text.secondary, paddingLeft: 12, paddingBottom: 4, marginTop: 6, alignSelf: "flex-start" }}>
                                                 Skills
                                             </div>
+                                            <div
+                                                style={{
+                                                    maxHeight: isMobileLayout ? 240 : 200,
+                                                    overflowY: "auto",
+                                                    overflowX: "hidden",
+                                                    width: "100%",
+                                                }}
+                                            >
+                                            <div
+                                                style={{
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    gap: 4,
+                                                    paddingBottom: 10,
+                                                }}
+                                            >
                                             {filteredSkills.map((skill, index) => (
                                                 <div
                                                     key={skill.id}
+                                                    ref={(el) => {
+                                                        if (index === selectedSkillsIndex) selectedSkillRef.current = el
+                                                    }}
+                                                    onMouseDown={(e) => e.preventDefault()}
                                                     onClick={(e) => {
                                                         e.stopPropagation()
-                                                        if (onSelectSkill) {
-                                                            onSelectSkill({ id: skill.id, name: skill.name, description: skill.description })
-                                                            setShowSkillsMenu(false)
-                                                            onChange({ target: { value: "" } } as React.ChangeEvent<HTMLTextAreaElement>)
-                                                        }
+                                                        insertChipAtCursor(skill)
                                                     }}
                                                     title={skill.description || undefined}
                                                     style={{
                                                         ...localStyles.menuItem,
-                                                        height: isMobileLayout ? 44 : 36,
+                                                        height: 36,
+                                                        minHeight: 36,
+                                                        flexShrink: 0,
                                                         transition: "none",
                                                         cursor: "pointer",
                                                         ...(index === selectedSkillsIndex ? localStyles.menuItemHover : {}),
@@ -7280,127 +7430,13 @@ const ChatInput = React.memo(function ChatInput({
                                                     </div>
                                                 </div>
                                             ))}
+                                            </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </>
                             )}
-                            <textarea
-                                ref={textareaRef}
-                                tabIndex={1}
-                                value={value}
-                                onSelect={(e) => {
-                                    selectionRef.current = {
-                                        start: e.target.selectionStart,
-                                        end: e.target.selectionEnd,
-                                    }
-                                }}
-                                onChange={(e) => {
-                                    selectionRef.current = {
-                                        start: e.target.selectionStart,
-                                        end: e.target.selectionEnd,
-                                    }
-                                    onChange(e)
-                                    const val = e.target.value
-                                    if (val.startsWith("/") && !val.includes(" ")) {
-                                        setShowSkillsMenu(true)
-                                        setShowMenu(false)
-                                    } else if (val.endsWith("/") || val.endsWith("@")) {
-                                        setShowMenu(true)
-                                        setSelectedMenuIndex(0)
-                                        setShowSkillsMenu(false)
-                                    } else if (showMenu || showSkillsMenu) {
-                                        setShowMenu(false)
-                                        setShowSkillsMenu(false)
-                                    }
-                                }}
-                                onPaste={handlePaste}
-                                onKeyDown={(e) => {
-                                    if (showSkillsMenu) {
-                                        if (e.key === "ArrowUp") {
-                                            e.preventDefault()
-                                            setSelectedSkillsIndex((prev) => {
-                                                const len = filteredSkills.length
-                                                if (len === 0) return -1
-                                                if (prev === -1) return len - 1
-                                                return prev <= 0 ? len - 1 : prev - 1
-                                            })
-                                            return
-                                        }
-                                        if (e.key === "ArrowDown") {
-                                            e.preventDefault()
-                                            setSelectedSkillsIndex((prev) => {
-                                                const len = filteredSkills.length
-                                                if (len === 0) return -1
-                                                if (prev === -1) return 0
-                                                return prev >= len - 1 ? 0 : prev + 1
-                                            })
-                                            return
-                                        }
-                                        if (e.key === "Enter") {
-                                            e.preventDefault()
-                                            const idx = selectedSkillsIndex === -1 ? 0 : selectedSkillsIndex
-                                            const skill = filteredSkills[idx]
-                                            if (skill && onSelectSkill) {
-                                                onSelectSkill({ id: skill.id, name: skill.name, description: skill.description })
-                                                setShowSkillsMenu(false)
-                                                onChange({ target: { value: "" } } as React.ChangeEvent<HTMLTextAreaElement>)
-                                            }
-                                            return
-                                        }
-                                        if (e.key === "Escape") {
-                                            e.preventDefault()
-                                            setShowSkillsMenu(false)
-                                            return
-                                        }
-                                    }
-                                    if (showMenu) {
-                                        if (e.key === "ArrowUp") {
-                                            e.preventDefault()
-                                            setSelectedMenuIndex((prev) => (prev === -1 ? menuItems.length - 1 : prev <= 0 ? menuItems.length - 1 : prev - 1))
-                                            return
-                                        }
-                                        if (e.key === "ArrowDown") {
-                                            e.preventDefault()
-                                            setSelectedMenuIndex((prev) => (prev === -1 ? 0 : prev === menuItems.length - 1 ? 0 : prev + 1))
-                                            return
-                                        }
-                                        if (e.key === "Enter") {
-                                            e.preventDefault()
-                                            const index = selectedMenuIndex === -1 ? 0 : selectedMenuIndex
-                                            if (menuItems[index]) menuItems[index].onClick()
-                                            return
-                                        }
-                                        if (e.key === "Escape") {
-                                            e.preventDefault()
-                                            setShowMenu(false)
-                                            return
-                                        }
-                                    }
-                                    if (e.key === "Enter" && !e.shiftKey) {
-                                        e.preventDefault()
-                                        if (hasContent && !isLoading) onSend()
-                                    }
-                                }}
-                                placeholder={placeholder}
-                                disabled={false}
-                                className="ChatTextInput"
-                                style={{
-                                    flex: "1 1 0",
-                                    color: themeColors.text.primary,
-                                    fontSize: 16,
-                                    fontFamily: "Inter",
-                                    fontWeight: "400",
-                                    lineHeight: "24px",
-                                    background: "transparent",
-                                    border: "none",
-                                    outline: "none",
-                                    resize: "none",
-                                    height: 24,
-                                    padding: 0,
-                                    margin: 0,
-                                    width: "100%",
-                                }}
-                            />
+                            {editableJSX}
                         </div>
                         {/* Send + Start AI Live - reuse from chips branch structure */}
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -9006,6 +9042,59 @@ function escapeHtml(text: string): string {
         .replace(/'/g, "&#039;")
 }
 
+// Renders user message text with skill names as bold inline (matches input chip style)
+function renderUserMessageWithSkills(
+    text: string,
+    skills: Array<{ id: string; name: string; description?: string }>
+): React.ReactNode {
+    if (!skills || skills.length === 0) return text
+    const sorted = [...skills].sort((a, b) => b.name.length - a.name.length)
+    const parts: Array<{ type: "text" | "skill"; content: string }> = []
+    let i = 0
+    while (i < text.length) {
+        let matched = false
+        for (const s of sorted) {
+            if (text.slice(i, i + s.name.length) === s.name) {
+                parts.push({ type: "skill", content: s.name })
+                i += s.name.length
+                matched = true
+                break
+            }
+        }
+        if (!matched) {
+            let j = i
+            while (j < text.length) {
+                const found = sorted.some(
+                    (s) => text.slice(j, j + s.name.length) === s.name
+                )
+                if (found) break
+                j++
+            }
+            parts.push({ type: "text", content: text.slice(i, j) })
+            i = j
+        }
+    }
+    return (
+        <>
+            {parts.map((p, idx) =>
+                p.type === "skill" ? (
+                    <strong
+                        key={idx}
+                        title={
+                            skills.find((s) => s.name === p.content)
+                                ?.description
+                        }
+                    >
+                        {p.content}
+                    </strong>
+                ) : (
+                    p.content
+                )
+            )}
+        </>
+    )
+}
+
 // --- HELPER COMPONENT: MESSAGE BUBBLE (MEMOIZED) ---
 const MessageBubble = React.memo(
     ({
@@ -10015,7 +10104,12 @@ const MessageBubble = React.memo(
                             }}
                         >
                             {msg.role === "user" || msg.role === "peer"
-                                ? msg.text
+                                ? msg.skills && msg.skills.length > 0
+                                    ? renderUserMessageWithSkills(
+                                          msg.text,
+                                          msg.skills
+                                      )
+                                    : msg.text
                                 : renderSimpleMarkdown(
                                       msg.text,
                                       baseTextStyle,
@@ -10680,7 +10774,7 @@ const RoleSelectionButton = React.memo(
         const label = isStudent ? "Get free help" : "Volunteer"
         const desc = isStudent
             ? "Video call with a mentor"
-            : "Support students with free advice"
+            : "Give free career and college advice"
         // Student tile text always white (dark mode), volunteer uses theme colors
         const textColor = isStudent
             ? darkColors.text.primary
@@ -14846,6 +14940,21 @@ Do not include markdown formatting or explanations.`
     const [selectedSkills, setSelectedSkills] = React.useState<
         Array<{ id: string; name: string; description?: string }>
     >([])
+    // Latest contenteditable HTML captured for P2P sync
+    const inputHtmlRef = React.useRef<string>("")
+    // Refs for broadcast to always send latest (avoids stale closure when throttled)
+    const inputTextRef = React.useRef<string>("")
+    const selectedSkillsRef = React.useRef<Array<{ id: string; name: string; description?: string }>>([])
+    React.useEffect(() => {
+        inputTextRef.current = inputText
+        selectedSkillsRef.current = selectedSkills
+    }, [inputText, selectedSkills])
+    // Incoming peer sync: applied to the peer's ChatInput contenteditable
+    const [peerSyncState, setPeerSyncState] = React.useState<{
+        html: string
+        skills: Array<{ id: string; name: string; description?: string }>
+        seq: number
+    } | null>(null)
 
     // --- STATE: RESPONSIVE UI ---
     // Initialize height from localStorage if available, else default to 300 (will be auto-sized for new users)
@@ -17552,7 +17661,24 @@ Do not include markdown formatting or explanations.`
             } else if (data.type === "doc-update") {
                 setDocContent(data.payload)
             } else if (data.type === "input-sync") {
-                setInputText(data.payload)
+                if (typeof data.payload === "object" && data.payload !== null) {
+                    // New format: { text, html, skills, seq }
+                    // ChatInput's contentOriginRef prevents overwriting when local user is typing.
+                    setInputText(data.payload.text ?? "")
+                    if (data.payload.html != null) {
+                        setPeerSyncState({
+                            html: data.payload.html,
+                            skills: data.payload.skills ?? [],
+                            seq: data.payload.seq ?? Date.now(),
+                        })
+                    }
+                    if (data.payload.skills) {
+                        setSelectedSkills(data.payload.skills)
+                    }
+                } else {
+                    // Legacy format: plain text string
+                    setInputText(data.payload ?? "")
+                }
             } else if (data.type === "tldraw-start") {
                 log("Received tldraw-start command")
                 // if (isScreenSharingRef.current) stopLocalScreenShare()
@@ -19014,6 +19140,7 @@ PREFERENCES:
         const peerMsg: Message = {
             role: "peer",
             text: payload.text,
+            skills: payload.skills,
             attachments: payload.attachments || [],
         }
 
@@ -19162,10 +19289,18 @@ PREFERENCES:
                 }
             }
 
-            // Build user message for display
+            // Build user message for display (text = display text with skills inline; full skill metadata hidden for API)
             const userMsg: Message = {
                 role: "user",
-                text: textToSend,
+                text: textToCheck,
+                skills:
+                    selectedSkills.length > 0
+                        ? selectedSkills.map((s) => ({
+                              id: s.id,
+                              name: s.name,
+                              description: s.description,
+                          }))
+                        : undefined,
                 attachments: attachmentsToSend.map((a) => ({
                     type: a.type,
                     url: a.previewUrl || a.url, // For images/videos
@@ -19253,13 +19388,21 @@ PREFERENCES:
                     broadcastData({
                         type: "chat",
                         payload: {
-                            text: textToSend,
+                            text: textToCheck,
+                            skills:
+                                selectedSkills.length > 0
+                                    ? selectedSkills.map((s) => ({
+                                          id: s.id,
+                                          name: s.name,
+                                          description: s.description,
+                                      }))
+                                    : undefined,
                             attachments: validAttachments,
                         },
                     })
 
                     // Clear peer's input bar as well
-                    broadcastData({ type: "input-sync", payload: "" })
+                    broadcastData({ type: "input-sync", payload: { text: "", html: "", skills: [], seq: Date.now() } })
                 })
             }
 
@@ -20358,6 +20501,7 @@ PREFERENCES:
                             value={inputText}
                             onChange={(e) => {
                                 const newValue = sanitizeMessage(e.target.value)
+                                inputTextRef.current = newValue
                                 setInputText(newValue)
                                 const now = Date.now()
                                 const interval = 50
@@ -20367,29 +20511,29 @@ PREFERENCES:
                                 if (inputTimeoutRef.current)
                                     clearTimeout(inputTimeoutRef.current)
 
-                                if (timeSinceLastSend > interval) {
+                                const broadcast = () => {
                                     if (dataConnectionsRef.current.size > 0) {
                                         broadcastData({
                                             type: "input-sync",
-                                            payload: newValue,
+                                            payload: {
+                                                text: inputTextRef.current,
+                                                html: inputHtmlRef.current,
+                                                skills: selectedSkillsRef.current,
+                                                seq: Date.now(),
+                                            },
                                         })
-                                        lastInputSendTimeRef.current = now
+                                        lastInputSendTimeRef.current = Date.now()
                                     }
+                                }
+
+                                if (timeSinceLastSend > interval) {
+                                    broadcast()
                                 } else {
-                                    inputTimeoutRef.current = setTimeout(() => {
-                                        if (
-                                            dataConnectionsRef.current.size > 0
-                                        ) {
-                                            broadcastData({
-                                                type: "input-sync",
-                                                payload: newValue,
-                                            })
-                                            lastInputSendTimeRef.current =
-                                                Date.now()
-                                        }
-                                    }, interval - timeSinceLastSend)
+                                    inputTimeoutRef.current = setTimeout(broadcast, interval - timeSinceLastSend)
                                 }
                             }}
+                            onHtmlChange={(html) => { inputHtmlRef.current = html }}
+                            peerSync={peerSyncState}
                             onSend={handleSendMessage}
                             onConnectWithAI={handleConnectWithAI}
                             onStop={handleStop}
@@ -20429,6 +20573,22 @@ PREFERENCES:
                             role={role}
                             hasMessages={messages.length > 0}
                             onClearMessages={handleClearMessages}
+                            skillsApiUrl={skillsApiUrl}
+                            selectedSkills={selectedSkills}
+                            onSelectSkill={(skill) =>
+                                setSelectedSkills((prev) =>
+                                    prev.some((s) => s.id === skill.id)
+                                        ? prev
+                                        : [...prev, skill]
+                                )
+                            }
+                            onRemoveSkill={(id) =>
+                                setSelectedSkills((prev) =>
+                                    prev.filter((s) => s.id !== id)
+                                )
+                            }
+                            onHtmlChange={(html) => { inputHtmlRef.current = html }}
+                            peerSync={peerSyncState}
                             rootStyle={{ pointerEvents: "none" }}
                         />
                     </div>
@@ -20654,6 +20814,7 @@ PREFERENCES:
                         value={inputText}
                         onChange={(e) => {
                             const newValue = sanitizeMessage(e.target.value)
+                            inputTextRef.current = newValue
                             setInputText(newValue)
                             const now = Date.now()
                             const interval = 50
@@ -20663,27 +20824,29 @@ PREFERENCES:
                             if (inputTimeoutRef.current)
                                 clearTimeout(inputTimeoutRef.current)
 
-                            if (timeSinceLastSend > interval) {
+                            const broadcast = () => {
                                 if (dataConnectionsRef.current.size > 0) {
                                     broadcastData({
                                         type: "input-sync",
-                                        payload: newValue,
+                                        payload: {
+                                            text: inputTextRef.current,
+                                            html: inputHtmlRef.current,
+                                            skills: selectedSkillsRef.current,
+                                            seq: Date.now(),
+                                        },
                                     })
-                                    lastInputSendTimeRef.current = now
+                                    lastInputSendTimeRef.current = Date.now()
                                 }
+                            }
+
+                            if (timeSinceLastSend > interval) {
+                                broadcast()
                             } else {
-                                inputTimeoutRef.current = setTimeout(() => {
-                                    if (dataConnectionsRef.current.size > 0) {
-                                        broadcastData({
-                                            type: "input-sync",
-                                            payload: newValue,
-                                        })
-                                        lastInputSendTimeRef.current =
-                                            Date.now()
-                                    }
-                                }, interval - timeSinceLastSend)
+                                inputTimeoutRef.current = setTimeout(broadcast, interval - timeSinceLastSend)
                             }
                         }}
+                        onHtmlChange={(html) => { inputHtmlRef.current = html }}
+                        peerSync={peerSyncState}
                         onSend={handleSendMessage}
                         onConnectWithAI={handleConnectWithAI}
                         onStop={handleStop}
