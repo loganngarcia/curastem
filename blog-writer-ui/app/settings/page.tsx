@@ -66,7 +66,6 @@ export default function SettingsPage() {
     setSaving(true);
     setMessage(null);
     
-    // Only send values that have been changed (not masked placeholders)
     const payload: Partial<SettingsConfig> = {};
     
     if (originalConfig) {
@@ -82,37 +81,10 @@ export default function SettingsPage() {
       if (config.framerBlogCollection && config.framerBlogCollection !== originalConfig.framerBlogCollection) {
         payload.framerBlogCollection = config.framerBlogCollection;
       }
-    } else {
-      // If no original config, send all non-masked values
-      if (config.framerProjectUrl && !isMaskedValue(config.framerProjectUrl)) {
-        payload.framerProjectUrl = config.framerProjectUrl;
-      }
-      if (config.framerApiKey && !isMaskedValue(config.framerApiKey)) {
-        payload.framerApiKey = config.framerApiKey;
-      }
-      if (config.poeApiKey && !isMaskedValue(config.poeApiKey)) {
-        payload.poeApiKey = config.poeApiKey;
-      }
-      if (config.framerBlogCollection) {
-        payload.framerBlogCollection = config.framerBlogCollection;
-      }
     }
-    
-    // Validate required fields
-    if (!payload.framerProjectUrl && !config.isConfigured?.framerProjectUrl) {
-      setMessage({
-        type: "error",
-        text: "Framer Project URL is required",
-      });
-      setSaving(false);
-      return;
-    }
-    
-    if (!payload.framerApiKey && !config.isConfigured?.framerApiKey) {
-      setMessage({
-        type: "error",
-        text: "Framer API Key is required",
-      });
+
+    if (Object.keys(payload).length === 0) {
+      setMessage({ type: "error", text: "No changes detected to save." });
       setSaving(false);
       return;
     }
@@ -131,36 +103,12 @@ export default function SettingsPage() {
           type: "success",
           text: data.message || "Settings saved successfully!",
         });
-        
-        // Reload settings to get updated masked values
         await fetchSettings();
-        
-        if (data.note) {
-          setTimeout(() => {
-            alert(data.note);
-          }, 500);
-        }
-      } else if (data.manualUpdate) {
-        // Show instructions for manual update
-        setMessage({
-          type: "success",
-          text: data.message || "Settings prepared. Please update manually in Vercel dashboard.",
-        });
-        
-        if (data.instructions) {
-          setTimeout(() => {
-            alert("Manual Update Instructions:\n\n" + data.instructions.join("\n"));
-          }, 500);
-        }
       } else {
         setMessage({
           type: "error",
           text: data.error || data.message || "Failed to save settings",
         });
-        
-        if (data.results) {
-          console.error("Update results:", data.results);
-        }
       }
     } catch (err) {
       setMessage({
@@ -216,23 +164,16 @@ export default function SettingsPage() {
                   Framer Project URL
                 </label>
                 {config.isConfigured?.framerProjectUrl && (
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">Configured</span>
+                  <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">Configured</span>
                 )}
               </div>
               <input
                 type="text"
                 value={config.framerProjectUrl}
-                onChange={(e) =>
-                  setConfig({ ...config, framerProjectUrl: e.target.value })
-                }
+                onChange={(e) => setConfig({ ...config, framerProjectUrl: e.target.value })}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
                 placeholder={config.isConfigured?.framerProjectUrl ? "Enter new URL to update" : "https://framer.com/projects/..."}
               />
-              {config.isConfigured?.framerProjectUrl && isMaskedValue(config.framerProjectUrl) && (
-                <p className="mt-1 text-xs text-gray-500">
-                  Current value is hidden. Enter a new value to update it.
-                </p>
-              )}
             </div>
 
             <div>
@@ -241,16 +182,14 @@ export default function SettingsPage() {
                   Framer API Key
                 </label>
                 {config.isConfigured?.framerApiKey && (
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">Configured</span>
+                  <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">Configured</span>
                 )}
               </div>
               <div className="relative">
                 <input
                   type={showFramerKey ? "text" : "password"}
                   value={config.framerApiKey}
-                  onChange={(e) =>
-                    setConfig({ ...config, framerApiKey: e.target.value })
-                  }
+                  onChange={(e) => setConfig({ ...config, framerApiKey: e.target.value })}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
                   placeholder={config.isConfigured?.framerApiKey ? "Enter new API key to update" : "Enter Framer API key"}
                 />
@@ -259,59 +198,36 @@ export default function SettingsPage() {
                   onClick={() => setShowFramerKey(!showFramerKey)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black"
                 >
-                  {showFramerKey ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
+                  {showFramerKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
-              {config.isConfigured?.framerApiKey && isMaskedValue(config.framerApiKey) && (
-                <p className="mt-1 text-xs text-gray-500">
-                  Current value is hidden. Enter a new value to update it.
-                </p>
-              )}
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-sm font-medium text-gray-700">
-                  Poe API Key (Optional)
+                  Poe API Key
                 </label>
                 {config.isConfigured?.poeApiKey && (
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">Configured</span>
+                  <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">Configured</span>
                 )}
               </div>
               <div className="relative">
                 <input
                   type={showPoeKey ? "text" : "password"}
                   value={config.poeApiKey}
-                  onChange={(e) =>
-                    setConfig({ ...config, poeApiKey: e.target.value })
-                  }
+                  onChange={(e) => setConfig({ ...config, poeApiKey: e.target.value })}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
-                  placeholder={config.isConfigured?.poeApiKey ? "Enter new API key to update" : "Enter Poe API key (optional)"}
+                  placeholder={config.isConfigured?.poeApiKey ? "Enter new API key to update" : "Enter Poe API key"}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPoeKey(!showPoeKey)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black"
                 >
-                  {showPoeKey ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
+                  {showPoeKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
-              {config.isConfigured?.poeApiKey && isMaskedValue(config.poeApiKey) && (
-                <p className="mt-1 text-xs text-gray-500">
-                  Current value is hidden. Enter a new value to update it.
-                </p>
-              )}
-              <p className="mt-1 text-xs text-gray-500">
-                Required for AI chat functionality. Get your key from poe.com/settings
-              </p>
             </div>
 
             <div>
@@ -320,15 +236,13 @@ export default function SettingsPage() {
                   Framer Blog Collection Name
                 </label>
                 {config.isConfigured?.framerBlogCollection && (
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">Configured</span>
+                  <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">Configured</span>
                 )}
               </div>
               <input
                 type="text"
                 value={config.framerBlogCollection}
-                onChange={(e) =>
-                  setConfig({ ...config, framerBlogCollection: e.target.value })
-                }
+                onChange={(e) => setConfig({ ...config, framerBlogCollection: e.target.value })}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
                 placeholder="Services"
               />
@@ -347,22 +261,10 @@ export default function SettingsPage() {
               disabled={saving}
               className="flex items-center space-x-2 rounded-lg bg-black px-4 py-2 text-white hover:bg-gray-800 disabled:opacity-50"
             >
-              {saving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               <span>Save Settings</span>
             </button>
           </div>
-        </div>
-
-        <div className="mt-6 rounded-lg bg-blue-50 border border-blue-200 p-4">
-          <h3 className="font-semibold text-blue-900 mb-2">Security Notice</h3>
-          <p className="text-sm text-blue-800">
-            All credentials are stored securely in Vercel environment variables and are never exposed in the codebase.
-            Values shown with "••••" are masked for security. Enter new values to update them.
-          </p>
         </div>
       </div>
     </div>

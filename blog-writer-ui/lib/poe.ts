@@ -23,7 +23,8 @@ export interface ChatCompletionOptions {
 export async function* streamChatCompletion(
   options: ChatCompletionOptions
 ): AsyncGenerator<string, void, unknown> {
-  if (!POE_API_KEY) {
+  const apiKey = process.env.POE_API_KEY?.trim();
+  if (!apiKey) {
     throw new Error("POE_API_KEY not configured");
   }
 
@@ -31,7 +32,7 @@ export async function* streamChatCompletion(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${POE_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         Accept: "text/event-stream",
       },
       body: JSON.stringify({
@@ -86,7 +87,8 @@ export async function* streamChatCompletion(
 export async function generateChatCompletion(
   options: ChatCompletionOptions
 ): Promise<string> {
-  if (!POE_API_KEY) {
+  const apiKey = process.env.POE_API_KEY?.trim();
+  if (!apiKey) {
     throw new Error("POE_API_KEY not configured");
   }
 
@@ -94,7 +96,7 @@ export async function generateChatCompletion(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${POE_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: options.model,
