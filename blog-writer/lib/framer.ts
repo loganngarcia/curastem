@@ -38,7 +38,9 @@ export async function getFramerClient() {
 
 export async function getBlogCollection(framer: any) {
   const { collectionName } = getFramerConfig();
+  console.log(`Looking for collection: "${collectionName}"`);
   const collections = await framer.getCollections();
+  console.log(`Available collections: ${collections.map((c: any) => `"${c.name}" (id: ${c.id})`).join(", ")}`);
   
   const collection = collections.find(
     (c: any) => c.name.trim().toLowerCase() === collectionName.toLowerCase()
