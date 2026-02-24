@@ -82,9 +82,20 @@ export async function getFieldIds(collection: any): Promise<FieldIds> {
         const contentField = fields.find((f: any) => 
           f.name.toLowerCase().includes("content") || 
           f.name.toLowerCase().includes("body") ||
-          f.name.toLowerCase().includes("text")
+          f.name.toLowerCase().includes("text") ||
+          f.name.toLowerCase().includes("desc")
         );
         if (contentField) return contentField.id;
+      }
+      
+      // Try fuzzy match for "Title" if not found
+      if (name.toLowerCase() === "title") {
+        const titleField = fields.find((f: any) => 
+          f.name.toLowerCase().includes("title") || 
+          f.name.toLowerCase().includes("name") ||
+          f.name.toLowerCase().includes("headline")
+        );
+        if (titleField) return titleField.id;
       }
       
       if (required) {
@@ -97,15 +108,16 @@ export async function getFieldIds(collection: any): Promise<FieldIds> {
 
   const contentId = getFieldId("Content", true);
   const titleId = getFieldId("Title", false);
+  const headlineId = getFieldId("Headline", false);
   
   return {
-    title: titleId || contentId,
-    headline: getFieldId("Headline", false),
+    title: titleId || headlineId || contentId,
+    headline: headlineId || titleId,
     content: contentId,
-    date: getFieldId("Date", false),
+    date: getFieldId("Date", false) || getFieldId("Created At", false),
     featured: getFieldId("Featured", false),
-    coverImage: getFieldId("Fill image", false),
-    blogListImage: getFieldId("Zoom out image", false),
+    coverImage: getFieldId("Fill image", false) || getFieldId("Image", false) || getFieldId("Cover", false),
+    blogListImage: getFieldId("Zoom out image", false) || getFieldId("Thumbnail", false),
   };
 }
 
