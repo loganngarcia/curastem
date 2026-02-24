@@ -48,21 +48,19 @@ Respond in a helpful, conversational manner. If you use a tool, include the [TOO
       ...messages,
     ];
 
-    // Start the stream completion to catch initial errors
-    const stream = streamChatCompletion({
-      model: POE_MODELS.GEMINI_3_FLASH,
-      messages: fullMessages,
-    });
-
     // Create a readable stream from the generator
     const encoder = new TextEncoder();
     const readableStream = new ReadableStream({
       async start(controller) {
         try {
+          // Start the stream completion - this will throw if there's an initial error
+          const stream = streamChatCompletion({
+            model: POE_MODELS.GEMINI_3_FLASH,
+            messages: fullMessages,
+          });
+
           for await (const chunk of stream) {
             controller.enqueue(encoder.encode(chunk));
-            // Force a small delay to ensure chunks are processed individually if needed
-            // await new Promise(resolve => setTimeout(resolve, 10));
           }
           controller.close();
         } catch (e) {
@@ -87,10 +85,24 @@ Respond in a helpful, conversational manner. If you use a tool, include the [TOO
     console.error("Chat error:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
     
-    if (errorMessage.includes("POE_API_KEY")) {
+    if (errorMessage.includes("POE_API_KEY") || errorMessage.includes("not configured")) {
       return NextResponse.json(
         { error: "Poe API key not configured. Please add POE_API_KEY to environment variables." },
         { status: 500 }
+      );
+    }
+    
+    if (errorMessage.includes("401") || errorMessage.includes("Unauthorized")) {
+      return NextResponse.json(
+        { error: "Invalid Poe API key. Please check your POE_API_KEY in settings." },
+        { status: 401 }
+      );
+    }
+    
+    if (errorMessage.includes("429") || errorMessage.includes("rate limit")) {
+      return NextResponse.json(
+        { error: "Rate limit exceeded. Please try again in a moment." },
+        { status: 429 }
       );
     }
     

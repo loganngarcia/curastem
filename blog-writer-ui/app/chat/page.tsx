@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, Plus, Settings, Search, Menu, RefreshCw } from "lucide-react";
+import { Send, Loader2, Plus, Settings, Search, Menu } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn, formatDate } from "@/lib/utils";
 import BlogEditor from "@/components/BlogEditor";
+import SettingsModal from "@/components/SettingsModal";
 
 interface Message {
   role: "user" | "assistant";
@@ -36,18 +37,25 @@ export default function ChatPage() {
   const [savingBlog, setSavingBlog] = useState(false);
   const [editableContent, setEditableContent] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [testingPoe, setTestingPoe] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Start collapsed on mobile
   const [isCreating, setIsCreating] = useState(false);
   const [creationStatus, setCreationStatus] = useState("");
   const [creationProgress, setCreationProgress] = useState(0);
   const [streamingBlogContent, setStreamingBlogContent] = useState("");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const blogPreviewRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchBlogs();
+    // Set sidebar open on desktop, closed on mobile
+    const checkScreenSize = () => {
+      setIsSidebarOpen(window.innerWidth >= 768);
+    };
+    checkScreenSize();
+    window.addEventListener("resize", checkScreenSize);
+    return () => window.removeEventListener("resize", checkScreenSize);
   }, []);
 
   useEffect(() => {
@@ -99,48 +107,6 @@ export default function ChatPage() {
     }
   };
 
-  const handleTestPoe = async () => {
-    setTestingPoe(true);
-    setMessages(prev => [...prev, { role: "assistant", content: "Testing Poe API connection..." }]);
-    
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          messages: [{ role: "user", content: "Say 'Poe API is working!'" }] 
-        }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to connect to Poe");
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No reader");
-
-      let assistantMessage = "";
-      setMessages(prev => [...prev, { role: "assistant", content: "" }]);
-
-      const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        assistantMessage += decoder.decode(value);
-        setMessages(prev => {
-          const newMessages = [...prev];
-          newMessages[newMessages.length - 1].content = assistantMessage;
-          return newMessages;
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setMessages(prev => [...prev, { role: "assistant", content: `❌ Poe API Error: ${msg}` }]);
-    } finally {
-      setTestingPoe(false);
-    }
-  };
 
   const handleBlogClick = async (blog: Blog) => {
     setLoadingBlog(true);
@@ -166,19 +132,35 @@ export default function ChatPage() {
       const res = await fetch(`/api/blogs/${selectedBlog.slug}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editableContent }),
+        body: JSON.stringify({ 
+          content: editableContent,
+          title: selectedBlog.title,
+          coverImageUrl: selectedBlog.coverImageUrl,
+        }),
       });
 
       if (res.ok) {
         const updatedBlog = await res.json();
         setSelectedBlog(updatedBlog);
         fetchBlogs();
+        // Show success feedback
+        const saveButtonText = document.querySelector('[data-testid="save-button-text"]');
+        if (saveButtonText) {
+          const originalText = saveButtonText.textContent;
+          saveButtonText.textContent = "Saved!";
+          setTimeout(() => {
+            if (saveButtonText) saveButtonText.textContent = originalText;
+          }, 2000);
+        }
       } else {
-        throw new Error("Failed to save blog");
+        const errorData = await res.json().catch(() => ({ error: "Unknown error" }));
+        console.error("Save error response:", errorData);
+        throw new Error(errorData.error || errorData.message || "Failed to save blog");
       }
     } catch (err) {
       console.error("Save error:", err);
-      alert("Failed to save changes. Please try again.");
+      const errorMessage = err instanceof Error ? err.message : "Failed to save changes. Please try again.";
+      alert(errorMessage);
     } finally {
       setSavingBlog(false);
     }
@@ -322,32 +304,37 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-screen bg-white overflow-hidden text-black font-sans">
+      {/* Mobile Overlay */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+      
       {/* Sidebar */}
       <div className={cn(
-        "w-[260px] bg-gray-50 flex flex-col transition-all duration-300 ease-in-out border-r border-gray-200",
-        !isSidebarOpen && "w-0 -translate-x-full"
+        "bg-gray-50 flex flex-col transition-all duration-300 ease-in-out border-r border-gray-200",
+        "fixed md:relative z-50 md:z-auto h-full",
+        isSidebarOpen ? "w-full md:w-[260px]" : "w-0 -translate-x-full md:translate-x-0 md:overflow-hidden",
+        !isSidebarOpen && "md:border-r-0"
       )}>
         {/* Sidebar Top Nav */}
         <div className="p-2 flex flex-col gap-3">
           <div className="flex items-center justify-between px-2 pt-2">
-            <button 
-              onClick={() => setIsSidebarOpen(false)}
-              className="p-2 hover:bg-gray-200 rounded-[28px] transition-colors"
-            >
-              <Menu className="h-5 w-5 text-gray-600" />
-            </button>
+            {isSidebarOpen && (
+              <button 
+                onClick={() => setIsSidebarOpen(false)}
+                className="p-2 hover:bg-gray-200 active:bg-gray-300 rounded-[28px] transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
+              >
+                <Menu className="h-5 w-5 text-gray-600" />
+              </button>
+            )}
+            {!isSidebarOpen && <div />}
             <div className="flex items-center gap-1">
               <button 
-                onClick={handleTestPoe}
-                disabled={testingPoe}
-                title="Test Poe API"
-                className="p-2 hover:bg-gray-200 rounded-[28px] transition-colors disabled:opacity-50"
-              >
-                <RefreshCw className={cn("h-5 w-5 text-gray-600", testingPoe && "animate-spin")} />
-              </button>
-              <button 
-                onClick={() => router.push("/settings")}
-                className="p-2 hover:bg-gray-200 rounded-[28px] transition-colors"
+                onClick={() => setIsSettingsOpen(true)}
+                className="p-2 hover:bg-gray-200 active:bg-gray-300 rounded-[28px] transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
               >
                 <Settings className="h-5 w-5 text-gray-600" />
               </button>
@@ -363,7 +350,7 @@ export default function ChatPage() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search blogs..."
-                className="w-full bg-white border border-gray-200 rounded-[28px] py-2 pl-10 pr-4 text-sm text-black placeholder:text-gray-400 focus:ring-1 focus:ring-gray-300 focus:bg-white transition-all outline-none"
+                className="w-full bg-white border border-gray-200 rounded-[28px] py-3 md:py-2 pl-10 pr-4 text-base md:text-sm text-black placeholder:text-gray-400 focus:ring-1 focus:ring-gray-300 focus:bg-white transition-all outline-none"
               />
             </div>
           </div>
@@ -378,7 +365,7 @@ export default function ChatPage() {
                 const title = prompt("Enter blog title:");
                 if (title) handleCreateBlog(title);
               }}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[28px] hover:bg-gray-200 transition-colors text-sm text-gray-700"
+              className="w-full flex items-center gap-3 px-3 py-3 md:py-2.5 rounded-[28px] hover:bg-gray-200 active:bg-gray-300 transition-colors text-base md:text-sm text-gray-700 touch-manipulation min-h-[44px]"
             >
               <Plus className="h-4 w-4" />
               <span>New blog</span>
@@ -407,10 +394,10 @@ export default function ChatPage() {
                   key={blog.id} 
                   onClick={() => handleBlogClick(blog)}
                   className={cn(
-                    "group px-3 py-2.5 rounded-[28px] transition-all cursor-pointer text-sm relative flex items-center justify-between",
+                    "group px-3 py-3 md:py-2.5 rounded-[28px] transition-all cursor-pointer text-base md:text-sm relative flex items-center justify-between touch-manipulation min-h-[44px]",
                     selectedBlog?.id === blog.id
                       ? "bg-gray-200 text-black font-medium"
-                      : "text-gray-600 hover:bg-gray-100 hover:text-black"
+                      : "text-gray-600 hover:bg-gray-100 active:bg-gray-200 hover:text-black"
                   )}
                 >
                   <span className="truncate flex-1">{blog.title}</span>
@@ -429,27 +416,18 @@ export default function ChatPage() {
 
       {/* Main Area */}
       <div className="flex-1 flex flex-col relative bg-white">
-        {/* Top Bar / Toggle Sidebar Button */}
-        <div className="absolute top-4 left-4 right-4 z-30 flex items-center justify-between pointer-events-none">
-          {!isSidebarOpen ? (
+        {/* Top Bar / Toggle Sidebar Button - Only show when sidebar is closed */}
+        {!isSidebarOpen && (
+          <div className="absolute top-2 md:top-4 left-2 md:left-4 right-2 md:right-4 z-30 flex items-center justify-between pointer-events-none">
             <button 
               onClick={() => setIsSidebarOpen(true)}
-              className="p-2 bg-gray-50 hover:bg-gray-100 rounded-[28px] transition-colors border border-gray-200 pointer-events-auto"
+              className="p-2 bg-gray-50 hover:bg-gray-100 active:bg-gray-200 rounded-[28px] transition-colors border border-gray-200 pointer-events-auto touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
             >
               <Menu className="h-5 w-5 text-gray-600" />
             </button>
-          ) : <div />}
-
-          {(selectedBlog || isCreating) && (
-            <button 
-              onClick={handleCloseBlog}
-              className="px-4 py-2 bg-white hover:bg-gray-50 rounded-[28px] transition-colors border border-gray-200 shadow-sm text-sm font-medium text-gray-600 flex items-center gap-2 pointer-events-auto"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Return to Chat
-            </button>
-          )}
-        </div>
+            <div />
+          </div>
+        )}
 
         {isCreating ? (
           <div className="flex-1 flex items-center justify-center bg-gray-50/50">
@@ -488,12 +466,57 @@ export default function ChatPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex-1 flex flex-col overflow-hidden bg-white text-black rounded-tl-[28px] mt-2 ml-2 border-l border-t border-gray-100 shadow-sm">
+              <div className="flex-1 flex flex-col overflow-hidden bg-white text-black md:rounded-tl-[28px] md:mt-2 md:ml-2 md:border-l md:border-t md:border-gray-100 shadow-sm">
                 <BlogEditor 
                   content={editableContent} 
                   onChange={setEditableContent}
                   onSave={handleSaveBlog}
                   isSaving={savingBlog}
+                  blogSlug={selectedBlog?.slug}
+                  coverImageUrl={selectedBlog?.coverImageUrl}
+                  title={selectedBlog?.title}
+                  onTitleChange={async (newTitle) => {
+                    if (!selectedBlog) return;
+                    // Update local state immediately for better UX
+                    setSelectedBlog({ ...selectedBlog, title: newTitle });
+                    try {
+                      const res = await fetch(`/api/blogs/${selectedBlog.slug}`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ title: newTitle }),
+                      });
+                      if (res.ok) {
+                        const updatedBlog = await res.json();
+                        setSelectedBlog(updatedBlog);
+                        fetchBlogs();
+                      }
+                    } catch (err) {
+                      console.error("Failed to update title:", err);
+                      // Revert on error
+                      setSelectedBlog({ ...selectedBlog, title: selectedBlog.title });
+                    }
+                  }}
+                  onCoverImageReplace={async (newUrl) => {
+                    if (!selectedBlog) return;
+                    // Update local state immediately for better UX
+                    setSelectedBlog({ ...selectedBlog, coverImageUrl: newUrl });
+                    try {
+                      const res = await fetch(`/api/blogs/${selectedBlog.slug}`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ coverImageUrl: newUrl }),
+                      });
+                      if (res.ok) {
+                        const updatedBlog = await res.json();
+                        setSelectedBlog(updatedBlog);
+                        fetchBlogs();
+                      }
+                    } catch (err) {
+                      console.error("Failed to update cover image:", err);
+                      // Revert on error
+                      setSelectedBlog({ ...selectedBlog, coverImageUrl: selectedBlog.coverImageUrl });
+                    }
+                  }}
                 />
               </div>
             )}
@@ -513,7 +536,7 @@ export default function ChatPage() {
                 Hide Preview
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-12 bg-white">
+            <div className="flex-1 overflow-y-auto p-4 md:p-12 bg-white">
               <div className="max-w-2xl mx-auto prose prose-sm">
                 <div dangerouslySetInnerHTML={{ 
                   __html: streamingBlogContent
@@ -527,15 +550,15 @@ export default function ChatPage() {
           </div>
         ) : (
           /* Chat Messages */
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 pb-40 custom-scrollbar">
-            <div className="max-w-3xl mx-auto pt-20">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6 pb-32 md:pb-40 custom-scrollbar">
+            <div className="max-w-3xl mx-auto pt-8 md:pt-20 w-full">
               {messages.map((msg, i) => (
                 <div key={i} className={cn(
                   "flex flex-col mb-8 animate-fade-in",
                   msg.role === "user" ? "items-end" : "items-start"
                 )}>
                   <div className={cn(
-                    "max-w-[85%] p-4 rounded-[28px] text-sm leading-relaxed shadow-sm border",
+                    "max-w-[90%] md:max-w-[85%] p-3 md:p-4 rounded-[28px] text-sm md:text-base leading-relaxed shadow-sm border",
                     msg.role === "user" 
                       ? "bg-gray-900 text-white border-gray-800 rounded-tr-none" 
                       : "bg-white text-gray-800 border-gray-100 rounded-tl-none"
@@ -550,26 +573,26 @@ export default function ChatPage() {
 
         {/* Floating Chat Bar */}
         <div className={cn(
-          "absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-white via-white/80 to-transparent pt-20 z-20",
-          selectedBlog && "px-12"
+          "absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-white via-white/80 to-transparent pt-16 md:pt-20 z-20",
+          selectedBlog && "px-4 md:px-12"
         )}>
           {selectedBlog && (
-            <div className="max-w-3xl mx-auto mb-4 px-4 py-2 bg-gray-50 border border-gray-200 rounded-[28px] flex items-center justify-between animate-slide-up">
-              <div className="flex items-center space-x-2">
-                <div className="h-2 w-2 bg-gray-400 rounded-full animate-pulse"></div>
-                <span className="text-xs text-gray-500">
+            <div className="max-w-3xl mx-auto mb-4 px-3 md:px-4 py-2 bg-gray-50 border border-gray-200 rounded-[28px] flex items-center justify-between animate-slide-up">
+              <div className="flex items-center space-x-2 min-w-0 flex-1">
+                <div className="h-2 w-2 bg-gray-400 rounded-full animate-pulse flex-shrink-0"></div>
+                <span className="text-xs text-gray-500 truncate">
                   Editing: <span className="text-black font-medium">{selectedBlog.title}</span>
                 </span>
               </div>
               <button 
                 onClick={handleCloseBlog}
-                className="text-[10px] uppercase tracking-widest text-gray-400 hover:text-black transition-colors"
+                className="text-[10px] uppercase tracking-widest text-gray-400 hover:text-black transition-colors flex-shrink-0 ml-2"
               >
                 Close editor
               </button>
             </div>
           )}
-          <form onSubmit={handleSend} className="max-w-3xl mx-auto relative group">
+          <form onSubmit={handleSend} className="max-w-3xl mx-auto relative group w-full">
             <input
               type="text"
               id="chat-input"
@@ -579,7 +602,7 @@ export default function ChatPage() {
               onChange={(e) => setInput(e.target.value)}
               placeholder={selectedBlog ? `Tell AI how to improve this blog...` : "What should we write about today?"}
               disabled={loading}
-              className="w-full bg-gray-50 border border-gray-200 rounded-[28px] py-4 pl-6 pr-14 text-black placeholder:text-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-all disabled:opacity-50 shadow-sm"
+              className="w-full bg-gray-50 border border-gray-200 rounded-[28px] py-3 md:py-4 pl-4 md:pl-6 pr-12 md:pr-14 text-sm md:text-base text-black placeholder:text-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-all disabled:opacity-50 shadow-sm"
             />
             <button
               type="submit"
@@ -587,13 +610,19 @@ export default function ChatPage() {
               data-testid="chat-submit"
               aria-label="Send message"
               disabled={loading || !input.trim()}
-              className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-black text-white rounded-[28px] hover:bg-gray-800 transition-colors disabled:opacity-10"
+              className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-2 bg-black text-white rounded-[28px] hover:bg-gray-800 active:bg-gray-700 transition-colors disabled:opacity-10 touch-manipulation"
             >
-              {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+              {loading ? <Loader2 className="h-4 w-4 md:h-5 md:w-5 animate-spin" /> : <Send className="h-4 w-4 md:h-5 md:w-5" />}
             </button>
           </form>
         </div>
       </div>
+
+      {/* Settings Modal */}
+      <SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+      />
 
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar {
@@ -610,6 +639,12 @@ export default function ChatPage() {
           background: rgba(0, 0, 0, 0.1);
         }
       `}</style>
+
+      {/* Settings Modal */}
+      <SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+      />
     </div>
   );
 }

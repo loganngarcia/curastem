@@ -35,15 +35,31 @@ export async function PUT(
   try {
     const { slug } = await params;
     const body = await request.json();
+    console.log(`[PUT /api/blogs/${slug}] Updating blog with data:`, {
+      slug,
+      hasContent: !!body.content,
+      hasTitle: !!body.title,
+      hasCoverImage: !!body.coverImageUrl,
+      contentLength: body.content?.length || 0,
+    });
+    
     const blog = await createOrUpdateBlog({
       ...body,
       slug,
     });
+    
+    console.log(`[PUT /api/blogs/${slug}] Successfully updated blog:`, {
+      id: blog.id,
+      title: blog.title,
+      contentLength: blog.content?.length || 0,
+    });
+    
     return NextResponse.json(blog);
   } catch (error) {
-    console.error("Failed to update blog:", error);
+    console.error(`[PUT /api/blogs/${(await params).slug}] Failed to update blog:`, error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "Failed to update blog" },
+      { error: "Failed to update blog", message: errorMessage },
       { status: 500 }
     );
   }

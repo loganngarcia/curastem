@@ -176,12 +176,36 @@ export async function getBlog(slug: string): Promise<BlogItem | null> {
 export async function uploadImageToFramer(imageUrl: string): Promise<string> {
   const framer = await getFramerClient();
   try {
+    console.log(`[uploadImageToFramer] Uploading image:`, {
+      isDataUrl: imageUrl.startsWith("data:"),
+      isHttpUrl: imageUrl.startsWith("http"),
+      length: imageUrl.length,
+    });
+    
     const result = await framer.uploadImage({
       image: imageUrl,
       name: `image-${Date.now()}.png`,
     });
     
-    return typeof result === "string" ? result : result.url;
+    console.log(`[uploadImageToFramer] Upload result type:`, typeof result, result);
+    
+    // uploadImage returns an ImageAsset object
+    // It should have a url property or be usable directly
+    let framerImageUrl: string;
+    if (typeof result === "string") {
+      framerImageUrl = result;
+    } else if (result && typeof result === "object") {
+      // ImageAsset object - try common properties
+      framerImageUrl = (result as any).url || (result as any).src || (result as any).href || String(result);
+    } else {
+      throw new Error(`Unexpected uploadImage return type: ${typeof result}`);
+    }
+    
+    console.log(`[uploadImageToFramer] Extracted URL:`, framerImageUrl);
+    return framerImageUrl;
+  } catch (error) {
+    console.error(`[uploadImageToFramer] Error:`, error);
+    throw error;
   } finally {
     await framer.disconnect().catch(() => {});
   }
@@ -190,32 +214,93 @@ export async function uploadImageToFramer(imageUrl: string): Promise<string> {
 export async function createOrUpdateBlog(blog: Partial<BlogItem> & { slug: string }): Promise<BlogItem> {
   const framer = await getFramerClient();
   try {
+    console.log(`[createOrUpdateBlog] Starting update for slug: ${blog.slug}`);
     const collection = await getBlogCollection(framer);
     const fields = await getFieldIds(collection);
+    console.log(`[createOrUpdateBlog] Field IDs:`, fields);
+    
     const items = await collection.getItems();
     const existingItem = items.find((i: any) => i.slug === blog.slug);
+    console.log(`[createOrUpdateBlog] Existing item found:`, existingItem ? { id: existingItem.id, slug: existingItem.slug } : "none");
     
     const fieldData: any = {};
-    if (blog.title !== undefined) fieldData[fields.title] = blog.title;
-    if (blog.headline !== undefined) fieldData[fields.headline] = blog.headline;
-    if (blog.content !== undefined) fieldData[fields.content] = blog.content;
+    if (blog.title !== undefined) {
+      fieldData[fields.title] = blog.title;
+      console.log(`[createOrUpdateBlog] Setting title field (${fields.title}):`, blog.title);
+    }
+    if (blog.headline !== undefined) {
+      fieldData[fields.headline] = blog.headline;
+      console.log(`[createOrUpdateBlog] Setting headline field (${fields.headline}):`, blog.headline);
+    }
+    if (blog.content !== undefined) {
+      fieldData[fields.content] = blog.content;
+      console.log(`[createOrUpdateBlog] Setting content field (${fields.content}), length:`, blog.content?.length || 0);
+    }
     if (blog.date !== undefined) fieldData[fields.date] = blog.date;
     if (blog.featured !== undefined) fieldData[fields.featured] = blog.featured;
-    if (blog.coverImageUrl !== undefined) fieldData[fields.coverImage] = blog.coverImageUrl;
+    if (blog.coverImageUrl !== undefined) {
+      fieldData[fields.coverImage] = blog.coverImageUrl;
+      console.log(`[createOrUpdateBlog] Setting coverImage field (${fields.coverImage}):`, blog.coverImageUrl);
+    }
     if (blog.blogListImageUrl !== undefined) fieldData[fields.blogListImage] = blog.blogListImageUrl;
     
+    console.log(`[createOrUpdateBlog] Field data to update:`, Object.keys(fieldData));
+    
     if (existingItem) {
-      await collection.addItems([{ id: existingItem.id, slug: blog.slug, fieldData }]);
+      console.log(`[createOrUpdateBlog] Updating existing item with id: ${existingItem.id}`);
+      // Use setAttributes() to update existing items (correct Framer API method)
+      // setAttributes expects { slug?, fieldData } structure
+      // fieldData uses field IDs as keys and simple values (strings, numbers, etc.)
+      const updatePayload: any = { fieldData };
+      // Only include slug if it's being changed
+      if (blog.slug && blog.slug !== existingItem.slug) {
+        updatePayload.slug = blog.slug;
+      }
+      
+      console.log(`[createOrUpdateBlog] Calling setAttributes with:`, {
+        hasSlug: !!updatePayload.slug,
+        fieldCount: Object.keys(fieldData).length,
+        fields: Object.keys(fieldData),
+      });
+      
+      const updatedItem = await existingItem.setAttributes(updatePayload);
+      if (!updatedItem) {
+        throw new Error("setAttributes returned null - item may have been deleted");
+      }
+      console.log(`[createOrUpdateBlog] Update call completed using setAttributes()`, { id: updatedItem.id });
+      
+      // Wait a moment for changes to propagate before disconnecting
+      await new Promise((r) => setTimeout(r, 1000));
     } else {
+      console.log(`[createOrUpdateBlog] Creating new item`);
+      // Use addItems() only for creating new items
       await collection.addItems([{ slug: blog.slug, fieldData }]);
+      console.log(`[createOrUpdateBlog] Create call completed`);
+      // Wait a moment for new item to be available
+      await new Promise((r) => setTimeout(r, 2000));
     }
     
+    // Disconnect after update/create is complete
     await framer.disconnect();
-    await new Promise((r) => setTimeout(r, 3000));
+    console.log(`[createOrUpdateBlog] Disconnected from Framer, waiting for propagation...`);
+    
+    // Wait additional time for CMS to sync
+    await new Promise((r) => setTimeout(r, 2000));
+    
+    console.log(`[createOrUpdateBlog] Fetching updated blog...`);
     const updated = await getBlog(blog.slug);
-    if (!updated) throw new Error("Failed to verify blog update");
+    if (!updated) {
+      console.error(`[createOrUpdateBlog] Failed to fetch updated blog after save`);
+      throw new Error("Failed to verify blog update");
+    }
+    console.log(`[createOrUpdateBlog] Successfully retrieved updated blog:`, {
+      id: updated.id,
+      title: updated.title,
+      contentLength: updated.content?.length || 0,
+    });
     return updated;
   } catch (error) {
+    console.error(`[createOrUpdateBlog] Error:`, error);
     await framer.disconnect().catch(() => {});
     throw error;
   }

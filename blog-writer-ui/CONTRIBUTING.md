@@ -75,14 +75,12 @@ blog-writer-ui/
 │   │   └── settings/             # Settings management
 │   ├── chat/                     # Main chat interface page
 │   ├── login/                    # Login page
-│   ├── settings/                 # Settings UI page
 │   ├── layout.tsx                # Root layout (includes robots meta)
 │   └── globals.css               # Global styles
 │
 ├── components/                   # Reusable React components
 │   ├── BlogEditor.tsx            # Rich text editor (Tiptap)
-│   ├── BlogPreview.tsx           # Blog preview component
-│   └── ImageGallery.tsx          # Image selection UI
+│   └── SettingsModal.tsx        # Settings overlay modal
 │
 ├── lib/                          # Core business logic
 │   ├── framer.ts                 # Framer API client & CMS operations
