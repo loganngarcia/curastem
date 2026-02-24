@@ -141,7 +141,7 @@ export async function POST(request: NextRequest) {
     if (errorMessage.includes("Poe")) {
       userMessage = "Image generation failed via Poe API. Please check your Poe settings.";
     } else if (errorMessage.includes("Collection")) {
-      userMessage = `Framer collection "${collectionName}" not found. Please check your project URL and collection name in settings.`;
+      userMessage = `Framer collection "${collectionName}" not found. ${errorMessage}`;
     } else if (errorMessage.includes("field")) {
       userMessage = `Framer field error: ${errorMessage}. Ensure your collection has a "Content" field.`;
     }

@@ -56,6 +56,7 @@ export async function getBlogCollection(framer: any) {
 
 export async function getFieldIds(collection: any): Promise<FieldIds> {
   const fields = await collection.getFields();
+  console.log(`Available fields in "${collection.name}": ${fields.map((f: any) => `"${f.name}" (id: ${f.id})`).join(", ")}`);
   
   const getFieldId = (name: string, required: boolean = true): string => {
     const field = fields.find(
