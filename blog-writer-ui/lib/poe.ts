@@ -24,7 +24,6 @@ export async function* streamChatCompletion(
   options: ChatCompletionOptions
 ): AsyncGenerator<string, void, unknown> {
   const apiKey = (process.env.POE_API_KEY || "").trim();
-  console.log("POE API KEY (stream):", apiKey ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}` : "MISSING");
   
   if (!apiKey) {
     throw new Error("POE_API_KEY not configured");
@@ -90,7 +89,6 @@ export async function generateChatCompletion(
   options: ChatCompletionOptions
 ): Promise<string> {
   const apiKey = (process.env.POE_API_KEY || "").trim();
-  console.log("POE API KEY (direct):", apiKey ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}` : "MISSING");
 
   if (!apiKey) {
     throw new Error("POE_API_KEY not configured");
