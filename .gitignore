@@ -1,6 +1,9 @@
 # Local tools & secrets - never published to repo
 local/
 
+# Root scripts (moved to local/scripts - do not push)
+scripts/
+
 # Environment and secrets - never commit API keys
 .env
 .env.local
