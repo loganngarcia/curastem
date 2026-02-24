@@ -42,9 +42,23 @@ export async function getBlogCollection(framer: any) {
   const collections = await framer.getCollections();
   console.log(`Available collections: ${collections.map((c: any) => `"${c.name}" (id: ${c.id})`).join(", ")}`);
   
-  const collection = collections.find(
-    (c: any) => c.name.trim().toLowerCase() === collectionName.toLowerCase()
+  // Try exact match first
+  let collection = collections.find(
+    (c: any) => c.name.trim() === collectionName
   );
+  
+  // Try case-insensitive match
+  if (!collection) {
+    collection = collections.find(
+      (c: any) => c.name.trim().toLowerCase() === collectionName.toLowerCase()
+    );
+  }
+  
+  // If still not found and there's only one collection, use it as a fallback
+  if (!collection && collections.length === 1) {
+    console.log(`Collection "${collectionName}" not found, but only one collection exists: "${collections[0].name}". Using it as fallback.`);
+    collection = collections[0];
+  }
   
   if (!collection) {
     const names = collections.map((c: any) => `"${c.name}"`).join(", ");
@@ -60,11 +74,21 @@ export async function getFieldIds(collection: any): Promise<FieldIds> {
   
   const getFieldId = (name: string, required: boolean = true): string => {
     const field = fields.find(
-      (f: any) => f.name.toLowerCase() === name.toLowerCase()
+      (f: any) => f.name.trim().toLowerCase() === name.toLowerCase()
     );
     if (!field) {
+      // Try fuzzy match for "Content" if not found
+      if (name.toLowerCase() === "content") {
+        const contentField = fields.find((f: any) => 
+          f.name.toLowerCase().includes("content") || 
+          f.name.toLowerCase().includes("body") ||
+          f.name.toLowerCase().includes("text")
+        );
+        if (contentField) return contentField.id;
+      }
+      
       if (required) {
-        throw new Error(`Required field "${name}" not found in "${collection.name}"`);
+        throw new Error(`Required field "${name}" not found in "${collection.name}". Available: ${fields.map((f: any) => `"${f.name}"`).join(", ")}`);
       }
       return "";
     }
