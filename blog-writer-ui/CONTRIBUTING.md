@@ -30,7 +30,7 @@ The entire flow—from "I want to write about X" to "published on the website"�
 1. **Clone and Install**:
    ```bash
    git clone <repo-url>
-   cd blog-writer
+   cd blog-writer-ui
    npm install
    ```
 
@@ -66,7 +66,7 @@ The entire flow—from "I want to write about X" to "published on the website"�
 This structure reflects the decisions we've made so far, but **we're always open to improvements**. If you see a better way to organize things, we'd love to hear it.
 
 ```
-blog-writer/
+blog-writer-ui/
 ├── app/                          # Next.js 15 App Router
 │   ├── api/                      # API routes (backend logic)
 │   │   ├── auth/                 # Authentication endpoints
