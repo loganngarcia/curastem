@@ -158,14 +158,22 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
   // Update editor content if it changes externally (e.g. when switching blogs)
   // Only update if content actually changed to preserve undo/redo history
   useEffect(() => {
-    if (editor && content !== editor.getHTML()) {
+    if (!editor) return;
+    
+    const currentEditorContent = editor.getHTML();
+    // Only update if content is significantly different (more than just whitespace)
+    const normalizedContent = content.trim();
+    const normalizedEditorContent = currentEditorContent.trim();
+    
+    if (normalizedContent !== normalizedEditorContent) {
       // Reset processed ref when content changes externally (e.g., switching blogs)
       h2PlaceholdersProcessedRef.current = "";
       // Store current selection
       const { from, to } = editor.state.selection;
       // Set content - this will reset history, but only happens when switching blogs
       // which is expected behavior
-      editor.commands.setContent(content);
+      // Use setContent with false to prevent triggering update event immediately
+      editor.commands.setContent(content, false);
       // Try to restore selection if possible
       try {
         const docSize = editor.state.doc.content.size;
@@ -178,7 +186,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     }
   }, [content, editor]);
 
-  // Ensure H2 placeholders are added for existing blogs (only once per content)
+  // Ensure H2 placeholders are added for existing blogs (only once per content, debounced)
   useEffect(() => {
     if (!editor || !content) return;
     
@@ -187,57 +195,62 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     // Skip if we've already processed this exact content
     if (h2PlaceholdersProcessedRef.current === currentContent) return;
     
-    const h2Regex = /<h2[^>]*>(.*?)<\/h2>/gi;
-    const h2Matches = Array.from(currentContent.matchAll(h2Regex));
-    
-    // If no H2s found, mark as processed and return
-    if (h2Matches.length === 0) {
-      h2PlaceholdersProcessedRef.current = currentContent;
-      return;
-    }
-    
-    let contentUpdated = false;
-    let updatedContent = currentContent;
-    
-    // Process in reverse order to maintain positions
-    for (let i = h2Matches.length - 1; i >= 0; i--) {
-      const match = h2Matches[i];
-      if (!match || match.index === undefined) continue;
+    // Debounce to prevent rapid re-runs
+    const timeoutId = setTimeout(() => {
+      const h2Regex = /<h2[^>]*>(.*?)<\/h2>/gi;
+      const h2Matches = Array.from(currentContent.matchAll(h2Regex));
       
-      const h2Text = match[1].replace(/<[^>]*>/g, '').trim();
-      const insertPosition = match.index;
-      
-      // Check if there's already an image or placeholder before this H2 (within 300 chars)
-      const beforeH2 = updatedContent.slice(Math.max(0, insertPosition - 300), insertPosition);
-      if (beforeH2.includes('<img') || beforeH2.includes('image-placeholder') || beforeH2.includes('data-type="imagePlaceholder"')) {
-        continue; // Skip if image/placeholder already exists
+      // If no H2s found, mark as processed and return
+      if (h2Matches.length === 0) {
+        h2PlaceholdersProcessedRef.current = currentContent;
+        return;
       }
       
-      // Generate image prompt from H2 text
-      const imagePrompt = `professional illustration representing ${h2Text.toLowerCase()}`;
+      let contentUpdated = false;
+      let updatedContent = currentContent;
       
-      // Create placeholder HTML
-      const placeholderHtml = `<p class="image-placeholder" data-type="imagePlaceholder" data-h2-text="${h2Text.replace(/"/g, '&quot;')}" data-image-prompt="${imagePrompt.replace(/"/g, '&quot;')}" style="width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;"><span style="font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%;">${imagePrompt}</span><button class="create-image-btn" style="background: black; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500;">Create Image</button></p>`;
+      // Process in reverse order to maintain positions
+      for (let i = h2Matches.length - 1; i >= 0; i--) {
+        const match = h2Matches[i];
+        if (!match || match.index === undefined) continue;
+        
+        const h2Text = match[1].replace(/<[^>]*>/g, '').trim();
+        const insertPosition = match.index;
+        
+        // Check if there's already an image or placeholder before this H2 (within 300 chars)
+        const beforeH2 = updatedContent.slice(Math.max(0, insertPosition - 300), insertPosition);
+        if (beforeH2.includes('<img') || beforeH2.includes('image-placeholder') || beforeH2.includes('data-type="imagePlaceholder"')) {
+          continue; // Skip if image/placeholder already exists
+        }
+        
+        // Generate image prompt from H2 text
+        const imagePrompt = `professional illustration representing ${h2Text.toLowerCase()}`;
+        
+        // Create placeholder HTML
+        const placeholderHtml = `<p class="image-placeholder" data-type="imagePlaceholder" data-h2-text="${h2Text.replace(/"/g, '&quot;')}" data-image-prompt="${imagePrompt.replace(/"/g, '&quot;')}" style="width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;"><span style="font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%;">${imagePrompt}</span><button class="create-image-btn" style="background: black; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500;">Create Image</button></p>`;
+        
+        // Insert placeholder before the H2
+        updatedContent = 
+          updatedContent.slice(0, insertPosition) +
+          placeholderHtml +
+          updatedContent.slice(insertPosition);
+        
+        contentUpdated = true;
+      }
       
-      // Insert placeholder before the H2
-      updatedContent = 
-        updatedContent.slice(0, insertPosition) +
-        placeholderHtml +
-        updatedContent.slice(insertPosition);
-      
-      contentUpdated = true;
-    }
+      // Update content if placeholders were added
+      if (contentUpdated && updatedContent !== currentContent) {
+        h2PlaceholdersProcessedRef.current = updatedContent;
+        // Only update editor, don't call onChange to avoid triggering parent re-render
+        editor.commands.setContent(updatedContent, false); // false = don't emit update event
+      } else {
+        // Mark as processed even if no changes were made
+        h2PlaceholdersProcessedRef.current = currentContent;
+      }
+    }, 300); // 300ms debounce
     
-    // Update content if placeholders were added
-    if (contentUpdated && updatedContent !== currentContent) {
-      h2PlaceholdersProcessedRef.current = updatedContent;
-      editor.commands.setContent(updatedContent);
-      onChange(updatedContent);
-    } else {
-      // Mark as processed even if no changes were made
-      h2PlaceholdersProcessedRef.current = currentContent;
-    }
-  }, [editor, content, onChange]);
+    return () => clearTimeout(timeoutId);
+  }, [editor, content]);
 
   // Update placeholder button text with countdown and regenerate button text
   useEffect(() => {
@@ -320,99 +333,119 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     }
   }, [editor, generatingImageFor, generationTimeRemaining, regeneratingImage, coverImageUrl]);
 
-  // Add regenerate buttons to images after editor renders
+  // Add regenerate buttons to images after editor renders (only when content changes, not on every update)
   useEffect(() => {
     if (!editor) return;
     
+    let isProcessing = false;
+    
     const addRegenerateButtons = () => {
-      const editorElement = editor.view.dom;
-      const images = editorElement.querySelectorAll("img");
+      // Prevent concurrent runs
+      if (isProcessing) return;
+      isProcessing = true;
       
-      images.forEach((img) => {
-        let parent = img.parentElement;
-        // Ensure parent is a paragraph
-        if (!parent || parent.tagName !== "P") {
-          // Wrap img in paragraph if needed
-          const wrapper = document.createElement("p");
-          wrapper.className = "image-with-regenerate";
-          wrapper.setAttribute("dir", "auto");
-          img.parentNode?.insertBefore(wrapper, img);
-          wrapper.appendChild(img);
-          parent = wrapper;
+      // Use requestAnimationFrame to batch DOM operations
+      requestAnimationFrame(() => {
+        try {
+          const editorElement = editor.view.dom;
+          const images = editorElement.querySelectorAll("img");
+          
+          images.forEach((img) => {
+            // Skip if button already exists
+            const existingBtn = img.closest(".image-with-regenerate")?.querySelector(".regenerate-image-btn");
+            if (existingBtn) return;
+            
+            let parent = img.parentElement;
+            // Ensure parent is a paragraph
+            if (!parent || parent.tagName !== "P") {
+              // Wrap img in paragraph if needed
+              const wrapper = document.createElement("p");
+              wrapper.className = "image-with-regenerate";
+              wrapper.setAttribute("dir", "auto");
+              img.parentNode?.insertBefore(wrapper, img);
+              wrapper.appendChild(img);
+              parent = wrapper;
+            }
+            
+            if (parent && !parent.classList.contains("image-with-regenerate")) {
+              parent.classList.add("image-with-regenerate");
+            }
+            
+            // Ensure image has 28px border-radius
+            if (!img.style.borderRadius || img.style.borderRadius !== '28px') {
+              img.style.borderRadius = '28px';
+            }
+            
+            // Ensure parent has position relative for absolute positioning of button
+            if (parent && !parent.style.position) {
+              parent.style.position = "relative";
+            }
+            
+            // Create regenerate button with Sparkles icon (overlay on image)
+            const regenerateBtn = document.createElement("button");
+            regenerateBtn.className = "regenerate-image-btn";
+            regenerateBtn.type = "button";
+            // Set inline styles to ensure overlay positioning
+            regenerateBtn.style.cssText = "position: absolute; bottom: 16px; right: 16px; background: rgba(0, 0, 0, 0.9); color: white; border: none; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.85; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); pointer-events: auto;";
+            // Create Sparkles icon SVG
+            const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            iconSvg.setAttribute("width", "12");
+            iconSvg.setAttribute("height", "12");
+            iconSvg.setAttribute("viewBox", "0 0 24 24");
+            iconSvg.setAttribute("fill", "none");
+            iconSvg.setAttribute("stroke", "currentColor");
+            iconSvg.setAttribute("stroke-width", "2");
+            iconSvg.setAttribute("stroke-linecap", "round");
+            iconSvg.setAttribute("stroke-linejoin", "round");
+            // Sparkles icon paths (multiple small stars/sparkles)
+            const path1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path1.setAttribute("d", "M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z");
+            const path2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path2.setAttribute("d", "M19 3L19.5 5.5L22 6L19.5 6.5L19 9L18.5 6.5L16 6L18.5 5.5L19 3Z");
+            const path3 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path3.setAttribute("d", "M5 21L5.5 18.5L8 18L5.5 17.5L5 15L4.5 17.5L2 18L4.5 18.5L5 21Z");
+            iconSvg.appendChild(path1);
+            iconSvg.appendChild(path2);
+            iconSvg.appendChild(path3);
+            regenerateBtn.appendChild(iconSvg);
+            const textSpan = document.createElement("span");
+            textSpan.textContent = " Regenerate";
+            regenerateBtn.appendChild(textSpan);
+            const imgSrc = img.getAttribute("src") || "";
+            regenerateBtn.onclick = (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const alt = img.getAttribute("alt") || "";
+              handleRegenerateImage(imgSrc, alt);
+            };
+            parent.appendChild(regenerateBtn);
+            
+            // Store reference to text span and image src for countdown updates
+            (regenerateBtn as any).__textSpan = textSpan;
+            (regenerateBtn as any).__imageSrc = imgSrc;
+          });
+        } finally {
+          isProcessing = false;
         }
-        
-        if (parent && !parent.classList.contains("image-with-regenerate")) {
-          parent.classList.add("image-with-regenerate");
-        }
-        
-        // Ensure image has 28px border-radius
-        if (!img.style.borderRadius || img.style.borderRadius !== '28px') {
-          img.style.borderRadius = '28px';
-        }
-        
-        // Remove existing regenerate button if any
-        const existingBtn = parent.querySelector(".regenerate-image-btn");
-        if (existingBtn) existingBtn.remove();
-        
-        // Ensure parent has position relative for absolute positioning of button
-        if (parent && !parent.style.position) {
-          parent.style.position = "relative";
-        }
-        
-        // Create regenerate button with Sparkles icon (overlay on image)
-        const regenerateBtn = document.createElement("button");
-        regenerateBtn.className = "regenerate-image-btn";
-        regenerateBtn.type = "button";
-        // Set inline styles to ensure overlay positioning
-        regenerateBtn.style.cssText = "position: absolute; bottom: 16px; right: 16px; background: rgba(0, 0, 0, 0.9); color: white; border: none; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.85; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); pointer-events: auto;";
-        // Create Sparkles icon SVG
-        const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        iconSvg.setAttribute("width", "12");
-        iconSvg.setAttribute("height", "12");
-        iconSvg.setAttribute("viewBox", "0 0 24 24");
-        iconSvg.setAttribute("fill", "none");
-        iconSvg.setAttribute("stroke", "currentColor");
-        iconSvg.setAttribute("stroke-width", "2");
-        iconSvg.setAttribute("stroke-linecap", "round");
-        iconSvg.setAttribute("stroke-linejoin", "round");
-        // Sparkles icon paths (multiple small stars/sparkles)
-        const path1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path1.setAttribute("d", "M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z");
-        const path2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path2.setAttribute("d", "M19 3L19.5 5.5L22 6L19.5 6.5L19 9L18.5 6.5L16 6L18.5 5.5L19 3Z");
-        const path3 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path3.setAttribute("d", "M5 21L5.5 18.5L8 18L5.5 17.5L5 15L4.5 17.5L2 18L4.5 18.5L5 21Z");
-        iconSvg.appendChild(path1);
-        iconSvg.appendChild(path2);
-        iconSvg.appendChild(path3);
-        regenerateBtn.appendChild(iconSvg);
-        const textSpan = document.createElement("span");
-        textSpan.textContent = " Regenerate";
-        regenerateBtn.appendChild(textSpan);
-        const imgSrc = img.getAttribute("src") || "";
-        regenerateBtn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const alt = img.getAttribute("alt") || "";
-          handleRegenerateImage(imgSrc, alt);
-        };
-        parent.appendChild(regenerateBtn);
-        
-        // Store reference to text span and image src for countdown updates
-        (regenerateBtn as any).__textSpan = textSpan;
-        (regenerateBtn as any).__imageSrc = imgSrc;
       });
     };
     
     // Add buttons after a short delay to ensure DOM is ready
-    const timeout = setTimeout(addRegenerateButtons, 100);
+    const timeout = setTimeout(addRegenerateButtons, 200);
     
-    // Also add when content changes
-    editor.on("update", addRegenerateButtons);
+    // Only listen to content changes, not every update (debounced)
+    let debounceTimeout: NodeJS.Timeout;
+    const handleContentChange = () => {
+      clearTimeout(debounceTimeout);
+      debounceTimeout = setTimeout(addRegenerateButtons, 500); // Only run 500ms after content stops changing
+    };
+    
+    editor.on("update", handleContentChange);
     
     return () => {
       clearTimeout(timeout);
-      editor.off("update", addRegenerateButtons);
+      clearTimeout(debounceTimeout);
+      editor.off("update", handleContentChange);
     };
   }, [editor]);
 
