@@ -396,8 +396,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           
           images.forEach((img) => {
             // Skip if button already exists - check both in parent and as sibling
-            const parent = img.parentElement;
-            const existingBtn = parent?.querySelector(".regenerate-image-btn") || 
+            const imgParent = img.parentElement;
+            const existingBtn = imgParent?.querySelector(".regenerate-image-btn") || 
                               img.closest(".image-with-regenerate")?.querySelector(".regenerate-image-btn");
             if (existingBtn) {
               // Button exists, just ensure it's properly configured
