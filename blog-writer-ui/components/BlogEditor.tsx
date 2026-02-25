@@ -172,8 +172,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       const { from, to } = editor.state.selection;
       // Set content - this will reset history, but only happens when switching blogs
       // which is expected behavior
-      // Use setContent with false to prevent triggering update event immediately
-      editor.commands.setContent(content, false);
+      // Use setContent with emitUpdate: false to prevent triggering update event immediately
+      editor.commands.setContent(content, { emitUpdate: false });
       // Try to restore selection if possible
       try {
         const docSize = editor.state.doc.content.size;
@@ -242,7 +242,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       if (contentUpdated && updatedContent !== currentContent) {
         h2PlaceholdersProcessedRef.current = updatedContent;
         // Only update editor, don't call onChange to avoid triggering parent re-render
-        editor.commands.setContent(updatedContent, false); // false = don't emit update event
+        editor.commands.setContent(updatedContent, { emitUpdate: false }); // Don't emit update event
       } else {
         // Mark as processed even if no changes were made
         h2PlaceholdersProcessedRef.current = currentContent;
