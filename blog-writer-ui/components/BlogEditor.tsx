@@ -7,6 +7,7 @@ import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
 import Typography from "@tiptap/extension-typography";
+import { ImagePlaceholder } from "./ImagePlaceholder";
 import { 
   Bold, 
   Italic, 
@@ -23,24 +24,33 @@ import {
   Image as ImageIcon,
   Upload,
   X,
-  Loader2
+  Loader2,
+  MoreHorizontal,
+  Sparkles
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import ErrorModal from "./ErrorModal";
 
 interface EditorProps {
   content: string;
   onChange: (content: string) => void;
   onSave?: () => void;
   isSaving?: boolean;
+  hasChanges?: boolean;
   blogSlug?: string;
   coverImageUrl?: string;
   title?: string;
+  date?: string;
   onTitleChange?: (title: string) => void;
+  onDateChange?: (date: string) => void;
   onCoverImageReplace?: (newUrl: string) => void;
 }
 
-export default function BlogEditor({ content, onChange, onSave, isSaving, blogSlug, coverImageUrl, title, onTitleChange, onCoverImageReplace }: EditorProps) {
+export default function BlogEditor({ content, onChange, onSave, isSaving, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace }: EditorProps) {
+  const [generatingImageFor, setGeneratingImageFor] = useState<string | null>(null);
+  const [regeneratingImage, setRegeneratingImage] = useState<string | null>(null);
+  const [imagePrompts, setImagePrompts] = useState<Record<string, string>>({}); // Store prompts for each image URL
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [isImageEditModalOpen, setIsImageEditModalOpen] = useState(false);
@@ -51,6 +61,19 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropdownButtonRef = useRef<HTMLButtonElement>(null);
   const [dropdownPosition, setDropdownPosition] = useState<{ top: number; left: number } | null>(null);
+  const [isToolbarMenuOpen, setIsToolbarMenuOpen] = useState(false);
+  const [toolbarMenuPosition, setToolbarMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const toolbarMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const [errorModal, setErrorModal] = useState<{
+    isOpen: boolean;
+    title?: string;
+    message: string;
+    error?: Error | string | unknown;
+    details?: string;
+  }>({
+    isOpen: false,
+    message: "",
+  });
 
   const editor = useEditor({
     extensions: [
@@ -71,6 +94,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
           class: "max-w-full h-auto rounded-lg cursor-pointer",
         },
       }),
+      ImagePlaceholder,
       Placeholder.configure({
         placeholder: "Start writing your blog post...",
       }),
@@ -86,7 +110,36 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
       handleDOMEvents: {
         click: (view, event) => {
           const target = event.target as HTMLElement;
-          if (target.tagName === "IMG") {
+          
+          // Handle placeholder image button clicks
+          if (target.classList.contains("create-image-btn") || target.closest(".create-image-btn")) {
+            event.preventDefault();
+            const button = target.classList.contains("create-image-btn") ? target : target.closest(".create-image-btn") as HTMLElement;
+            const placeholder = button?.closest(".image-placeholder") as HTMLElement;
+            if (placeholder) {
+              const h2Text = placeholder.getAttribute("data-h2-text") || "";
+              handleCreatePlaceholderImage(h2Text, placeholder);
+            }
+            return true;
+          }
+          
+          // Handle regenerate button clicks
+          if (target.classList.contains("regenerate-image-btn") || target.closest(".regenerate-image-btn")) {
+            event.preventDefault();
+            event.stopPropagation();
+            const button = target.classList.contains("regenerate-image-btn") ? target : target.closest(".regenerate-image-btn") as HTMLElement;
+            const imgContainer = button?.closest(".image-with-regenerate") as HTMLElement;
+            const img = imgContainer?.querySelector("img") as HTMLImageElement;
+            if (img) {
+              const src = img.getAttribute("src") || "";
+              const alt = img.getAttribute("alt") || "";
+              handleRegenerateImage(src, alt);
+            }
+            return true;
+          }
+          
+          // Handle regular image clicks (but not regenerate button)
+          if (target.tagName === "IMG" && !target.closest(".regenerate-image-btn")) {
             event.preventDefault();
             const src = target.getAttribute("src") || "";
             const alt = target.getAttribute("alt") || "";
@@ -101,22 +154,104 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
   });
 
   // Update editor content if it changes externally (e.g. when switching blogs)
+  // Only update if content actually changed to preserve undo/redo history
   useEffect(() => {
     if (editor && content !== editor.getHTML()) {
+      // Store current selection
+      const { from, to } = editor.state.selection;
+      // Set content - this will reset history, but only happens when switching blogs
+      // which is expected behavior
       editor.commands.setContent(content);
+      // Try to restore selection if possible
+      try {
+        const docSize = editor.state.doc.content.size;
+        if (from <= docSize && to <= docSize) {
+          editor.commands.setTextSelection({ from: Math.min(from, docSize), to: Math.min(to, docSize) });
+        }
+      } catch {
+        // Selection might be invalid after content change, that's okay
+      }
     }
   }, [content, editor]);
 
-  // Extract alt text from images in content when content changes
+  // Add regenerate buttons to images after editor renders
   useEffect(() => {
-    if (editor && content) {
-      // Parse HTML to extract image alt attributes
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(content, "text/html");
-      const images = doc.querySelectorAll("img");
-      // Alt text is already in the HTML, TipTap will preserve it
-    }
-  }, [content, editor]);
+    if (!editor) return;
+    
+    const addRegenerateButtons = () => {
+      const editorElement = editor.view.dom;
+      const images = editorElement.querySelectorAll("img");
+      
+      images.forEach((img) => {
+        let parent = img.parentElement;
+        // Ensure parent is a paragraph
+        if (!parent || parent.tagName !== "P") {
+          // Wrap img in paragraph if needed
+          const wrapper = document.createElement("p");
+          wrapper.className = "image-with-regenerate";
+          wrapper.setAttribute("dir", "auto");
+          img.parentNode?.insertBefore(wrapper, img);
+          wrapper.appendChild(img);
+          parent = wrapper;
+        }
+        
+        if (parent && !parent.classList.contains("image-with-regenerate")) {
+          parent.classList.add("image-with-regenerate");
+        }
+        
+        // Remove existing regenerate button if any
+        const existingBtn = parent.querySelector(".regenerate-image-btn");
+        if (existingBtn) existingBtn.remove();
+        
+        // Create regenerate button with Sparkles icon
+        const regenerateBtn = document.createElement("button");
+        regenerateBtn.className = "regenerate-image-btn";
+        regenerateBtn.type = "button";
+        // Create Sparkles icon SVG
+        const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        iconSvg.setAttribute("width", "12");
+        iconSvg.setAttribute("height", "12");
+        iconSvg.setAttribute("viewBox", "0 0 24 24");
+        iconSvg.setAttribute("fill", "none");
+        iconSvg.setAttribute("stroke", "currentColor");
+        iconSvg.setAttribute("stroke-width", "2");
+        iconSvg.setAttribute("stroke-linecap", "round");
+        iconSvg.setAttribute("stroke-linejoin", "round");
+        // Sparkles icon paths (multiple small stars/sparkles)
+        const path1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path1.setAttribute("d", "M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z");
+        const path2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path2.setAttribute("d", "M19 3L19.5 5.5L22 6L19.5 6.5L19 9L18.5 6.5L16 6L18.5 5.5L19 3Z");
+        const path3 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path3.setAttribute("d", "M5 21L5.5 18.5L8 18L5.5 17.5L5 15L4.5 17.5L2 18L4.5 18.5L5 21Z");
+        iconSvg.appendChild(path1);
+        iconSvg.appendChild(path2);
+        iconSvg.appendChild(path3);
+        regenerateBtn.appendChild(iconSvg);
+        const textNode = document.createTextNode(" Regenerate");
+        regenerateBtn.appendChild(textNode);
+        regenerateBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const src = img.getAttribute("src") || "";
+          const alt = img.getAttribute("alt") || "";
+          handleRegenerateImage(src, alt);
+        };
+        parent.appendChild(regenerateBtn);
+      });
+    };
+    
+    // Add buttons after a short delay to ensure DOM is ready
+    const timeout = setTimeout(addRegenerateButtons, 100);
+    
+    // Also add when content changes
+    editor.on("update", addRegenerateButtons);
+    
+    return () => {
+      clearTimeout(timeout);
+      editor.off("update", addRegenerateButtons);
+    };
+  }, [editor]);
 
   // Fetch CMS images when modal opens
   useEffect(() => {
@@ -157,11 +292,20 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
       }
 
       const data = await res.json();
-      insertImage(data.url);
+      // Use filename as alt text (remove extension)
+      const altText = file.name.replace(/\.[^/.]+$/, "") || "Uploaded image";
+      insertImage(data.url, altText);
       setIsImageModalOpen(false);
     } catch (error) {
       console.error("Upload error:", error);
-      alert(error instanceof Error ? error.message : "Failed to upload image");
+      const errorMessage = error instanceof Error ? error.message : "Failed to upload image";
+      setErrorModal({
+        isOpen: true,
+        title: "Failed to upload image",
+        message: errorMessage,
+        error: error,
+        details: "Failed to upload image file to Framer CMS.",
+      });
     } finally {
       setUploading(false);
     }
@@ -186,18 +330,155 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
       }
 
       const data = await res.json();
-      insertImage(data.url);
+      // Extract filename from URL for alt text
+      const urlParts = imageUrl.trim().split('/');
+      const filename = urlParts[urlParts.length - 1].split('?')[0].replace(/\.[^/.]+$/, "") || "Image from URL";
+      insertImage(data.url, filename);
       setIsImageModalOpen(false);
     } catch (error) {
       console.error("Upload error:", error);
-      alert(error instanceof Error ? error.message : "Failed to upload image");
+      const errorMessage = error instanceof Error ? error.message : "Failed to upload image";
+      setErrorModal({
+        isOpen: true,
+        title: "Failed to upload image",
+        message: errorMessage,
+        error: error,
+        details: `Failed to upload image from URL: ${imageUrl}`,
+      });
     } finally {
       setUploading(false);
     }
   };
 
-  const insertImage = (url: string) => {
-    editor.chain().focus().setImage({ src: url }).run();
+  const insertImage = (url: string, alt: string = "") => {
+    editor.chain().focus().setImage({ src: url, alt }).run();
+  };
+
+  const handleRegenerateImage = async (currentImageUrl: string, currentAlt: string) => {
+    if (!editor || regeneratingImage) return;
+    
+    setRegeneratingImage(currentImageUrl);
+    
+    try {
+      // Use the alt text as the image prompt (it contains the original subject)
+      const imagePrompt = currentAlt || "professional illustration";
+      
+      // Call API to generate new image
+      const res = await fetch("/api/images/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9" }),
+      });
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to regenerate image");
+      }
+      
+      const data = await res.json();
+      const newImageUrl = data.url;
+      
+      // Replace the old image with the new one in editor content
+      const currentContent = editor.getHTML();
+      // Escape special regex characters
+      const escapedUrl = currentImageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Match img tag with its parent paragraph if it exists
+      const imagePattern = new RegExp(`(<p[^>]*>)?<img[^>]+src=["']${escapedUrl}["'][^>]*>(</p>)?`, 'gi');
+      
+      // Create new image wrapped in paragraph with regenerate class
+      const wrappedHtml = `<p dir="auto" class="image-with-regenerate"><img src="${newImageUrl}" alt="${currentAlt}"></p>`;
+      
+      const newContent = currentContent.replace(imagePattern, wrappedHtml);
+      editor.commands.setContent(newContent);
+      
+      // Update the prompt mapping
+      setImagePrompts(prev => ({ ...prev, [newImageUrl]: imagePrompt }));
+      
+    } catch (error) {
+      console.error("Failed to regenerate image:", error);
+      setErrorModal({
+        isOpen: true,
+        title: "Failed to regenerate image",
+        message: error instanceof Error ? error.message : "Failed to regenerate image",
+        error: error,
+        details: "Failed to regenerate image.",
+      });
+    } finally {
+      setRegeneratingImage(null);
+    }
+  };
+
+  const handleCreatePlaceholderImage = async (h2Text: string, placeholderElement: HTMLElement) => {
+    if (!editor || generatingImageFor) return;
+    
+    setGeneratingImageFor(h2Text);
+    
+    try {
+      // Get image prompt from data attribute, or generate from H2 text
+      const imagePrompt = placeholderElement.getAttribute("data-image-prompt") || 
+                         `professional illustration representing ${h2Text.toLowerCase()}`;
+      
+      // Call API to generate image
+      const res = await fetch("/api/images/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9" }),
+      });
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to generate image");
+      }
+      
+      const data = await res.json();
+      const imageUrl = data.url;
+      
+      // Store the prompt for this image
+      setImagePrompts(prev => ({ ...prev, [imageUrl]: imagePrompt }));
+      
+      // Find the placeholder node in the editor and replace it with an image
+      const { state } = editor;
+      const { tr } = state;
+      
+      state.doc.descendants((node, pos) => {
+        if (node.type.name === 'imagePlaceholder' && 
+            node.attrs.h2Text === h2Text) {
+          // Replace placeholder node with image, using imagePrompt as alt text
+          const imageNode = state.schema.nodes.paragraph.create(
+            { class: "image-with-regenerate" },
+            state.schema.nodes.image.create({ src: imageUrl, alt: imagePrompt })
+          );
+          tr.replaceWith(pos, pos + node.nodeSize, imageNode);
+          return false; // Stop searching
+        }
+      });
+      
+      if (tr.steps.length > 0) {
+        editor.view.dispatch(tr);
+      } else {
+        // Fallback: replace in HTML if node replacement didn't work
+        const currentContent = editor.getHTML();
+        const placeholderPattern = new RegExp(
+          `<p[^>]*class="image-placeholder"[^>]*data-h2-text="${h2Text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>.*?</p>`,
+          'gs'
+        );
+        const imageHtml = `<p dir="auto" class="image-with-regenerate"><img src="${imageUrl}" alt="${imagePrompt}"></p>`;
+        const newContent = currentContent.replace(placeholderPattern, imageHtml);
+        editor.commands.setContent(newContent);
+      }
+      
+    } catch (error) {
+      console.error("Failed to generate image:", error);
+      setErrorModal({
+        isOpen: true,
+        title: "Failed to generate image",
+        message: error instanceof Error ? error.message : "Failed to generate image",
+        error: error,
+        details: "Failed to generate image for placeholder.",
+      });
+    } finally {
+      setGeneratingImageFor(null);
+    }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -230,21 +511,40 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
   return (
     <div className="flex flex-col w-full h-full relative">
       {/* Fixed Toolbar */}
-      <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-gray-200 p-1 md:p-2 flex items-center justify-between shadow-sm overflow-x-auto">
+      <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-gray-200 p-1 md:p-2 flex items-center justify-between shadow-sm overflow-x-auto overflow-y-visible">
         <div className="flex items-center space-x-0.5 md:space-x-1 flex-shrink-0 min-w-0">
           {/* Heading Dropdown */}
           <div className="relative">
             <button
               ref={dropdownButtonRef}
-              onClick={() => {
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 if (!isMenuOpen && dropdownButtonRef.current) {
                   const rect = dropdownButtonRef.current.getBoundingClientRect();
+                  const viewportWidth = window.innerWidth;
+                  const dropdownWidth = 192; // w-48 = 12rem = 192px
+                  let left = rect.left;
+                  
+                  // Ensure dropdown doesn't go off-screen on the right
+                  if (left + dropdownWidth > viewportWidth - 16) {
+                    left = viewportWidth - dropdownWidth - 16;
+                  }
+                  
+                  // Ensure dropdown doesn't go off-screen on the left
+                  if (left < 16) {
+                    left = 16;
+                  }
+                  
                   setDropdownPosition({
                     top: rect.bottom + 4,
-                    left: rect.left,
+                    left: left,
                   });
+                  setIsMenuOpen(true);
+                } else {
+                  setIsMenuOpen(false);
+                  setDropdownPosition(null);
                 }
-                setIsMenuOpen(!isMenuOpen);
               }}
               className="flex items-center space-x-1 md:space-x-2 px-2 md:px-3 py-1.5 rounded-lg hover:bg-gray-100 active:bg-gray-200 text-xs md:text-sm font-medium transition-colors touch-manipulation"
             >
@@ -257,22 +557,30 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
               <>
                 <div 
                   className="fixed inset-0 z-30" 
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setIsMenuOpen(false);
                     setDropdownPosition(null);
                   }}
                 />
                 <div 
-                  className="fixed w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-40 py-1 overflow-hidden animate-in fade-in slide-in-from-top-2"
+                  className="fixed w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 overflow-hidden"
                   style={{
                     top: `${dropdownPosition.top}px`,
                     left: `${dropdownPosition.left}px`,
                   }}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   <button
-                    onClick={() => { editor.chain().focus().setParagraph().run(); setIsMenuOpen(false); setDropdownPosition(null); }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      editor.chain().focus().setParagraph().run();
+                      setIsMenuOpen(false);
+                      setDropdownPosition(null);
+                    }}
                     className={cn(
-                      "w-full text-left px-4 py-2 text-sm hover:bg-gray-50",
+                      "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors touch-manipulation",
                       !editor.isActive("heading") && "bg-gray-50 font-semibold"
                     )}
                   >
@@ -281,9 +589,14 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
                   {[1, 2, 3, 4, 5, 6].map((level) => (
                     <button
                       key={level}
-                      onClick={() => { toggleHeading(level as any); setDropdownPosition(null); }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleHeading(level as any);
+                        setDropdownPosition(null);
+                      }}
                       className={cn(
-                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50",
+                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors touch-manipulation",
                         editor.isActive("heading", { level }) && "bg-gray-50 font-semibold"
                       )}
                     >
@@ -299,6 +612,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
 
           {/* Formatting Buttons */}
           <div className="flex items-center space-x-0.5">
+            {/* Always visible on mobile */}
             <ToolbarButton
               onClick={() => editor.chain().focus().toggleBold().run()}
               active={editor.isActive("bold")}
@@ -318,48 +632,169 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
               title="Underline"
             />
             <ToolbarButton
-              onClick={() => {
-                const url = window.prompt("Enter URL");
-                if (url) {
-                  editor.chain().focus().setLink({ href: url }).run();
-                } else if (url === "") {
-                  editor.chain().focus().unsetLink().run();
-                }
-              }}
-              active={editor.isActive("link")}
-              icon={<LinkIcon className="h-4 w-4" />}
-              title="Link"
-            />
-            <ToolbarButton
               onClick={() => setIsImageModalOpen(true)}
               active={editor.isActive("image")}
               icon={<ImageIcon className="h-4 w-4" />}
               title="Insert Image"
             />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBlockquote().run()}
-              active={editor.isActive("blockquote")}
-              icon={<Quote className="h-4 w-4" />}
-              title="Quote"
-            />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleCode().run()}
-              active={editor.isActive("code")}
-              icon={<Code className="h-4 w-4" />}
-              title="Code"
-            />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBulletList().run()}
-              active={editor.isActive("bulletList")}
-              icon={<List className="h-4 w-4" />}
-              title="Bullet List"
-            />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleOrderedList().run()}
-              active={editor.isActive("orderedList")}
-              icon={<ListOrdered className="h-4 w-4" />}
-              title="Ordered List"
-            />
+            
+            {/* Hidden on mobile, shown in overflow menu */}
+            <div className="hidden md:flex items-center space-x-0.5">
+              <ToolbarButton
+                onClick={() => {
+                  const url = window.prompt("Enter URL");
+                  if (url) {
+                    editor.chain().focus().setLink({ href: url }).run();
+                  } else if (url === "") {
+                    editor.chain().focus().unsetLink().run();
+                  }
+                }}
+                active={editor.isActive("link")}
+                icon={<LinkIcon className="h-4 w-4" />}
+                title="Link"
+              />
+              <ToolbarButton
+                onClick={() => editor.chain().focus().toggleBlockquote().run()}
+                active={editor.isActive("blockquote")}
+                icon={<Quote className="h-4 w-4" />}
+                title="Quote"
+              />
+              <ToolbarButton
+                onClick={() => editor.chain().focus().toggleCode().run()}
+                active={editor.isActive("code")}
+                icon={<Code className="h-4 w-4" />}
+                title="Code"
+              />
+              <ToolbarButton
+                onClick={() => editor.chain().focus().toggleBulletList().run()}
+                active={editor.isActive("bulletList")}
+                icon={<List className="h-4 w-4" />}
+                title="Bullet List"
+              />
+              <ToolbarButton
+                onClick={() => editor.chain().focus().toggleOrderedList().run()}
+                active={editor.isActive("orderedList")}
+                icon={<ListOrdered className="h-4 w-4" />}
+                title="Ordered List"
+              />
+            </div>
+
+            {/* Mobile overflow menu */}
+            <div className="md:hidden relative">
+              <button
+                ref={toolbarMenuButtonRef}
+                onClick={() => {
+                  if (!isToolbarMenuOpen && toolbarMenuButtonRef.current) {
+                    const rect = toolbarMenuButtonRef.current.getBoundingClientRect();
+                    setToolbarMenuPosition({
+                      top: rect.bottom + 4,
+                      left: rect.left,
+                    });
+                  }
+                  setIsToolbarMenuOpen(!isToolbarMenuOpen);
+                }}
+                className="p-1.5 rounded-lg hover:bg-gray-100 active:bg-gray-200 transition-colors touch-manipulation"
+                title="More options"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+              
+              {isToolbarMenuOpen && toolbarMenuPosition && (
+                <>
+                  <div 
+                    className="fixed inset-0 z-30" 
+                    onClick={() => {
+                      setIsToolbarMenuOpen(false);
+                      setToolbarMenuPosition(null);
+                    }}
+                  />
+                  <div 
+                    className="fixed bg-white border border-gray-200 rounded-xl shadow-xl z-40 py-1 overflow-hidden animate-in fade-in slide-in-from-top-2"
+                    style={{
+                      top: `${toolbarMenuPosition.top}px`,
+                      left: `${toolbarMenuPosition.left}px`,
+                      minWidth: "160px",
+                    }}
+                  >
+                    <button
+                      onClick={() => {
+                        const url = window.prompt("Enter URL");
+                        if (url) {
+                          editor.chain().focus().setLink({ href: url }).run();
+                        } else if (url === "") {
+                          editor.chain().focus().unsetLink().run();
+                        }
+                        setIsToolbarMenuOpen(false);
+                        setToolbarMenuPosition(null);
+                      }}
+                      className={cn(
+                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
+                        editor.isActive("link") && "bg-gray-50 font-semibold"
+                      )}
+                    >
+                      <LinkIcon className="h-4 w-4" />
+                      Link
+                    </button>
+                    <button
+                      onClick={() => {
+                        editor.chain().focus().toggleBlockquote().run();
+                        setIsToolbarMenuOpen(false);
+                        setToolbarMenuPosition(null);
+                      }}
+                      className={cn(
+                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
+                        editor.isActive("blockquote") && "bg-gray-50 font-semibold"
+                      )}
+                    >
+                      <Quote className="h-4 w-4" />
+                      Quote
+                    </button>
+                    <button
+                      onClick={() => {
+                        editor.chain().focus().toggleCode().run();
+                        setIsToolbarMenuOpen(false);
+                        setToolbarMenuPosition(null);
+                      }}
+                      className={cn(
+                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
+                        editor.isActive("code") && "bg-gray-50 font-semibold"
+                      )}
+                    >
+                      <Code className="h-4 w-4" />
+                      Code
+                    </button>
+                    <button
+                      onClick={() => {
+                        editor.chain().focus().toggleBulletList().run();
+                        setIsToolbarMenuOpen(false);
+                        setToolbarMenuPosition(null);
+                      }}
+                      className={cn(
+                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
+                        editor.isActive("bulletList") && "bg-gray-50 font-semibold"
+                      )}
+                    >
+                      <List className="h-4 w-4" />
+                      Bullet List
+                    </button>
+                    <button
+                      onClick={() => {
+                        editor.chain().focus().toggleOrderedList().run();
+                        setIsToolbarMenuOpen(false);
+                        setToolbarMenuPosition(null);
+                      }}
+                      className={cn(
+                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
+                        editor.isActive("orderedList") && "bg-gray-50 font-semibold"
+                      )}
+                    >
+                      <ListOrdered className="h-4 w-4" />
+                      Numbered List
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           <div className="h-6 w-[1px] bg-gray-200 mx-0.5 md:mx-1 flex-shrink-0" />
@@ -367,13 +802,17 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
           {/* History */}
           <div className="flex items-center space-x-0.5">
             <ToolbarButton
-              onClick={() => editor.chain().focus().undo().run()}
+              onClick={() => {
+                editor.chain().focus().undo().run();
+              }}
               disabled={!editor.can().undo()}
               icon={<Undo className="h-4 w-4" />}
               title="Undo"
             />
             <ToolbarButton
-              onClick={() => editor.chain().focus().redo().run()}
+              onClick={() => {
+                editor.chain().focus().redo().run();
+              }}
               disabled={!editor.can().redo()}
               icon={<Redo className="h-4 w-4" />}
               title="Redo"
@@ -385,9 +824,9 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
         {onSave && (
           <button
             onClick={onSave}
-            disabled={isSaving}
+            disabled={isSaving || !hasChanges}
             data-testid="save-button"
-            className="flex items-center space-x-1 md:space-x-2 bg-black text-white px-3 md:px-4 py-1.5 rounded-lg hover:bg-gray-800 disabled:opacity-50 transition-all text-xs md:text-sm font-medium flex-shrink-0"
+            className="flex items-center space-x-1 md:space-x-2 bg-black text-white px-3 md:px-4 py-1.5 rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-xs md:text-sm font-medium flex-shrink-0"
           >
             {isSaving ? (
               <span className="animate-spin">◌</span>
@@ -402,7 +841,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
 
       {/* Editor Content */}
       <div className="flex-1 overflow-y-auto bg-white">
-        <div className="max-w-4xl mx-auto p-3 md:p-8 w-full">
+        <div className="w-full mx-auto p-3 md:p-8 max-w-4xl">
           {/* Title */}
           {title !== undefined && (
             <input
@@ -413,19 +852,139 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
               placeholder="Blog title..."
             />
           )}
+
+          {/* Date */}
+          {date !== undefined && onDateChange && (
+            <div className="mb-4 md:mb-6">
+              <input
+                type="text"
+                value={date ? (() => {
+                  const d = new Date(date);
+                  const month = String(d.getMonth() + 1).padStart(2, '0');
+                  const day = String(d.getDate()).padStart(2, '0');
+                  const year = d.getFullYear();
+                  return `${month}/${day}/${year}`;
+                })() : ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (!value) {
+                    onDateChange('');
+                    return;
+                  }
+                  // Parse mm/dd/yyyy format
+                  const match = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+                  if (match) {
+                    const [, month, day, year] = match;
+                    const dateObj = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+                    if (!isNaN(dateObj.getTime())) {
+                      onDateChange(dateObj.toISOString());
+                    }
+                  }
+                }}
+                placeholder="mm/dd/yyyy"
+                className="text-base md:text-lg text-gray-700 bg-transparent border-none outline-none focus:outline-none p-0 transition-colors w-full placeholder:text-gray-400"
+              />
+            </div>
+          )}
+
+          {/* Cover Image Placeholder - shown if no cover image exists */}
+          {title && !coverImageUrl && onCoverImageReplace && (
+            <div className="mb-6 md:mb-8">
+              <p className="image-placeholder" 
+                 data-type="imagePlaceholder" 
+                 data-h2-text="Cover Image" 
+                 data-image-prompt={`professional cover image for blog post about ${title.toLowerCase()}`}
+                 style={{ width: '100%', aspectRatio: '16/9', backgroundColor: '#e5e7eb', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', margin: '2rem 0', position: 'relative', cursor: 'pointer', minHeight: '200px', padding: '1rem' }}
+              >
+                <span style={{ fontSize: '14px', color: '#6b7280', marginBottom: '12px', textAlign: 'center', maxWidth: '80%' }}>
+                  Cover & Blog List Image: professional cover image for blog post about {title.toLowerCase()}
+                </span>
+                <button 
+                  className="create-image-btn" 
+                  style={{ background: 'black', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '8px', fontSize: '14px', cursor: 'pointer', fontWeight: '500' }}
+                  onClick={async () => {
+                    if (generatingImageFor) return;
+                    setGeneratingImageFor("Cover Image");
+                    try {
+                      const imagePrompt = `professional cover image for blog post about ${title.toLowerCase()}`;
+                      const res = await fetch("/api/images/generate", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9" }),
+                      });
+                      if (!res.ok) throw new Error("Failed to generate image");
+                      const data = await res.json();
+                      onCoverImageReplace(data.url);
+                    } catch (error) {
+                      console.error("Failed to generate cover image:", error);
+                      setErrorModal({
+                        isOpen: true,
+                        title: "Failed to generate image",
+                        message: error instanceof Error ? error.message : "Failed to generate image",
+                        error: error,
+                        details: "Failed to generate cover image.",
+                      });
+                    } finally {
+                      setGeneratingImageFor(null);
+                    }
+                  }}
+                  disabled={!!generatingImageFor}
+                >
+                  {generatingImageFor === "Cover Image" ? "Generating..." : "Create Cover Image"}
+                </button>
+              </p>
+            </div>
+          )}
           
           {/* Cover Image - as inline image */}
           {coverImageUrl && (
-            <div className="mb-8">
+            <div className="mb-8 relative image-with-regenerate">
               <img 
                 src={coverImageUrl} 
-                alt="Cover" 
+                alt={title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image"} 
                 className="w-full h-auto cursor-pointer"
                 onClick={() => {
-                  setSelectedImage({ src: coverImageUrl, alt: "Cover" });
+                  const altText = title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image";
+                  setSelectedImage({ src: coverImageUrl, alt: altText });
                   setIsImageEditModalOpen(true);
                 }}
               />
+              <button
+                className="regenerate-image-btn"
+                type="button"
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (regeneratingImage || !onCoverImageReplace) return;
+                  setRegeneratingImage(coverImageUrl);
+                  try {
+                    const imagePrompt = title ? `professional cover image for blog post about ${title.toLowerCase()}` : "professional cover image";
+                    const res = await fetch("/api/images/generate", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ subject: imagePrompt, aspect: "16:9" }),
+                    });
+                    if (!res.ok) throw new Error("Failed to regenerate image");
+                    const data = await res.json();
+                    onCoverImageReplace(data.url);
+                  } catch (error) {
+                    console.error("Failed to regenerate cover image:", error);
+                    setErrorModal({
+                      isOpen: true,
+                      title: "Failed to regenerate image",
+                      message: error instanceof Error ? error.message : "Failed to regenerate image",
+                      error: error,
+                      details: "Failed to regenerate cover image.",
+                    });
+                  } finally {
+                    setRegeneratingImage(null);
+                  }
+                }}
+                disabled={!!regeneratingImage}
+              >
+                <Sparkles className="h-3 w-3" />
+                <span>Regenerate</span>
+              </button>
             </div>
           )}
           
@@ -435,6 +994,16 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
       </div>
 
       {/* Image Edit Modal */}
+      {/* Error Modal */}
+      <ErrorModal
+        isOpen={errorModal.isOpen}
+        onClose={() => setErrorModal({ ...errorModal, isOpen: false })}
+        title={errorModal.title}
+        message={errorModal.message}
+        error={errorModal.error}
+        details={errorModal.details}
+      />
+
       {isImageEditModalOpen && selectedImage && (
         <ImageEditModal
           image={selectedImage}
@@ -510,6 +1079,74 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
           outline: 2px solid #000;
           outline-offset: 2px;
         }
+        .ProseMirror p.image-with-regenerate {
+          position: relative;
+          margin: 1rem 0;
+        }
+        .ProseMirror .regenerate-image-btn {
+          position: absolute;
+          bottom: 8px;
+          right: 8px;
+          background: rgba(0, 0, 0, 0.8);
+          color: white;
+          border: none;
+          border-radius: 6px;
+          padding: 6px 10px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 12px;
+          font-weight: 500;
+          transition: all 0.2s;
+          z-index: 10;
+          backdrop-filter: blur(4px);
+          opacity: 0.8;
+        }
+        .ProseMirror .regenerate-image-btn:hover:not(:disabled) {
+          background: rgba(0, 0, 0, 0.9);
+          transform: scale(1.05);
+          opacity: 1;
+        }
+        .ProseMirror .regenerate-image-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+        .ProseMirror p.image-with-regenerate:hover .regenerate-image-btn {
+          opacity: 1;
+        }
+        .ProseMirror .image-placeholder {
+          width: 100%;
+          aspect-ratio: 16/9;
+          background-color: #e5e7eb;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: 2rem 0;
+          position: relative;
+          cursor: pointer;
+          min-height: 200px;
+        }
+        .ProseMirror .image-placeholder .create-image-btn {
+          background: black;
+          color: white;
+          border: none;
+          padding: 12px 24px;
+          border-radius: 8px;
+          font-size: 14px;
+          cursor: pointer;
+          font-weight: 500;
+          transition: opacity 0.2s;
+        }
+        .ProseMirror .image-placeholder .create-image-btn:hover:not(:disabled) {
+          opacity: 0.9;
+        }
+        .ProseMirror .image-placeholder .create-image-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          outline-offset: 2px;
+        }
         .ProseMirror ul,
         .ProseMirror ol {
           list-style-position: outside;
@@ -524,6 +1161,46 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
         }
         .ProseMirror li {
           margin: 0.5rem 0;
+        }
+        .ProseMirror p.image-placeholder {
+          width: 100% !important;
+          aspect-ratio: 16/9;
+          background-color: #e5e7eb !important;
+          border-radius: 8px;
+          display: flex !important;
+          flex-direction: column !important;
+          align-items: center !important;
+          justify-content: center !important;
+          margin: 2rem 0 !important;
+          position: relative;
+          cursor: pointer;
+          min-height: 200px;
+          padding: 1rem !important;
+        }
+        .ProseMirror p.image-placeholder span {
+          font-size: 14px;
+          color: #6b7280;
+          margin-bottom: 12px;
+          text-align: center;
+          max-width: 80%;
+        }
+        .ProseMirror p.image-placeholder .create-image-btn {
+          background: black;
+          color: white;
+          border: none;
+          padding: 12px 24px;
+          border-radius: 8px;
+          font-size: 14px;
+          cursor: pointer;
+          font-weight: 500;
+          transition: opacity 0.2s;
+        }
+        .ProseMirror p.image-placeholder .create-image-btn:hover:not(:disabled) {
+          opacity: 0.9;
+        }
+        .ProseMirror p.image-placeholder .create-image-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
       `}</style>
 
@@ -548,7 +1225,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, blogSl
 
 interface ImageModalProps {
   onClose: () => void;
-  onInsert: (url: string) => void;
+  onInsert: (url: string, alt?: string) => void;
   onUpload: (file: File) => void;
   onUrlUpload: (url: string) => void;
   cmsImages: Array<{ url: string; alt: string; source: string }>;
@@ -691,7 +1368,7 @@ function ImageModal({
                       <div
                         key={i}
                         onClick={() => {
-                          onInsert(img.url);
+                          onInsert(img.url, img.alt || "CMS image");
                           onClose();
                         }}
                         className="relative aspect-video rounded-lg overflow-hidden bg-gray-100 cursor-pointer group hover:ring-2 hover:ring-black transition-all"
@@ -749,7 +1426,10 @@ function ImageModal({
                   <button
                     onClick={() => {
                       if (urlInput.trim()) {
-                        onInsert(urlInput.trim());
+                        // Extract filename from URL for alt text
+                        const urlParts = urlInput.trim().split('/');
+                        const filename = urlParts[urlParts.length - 1].split('?')[0].replace(/\.[^/.]+$/, "") || "Image from URL";
+                        onInsert(urlInput.trim(), filename);
                         onClose();
                       }
                     }}
@@ -788,6 +1468,16 @@ function ImageEditModal({
   const [replaceTab, setReplaceTab] = useState<"upload" | "cms" | "url">("cms");
   const [urlInput, setUrlInput] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [errorModal, setErrorModal] = useState<{
+    isOpen: boolean;
+    title?: string;
+    message: string;
+    error?: Error | string | unknown;
+    details?: string;
+  }>({
+    isOpen: false,
+    message: "",
+  });
 
   const handleFileUploadLocal = async (file: File) => {
     setUploading(true);
@@ -805,7 +1495,14 @@ function ImageEditModal({
       const data = await res.json();
       onReplace(data.url);
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Failed to upload");
+      const errorMessage = error instanceof Error ? error.message : "Failed to upload";
+      setErrorModal({
+        isOpen: true,
+        title: "Failed to upload image",
+        message: errorMessage,
+        error: error,
+        details: "Failed to upload image file to replace existing image.",
+      });
     } finally {
       setUploading(false);
     }
@@ -828,7 +1525,14 @@ function ImageEditModal({
       const data = await res.json();
       onReplace(data.url);
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Failed to upload");
+      const errorMessage = error instanceof Error ? error.message : "Failed to upload";
+      setErrorModal({
+        isOpen: true,
+        title: "Failed to upload image",
+        message: errorMessage,
+        error: error,
+        details: `Failed to upload image from URL: ${url}`,
+      });
     } finally {
       setUploading(false);
     }
@@ -1049,6 +1753,16 @@ function ImageEditModal({
           </div>
         </div>
       </div>
+
+      {/* Error Modal */}
+      <ErrorModal
+        isOpen={errorModal.isOpen}
+        onClose={() => setErrorModal({ ...errorModal, isOpen: false })}
+        title={errorModal.title}
+        message={errorModal.message}
+        error={errorModal.error}
+        details={errorModal.details}
+      />
     </>
   );
 }

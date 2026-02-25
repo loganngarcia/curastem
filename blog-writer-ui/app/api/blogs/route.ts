@@ -50,90 +50,61 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "create") {
-      // 1. Generate content
+      // 1. Generate content only (no images)
       const blogContent = generateBlogContent(title);
-      const imageConfigs = generateImageConfigs(title);
 
-      // 2. Create initial blog item in Framer
-      let blog = await createOrUpdateBlog({
+      // 2. Add grey placeholder images above each H2 (only if no image already exists)
+      let contentWithPlaceholders = blogContent.content || "";
+      
+      // Get image configs to know what prompts to use
+      const imageConfigs = generateImageConfigs(title);
+      
+      // Find all H2 headings and add placeholders above them
+      const h2Regex = /<h2[^>]*>(.*?)<\/h2>/gi;
+      const h2Matches = Array.from(contentWithPlaceholders.matchAll(h2Regex));
+      
+      // Process in reverse order to maintain positions
+      for (let i = h2Matches.length - 1; i >= 0; i--) {
+        const match = h2Matches[i];
+        if (!match) continue;
+        
+        const h2Text = match[1].replace(/<[^>]*>/g, '').trim(); // Extract text, remove HTML tags
+        const insertPosition = match.index || 0;
+        
+        // Check if there's already an image before this H2 (within 200 chars)
+        const beforeH2 = contentWithPlaceholders.slice(Math.max(0, insertPosition - 200), insertPosition);
+        if (beforeH2.includes('<img') || beforeH2.includes('image-placeholder')) {
+          continue; // Skip if image already exists
+        }
+        
+        // Find matching image config for this H2
+        const imageConfig = imageConfigs.find(cfg => 
+          cfg.insertBefore && h2Text.toLowerCase().includes(cfg.insertBefore.toLowerCase())
+        );
+        
+        // Generate image prompt from H2 text or use config
+        const imagePrompt = imageConfig?.subject || `professional illustration representing ${h2Text.toLowerCase()}`;
+        
+        // Create placeholder using TipTap node format
+        // Store the imagePrompt as the alt text that will be used
+        const placeholderHtml = `<p class="image-placeholder" data-type="imagePlaceholder" data-h2-text="${h2Text.replace(/"/g, '&quot;')}" data-image-prompt="${imagePrompt.replace(/"/g, '&quot;')}"></p>`;
+        
+        // Insert placeholder before the H2
+        contentWithPlaceholders = 
+          contentWithPlaceholders.slice(0, insertPosition) +
+          placeholderHtml +
+          contentWithPlaceholders.slice(insertPosition);
+      }
+
+      // 3. Create blog item in Framer with placeholders
+      const blog = await createOrUpdateBlog({
         slug: blogContent.slug,
         title: blogContent.title,
         headline: blogContent.headline,
-        content: blogContent.content,
+        content: contentWithPlaceholders,
         date: new Date().toISOString(),
         featured: false,
       });
-
-      // 3. Generate and upload images in parallel to save time
-      console.log(`Generating ${imageConfigs.length} images for ${blog.slug}...`);
-      
-      const imagePromises = imageConfigs.map(async (cfg, i) => {
-        // Add a small staggered delay to avoid hitting Poe API all at once
-        await delay(i * 2000); 
-        
-        try {
-          console.log(`Generating image ${i + 1}/${imageConfigs.length}: ${cfg.subject}`);
-          const poeUrl = await generateImageViaPoe(cfg.subject, cfg.accentHue, cfg.aspect);
-          console.log(`Image ${i + 1} generated, uploading to Framer...`);
-          const framerUrl = await uploadImageToFramer(poeUrl);
-          console.log(`Image ${i + 1} uploaded successfully`);
-          return { index: i, url: framerUrl, cfg };
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          console.error(`Failed to generate image ${i + 1} (${cfg.subject}):`, errorMsg);
-          // Don't fail the entire blog creation if one image fails
-          return null;
-        }
-      });
-
-      const results = await Promise.all(imagePromises);
-      const validResults = results.filter(r => r !== null);
-      const failedCount = results.length - validResults.length;
-      
-      if (failedCount > 0) {
-        console.warn(`${failedCount} image(s) failed to generate, continuing with ${validResults.length} successful image(s)`);
-      }
-      
-      if (validResults.length === 0) {
-        console.warn("No images were generated successfully, blog will be created without images");
-      }
-
-      // 4. Update blog with images
-      if (validResults.length > 0) {
-        const coverResult = validResults.find(r => r!.cfg.type === "cover") || validResults[0];
-        const coverUrl = coverResult.url;
-        
-        let finalContent = blog.content || "";
-        
-        // Insert inline images
-        const inlineResults = validResults.filter(r => r!.cfg.type === "inline");
-        
-        // Sort by index descending to keep positions stable
-        inlineResults.sort((a, b) => b!.index - a!.index);
-        
-        for (const result of inlineResults) {
-          const { url, cfg } = result!;
-          if (!url || !cfg.insertBefore) continue;
-          
-          const escaped = cfg.insertBefore.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const pattern = `(<h2[^>]*>[^<]*${escaped}[^<]*)(</h2>)`;
-          const re = new RegExp(pattern, "i");
-          
-          const imgTag = `<p dir="auto"><img alt="${cfg.subject}" src="${url}"></p><br>`;
-          finalContent = finalContent.replace(re, imgTag + "$1$2");
-        }
-
-        // Clean up spacing (remove excess <br>)
-        finalContent = finalContent.replace(/<br><br><br>+/g, "<br><br>");
-        finalContent = finalContent.replace(/<p dir="auto">(<br>)+<\/p>/g, "<br>");
-
-        blog = await createOrUpdateBlog({
-          slug: blog.slug,
-          content: finalContent,
-          coverImageUrl: coverUrl,
-          blogListImageUrl: coverUrl,
-        });
-      }
 
       return NextResponse.json(blog);
     }

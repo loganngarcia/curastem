@@ -142,7 +142,29 @@ export async function getBlogs(): Promise<BlogItem[]> {
       
       const getUrl = (val: any): string | undefined => {
         if (!val) return undefined;
-        return typeof val === "string" ? val : val.url;
+        // Handle typed format: { type: "image", value: "..." }
+        if (typeof val === "object" && val !== null) {
+          // If it has a value property, check if value is a string URL
+          if ("value" in val) {
+            const value = val.value;
+            if (typeof value === "string") {
+              return value;
+            }
+            // If value is an object with url property
+            if (value && typeof value === "object" && "url" in value && typeof value.url === "string") {
+              return value.url;
+            }
+          }
+          // If it has a url property directly
+          if ("url" in val && typeof val.url === "string") {
+            return val.url;
+          }
+        }
+        // Handle plain string
+        if (typeof val === "string") {
+          return val;
+        }
+        return undefined;
       };
 
       const title = fields.title && fields.title !== fields.content 
@@ -223,77 +245,209 @@ export async function createOrUpdateBlog(blog: Partial<BlogItem> & { slug: strin
     const existingItem = items.find((i: any) => i.slug === blog.slug);
     console.log(`[createOrUpdateBlog] Existing item found:`, existingItem ? { id: existingItem.id, slug: existingItem.slug } : "none");
     
+    // Framer API requires fieldData values to be in typed format: { type: "string", value: "..." }
+    // Based on error: expects StringFieldDataEntryInput | FormattedTextFieldDataEntryInput | etc.
     const fieldData: any = {};
+    
     if (blog.title !== undefined) {
-      fieldData[fields.title] = blog.title;
+      fieldData[fields.title] = { type: "string", value: blog.title };
       console.log(`[createOrUpdateBlog] Setting title field (${fields.title}):`, blog.title);
     }
     if (blog.headline !== undefined) {
-      fieldData[fields.headline] = blog.headline;
+      fieldData[fields.headline] = { type: "string", value: blog.headline };
       console.log(`[createOrUpdateBlog] Setting headline field (${fields.headline}):`, blog.headline);
     }
     if (blog.content !== undefined) {
-      fieldData[fields.content] = blog.content;
+      // Content is HTML, so use formattedText type
+      fieldData[fields.content] = { type: "formattedText", value: blog.content };
       console.log(`[createOrUpdateBlog] Setting content field (${fields.content}), length:`, blog.content?.length || 0);
     }
-    if (blog.date !== undefined) fieldData[fields.date] = blog.date;
-    if (blog.featured !== undefined) fieldData[fields.featured] = blog.featured;
+    if (blog.date !== undefined) {
+      fieldData[fields.date] = { type: "date", value: blog.date };
+    }
+    if (blog.featured !== undefined) {
+      fieldData[fields.featured] = { type: "boolean", value: blog.featured };
+    }
     if (blog.coverImageUrl !== undefined) {
-      fieldData[fields.coverImage] = blog.coverImageUrl;
+      fieldData[fields.coverImage] = { type: "image", value: blog.coverImageUrl };
       console.log(`[createOrUpdateBlog] Setting coverImage field (${fields.coverImage}):`, blog.coverImageUrl);
     }
-    if (blog.blogListImageUrl !== undefined) fieldData[fields.blogListImage] = blog.blogListImageUrl;
+    if (blog.blogListImageUrl !== undefined) {
+      fieldData[fields.blogListImage] = { type: "image", value: blog.blogListImageUrl };
+    }
     
     console.log(`[createOrUpdateBlog] Field data to update:`, Object.keys(fieldData));
     
+    // According to Framer API docs: "If an id is provided and matches an existing Item, that Item will be updated."
+    // So we can use addItems for both create and update
     if (existingItem) {
       console.log(`[createOrUpdateBlog] Updating existing item with id: ${existingItem.id}`);
-      // Use setAttributes() to update existing items (correct Framer API method)
-      // setAttributes expects { slug?, fieldData } structure
-      // fieldData uses field IDs as keys and simple values (strings, numbers, etc.)
-      const updatePayload: any = { fieldData };
-      // Only include slug if it's being changed
-      if (blog.slug && blog.slug !== existingItem.slug) {
-        updatePayload.slug = blog.slug;
-      }
-      
-      console.log(`[createOrUpdateBlog] Calling setAttributes with:`, {
-        hasSlug: !!updatePayload.slug,
+      console.log(`[createOrUpdateBlog] Using addItems with id to update:`, {
+        id: existingItem.id,
+        slug: blog.slug,
         fieldCount: Object.keys(fieldData).length,
         fields: Object.keys(fieldData),
+        sampleFieldData: Object.entries(fieldData).slice(0, 2),
       });
       
-      const updatedItem = await existingItem.setAttributes(updatePayload);
-      if (!updatedItem) {
-        throw new Error("setAttributes returned null - item may have been deleted");
+      try {
+        // Use addItems with id to update existing item
+        await collection.addItems([{ 
+          id: existingItem.id, 
+          slug: blog.slug, 
+          fieldData 
+        }]);
+        console.log(`[createOrUpdateBlog] Update call completed using addItems with id`);
+      } catch (addItemsError) {
+        console.error(`[createOrUpdateBlog] addItems failed:`, addItemsError);
+        console.error(`[createOrUpdateBlog] Error details:`, {
+          message: addItemsError instanceof Error ? addItemsError.message : String(addItemsError),
+          stack: addItemsError instanceof Error ? addItemsError.stack : undefined,
+          name: addItemsError instanceof Error ? addItemsError.name : undefined,
+        });
+        throw addItemsError;
       }
-      console.log(`[createOrUpdateBlog] Update call completed using setAttributes()`, { id: updatedItem.id });
       
-      // Wait a moment for changes to propagate before disconnecting
+      // Wait a moment for changes to propagate
       await new Promise((r) => setTimeout(r, 1000));
     } else {
       console.log(`[createOrUpdateBlog] Creating new item`);
-      // Use addItems() only for creating new items
-      await collection.addItems([{ slug: blog.slug, fieldData }]);
-      console.log(`[createOrUpdateBlog] Create call completed`);
-      // Wait a moment for new item to be available
-      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        // Use addItems without id to create new item
+        await collection.addItems([{ 
+          slug: blog.slug, 
+          fieldData 
+        }]);
+        console.log(`[createOrUpdateBlog] Create call completed`);
+      } catch (addItemsError) {
+        console.error(`[createOrUpdateBlog] addItems create failed:`, addItemsError);
+        throw addItemsError;
+      }
+      
+      // Wait a moment for the item to be created
+      await new Promise((r) => setTimeout(r, 1000));
+      
+      // Fetch the newly created item from the SAME connection before disconnecting
+      console.log(`[createOrUpdateBlog] Fetching newly created item from same connection...`);
+      const allItems = await collection.getItems();
+      const newItem = allItems.find((i: any) => i.slug === blog.slug);
+      
+      if (!newItem) {
+        console.error(`[createOrUpdateBlog] Newly created item not found in collection`);
+        await framer.disconnect();
+        throw new Error("Failed to find newly created blog item");
+      }
+      
+      // Construct BlogItem from the created item
+      const fd = (newItem.fieldData ?? {}) as Record<string, unknown>;
+      const getUrl = (val: any): string | undefined => {
+        if (!val) return undefined;
+        // Handle typed format: { type: "image", value: "..." }
+        if (typeof val === "object" && val !== null) {
+          // If it has a value property, check if value is a string URL
+          if ("value" in val) {
+            const value = val.value;
+            if (typeof value === "string") {
+              return value;
+            }
+            // If value is an object with url property
+            if (value && typeof value === "object" && "url" in value && typeof value.url === "string") {
+              return value.url;
+            }
+          }
+          // If it has a url property directly
+          if ("url" in val && typeof val.url === "string") {
+            return val.url;
+          }
+        }
+        // Handle plain string
+        if (typeof val === "string") {
+          return val;
+        }
+        return undefined;
+      };
+
+      const createdBlog: BlogItem = {
+        id: newItem.id,
+        slug: newItem.slug || blog.slug,
+        title: (getVal(fd, fields.title) as string) || blog.title || blog.slug,
+        headline: (getVal(fd, fields.headline) as string) || blog.headline || "",
+        content: (getVal(fd, fields.content) as string) || blog.content || "",
+        coverImageUrl: getUrl(getVal(fd, fields.coverImage)),
+        blogListImageUrl: getUrl(getVal(fd, fields.blogListImage)),
+        date: (getVal(fd, fields.date) as string) || blog.date || new Date().toISOString(),
+        featured: (getVal(fd, fields.featured) as boolean) || blog.featured || false,
+      };
+      
+      await framer.disconnect();
+      console.log(`[createOrUpdateBlog] Successfully created blog:`, {
+        id: createdBlog.id,
+        slug: createdBlog.slug,
+        title: createdBlog.title,
+      });
+      
+      return createdBlog;
     }
     
-    // Disconnect after update/create is complete
+    // For updates, verify before disconnecting
+    console.log(`[createOrUpdateBlog] Waiting for CMS to sync...`);
+    await new Promise((r) => setTimeout(r, 1000));
+    
+    // Fetch updated item from the SAME connection
+    console.log(`[createOrUpdateBlog] Fetching updated item from same connection...`);
+    const allItemsUpdated = await collection.getItems();
+    const updatedItem = allItemsUpdated.find((i: any) => i.slug === blog.slug);
+    
     await framer.disconnect();
-    console.log(`[createOrUpdateBlog] Disconnected from Framer, waiting for propagation...`);
+    console.log(`[createOrUpdateBlog] Disconnected from Framer`);
     
-    // Wait additional time for CMS to sync
-    await new Promise((r) => setTimeout(r, 2000));
-    
-    console.log(`[createOrUpdateBlog] Fetching updated blog...`);
-    const updated = await getBlog(blog.slug);
-    if (!updated) {
-      console.error(`[createOrUpdateBlog] Failed to fetch updated blog after save`);
-      throw new Error("Failed to verify blog update");
+    if (!updatedItem) {
+      console.error(`[createOrUpdateBlog] Updated item not found in collection`);
+      throw new Error("Failed to find updated blog item");
     }
-    console.log(`[createOrUpdateBlog] Successfully retrieved updated blog:`, {
+    
+    // Construct BlogItem from the updated item
+    const fd = (updatedItem.fieldData ?? {}) as Record<string, unknown>;
+    const getUrl = (val: any): string | undefined => {
+      if (!val) return undefined;
+      // Handle typed format: { type: "image", value: "..." }
+      if (typeof val === "object" && val !== null) {
+        // If it has a value property, check if value is a string URL
+        if ("value" in val) {
+          const value = val.value;
+          if (typeof value === "string") {
+            return value;
+          }
+          // If value is an object with url property
+          if (value && typeof value === "object" && "url" in value && typeof value.url === "string") {
+            return value.url;
+          }
+        }
+        // If it has a url property directly
+        if ("url" in val && typeof val.url === "string") {
+          return val.url;
+        }
+      }
+      // Handle plain string
+      if (typeof val === "string") {
+        return val;
+      }
+      return undefined;
+    };
+
+    const updated: BlogItem = {
+      id: updatedItem.id,
+      slug: updatedItem.slug || blog.slug,
+      title: (getVal(fd, fields.title) as string) || blog.title || "",
+      headline: (getVal(fd, fields.headline) as string) || blog.headline || "",
+      content: (getVal(fd, fields.content) as string) || blog.content || "",
+      coverImageUrl: getUrl(getVal(fd, fields.coverImage)),
+      blogListImageUrl: getUrl(getVal(fd, fields.blogListImage)),
+      date: (getVal(fd, fields.date) as string) || blog.date || "",
+      featured: (getVal(fd, fields.featured) as boolean) || blog.featured || false,
+    };
+    
+    console.log(`[createOrUpdateBlog] Successfully updated blog:`, {
       id: updated.id,
       title: updated.title,
       contentLength: updated.content?.length || 0,
@@ -301,8 +455,26 @@ export async function createOrUpdateBlog(blog: Partial<BlogItem> & { slug: strin
     return updated;
   } catch (error) {
     console.error(`[createOrUpdateBlog] Error:`, error);
+    const errorDetails = error instanceof Error ? {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+    } : { error: String(error) };
+    console.error(`[createOrUpdateBlog] Full error details:`, JSON.stringify(errorDetails, null, 2));
+    
+    // Try to extract more details from the error
+    let detailedMessage = "Failed to update blog in Framer CMS";
+    if (error instanceof Error) {
+      detailedMessage = `${detailedMessage}: ${error.message}`;
+      if (error.stack) {
+        console.error(`[createOrUpdateBlog] Error stack:`, error.stack);
+      }
+    } else {
+      detailedMessage = `${detailedMessage}: ${String(error)}`;
+    }
+    
     await framer.disconnect().catch(() => {});
-    throw error;
+    throw new Error(detailedMessage);
   }
 }
 

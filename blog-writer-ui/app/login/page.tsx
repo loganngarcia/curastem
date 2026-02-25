@@ -92,7 +92,7 @@ export default function LoginPage() {
             <Lock className="h-6 w-6" />
           </div>
           <h2 className="mt-6 text-3xl font-bold tracking-tight text-gray-900">
-            Curastem Blog Tool
+            Log into Curastem Blogs
           </h2>
           <p className="mt-2 text-sm text-gray-600">
             Enter password to access the internal tool

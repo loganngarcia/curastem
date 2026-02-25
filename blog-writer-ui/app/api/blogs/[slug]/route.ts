@@ -39,6 +39,7 @@ export async function PUT(
       slug,
       hasContent: !!body.content,
       hasTitle: !!body.title,
+      hasDate: !!body.date,
       hasCoverImage: !!body.coverImageUrl,
       contentLength: body.content?.length || 0,
     });
@@ -56,10 +57,25 @@ export async function PUT(
     
     return NextResponse.json(blog);
   } catch (error) {
-    console.error(`[PUT /api/blogs/${(await params).slug}] Failed to update blog:`, error);
+    const { slug: errorSlug } = await params;
+    console.error(`[PUT /api/blogs/${errorSlug}] Failed to update blog:`, error);
+    
+    // Log full error details
+    if (error instanceof Error) {
+      console.error(`[PUT /api/blogs/${errorSlug}] Error message:`, error.message);
+      console.error(`[PUT /api/blogs/${errorSlug}] Error stack:`, error.stack);
+      console.error(`[PUT /api/blogs/${errorSlug}] Error name:`, error.name);
+    } else {
+      console.error(`[PUT /api/blogs/${errorSlug}] Error (non-Error):`, JSON.stringify(error));
+    }
+    
     const errorMessage = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "Failed to update blog", message: errorMessage },
+      { 
+        error: "Failed to update blog", 
+        message: errorMessage,
+        details: error instanceof Error ? error.stack : undefined,
+      },
       { status: 500 }
     );
   }

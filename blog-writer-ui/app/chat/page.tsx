@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { cn, formatDate } from "@/lib/utils";
 import BlogEditor from "@/components/BlogEditor";
 import SettingsModal from "@/components/SettingsModal";
+import ErrorModal from "@/components/ErrorModal";
 
 interface Message {
   role: "user" | "assistant";
@@ -43,6 +44,16 @@ export default function ChatPage() {
   const [creationProgress, setCreationProgress] = useState(0);
   const [streamingBlogContent, setStreamingBlogContent] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [errorModal, setErrorModal] = useState<{
+    isOpen: boolean;
+    title?: string;
+    message: string;
+    error?: Error | string | unknown;
+    details?: string;
+  }>({
+    isOpen: false,
+    message: "",
+  });
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const blogPreviewRef = useRef<HTMLDivElement>(null);
@@ -108,6 +119,13 @@ export default function ChatPage() {
   };
 
 
+  const [originalBlogState, setOriginalBlogState] = useState<{
+    content: string;
+    title: string;
+    date: string;
+    coverImageUrl?: string;
+  } | null>(null);
+
   const handleBlogClick = async (blog: Blog) => {
     setLoadingBlog(true);
     try {
@@ -116,6 +134,17 @@ export default function ChatPage() {
         const fullBlog = await res.json();
         setSelectedBlog(fullBlog);
         setEditableContent(fullBlog.content || "");
+        // Store original state for comparison
+        setOriginalBlogState({
+          content: fullBlog.content || "",
+          title: fullBlog.title || "",
+          date: fullBlog.date || "",
+          coverImageUrl: fullBlog.coverImageUrl,
+        });
+        // Scroll to top of editor
+        if (blogPreviewRef.current) {
+          blogPreviewRef.current.scrollTop = 0;
+        }
       }
     } catch (err) {
       console.error("Failed to fetch blog", err);
@@ -135,13 +164,22 @@ export default function ChatPage() {
         body: JSON.stringify({ 
           content: editableContent,
           title: selectedBlog.title,
+          date: selectedBlog.date,
           coverImageUrl: selectedBlog.coverImageUrl,
+          blogListImageUrl: selectedBlog.coverImageUrl, // Use same image for both cover and list
         }),
       });
 
       if (res.ok) {
         const updatedBlog = await res.json();
         setSelectedBlog(updatedBlog);
+        // Update original state after successful save
+        setOriginalBlogState({
+          content: editableContent,
+          title: selectedBlog.title,
+          date: selectedBlog.date || "",
+          coverImageUrl: selectedBlog.coverImageUrl,
+        });
         fetchBlogs();
         // Show success feedback
         const saveButtonText = document.querySelector('[data-testid="save-button-text"]');
@@ -155,12 +193,20 @@ export default function ChatPage() {
       } else {
         const errorData = await res.json().catch(() => ({ error: "Unknown error" }));
         console.error("Save error response:", errorData);
-        throw new Error(errorData.error || errorData.message || "Failed to save blog");
+        const errorMsg = errorData.error || errorData.message || "Failed to save blog";
+        const errorDetails = errorData.details || errorData.message || errorMsg;
+        throw new Error(`${errorMsg}\n\n${errorDetails}`);
       }
     } catch (err) {
       console.error("Save error:", err);
       const errorMessage = err instanceof Error ? err.message : "Failed to save changes. Please try again.";
-      alert(errorMessage);
+      setErrorModal({
+        isOpen: true,
+        title: "Failed to save blog",
+        message: errorMessage.split('\n\n')[0], // Show first line as main message
+        error: err,
+        details: `Failed to save blog "${selectedBlog?.title}" to Framer CMS.\n\n${errorMessage}`,
+      });
     } finally {
       setSavingBlog(false);
     }
@@ -172,14 +218,12 @@ export default function ChatPage() {
     setStreamingBlogContent("");
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
+  const sendMessage = async (messageText: string) => {
+    if (!messageText.trim() || loading) return;
 
-    const userMessage = input.trim();
-    setInput("");
+    const userMessage = messageText.trim();
     setStreamingBlogContent("");
-    setMessages(prev => [...prev, { role: "user", content: userMessage }]);
+    setMessages(prev => [...prev, { role: "user" as const, content: userMessage }]);
     setLoading(true);
 
     try {
@@ -187,7 +231,7 @@ export default function ChatPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          messages: [...messages, { role: "user", content: userMessage }] 
+          messages: [...messages, { role: "user" as const, content: userMessage }] 
         }),
       });
 
@@ -247,6 +291,38 @@ export default function ChatPage() {
             fetchBlogs();
             setMessages(prev => [...prev, { role: "assistant", content: "I've updated the blog list in the sidebar for you." }]);
             break;
+          } else if (toolName === "add_image" && selectedBlog) {
+            // AI wants to add an image at a specific location
+            const { h2Text, subject } = toolArgs;
+            if (h2Text && subject) {
+              // Find the H2 and add image above it
+              const currentContent = editableContent;
+              const h2Pattern = new RegExp(`(<h2[^>]*>[^<]*${h2Text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^<]*</h2>)`, 'i');
+              const match = currentContent.match(h2Pattern);
+              
+              if (match) {
+                // Generate image
+                try {
+                  const res = await fetch("/api/images/generate", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ subject, aspect: "16:9" }),
+                  });
+                  
+                  if (res.ok) {
+                    const data = await res.json();
+                    // Use the subject as alt text (it's the image prompt)
+                    const imageHtml = `<p dir="auto" class="image-with-regenerate"><img src="${data.url}" alt="${subject}"></p>`;
+                    const newContent = currentContent.replace(h2Pattern, imageHtml + match[0]);
+                    setEditableContent(newContent);
+                    setMessages(prev => [...prev, { role: "assistant", content: `I've added an image above "${h2Text}".` }]);
+                  }
+                } catch (err) {
+                  console.error("Failed to add image:", err);
+                }
+              }
+            }
+            break;
           }
         }
       }
@@ -257,6 +333,14 @@ export default function ChatPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || loading) return;
+    const messageText = input.trim();
+    setInput("");
+    await sendMessage(messageText);
   };
 
   const handleCreateBlog = async (title: string) => {
@@ -331,53 +415,65 @@ export default function ChatPage() {
               </button>
             )}
             {!isSidebarOpen && <div />}
-            <div className="flex items-center gap-1">
+            {isSidebarOpen && (
+              <div className="flex items-center gap-1">
+                <button 
+                  onClick={() => setIsSettingsOpen(true)}
+                  className="p-2 hover:bg-gray-200 active:bg-gray-300 rounded-[28px] transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
+                >
+                  <Settings className="h-5 w-5 text-gray-600" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Search Bar - Only show when sidebar is open */}
+          {isSidebarOpen && (
+            <div className="px-2">
+              <div className="relative group">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 group-focus-within:text-gray-600 transition-colors" />
+                <input 
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search blogs..."
+                  className="w-full bg-white border border-gray-200 rounded-[28px] py-3 md:py-2 pl-10 pr-4 text-base md:text-sm text-black placeholder:text-gray-400 focus:ring-1 focus:ring-gray-300 focus:bg-white transition-all outline-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Actions - Only show when sidebar is open */}
+          {isSidebarOpen && (
+            <div className="flex flex-col gap-0.5 px-2">
               <button 
-                onClick={() => setIsSettingsOpen(true)}
-                className="p-2 hover:bg-gray-200 active:bg-gray-300 rounded-[28px] transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
+                id="new-blog-button"
+                data-testid="new-blog-button"
+                aria-label="Create new blog"
+                onClick={() => {
+                  // Close current editor (equivalent to Close Editor)
+                  setSelectedBlog(null);
+                  setIsCreating(false);
+                  setStreamingBlogContent("");
+                  setOriginalBlogState(null);
+                  // Send message to AI to create a blog - AI will decide the title
+                  sendMessage("Create a new blog");
+                }}
+                className="w-full flex items-center gap-3 px-3 py-3 md:py-2.5 rounded-[28px] hover:bg-gray-200 active:bg-gray-300 transition-colors text-base md:text-sm text-gray-700 touch-manipulation min-h-[44px]"
               >
-                <Settings className="h-5 w-5 text-gray-600" />
+                <Plus className="h-4 w-4" />
+                <span>New blog</span>
               </button>
             </div>
-          </div>
-
-          {/* Search Bar */}
-          <div className="px-2">
-            <div className="relative group">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 group-focus-within:text-gray-600 transition-colors" />
-              <input 
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search blogs..."
-                className="w-full bg-white border border-gray-200 rounded-[28px] py-3 md:py-2 pl-10 pr-4 text-base md:text-sm text-black placeholder:text-gray-400 focus:ring-1 focus:ring-gray-300 focus:bg-white transition-all outline-none"
-              />
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex flex-col gap-0.5 px-2">
-            <button 
-              id="new-blog-button"
-              data-testid="new-blog-button"
-              aria-label="Create new blog"
-              onClick={() => {
-                const title = prompt("Enter blog title:");
-                if (title) handleCreateBlog(title);
-              }}
-              className="w-full flex items-center gap-3 px-3 py-3 md:py-2.5 rounded-[28px] hover:bg-gray-200 active:bg-gray-300 transition-colors text-base md:text-sm text-gray-700 touch-manipulation min-h-[44px]"
-            >
-              <Plus className="h-4 w-4" />
-              <span>New blog</span>
-            </button>
-          </div>
+          )}
         </div>
 
-        {/* Blog List */}
-        <div className="flex-1 overflow-y-auto px-2 py-4 custom-scrollbar">
-          <div className="px-3 mb-2">
-            <h2 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Your blogs</h2>
-          </div>
+        {/* Blog List - Only show when sidebar is open */}
+        {isSidebarOpen && (
+          <div className="flex-1 overflow-y-auto px-2 py-4 custom-scrollbar">
+            <div className="px-3 mb-2">
+              <h2 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Your blogs</h2>
+            </div>
           
           <div className="flex flex-col gap-0.5">
             {fetchingBlogs ? (
@@ -411,7 +507,8 @@ export default function ChatPage() {
               ))
             )}
           </div>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Main Area */}
@@ -467,57 +564,46 @@ export default function ChatPage() {
               </div>
             ) : (
               <div className="flex-1 flex flex-col overflow-hidden bg-white text-black md:rounded-tl-[28px] md:mt-2 md:ml-2 md:border-l md:border-t md:border-gray-100 shadow-sm">
-                <BlogEditor 
-                  content={editableContent} 
-                  onChange={setEditableContent}
-                  onSave={handleSaveBlog}
-                  isSaving={savingBlog}
-                  blogSlug={selectedBlog?.slug}
-                  coverImageUrl={selectedBlog?.coverImageUrl}
-                  title={selectedBlog?.title}
-                  onTitleChange={async (newTitle) => {
-                    if (!selectedBlog) return;
-                    // Update local state immediately for better UX
-                    setSelectedBlog({ ...selectedBlog, title: newTitle });
-                    try {
-                      const res = await fetch(`/api/blogs/${selectedBlog.slug}`, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ title: newTitle }),
-                      });
-                      if (res.ok) {
-                        const updatedBlog = await res.json();
-                        setSelectedBlog(updatedBlog);
-                        fetchBlogs();
-                      }
-                    } catch (err) {
-                      console.error("Failed to update title:", err);
-                      // Revert on error
-                      setSelectedBlog({ ...selectedBlog, title: selectedBlog.title });
-                    }
-                  }}
+                {(() => {
+                  // Check if there are actual changes
+                  const hasChanges = originalBlogState && selectedBlog ? (
+                    editableContent !== originalBlogState.content ||
+                    selectedBlog.title !== originalBlogState.title ||
+                    (selectedBlog.date || '') !== originalBlogState.date ||
+                    (selectedBlog.coverImageUrl || '') !== (originalBlogState.coverImageUrl || '')
+                  ) : false;
+
+                  return (
+                    <BlogEditor 
+                      content={editableContent} 
+                      onChange={setEditableContent}
+                      onSave={handleSaveBlog}
+                      isSaving={savingBlog}
+                      hasChanges={hasChanges}
+                      blogSlug={selectedBlog?.slug}
+                      coverImageUrl={selectedBlog?.coverImageUrl}
+                      title={selectedBlog?.title}
+                      date={selectedBlog?.date}
+                      onTitleChange={(newTitle) => {
+                        if (!selectedBlog) return;
+                        // Only update local state - save happens on button click
+                        setSelectedBlog({ ...selectedBlog, title: newTitle });
+                      }}
+                      onDateChange={(newDate) => {
+                        if (!selectedBlog) return;
+                        // Only update local state - save happens on button click
+                        setSelectedBlog({ ...selectedBlog, date: newDate });
+                      }}
                   onCoverImageReplace={async (newUrl) => {
                     if (!selectedBlog) return;
-                    // Update local state immediately for better UX
+                    // Update both coverImageUrl and blogListImageUrl (they use the same image)
                     setSelectedBlog({ ...selectedBlog, coverImageUrl: newUrl });
-                    try {
-                      const res = await fetch(`/api/blogs/${selectedBlog.slug}`, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ coverImageUrl: newUrl }),
-                      });
-                      if (res.ok) {
-                        const updatedBlog = await res.json();
-                        setSelectedBlog(updatedBlog);
-                        fetchBlogs();
-                      }
-                    } catch (err) {
-                      console.error("Failed to update cover image:", err);
-                      // Revert on error
-                      setSelectedBlog({ ...selectedBlog, coverImageUrl: selectedBlog.coverImageUrl });
-                    }
+                    // Also update in the save handler so both are saved together
+                    // The save will handle updating both fields
                   }}
-                />
+                    />
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -537,7 +623,7 @@ export default function ChatPage() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 md:p-12 bg-white">
-              <div className="max-w-2xl mx-auto prose prose-sm">
+              <div className="w-full mx-auto prose prose-sm max-w-2xl">
                 <div dangerouslySetInnerHTML={{ 
                   __html: streamingBlogContent
                     .replace(/### (.*)/g, '<h3>$1</h3>')
@@ -551,17 +637,17 @@ export default function ChatPage() {
         ) : (
           /* Chat Messages */
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6 pb-32 md:pb-40 custom-scrollbar">
-            <div className="max-w-3xl mx-auto pt-8 md:pt-20 w-full">
+            <div className="w-full mx-auto pt-8 md:pt-20 px-4">
               {messages.map((msg, i) => (
                 <div key={i} className={cn(
                   "flex flex-col mb-8 animate-fade-in",
                   msg.role === "user" ? "items-end" : "items-start"
                 )}>
                   <div className={cn(
-                    "max-w-[90%] md:max-w-[85%] p-3 md:p-4 rounded-[28px] text-sm md:text-base leading-relaxed shadow-sm border",
-                    msg.role === "user" 
-                      ? "bg-gray-900 text-white border-gray-800 rounded-tr-none" 
-                      : "bg-white text-gray-800 border-gray-100 rounded-tl-none"
+                    "p-3 md:p-4 rounded-[28px] text-sm md:text-base leading-relaxed shadow-sm border",
+                    msg.role === "user"
+                      ? "bg-gray-900 text-white border-gray-800 rounded-tr-none max-w-[85%] md:max-w-[75%]"
+                      : "bg-white text-gray-800 border-gray-100 rounded-tl-none w-full max-w-full md:max-w-[85%]"
                   )}>
                     {msg.content || (loading && i === messages.length - 1 ? <Loader2 className="h-4 w-4 animate-spin opacity-20" /> : null)}
                   </div>
@@ -577,22 +663,23 @@ export default function ChatPage() {
           selectedBlog && "px-4 md:px-12"
         )}>
           {selectedBlog && (
-            <div className="max-w-3xl mx-auto mb-4 px-3 md:px-4 py-2 bg-gray-50 border border-gray-200 rounded-[28px] flex items-center justify-between animate-slide-up">
+            <div className="w-full max-w-[768px] mx-auto mb-4 px-3 md:px-4 py-2 bg-gray-50 border border-gray-200 rounded-[28px] flex items-center justify-between animate-slide-up">
               <div className="flex items-center space-x-2 min-w-0 flex-1">
                 <div className="h-2 w-2 bg-gray-400 rounded-full animate-pulse flex-shrink-0"></div>
-                <span className="text-xs text-gray-500 truncate">
-                  Editing: <span className="text-black font-medium">{selectedBlog.title}</span>
+                <span className="text-gray-500 truncate font-normal" style={{ fontSize: '14px', fontFamily: 'inherit' }}>
+                  Editing: <span className="text-black font-normal">{selectedBlog.title}</span>
                 </span>
               </div>
               <button 
                 onClick={handleCloseBlog}
-                className="text-[10px] uppercase tracking-widest text-gray-400 hover:text-black transition-colors flex-shrink-0 ml-2"
+                className="text-black hover:opacity-80 transition-opacity flex-shrink-0 font-normal"
+                style={{ fontSize: '14px', fontFamily: 'inherit', letterSpacing: '0.05em' }}
               >
-                Close editor
+                Close Editor
               </button>
             </div>
           )}
-          <form onSubmit={handleSend} className="max-w-3xl mx-auto relative group w-full">
+          <form onSubmit={handleSend} className="w-full max-w-[768px] mx-auto relative group">
             <input
               type="text"
               id="chat-input"
@@ -622,6 +709,16 @@ export default function ChatPage() {
       <SettingsModal 
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)} 
+      />
+
+      {/* Error Modal */}
+      <ErrorModal
+        isOpen={errorModal.isOpen}
+        onClose={() => setErrorModal({ ...errorModal, isOpen: false })}
+        title={errorModal.title}
+        message={errorModal.message}
+        error={errorModal.error}
+        details={errorModal.details}
       />
 
       <style jsx global>{`
