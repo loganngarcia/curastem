@@ -89,7 +89,26 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       Link.configure({
         openOnClick: false,
       }),
-      Image.configure({
+      Image.extend({
+        parseHTML() {
+          return [
+            {
+              tag: 'img[src]',
+              getAttrs: (element) => {
+                if (typeof element === 'string') return false;
+                // Don't parse if it's inside a regenerate button
+                if (element.closest('.regenerate-image-btn')) return false;
+                return {};
+              },
+            },
+          ];
+        },
+        renderHTML({ HTMLAttributes }) {
+          // Remove any button-related attributes that might have been added
+          const { 'data-tiptap-ignore': _, ...cleanAttrs } = HTMLAttributes;
+          return ['img', cleanAttrs];
+        },
+      }).configure({
         allowBase64: true,
         inline: true,
         HTMLAttributes: {
@@ -103,7 +122,32 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     ],
     content: content,
     onUpdate: ({ editor }) => {
-      onChange(editor.getHTML());
+      // TipTap's getHTML() reads from the document model, not DOM
+      // Buttons added to DOM shouldn't be serialized, but let's be safe
+      const html = editor.getHTML();
+      // Use DOMParser to safely remove button elements if they somehow got serialized
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      doc.querySelectorAll('.regenerate-image-btn, button.regenerate-image-btn').forEach(btn => btn.remove());
+      // Also remove any stray "Regenerate" text that might have been serialized
+      const body = doc.body;
+      if (body) {
+        // Walk through text nodes and remove standalone "Regenerate" text
+        const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+        const textNodes: Text[] = [];
+        let node;
+        while (node = walker.nextNode()) {
+          if (node.textContent?.trim() === 'Regenerate' || node.textContent?.trim().startsWith('Regenerate ')) {
+            textNodes.push(node as Text);
+          }
+        }
+        textNodes.forEach(textNode => {
+          if (textNode.parentElement && !textNode.parentElement.closest('.regenerate-image-btn')) {
+            textNode.remove();
+          }
+        });
+      }
+      onChange(body ? body.innerHTML : html);
     },
     editorProps: {
       attributes: {
@@ -351,9 +395,16 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           const images = editorElement.querySelectorAll("img");
           
           images.forEach((img) => {
-            // Skip if button already exists
-            const existingBtn = img.closest(".image-with-regenerate")?.querySelector(".regenerate-image-btn");
-            if (existingBtn) return;
+            // Skip if button already exists - check both in parent and as sibling
+            const parent = img.parentElement;
+            const existingBtn = parent?.querySelector(".regenerate-image-btn") || 
+                              img.closest(".image-with-regenerate")?.querySelector(".regenerate-image-btn");
+            if (existingBtn) {
+              // Button exists, just ensure it's properly configured
+              existingBtn.setAttribute("contenteditable", "false");
+              existingBtn.setAttribute("data-tiptap-ignore", "true");
+              return;
+            }
             
             let parent = img.parentElement;
             // Ensure parent is a paragraph
@@ -369,12 +420,15 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
             
             if (parent && !parent.classList.contains("image-with-regenerate")) {
               parent.classList.add("image-with-regenerate");
+              // Mark parent as having non-editable content to prevent TipTap from serializing buttons
+              parent.setAttribute("data-tiptap-ignore", "true");
             }
             
-            // Ensure image has 28px border-radius
+            // Ensure image has 28px border-radius and is marked as non-editable
             if (!img.style.borderRadius || img.style.borderRadius !== '28px') {
               img.style.borderRadius = '28px';
             }
+            img.setAttribute("contenteditable", "false");
             
             // Ensure parent has position relative for absolute positioning of button
             if (parent && !parent.style.position) {
@@ -385,8 +439,11 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
             const regenerateBtn = document.createElement("button");
             regenerateBtn.className = "regenerate-image-btn";
             regenerateBtn.type = "button";
+            // CRITICAL: Mark as non-editable so TipTap doesn't serialize its text content
+            regenerateBtn.setAttribute("contenteditable", "false");
+            regenerateBtn.setAttribute("data-tiptap-ignore", "true");
             // Set inline styles to ensure overlay positioning
-            regenerateBtn.style.cssText = "position: absolute; bottom: 16px; right: 16px; background: rgba(0, 0, 0, 0.9); color: white; border: none; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.85; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); pointer-events: auto;";
+            regenerateBtn.style.cssText = "position: absolute; bottom: 16px; right: 16px; background: rgba(0, 0, 0, 0.9); color: white; border: none; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.85; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); pointer-events: auto; user-select: none; -webkit-user-select: none;";
             // Create Sparkles icon SVG
             const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             iconSvg.setAttribute("width", "12");
@@ -397,6 +454,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
             iconSvg.setAttribute("stroke-width", "2");
             iconSvg.setAttribute("stroke-linecap", "round");
             iconSvg.setAttribute("stroke-linejoin", "round");
+            iconSvg.setAttribute("contenteditable", "false");
             // Sparkles icon paths (multiple small stars/sparkles)
             const path1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
             path1.setAttribute("d", "M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z");
@@ -409,6 +467,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
             iconSvg.appendChild(path3);
             regenerateBtn.appendChild(iconSvg);
             const textSpan = document.createElement("span");
+            textSpan.setAttribute("contenteditable", "false");
             textSpan.textContent = " Regenerate";
             regenerateBtn.appendChild(textSpan);
             const imgSrc = img.getAttribute("src") || "";
@@ -418,6 +477,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
               const alt = img.getAttribute("alt") || "";
               handleRegenerateImage(imgSrc, alt);
             };
+            // Append to parent, but ensure parent doesn't serialize button content
             parent.appendChild(regenerateBtn);
             
             // Store reference to text span and image src for countdown updates
