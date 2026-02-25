@@ -65,6 +65,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
   const [isToolbarMenuOpen, setIsToolbarMenuOpen] = useState(false);
   const [toolbarMenuPosition, setToolbarMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const toolbarMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const h2PlaceholdersProcessedRef = useRef<string>(""); // Track processed content to prevent infinite loops
   const [errorModal, setErrorModal] = useState<{
     isOpen: boolean;
     title?: string;
@@ -158,6 +159,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
   // Only update if content actually changed to preserve undo/redo history
   useEffect(() => {
     if (editor && content !== editor.getHTML()) {
+      // Reset processed ref when content changes externally (e.g., switching blogs)
+      h2PlaceholdersProcessedRef.current = "";
       // Store current selection
       const { from, to } = editor.state.selection;
       // Set content - this will reset history, but only happens when switching blogs
@@ -175,13 +178,23 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     }
   }, [content, editor]);
 
-  // Ensure H2 placeholders are added for existing blogs
+  // Ensure H2 placeholders are added for existing blogs (only once per content)
   useEffect(() => {
     if (!editor || !content) return;
     
     const currentContent = editor.getHTML();
+    
+    // Skip if we've already processed this exact content
+    if (h2PlaceholdersProcessedRef.current === currentContent) return;
+    
     const h2Regex = /<h2[^>]*>(.*?)<\/h2>/gi;
     const h2Matches = Array.from(currentContent.matchAll(h2Regex));
+    
+    // If no H2s found, mark as processed and return
+    if (h2Matches.length === 0) {
+      h2PlaceholdersProcessedRef.current = currentContent;
+      return;
+    }
     
     let contentUpdated = false;
     let updatedContent = currentContent;
@@ -189,7 +202,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     // Process in reverse order to maintain positions
     for (let i = h2Matches.length - 1; i >= 0; i--) {
       const match = h2Matches[i];
-      if (!match || !match.index) continue;
+      if (!match || match.index === undefined) continue;
       
       const h2Text = match[1].replace(/<[^>]*>/g, '').trim();
       const insertPosition = match.index;
@@ -217,8 +230,12 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     
     // Update content if placeholders were added
     if (contentUpdated && updatedContent !== currentContent) {
+      h2PlaceholdersProcessedRef.current = updatedContent;
       editor.commands.setContent(updatedContent);
       onChange(updatedContent);
+    } else {
+      // Mark as processed even if no changes were made
+      h2PlaceholdersProcessedRef.current = currentContent;
     }
   }, [editor, content, onChange]);
 
@@ -277,22 +294,30 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         const isRegenerating = regeneratingImage === currentImageSrc || (regeneratingImage === coverImageUrl && currentImageSrc === coverImageUrl);
         
         if (isRegenerating && generationTimeRemaining !== null && generationTimeRemaining > 0) {
-          textSpan.textContent = ` ${generationTimeRemaining}s`;
+          if (textSpan.textContent !== ` ${generationTimeRemaining}s`) {
+            textSpan.textContent = ` ${generationTimeRemaining}s`;
+          }
           (btn as HTMLButtonElement).disabled = true;
         } else if (isRegenerating) {
-          textSpan.textContent = " Regenerating...";
+          if (textSpan.textContent !== " Regenerating...") {
+            textSpan.textContent = " Regenerating...";
+          }
           (btn as HTMLButtonElement).disabled = true;
         } else {
-          textSpan.textContent = " Regenerate";
+          if (textSpan.textContent !== " Regenerate") {
+            textSpan.textContent = " Regenerate";
+          }
           (btn as HTMLButtonElement).disabled = false;
         }
       });
     };
     
     updateButtons();
-    const interval = setInterval(updateButtons, 100);
-    
-    return () => clearInterval(interval);
+    // Only run interval if we're actively generating/regenerating
+    if (generatingImageFor || regeneratingImage) {
+      const interval = setInterval(updateButtons, 1000); // Update every second instead of 100ms
+      return () => clearInterval(interval);
+    }
   }, [editor, generatingImageFor, generationTimeRemaining, regeneratingImage, coverImageUrl]);
 
   // Add regenerate buttons to images after editor renders
@@ -329,10 +354,17 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         const existingBtn = parent.querySelector(".regenerate-image-btn");
         if (existingBtn) existingBtn.remove();
         
+        // Ensure parent has position relative for absolute positioning of button
+        if (parent && !parent.style.position) {
+          parent.style.position = "relative";
+        }
+        
         // Create regenerate button with Sparkles icon (overlay on image)
         const regenerateBtn = document.createElement("button");
         regenerateBtn.className = "regenerate-image-btn";
         regenerateBtn.type = "button";
+        // Set inline styles to ensure overlay positioning
+        regenerateBtn.style.cssText = "position: absolute; bottom: 16px; right: 16px; background: rgba(0, 0, 0, 0.9); color: white; border: none; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.85; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); pointer-events: auto;";
         // Create Sparkles icon SVG
         const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         iconSvg.setAttribute("width", "12");
@@ -1008,7 +1040,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       </div>
 
       {/* Editor Content */}
-      <div className="flex-1 overflow-y-auto bg-white">
+      <div className="flex-1 overflow-y-auto bg-white" style={{ minHeight: 0 }}>
         <div className="w-full mx-auto p-3 md:p-8 max-w-4xl">
           {/* Title */}
           {title !== undefined && (
@@ -1128,12 +1160,12 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           
           {/* Cover Image - as inline image */}
           {coverImageUrl && (
-            <div className="mb-8 relative image-with-regenerate">
+            <div className="mb-8 relative image-with-regenerate" style={{ position: 'relative' }}>
               <img 
                 src={coverImageUrl} 
                 alt={title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image"} 
                 className="w-full h-auto cursor-pointer rounded-[28px]"
-                style={{ borderRadius: '28px' }}
+                style={{ borderRadius: '28px', display: 'block' }}
                 onClick={() => {
                   const altText = title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image";
                   setSelectedImage({ src: coverImageUrl, alt: altText });
@@ -1143,7 +1175,29 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
               <button
                 className="regenerate-image-btn"
                 type="button"
-                  onClick={async (e) => {
+                style={{
+                  position: 'absolute',
+                  bottom: '16px',
+                  right: '16px',
+                  background: 'rgba(0, 0, 0, 0.9)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '10px 14px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '12px',
+                  fontWeight: '500',
+                  transition: 'all 0.2s',
+                  zIndex: 20,
+                  backdropFilter: 'blur(8px)',
+                  opacity: regeneratingImage === coverImageUrl ? 1 : 0.85,
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+                  pointerEvents: 'auto',
+                }}
+                onClick={async (e) => {
                   e.preventDefault();
                   e.stopPropagation();
                   if (regeneratingImage || !onCoverImageReplace) return;
@@ -1190,6 +1244,16 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                   }
                 }}
                 disabled={!!regeneratingImage}
+                onMouseEnter={(e) => {
+                  if (!regeneratingImage) {
+                    e.currentTarget.style.opacity = '1';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!regeneratingImage) {
+                    e.currentTarget.style.opacity = '0.85';
+                  }
+                }}
               >
                 <Sparkles className="h-3 w-3" />
                 <span>{regeneratingImage === coverImageUrl && generationTimeRemaining !== null && generationTimeRemaining > 0 
@@ -1296,13 +1360,13 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         }
         .ProseMirror .regenerate-image-btn {
           position: absolute;
-          bottom: 12px;
-          right: 12px;
-          background: rgba(0, 0, 0, 0.85);
+          bottom: 16px;
+          right: 16px;
+          background: rgba(0, 0, 0, 0.9);
           color: white;
           border: none;
           border-radius: 8px;
-          padding: 8px 12px;
+          padding: 10px 14px;
           cursor: pointer;
           display: flex;
           align-items: center;
@@ -1310,15 +1374,17 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           font-size: 12px;
           font-weight: 500;
           transition: all 0.2s;
-          z-index: 10;
+          z-index: 20;
           backdrop-filter: blur(8px);
-          opacity: 0.9;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          opacity: 0.85;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+          pointer-events: auto;
         }
         .ProseMirror .regenerate-image-btn:hover:not(:disabled) {
-          background: rgba(0, 0, 0, 0.9);
+          background: rgba(0, 0, 0, 1);
           transform: scale(1.05);
           opacity: 1;
+          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
         }
         .ProseMirror .regenerate-image-btn:disabled {
           opacity: 0.6;
@@ -1326,6 +1392,38 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         }
         .ProseMirror p.image-with-regenerate:hover .regenerate-image-btn {
           opacity: 1;
+        }
+        /* Cover image regenerate button overlay */
+        .image-with-regenerate .regenerate-image-btn {
+          position: absolute;
+          bottom: 16px;
+          right: 16px;
+          background: rgba(0, 0, 0, 0.9);
+          color: white;
+          border: none;
+          border-radius: 8px;
+          padding: 10px 14px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 12px;
+          font-weight: 500;
+          transition: all 0.2s;
+          z-index: 20;
+          backdrop-filter: blur(8px);
+          opacity: 0.85;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+          pointer-events: auto;
+        }
+        .image-with-regenerate:hover .regenerate-image-btn {
+          opacity: 1;
+        }
+        .image-with-regenerate .regenerate-image-btn:hover:not(:disabled) {
+          background: rgba(0, 0, 0, 1);
+          transform: scale(1.05);
+          opacity: 1;
+          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
         }
         .ProseMirror .image-placeholder {
           width: 100%;
