@@ -65,6 +65,8 @@ export const ImagePlaceholder = Node.create({
         'button',
         {
           class: 'create-image-btn',
+          contenteditable: 'false',
+          'data-tiptap-ignore': 'true',
           style: 'background: black; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500;',
         },
         'Create Image',
@@ -76,16 +78,21 @@ export const ImagePlaceholder = Node.create({
     return ({ node, HTMLAttributes }) => {
       const dom = document.createElement('p');
       dom.className = 'image-placeholder';
+      dom.setAttribute('data-type', 'imagePlaceholder');
       dom.setAttribute('data-h2-text', node.attrs.h2Text);
       dom.setAttribute('data-image-prompt', node.attrs.imagePrompt);
+      dom.setAttribute('contenteditable', 'false');
       dom.style.cssText = 'width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;';
       
       const promptSpan = document.createElement('span');
+      promptSpan.setAttribute('contenteditable', 'false');
       promptSpan.style.cssText = 'font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%;';
       promptSpan.textContent = node.attrs.imagePrompt || 'Image placeholder';
       
       const button = document.createElement('button');
       button.className = 'create-image-btn';
+      button.setAttribute('contenteditable', 'false');
+      button.setAttribute('data-tiptap-ignore', 'true');
       button.style.cssText = 'background: black; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500;';
       button.textContent = 'Create Image';
       

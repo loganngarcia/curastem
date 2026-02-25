@@ -270,8 +270,9 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         // Generate image prompt from H2 text
         const imagePrompt = `professional illustration representing ${h2Text.toLowerCase()}`;
         
-        // Create placeholder HTML
-        const placeholderHtml = `<p class="image-placeholder" data-type="imagePlaceholder" data-h2-text="${h2Text.replace(/"/g, '&quot;')}" data-image-prompt="${imagePrompt.replace(/"/g, '&quot;')}" style="width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;"><span style="font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%;">${imagePrompt}</span><button class="create-image-btn" style="background: black; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500;">Create Image</button></p>`;
+        // Create placeholder HTML - just the node marker, TipTap will render it properly
+        // The ImagePlaceholder extension's parseHTML looks for p[data-type="imagePlaceholder"] or p.image-placeholder
+        const placeholderHtml = `<p class="image-placeholder" data-type="imagePlaceholder" data-h2-text="${h2Text.replace(/"/g, '&quot;')}" data-image-prompt="${imagePrompt.replace(/"/g, '&quot;')}"></p>`;
         
         // Insert placeholder before the H2
         updatedContent = 
