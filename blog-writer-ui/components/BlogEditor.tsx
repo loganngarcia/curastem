@@ -213,14 +213,21 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     const normalizedContent = content.trim();
     const normalizedEditorContent = currentEditorContent.trim();
     
+    // Don't overwrite if editor has placeholders that parent doesn't - that causes a sync loop
+    const editorHasPlaceholders = normalizedEditorContent.includes('data-type="imagePlaceholder"') || normalizedEditorContent.includes('image-placeholder');
+    const contentHasPlaceholders = normalizedContent.includes('data-type="imagePlaceholder"') || normalizedContent.includes('image-placeholder');
+    if (editorHasPlaceholders && !contentHasPlaceholders && normalizedContent.length > 0) {
+      // Editor was enhanced with placeholders by our effect; parent has raw content
+      // Don't overwrite - let the H2 effect handle sync via onChange
+      return;
+    }
+    
     if (normalizedContent !== normalizedEditorContent) {
       // Reset processed ref when content changes externally (e.g., switching blogs)
       h2PlaceholdersProcessedRef.current = "";
       // Store current selection
       const { from, to } = editor.state.selection;
       // Set content - this will reset history, but only happens when switching blogs
-      // which is expected behavior
-      // Use setContent with emitUpdate: false to prevent triggering update event immediately
       editor.commands.setContent(content, { emitUpdate: false });
       // Try to restore selection if possible
       try {
@@ -302,10 +309,10 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         // Mark that we're updating from an effect to prevent onUpdate from triggering
         isUpdatingFromEffectRef.current = true;
         try {
-          // Only update editor, don't call onChange to avoid triggering parent re-render
-          editor.commands.setContent(updatedContent, { emitUpdate: false }); // Don't emit update event
+          editor.commands.setContent(updatedContent, { emitUpdate: false });
+          // CRITICAL: Sync parent so content sync effect doesn't overwrite and cause a loop
+          onChange(updatedContent);
         } finally {
-          // Reset flag after a short delay to allow TipTap to process
           setTimeout(() => {
             isUpdatingFromEffectRef.current = false;
           }, 100);
@@ -317,7 +324,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     }, 300); // 300ms debounce
     
     return () => clearTimeout(timeoutId);
-  }, [editor, content]);
+  }, [editor, content, onChange]);
 
   // Update placeholder button text with countdown and regenerate button text
   useEffect(() => {
@@ -513,16 +520,15 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       });
     };
     
-    // Add buttons after a short delay to ensure DOM is ready
-    const timeout = setTimeout(addRegenerateButtons, 200);
+    // Add buttons after a short delay when editor is ready
+    const timeout = setTimeout(addRegenerateButtons, 300);
     
-    // Only listen to content changes, not every update (debounced)
-    let debounceTimeout: NodeJS.Timeout;
+    // Run when content changes (e.g. new image added) - heavily debounced to prevent layout thrashing
+    let debounceTimeout: ReturnType<typeof setTimeout>;
     const handleContentChange = () => {
       clearTimeout(debounceTimeout);
-      debounceTimeout = setTimeout(addRegenerateButtons, 500); // Only run 500ms after content stops changing
+      debounceTimeout = setTimeout(addRegenerateButtons, 800);
     };
-    
     editor.on("update", handleContentChange);
     
     return () => {
