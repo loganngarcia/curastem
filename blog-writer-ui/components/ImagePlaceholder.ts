@@ -52,7 +52,7 @@ export const ImagePlaceholder = Node.create({
         class: 'image-placeholder',
         'data-h2-text': HTMLAttributes.h2Text,
         'data-image-prompt': HTMLAttributes.imagePrompt,
-        style: 'width: 100%; aspect-ratio: 16/9; background-color: #e5e7eb; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;',
+        style: 'width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;',
       }),
       [
         'span',
@@ -78,7 +78,7 @@ export const ImagePlaceholder = Node.create({
       dom.className = 'image-placeholder';
       dom.setAttribute('data-h2-text', node.attrs.h2Text);
       dom.setAttribute('data-image-prompt', node.attrs.imagePrompt);
-      dom.style.cssText = 'width: 100%; aspect-ratio: 16/9; background-color: #e5e7eb; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;';
+      dom.style.cssText = 'width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;';
       
       const promptSpan = document.createElement('span');
       promptSpan.style.cssText = 'font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%;';

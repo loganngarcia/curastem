@@ -51,6 +51,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
   const [generatingImageFor, setGeneratingImageFor] = useState<string | null>(null);
   const [regeneratingImage, setRegeneratingImage] = useState<string | null>(null);
   const [imagePrompts, setImagePrompts] = useState<Record<string, string>>({}); // Store prompts for each image URL
+  const [generationTimeRemaining, setGenerationTimeRemaining] = useState<number | null>(null); // Countdown timer in seconds
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [isImageEditModalOpen, setIsImageEditModalOpen] = useState(false);
@@ -174,6 +175,126 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     }
   }, [content, editor]);
 
+  // Ensure H2 placeholders are added for existing blogs
+  useEffect(() => {
+    if (!editor || !content) return;
+    
+    const currentContent = editor.getHTML();
+    const h2Regex = /<h2[^>]*>(.*?)<\/h2>/gi;
+    const h2Matches = Array.from(currentContent.matchAll(h2Regex));
+    
+    let contentUpdated = false;
+    let updatedContent = currentContent;
+    
+    // Process in reverse order to maintain positions
+    for (let i = h2Matches.length - 1; i >= 0; i--) {
+      const match = h2Matches[i];
+      if (!match || !match.index) continue;
+      
+      const h2Text = match[1].replace(/<[^>]*>/g, '').trim();
+      const insertPosition = match.index;
+      
+      // Check if there's already an image or placeholder before this H2 (within 300 chars)
+      const beforeH2 = updatedContent.slice(Math.max(0, insertPosition - 300), insertPosition);
+      if (beforeH2.includes('<img') || beforeH2.includes('image-placeholder') || beforeH2.includes('data-type="imagePlaceholder"')) {
+        continue; // Skip if image/placeholder already exists
+      }
+      
+      // Generate image prompt from H2 text
+      const imagePrompt = `professional illustration representing ${h2Text.toLowerCase()}`;
+      
+      // Create placeholder HTML
+      const placeholderHtml = `<p class="image-placeholder" data-type="imagePlaceholder" data-h2-text="${h2Text.replace(/"/g, '&quot;')}" data-image-prompt="${imagePrompt.replace(/"/g, '&quot;')}" style="width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;"><span style="font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%;">${imagePrompt}</span><button class="create-image-btn" style="background: black; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500;">Create Image</button></p>`;
+      
+      // Insert placeholder before the H2
+      updatedContent = 
+        updatedContent.slice(0, insertPosition) +
+        placeholderHtml +
+        updatedContent.slice(insertPosition);
+      
+      contentUpdated = true;
+    }
+    
+    // Update content if placeholders were added
+    if (contentUpdated && updatedContent !== currentContent) {
+      editor.commands.setContent(updatedContent);
+      onChange(updatedContent);
+    }
+  }, [editor, content, onChange]);
+
+  // Update placeholder button text with countdown and regenerate button text
+  useEffect(() => {
+    if (!editor) return;
+    
+    const updateButtons = () => {
+      const editorElement = editor.view.dom;
+      
+      // Update placeholder buttons
+      const placeholderButtons = editorElement.querySelectorAll(".create-image-btn");
+      placeholderButtons.forEach((btn) => {
+        const placeholder = btn.closest(".image-placeholder") as HTMLElement;
+        if (!placeholder) return;
+        
+        const h2Text = placeholder.getAttribute("data-h2-text") || "";
+        const isGenerating = generatingImageFor === h2Text;
+        
+        if (isGenerating && generationTimeRemaining !== null && generationTimeRemaining > 0) {
+          btn.textContent = `Generating... ${generationTimeRemaining}s remaining`;
+          (btn as HTMLButtonElement).disabled = true;
+        } else if (isGenerating) {
+          btn.textContent = "Generating...";
+          (btn as HTMLButtonElement).disabled = true;
+        } else {
+          const buttonText = h2Text === "Cover Image" ? "Create Cover Image" : "Create Image";
+          if (btn.textContent !== buttonText) {
+            btn.textContent = buttonText;
+          }
+          (btn as HTMLButtonElement).disabled = false;
+        }
+      });
+      
+      // Update regenerate buttons
+      const regenerateButtons = editorElement.querySelectorAll(".regenerate-image-btn");
+      regenerateButtons.forEach((btn) => {
+        const textSpan = (btn as any).__textSpan;
+        const imageSrc = (btn as any).__imageSrc;
+        if (!textSpan) {
+          // If textSpan doesn't exist, find it in the button's children
+          const span = btn.querySelector("span");
+          if (span) {
+            (btn as any).__textSpan = span;
+            // Try to get image src from parent
+            const parentImg = btn.closest(".image-with-regenerate")?.querySelector("img");
+            if (parentImg) {
+              (btn as any).__imageSrc = parentImg.getAttribute("src") || "";
+            }
+          } else {
+            return;
+          }
+        }
+        
+        const currentImageSrc = (btn as any).__imageSrc || "";
+        const isRegenerating = regeneratingImage === currentImageSrc || (regeneratingImage === coverImageUrl && currentImageSrc === coverImageUrl);
+        
+        if (isRegenerating && generationTimeRemaining !== null && generationTimeRemaining > 0) {
+          textSpan.textContent = ` ${generationTimeRemaining}s`;
+          (btn as HTMLButtonElement).disabled = true;
+        } else if (isRegenerating) {
+          textSpan.textContent = " Regenerating...";
+          (btn as HTMLButtonElement).disabled = true;
+        } else {
+          textSpan.textContent = " Regenerate";
+          (btn as HTMLButtonElement).disabled = false;
+        }
+      });
+    };
+    
+    updateButtons();
+    const interval = setInterval(updateButtons, 100);
+    
+    return () => clearInterval(interval);
+  }, [editor, generatingImageFor, generationTimeRemaining, regeneratingImage, coverImageUrl]);
+
   // Add regenerate buttons to images after editor renders
   useEffect(() => {
     if (!editor) return;
@@ -199,11 +320,16 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           parent.classList.add("image-with-regenerate");
         }
         
+        // Ensure image has 28px border-radius
+        if (!img.style.borderRadius || img.style.borderRadius !== '28px') {
+          img.style.borderRadius = '28px';
+        }
+        
         // Remove existing regenerate button if any
         const existingBtn = parent.querySelector(".regenerate-image-btn");
         if (existingBtn) existingBtn.remove();
         
-        // Create regenerate button with Sparkles icon
+        // Create regenerate button with Sparkles icon (overlay on image)
         const regenerateBtn = document.createElement("button");
         regenerateBtn.className = "regenerate-image-btn";
         regenerateBtn.type = "button";
@@ -228,16 +354,21 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         iconSvg.appendChild(path2);
         iconSvg.appendChild(path3);
         regenerateBtn.appendChild(iconSvg);
-        const textNode = document.createTextNode(" Regenerate");
-        regenerateBtn.appendChild(textNode);
+        const textSpan = document.createElement("span");
+        textSpan.textContent = " Regenerate";
+        regenerateBtn.appendChild(textSpan);
+        const imgSrc = img.getAttribute("src") || "";
         regenerateBtn.onclick = (e) => {
           e.preventDefault();
           e.stopPropagation();
-          const src = img.getAttribute("src") || "";
           const alt = img.getAttribute("alt") || "";
-          handleRegenerateImage(src, alt);
+          handleRegenerateImage(imgSrc, alt);
         };
         parent.appendChild(regenerateBtn);
+        
+        // Store reference to text span and image src for countdown updates
+        (regenerateBtn as any).__textSpan = textSpan;
+        (regenerateBtn as any).__imageSrc = imgSrc;
       });
     };
     
@@ -358,6 +489,19 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     if (!editor || regeneratingImage) return;
     
     setRegeneratingImage(currentImageUrl);
+    // Start countdown timer (nano-banana-pro typically takes 30-40 seconds for 2K)
+    const estimatedTime = 35; // seconds
+    setGenerationTimeRemaining(estimatedTime);
+    
+    const countdownInterval = setInterval(() => {
+      setGenerationTimeRemaining(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(countdownInterval);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
     
     try {
       // Use the alt text as the image prompt (it contains the original subject)
@@ -386,16 +530,21 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       const imagePattern = new RegExp(`(<p[^>]*>)?<img[^>]+src=["']${escapedUrl}["'][^>]*>(</p>)?`, 'gi');
       
       // Create new image wrapped in paragraph with regenerate class
-      const wrappedHtml = `<p dir="auto" class="image-with-regenerate"><img src="${newImageUrl}" alt="${currentAlt}"></p>`;
+      const wrappedHtml = `<p dir="auto" class="image-with-regenerate"><img src="${newImageUrl}" alt="${currentAlt}" style="border-radius: 28px;"></p>`;
       
       const newContent = currentContent.replace(imagePattern, wrappedHtml);
       editor.commands.setContent(newContent);
+      
+      clearInterval(countdownInterval);
+      setGenerationTimeRemaining(null);
       
       // Update the prompt mapping
       setImagePrompts(prev => ({ ...prev, [newImageUrl]: imagePrompt }));
       
     } catch (error) {
       console.error("Failed to regenerate image:", error);
+      clearInterval(countdownInterval);
+      setGenerationTimeRemaining(null);
       setErrorModal({
         isOpen: true,
         title: "Failed to regenerate image",
@@ -412,6 +561,19 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     if (!editor || generatingImageFor) return;
     
     setGeneratingImageFor(h2Text);
+    // Start countdown timer (nano-banana-pro typically takes 30-40 seconds for 2K)
+    const estimatedTime = 35; // seconds
+    setGenerationTimeRemaining(estimatedTime);
+    
+    const countdownInterval = setInterval(() => {
+      setGenerationTimeRemaining(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(countdownInterval);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
     
     try {
       // Get image prompt from data attribute, or generate from H2 text
@@ -426,12 +588,16 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       });
       
       if (!res.ok) {
+        clearInterval(countdownInterval);
+        setGenerationTimeRemaining(null);
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.error || "Failed to generate image");
       }
       
       const data = await res.json();
       const imageUrl = data.url;
+      clearInterval(countdownInterval);
+      setGenerationTimeRemaining(null);
       
       // Store the prompt for this image
       setImagePrompts(prev => ({ ...prev, [imageUrl]: imagePrompt }));
@@ -446,7 +612,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           // Replace placeholder node with image, using imagePrompt as alt text
           const imageNode = state.schema.nodes.paragraph.create(
             { class: "image-with-regenerate" },
-            state.schema.nodes.image.create({ src: imageUrl, alt: imagePrompt })
+            state.schema.nodes.image.create({ src: imageUrl, alt: imagePrompt, style: "border-radius: 28px;" })
           );
           tr.replaceWith(pos, pos + node.nodeSize, imageNode);
           return false; // Stop searching
@@ -462,13 +628,15 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           `<p[^>]*class="image-placeholder"[^>]*data-h2-text="${h2Text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>.*?</p>`,
           'gs'
         );
-        const imageHtml = `<p dir="auto" class="image-with-regenerate"><img src="${imageUrl}" alt="${imagePrompt}"></p>`;
+        const imageHtml = `<p dir="auto" class="image-with-regenerate"><img src="${imageUrl}" alt="${imagePrompt}" style="border-radius: 28px;"></p>`;
         const newContent = currentContent.replace(placeholderPattern, imageHtml);
         editor.commands.setContent(newContent);
       }
       
     } catch (error) {
       console.error("Failed to generate image:", error);
+      clearInterval(countdownInterval);
+      setGenerationTimeRemaining(null);
       setErrorModal({
         isOpen: true,
         title: "Failed to generate image",
@@ -894,7 +1062,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                  data-type="imagePlaceholder" 
                  data-h2-text="Cover Image" 
                  data-image-prompt={`professional cover image for blog post about ${title.toLowerCase()}`}
-                 style={{ width: '100%', aspectRatio: '16/9', backgroundColor: '#e5e7eb', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', margin: '2rem 0', position: 'relative', cursor: 'pointer', minHeight: '200px', padding: '1rem' }}
+                 style={{ width: '100%', aspectRatio: '16/9', backgroundColor: '#f6f6f6', borderRadius: '28px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', margin: '2rem 0', position: 'relative', cursor: 'pointer', minHeight: '200px', padding: '1rem' }}
               >
                 <span style={{ fontSize: '14px', color: '#6b7280', marginBottom: '12px', textAlign: 'center', maxWidth: '80%' }}>
                   Cover & Blog List Image: professional cover image for blog post about {title.toLowerCase()}
@@ -905,6 +1073,20 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                   onClick={async () => {
                     if (generatingImageFor) return;
                     setGeneratingImageFor("Cover Image");
+                    // Start countdown timer (nano-banana-pro typically takes 30-40 seconds for 2K)
+                    const estimatedTime = 35; // seconds
+                    setGenerationTimeRemaining(estimatedTime);
+                    
+                    const countdownInterval = setInterval(() => {
+                      setGenerationTimeRemaining(prev => {
+                        if (prev === null || prev <= 1) {
+                          clearInterval(countdownInterval);
+                          return null;
+                        }
+                        return prev - 1;
+                      });
+                    }, 1000);
+                    
                     try {
                       const imagePrompt = `professional cover image for blog post about ${title.toLowerCase()}`;
                       const res = await fetch("/api/images/generate", {
@@ -914,9 +1096,13 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                       });
                       if (!res.ok) throw new Error("Failed to generate image");
                       const data = await res.json();
+                      clearInterval(countdownInterval);
+                      setGenerationTimeRemaining(null);
                       onCoverImageReplace(data.url);
                     } catch (error) {
                       console.error("Failed to generate cover image:", error);
+                      clearInterval(countdownInterval);
+                      setGenerationTimeRemaining(null);
                       setErrorModal({
                         isOpen: true,
                         title: "Failed to generate image",
@@ -930,7 +1116,11 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                   }}
                   disabled={!!generatingImageFor}
                 >
-                  {generatingImageFor === "Cover Image" ? "Generating..." : "Create Cover Image"}
+                  {generatingImageFor === "Cover Image" 
+                    ? (generationTimeRemaining !== null && generationTimeRemaining > 0
+                        ? `Generating... ${generationTimeRemaining}s remaining` 
+                        : "Generating...")
+                    : "Create Cover Image"}
                 </button>
               </p>
             </div>
@@ -942,7 +1132,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
               <img 
                 src={coverImageUrl} 
                 alt={title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image"} 
-                className="w-full h-auto cursor-pointer"
+                className="w-full h-auto cursor-pointer rounded-[28px]"
+                style={{ borderRadius: '28px' }}
                 onClick={() => {
                   const altText = title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image";
                   setSelectedImage({ src: coverImageUrl, alt: altText });
@@ -952,11 +1143,25 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
               <button
                 className="regenerate-image-btn"
                 type="button"
-                onClick={async (e) => {
+                  onClick={async (e) => {
                   e.preventDefault();
                   e.stopPropagation();
                   if (regeneratingImage || !onCoverImageReplace) return;
                   setRegeneratingImage(coverImageUrl);
+                  // Start countdown timer
+                  const estimatedTime = 35;
+                  setGenerationTimeRemaining(estimatedTime);
+                  
+                  const countdownInterval = setInterval(() => {
+                    setGenerationTimeRemaining(prev => {
+                      if (prev === null || prev <= 1) {
+                        clearInterval(countdownInterval);
+                        return null;
+                      }
+                      return prev - 1;
+                    });
+                  }, 1000);
+                  
                   try {
                     const imagePrompt = title ? `professional cover image for blog post about ${title.toLowerCase()}` : "professional cover image";
                     const res = await fetch("/api/images/generate", {
@@ -966,9 +1171,13 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                     });
                     if (!res.ok) throw new Error("Failed to regenerate image");
                     const data = await res.json();
+                    clearInterval(countdownInterval);
+                    setGenerationTimeRemaining(null);
                     onCoverImageReplace(data.url);
                   } catch (error) {
                     console.error("Failed to regenerate cover image:", error);
+                    clearInterval(countdownInterval);
+                    setGenerationTimeRemaining(null);
                     setErrorModal({
                       isOpen: true,
                       title: "Failed to regenerate image",
@@ -983,7 +1192,9 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                 disabled={!!regeneratingImage}
               >
                 <Sparkles className="h-3 w-3" />
-                <span>Regenerate</span>
+                <span>{regeneratingImage === coverImageUrl && generationTimeRemaining !== null && generationTimeRemaining > 0 
+                  ? `${generationTimeRemaining}s` 
+                  : "Regenerate"}</span>
               </button>
             </div>
           )}
@@ -1070,7 +1281,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         .ProseMirror img {
           max-width: 100%;
           height: auto;
-          border-radius: 0.5rem;
+          border-radius: 28px;
           margin: 1rem 0;
           display: block;
           cursor: pointer;
@@ -1085,23 +1296,24 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         }
         .ProseMirror .regenerate-image-btn {
           position: absolute;
-          bottom: 8px;
-          right: 8px;
-          background: rgba(0, 0, 0, 0.8);
+          bottom: 12px;
+          right: 12px;
+          background: rgba(0, 0, 0, 0.85);
           color: white;
           border: none;
-          border-radius: 6px;
-          padding: 6px 10px;
+          border-radius: 8px;
+          padding: 8px 12px;
           cursor: pointer;
           display: flex;
           align-items: center;
-          gap: 4px;
+          gap: 6px;
           font-size: 12px;
           font-weight: 500;
           transition: all 0.2s;
           z-index: 10;
-          backdrop-filter: blur(4px);
-          opacity: 0.8;
+          backdrop-filter: blur(8px);
+          opacity: 0.9;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         }
         .ProseMirror .regenerate-image-btn:hover:not(:disabled) {
           background: rgba(0, 0, 0, 0.9);
@@ -1118,8 +1330,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         .ProseMirror .image-placeholder {
           width: 100%;
           aspect-ratio: 16/9;
-          background-color: #e5e7eb;
-          border-radius: 8px;
+          background-color: #f6f6f6;
+          border-radius: 28px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -1165,8 +1377,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         .ProseMirror p.image-placeholder {
           width: 100% !important;
           aspect-ratio: 16/9;
-          background-color: #e5e7eb !important;
-          border-radius: 8px;
+          background-color: #f6f6f6 !important;
+          border-radius: 28px;
           display: flex !important;
           flex-direction: column !important;
           align-items: center !important;
