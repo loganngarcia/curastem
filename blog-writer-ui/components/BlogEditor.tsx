@@ -66,6 +66,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
   const [toolbarMenuPosition, setToolbarMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const toolbarMenuButtonRef = useRef<HTMLButtonElement>(null);
   const h2PlaceholdersProcessedRef = useRef<string>(""); // Track processed content to prevent infinite loops
+  const isUpdatingFromEffectRef = useRef<boolean>(false); // Track if we're updating from an effect
   const [errorModal, setErrorModal] = useState<{
     isOpen: boolean;
     title?: string;
@@ -122,6 +123,9 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     ],
     content: content,
     onUpdate: ({ editor }) => {
+      // Skip if we're updating from an effect to prevent infinite loops
+      if (isUpdatingFromEffectRef.current) return;
+      
       // TipTap's getHTML() reads from the document model, not DOM
       // Buttons added to DOM shouldn't be serialized, but let's be safe
       const html = editor.getHTML();
@@ -239,10 +243,19 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     // Skip if we've already processed this exact content
     if (h2PlaceholdersProcessedRef.current === currentContent) return;
     
+    // Skip if content is empty or just whitespace
+    if (!currentContent.trim()) {
+      h2PlaceholdersProcessedRef.current = currentContent;
+      return;
+    }
+    
     // Debounce to prevent rapid re-runs
     const timeoutId = setTimeout(() => {
+      // Double-check we haven't processed this content while waiting
+      const checkContent = editor.getHTML();
+      if (h2PlaceholdersProcessedRef.current === checkContent) return;
       const h2Regex = /<h2[^>]*>(.*?)<\/h2>/gi;
-      const h2Matches = Array.from(currentContent.matchAll(h2Regex));
+      const h2Matches = Array.from(checkContent.matchAll(h2Regex));
       
       // If no H2s found, mark as processed and return
       if (h2Matches.length === 0) {
@@ -251,7 +264,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       }
       
       let contentUpdated = false;
-      let updatedContent = currentContent;
+      let updatedContent = checkContent;
       
       // Process in reverse order to maintain positions
       for (let i = h2Matches.length - 1; i >= 0; i--) {
@@ -284,13 +297,22 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       }
       
       // Update content if placeholders were added
-      if (contentUpdated && updatedContent !== currentContent) {
+      if (contentUpdated && updatedContent !== checkContent) {
         h2PlaceholdersProcessedRef.current = updatedContent;
-        // Only update editor, don't call onChange to avoid triggering parent re-render
-        editor.commands.setContent(updatedContent, { emitUpdate: false }); // Don't emit update event
+        // Mark that we're updating from an effect to prevent onUpdate from triggering
+        isUpdatingFromEffectRef.current = true;
+        try {
+          // Only update editor, don't call onChange to avoid triggering parent re-render
+          editor.commands.setContent(updatedContent, { emitUpdate: false }); // Don't emit update event
+        } finally {
+          // Reset flag after a short delay to allow TipTap to process
+          setTimeout(() => {
+            isUpdatingFromEffectRef.current = false;
+          }, 100);
+        }
       } else {
         // Mark as processed even if no changes were made
-        h2PlaceholdersProcessedRef.current = currentContent;
+        h2PlaceholdersProcessedRef.current = checkContent;
       }
     }, 300); // 300ms debounce
     
