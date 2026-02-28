@@ -1,6 +1,7 @@
 "use client";
 
 import { useEditor, EditorContent } from "@tiptap/react";
+import { Mark } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import Image from "@tiptap/extension-image";
@@ -37,8 +38,8 @@ import { cn } from "@/lib/utils";
 import ErrorModal from "./ErrorModal";
 
 export interface BlogEditorRef {
-  /** Apply AI-generated find/replace edits as a ProseMirror transaction (supports undo/redo). */
-  applyAIEdits: (operations: Array<{ find: string; replace: string }>) => void;
+  /** Apply AI-generated find/replace edits as a ProseMirror transaction (supports undo/redo). Returns true if any edit was applied. */
+  applyAIEdits: (operations: Array<{ find: string; replace: string }>) => boolean;
 }
 
 interface EditorProps {
@@ -105,6 +106,20 @@ function generateFocusedImagePrompt(h2Text: string): string {
   return words.slice(0, 4).join(' ') || "professional at work";
 }
 
+/** Mark for green highlight on AI-edited text (diffs) */
+const AIEditHighlight = Mark.create({
+  name: "aiEditHighlight",
+  parseHTML() {
+    return [
+      { tag: "span.ai-diff-new" },
+      { tag: "span", getAttrs: (node) => (node as HTMLElement).classList?.contains("ai-diff-new") ? {} : false },
+    ];
+  },
+  renderHTML() {
+    return ["span", { class: "ai-diff-new" }, 0];
+  },
+});
+
 const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ content, onChange, onSave, isSaving, saveJustCompleted = false, saveFailed = false, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace, onEditImage, onClose, isStreaming = false }: EditorProps, ref) {
   // Set-based tracking so multiple images can generate simultaneously
   const [generatingImages, setGeneratingImages] = useState<Set<string>>(new Set()); // h2Texts currently generating
@@ -134,7 +149,9 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
   // Dynamic overflow toolbar
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const titleTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [primaryCount, setPrimaryCount] = useState(9); // how many overflow-candidates to show inline
+  const [editorFocused, setEditorFocused] = useState(false);
   const [errorModal, setErrorModal] = useState<{
     isOpen: boolean;
     title?: string;
@@ -155,6 +172,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
       }),
       Underline,
       Typography,
+      AIEditHighlight,
       Link.configure({
         openOnClick: false,
       }),
@@ -363,31 +381,56 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
   // Expose applyAIEdits to parent — applies find/replace operations as undoable ProseMirror transactions
   useImperativeHandle(ref, () => ({
     applyAIEdits(operations) {
-      if (!editor) return;
+      if (!editor) return false;
+
+      const wrapWithGreenHighlight = (replace: string): string => {
+        if (!replace.trim()) return replace;
+        // Wrap inner content in span.ai-diff-new so the Mark is preserved by ProseMirror
+        const match = replace.match(/^(<([a-zA-Z][a-zA-Z0-9]*)(\s[^>]*)?>)([\s\S]*?)(<\/\2>)$/);
+        if (match) {
+          const [, openTag, , , content, closeTag] = match;
+          return `${openTag}<span class="ai-diff-new">${content}</span>${closeTag}`;
+        }
+        return `<span class="ai-diff-new">${replace}</span>`;
+      };
 
       let html = editor.getHTML();
       let changed = false;
 
       for (const op of operations) {
         if (op.find && html.includes(op.find)) {
-          html = html.split(op.find).join(op.replace);
+          html = html.split(op.find).join(wrapWithGreenHighlight(op.replace));
           changed = true;
         }
       }
 
-      if (!changed) return;
+      if (!changed) return false;
 
-      // Parse HTML into a DOM container then into ProseMirror document
       const container = document.createElement("div");
       container.innerHTML = html;
       const parsedDoc = PMDOMParser.fromSchema(editor.schema).parse(container);
 
-      // Dispatch transaction WITHOUT addToHistory:false → ProseMirror history captures it → undo/redo works
       const { state, view } = editor;
       const tr = state.tr.replace(0, state.doc.content.size, new Slice(parsedDoc.content, 0, 0));
       view.dispatch(tr);
+      return true;
     },
   }), [editor]);
+
+  // Show toolbar when hovering prose/toolbar or when editor has focus
+  useEffect(() => {
+    if (!editor) return;
+    const onFocus = () => setEditorFocused(true);
+    const onBlur = () => setEditorFocused(false);
+    editor.on("focus", onFocus);
+    editor.on("blur", onBlur);
+    return () => {
+      editor.off("focus", onFocus);
+      editor.off("blur", onBlur);
+    };
+  }, [editor]);
+
+  const showFormattingToolbar = editorFocused || isMenuOpen || isToolbarMenuOpen;
 
   // Measure toolbar width and compute how many overflow-candidate buttons fit inline
   useEffect(() => {
@@ -400,7 +443,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
       // Curastem-style: 40×40 buttons, gap 4. Reserve: sidebar + heading + bold + italic + overflow + save + gaps
       const sidebarBtn = 0; // Hamburger is always outside toolbar
       const headingBtn = 140; // Paragraph / Title (H1) / Pull Quote (H2) / etc.
-      const alwaysVisible = 40 + 40; // bold + italic
+      const alwaysVisible = 40 * 4; // bold + italic + undo + redo
       const closeBtn = 40; // Close button only (Publish is above chat bar)
       const overflowBtn = 40;
       const gap = 4;
@@ -418,7 +461,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     ro.observe(el);
     compute(); // run immediately on mount
     return () => ro.disconnect();
-  }, [editor]);
+  }, [editor, showFormattingToolbar]);
 
   // Update editor content if it changes externally (e.g. when switching blogs or streaming)
   useEffect(() => {
@@ -608,6 +651,15 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
       fetchCmsImages();
     }
   }, [isImageModalOpen, isImageEditModalOpen, blogSlug]);
+
+  // Resize title textarea when title prop changes (e.g. switching blogs)
+  useEffect(() => {
+    const el = titleTextareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    const h = Math.min(el.scrollHeight, 200);
+    el.style.height = `${h}px`;
+  }, [title]);
 
   const fetchCmsImages = async () => {
     try {
@@ -894,19 +946,17 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
 
   return (
     <div className="flex flex-col w-full h-full relative">
-      {/* Toolbar — Curastem doc editor design (surface pill, 40×40 buttons, gap 4) */}
+      {/* Toolbar — floats above content, never takes layout space */}
       <div
         ref={toolbarRef}
-        className="sticky top-0 z-20 flex items-center justify-between border-none outline-none"
-        style={{
-          padding: "0 12px",
-          gap: 12,
-          background: "var(--cs-bg)",
-        }}
+        className="absolute top-2 left-2 right-2 md:top-4 md:left-4 md:right-4 z-20 flex items-center justify-between"
       >
-        {/* Left pill — fits content width, surface, borderRadius 28, gap 4 */}
+        {/* Left pill — formatting, shown when editor focused */}
         <div
-          className="flex items-center flex-shrink-0 overflow-hidden flex-wrap"
+          className={cn(
+            "flex items-center flex-shrink-0 overflow-hidden flex-wrap transition-all duration-200",
+            !showFormattingToolbar && "max-w-0 opacity-0 pointer-events-none"
+          )}
           style={{
             background: "var(--cs-surface)",
             borderRadius: 28,
@@ -1019,11 +1069,13 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             )}
           </div>
 
-          {/* Bold, Italic, then dynamic primary items */}
+          {/* Bold, Italic, Undo, Redo — always visible for AI edit reverts */}
           <ToolbarButton onClick={() => editor.chain().focus().toggleBold().run()} active={editor.isActive("bold")} icon={<Bold className="h-4 w-4" style={{ color: "inherit" }} />} title="Bold" />
           <ToolbarButton onClick={() => editor.chain().focus().toggleItalic().run()} active={editor.isActive("italic")} icon={<Italic className="h-4 w-4" style={{ color: "inherit" }} />} title="Italic" />
+          <ToolbarButton onClick={() => editor.chain().focus().undo().run()} active={false} disabled={!editor.can().undo()} icon={<Undo className="h-4 w-4" style={{ color: "inherit" }} />} title="Undo" />
+          <ToolbarButton onClick={() => editor.chain().focus().redo().run()} active={false} disabled={!editor.can().redo()} icon={<Redo className="h-4 w-4" style={{ color: "inherit" }} />} title="Redo" />
 
-          {primaryItems.map((item) => (
+          {primaryItems.filter((item) => item.id !== "undo" && item.id !== "redo").map((item) => (
             <ToolbarButton
               key={item.id}
               onClick={item.action}
@@ -1122,9 +1174,9 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
           )}
         </div>
 
-        {/* Close only — Publish moved to floating bar above chat input */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {onClose && (
+        {/* Close — always in fixed top-right position */}
+        {onClose && (
+          <div className="absolute top-0 right-0 flex-shrink-0">
             <button
               type="button"
               onClick={onClose}
@@ -1151,26 +1203,33 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                 />
               </svg>
             </button>
-          )}
-        </div>
+          </div>
+        )}
+
       </div>
 
       {/* Editor Content */}
       <div className="flex-1 overflow-y-auto bg-white" style={{ minHeight: 0 }}>
-        <div className="w-full mx-auto p-3 md:p-8 max-w-4xl">
+        <div className="w-full mx-auto px-3 pb-3 pt-[80px] md:px-8 md:pb-8 md:pt-[88px] max-w-4xl">
           {/* Title — textarea so long titles wrap instead of clipping */}
           {title !== undefined && (
             <textarea
               value={title}
               onChange={(e) => {
                 onTitleChange?.(e.target.value);
-                // Auto-resize
-                e.target.style.height = "auto";
-                e.target.style.height = `${e.target.scrollHeight}px`;
+                // Auto-resize: collapse first so scrollHeight reflects content, not parent
+                const ta = e.target;
+                ta.style.height = "0px";
+                const h = Math.min(ta.scrollHeight, 200);
+                ta.style.height = `${h}px`;
               }}
               ref={(el) => {
-                // Set initial height on mount
-                if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; }
+                titleTextareaRef.current = el;
+                if (el) {
+                  el.style.height = "0px";
+                  const h = Math.min(el.scrollHeight, 200);
+                  el.style.height = `${h}px`;
+                }
               }}
               rows={1}
               className="text-2xl md:text-4xl font-bold mb-4 md:mb-6 w-full bg-transparent border-none outline-none focus:outline-none p-0 resize-none overflow-hidden leading-tight"
@@ -1383,6 +1442,47 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
         </div>
       </div>
 
+      {/* Publish — bottom right, always visible (desktop + mobile), above chat input on mobile overlay */}
+      {onSave && (hasChanges || saveFailed || saveJustCompleted) && (
+        <div className="flex-shrink-0 flex justify-end items-center p-4 pb-6 md:pb-4">
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={isSaving || (!hasChanges && !saveFailed)}
+            data-testid="save-button"
+            className="flex items-center gap-2 transition-colors touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              height: 40,
+              paddingLeft: 16,
+              paddingRight: 16,
+              borderRadius: 28,
+              background: saveFailed
+                ? "hsl(0, 84%, 50%)"
+                : saveJustCompleted
+                  ? "hsl(142, 71%, 45%)"
+                  : "var(--cs-accent)",
+              color: "var(--cs-bg)",
+              fontSize: 14,
+              fontFamily: "Inter",
+              fontWeight: 500,
+            }}
+          >
+            {saveJustCompleted ? (
+              <span className="text-sm leading-none">✓</span>
+            ) : saveFailed ? (
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            ) : isSaving ? (
+              <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4 flex-shrink-0" />
+            )}
+            <span data-testid="save-button-text" className="whitespace-nowrap">
+              {saveJustCompleted ? "Published!" : saveFailed ? "Retry" : isSaving ? "Publishing…" : "Publish"}
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* Image Edit Modal */}
       {/* Error Modal */}
       <ErrorModal
@@ -1462,6 +1562,12 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
 
       {/* Image Styles */}
       <style jsx global>{`
+        .ProseMirror .ai-diff-new {
+          background: rgba(34, 197, 94, 0.4) !important;
+          border-radius: 3px;
+          padding: 0 2px;
+          box-decoration-break: clone;
+        }
         .ProseMirror img {
           max-width: 100%;
           height: auto;

@@ -2,7 +2,43 @@ import { NextRequest, NextResponse } from "next/server";
 import sharp from "sharp";
 import { uploadImageToFramer } from "@/lib/framer";
 
-const EXPAND_RATIO = 0.25; // 25% size increase (12.5% left/right, 25% top)
+const EXPAND_RATIO = 0.35; // 35% size increase (17.5% left/right, 35% top)
+
+/** Sample dominant color from image edges (where fill will be adjacent) for better match */
+async function getEdgeDominantColor(
+  imgBuffer: Buffer,
+  width: number,
+  height: number
+): Promise<{ r: number; g: number; b: number }> {
+  const edgePct = 0.08; // sample 8% of image from each edge
+  const topRows = Math.max(2, Math.min(Math.round(height * edgePct), height));
+  const sideCols = Math.max(2, Math.min(Math.round(width * edgePct), width));
+
+  const regions = [
+    { left: 0, top: 0, width, height: topRows }, // top edge
+    { left: 0, top: 0, width: sideCols, height }, // left edge
+    { left: Math.max(0, width - sideCols), top: 0, width: Math.min(sideCols, width), height }, // right edge
+  ];
+
+  const colors: Array<{ r: number; g: number; b: number }> = [];
+  for (const region of regions) {
+    const cropped = await sharp(imgBuffer).extract(region).toBuffer();
+    const stats = await sharp(cropped).stats();
+    if (stats.dominant) {
+      colors.push(stats.dominant);
+    }
+  }
+
+  if (colors.length === 0) {
+    const stats = await sharp(imgBuffer).stats();
+    return stats.dominant ?? { r: 245, g: 245, b: 245 };
+  }
+
+  const r = Math.round(colors.reduce((s, c) => s + c.r, 0) / colors.length);
+  const g = Math.round(colors.reduce((s, c) => s + c.g, 0) / colors.length);
+  const b = Math.round(colors.reduce((s, c) => s + c.b, 0) / colors.length);
+  return { r, g, b };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -65,8 +101,7 @@ export async function POST(request: NextRequest) {
       pipeline = sharp(inputBuffer);
     }
 
-    const { dominant } = await sharp(inputBuffer).stats();
-    const { r, g, b } = dominant;
+    const { r, g, b } = await getEdgeDominantColor(inputBuffer, width, height);
 
     const top = Math.round(height * EXPAND_RATIO);
     const leftRight = Math.round(width * (EXPAND_RATIO / 2));
