@@ -7,7 +7,9 @@ import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
 import Typography from "@tiptap/extension-typography";
+import { DOMParser as PMDOMParser, Slice } from "@tiptap/pm/model";
 import { ImagePlaceholder } from "./ImagePlaceholder";
+import { createPortal } from "react-dom";
 import { 
   Bold, 
   Italic, 
@@ -26,11 +28,19 @@ import {
   X,
   Loader2,
   MoreHorizontal,
-  Sparkles
+  Sparkles,
+  Pencil,
+  AlertCircle,
+  Menu,
 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react";
 import { cn } from "@/lib/utils";
 import ErrorModal from "./ErrorModal";
+
+export interface BlogEditorRef {
+  /** Apply AI-generated find/replace edits as a ProseMirror transaction (supports undo/redo). */
+  applyAIEdits: (operations: Array<{ find: string; replace: string }>) => void;
+}
 
 interface EditorProps {
   content: string;
@@ -38,6 +48,7 @@ interface EditorProps {
   onSave?: () => void;
   isSaving?: boolean;
   saveJustCompleted?: boolean;
+  saveFailed?: boolean;
   hasChanges?: boolean;
   blogSlug?: string;
   coverImageUrl?: string;
@@ -46,19 +57,70 @@ interface EditorProps {
   onTitleChange?: (title: string) => void;
   onDateChange?: (date: string) => void;
   onCoverImageReplace?: (newUrl: string) => void;
+  /** Called when the user clicks the Edit button on an image. */
+  onEditImage?: (imageUrl: string, imageAlt: string) => void;
+  /** If provided, a sidebar-toggle button is embedded in the toolbar (fixes hamburger overlap on mobile). */
+  onShowSidebar?: () => void;
   /** When true, bypass placeholder guards and skip the H2-placeholder injection effect */
   isStreaming?: boolean;
 }
 
-export default function BlogEditor({ content, onChange, onSave, isSaving, saveJustCompleted = false, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace, isStreaming = false }: EditorProps) {
-  const [generatingImageFor, setGeneratingImageFor] = useState<string | null>(null);
-  const [regeneratingImage, setRegeneratingImage] = useState<string | null>(null);
+/**
+ * Maps an H2 pull-quote to a short concrete subject phrase.
+ * The image API already has style/quality instructions built in —
+ * the subject just needs to be simple and specific, e.g. "person talking to boss".
+ */
+function generateFocusedImagePrompt(h2Text: string): string {
+  const text = h2Text.toLowerCase();
+
+  const topics: Array<[RegExp, string]> = [
+    [/salary|pay\b|negoti|compens|earn|wage|income/i,  "person negotiating salary with manager"],
+    [/job\b|hire|hired|interview|applicat/i,            "person in job interview"],
+    [/shy|introvert|anxious|nervous|timid/i,            "shy person speaking up in a meeting"],
+    [/communicat|speak|present|public|speech/i,         "person speaking on a microphone"],
+    [/network|social|convers|connect/i,                 "two people having a conversation"],
+    [/talk.*boss|boss|manag/i,                          "person talking to their boss"],
+    [/graduate|school|college|degree|education/i,       "student receiving diploma"],
+    [/career|advance|promot/i,                          "person getting promoted at work"],
+    [/mentor|guide|coach/i,                             "mentor talking with a student"],
+    [/support|help/i,                                   "person receiving support from a colleague"],
+    [/practice|prepare|skill|train/i,                   "person practicing a skill at a desk"],
+    [/team|together|collaborat/i,                       "two coworkers collaborating"],
+    [/confident|strength|success|achieve/i,             "confident person standing at work"],
+    [/barrier|obstacle|challenge|overcome/i,            "person breaking through a wall"],
+    [/opportunit|door|path|future/i,                    "person walking through an open door"],
+    [/research|data|study|evidence/i,                   "person reviewing data on a screen"],
+    [/laptop|online|remote|digital|technolog/i,         "person on laptop at home office"],
+    [/money|financ|saving|budget/i,                     "person reviewing finances on paper"],
+    [/read|write|learn|book/i,                          "person reading at a desk"],
+    [/phone|call/i,                                     "person on a phone call"],
+  ];
+
+  for (const [pattern, subject] of topics) {
+    if (pattern.test(text)) return subject;
+  }
+
+  // Fallback: strip filler words and keep the first 3–4 content words as a subject
+  const stop = new Set(['the','a','an','is','are','was','were','be','been','have','has','had','do','does','will','would','could','should','can','to','of','in','on','at','by','for','with','and','or','but','not','that','this','it','you','your','they','their','we','our','into','when','what','how','why','very','just','turn','turns','makes','make','clearly','often','key','real','most','more','than','never','always','every']);
+  const words = text.replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2 && !stop.has(w));
+  return words.slice(0, 4).join(' ') || "professional at work";
+}
+
+const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ content, onChange, onSave, isSaving, saveJustCompleted = false, saveFailed = false, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace, onEditImage, onShowSidebar, isStreaming = false }: EditorProps, ref) {
+  // Set-based tracking so multiple images can generate simultaneously
+  const [generatingImages, setGeneratingImages] = useState<Set<string>>(new Set()); // h2Texts currently generating
+  const [regeneratingImages, setRegeneratingImages] = useState<Set<string>>(new Set()); // imageUrls currently regenerating
+  // Per-image countdown timers: key (h2Text or imageUrl) → seconds remaining
+  const [imageTimers, setImageTimers] = useState<Map<string, number>>(new Map());
   const [imagePrompts, setImagePrompts] = useState<Record<string, string>>({}); // Store prompts for each image URL
-  const [generationTimeRemaining, setGenerationTimeRemaining] = useState<number | null>(null); // Countdown timer in seconds
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [isImageEditModalOpen, setIsImageEditModalOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null);
+  // Tracks the cover image alt text so user edits persist across regenerations
+  const [coverImageAlt, setCoverImageAlt] = useState<string>(() =>
+    title ? generateFocusedImagePrompt(title) : "professional at work"
+  );
   const [cmsImages, setCmsImages] = useState<Array<{ url: string; alt: string; source: string }>>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadTab, setUploadTab] = useState<"upload" | "cms" | "url">("upload");
@@ -70,6 +132,10 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
   const toolbarMenuButtonRef = useRef<HTMLButtonElement>(null);
   const h2PlaceholdersProcessedRef = useRef<string>(""); // Track processed content to prevent infinite loops
   const isUpdatingFromEffectRef = useRef<boolean>(false); // Track if we're updating from an effect
+  const editorRef = useRef<ReturnType<typeof useEditor>>(null);
+  // Dynamic overflow toolbar
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [primaryCount, setPrimaryCount] = useState(9); // how many overflow-candidates to show inline
   const [errorModal, setErrorModal] = useState<{
     isOpen: boolean;
     title?: string;
@@ -123,6 +189,31 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
             img.style.cssText = "border-radius: 0; display: block; max-width: 100%; height: auto; cursor: pointer;";
             img.className = "max-w-full h-auto rounded-lg cursor-pointer";
             wrapper.appendChild(img);
+
+            // Edit button — left of regenerate
+            const editBtn = document.createElement("button");
+            editBtn.className = "edit-image-btn";
+            editBtn.type = "button";
+            editBtn.setAttribute("contenteditable", "false");
+            editBtn.setAttribute("data-tiptap-ignore", "true");
+            editBtn.title = "Edit with AI";
+            editBtn.style.cssText = "position: absolute; bottom: 16px; right: 152px; background: rgba(0, 0, 0, 0.75); color: white; border: none; border-radius: 28px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.9; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); pointer-events: auto; user-select: none; -webkit-user-select: none;";
+            const pencilSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            pencilSvg.setAttribute("width", "12"); pencilSvg.setAttribute("height", "12"); pencilSvg.setAttribute("viewBox", "0 0 24 24");
+            pencilSvg.setAttribute("fill", "none"); pencilSvg.setAttribute("stroke", "currentColor"); pencilSvg.setAttribute("stroke-width", "2");
+            pencilSvg.setAttribute("stroke-linecap", "round"); pencilSvg.setAttribute("stroke-linejoin", "round");
+            const pe1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            pe1.setAttribute("d", "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7");
+            const pe2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            pe2.setAttribute("d", "M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z");
+            pencilSvg.append(pe1, pe2);
+            const editSpan = document.createElement("span");
+            editSpan.textContent = "Edit";
+            editBtn.append(pencilSvg, editSpan);
+            wrapper.appendChild(editBtn);
+
+            (editBtn as any).__imageSrc = node.attrs.src;
+            (editBtn as any).__imageAlt = node.attrs.alt || "";
 
             const btn = document.createElement("button");
             btn.className = "regenerate-image-btn";
@@ -215,6 +306,19 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
             return true;
           }
           
+          // Handle edit-image button clicks — opens image in chat input for AI editing
+          if (target.classList.contains("edit-image-btn") || target.closest(".edit-image-btn")) {
+            event.preventDefault();
+            event.stopPropagation();
+            const button = (target.classList.contains("edit-image-btn") ? target : target.closest(".edit-image-btn")) as HTMLElement;
+            const imgContainer = button?.closest(".image-with-regenerate") as HTMLElement;
+            const img = imgContainer?.querySelector("img") as HTMLImageElement;
+            if (img && onEditImage) {
+              onEditImage(img.getAttribute("src") || "", img.getAttribute("alt") || "");
+            }
+            return true;
+          }
+
           // Handle regenerate button clicks
           if (target.classList.contains("regenerate-image-btn") || target.closest(".regenerate-image-btn")) {
             event.preventDefault();
@@ -244,6 +348,62 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
       },
     },
   });
+
+  // Expose applyAIEdits to parent — applies find/replace operations as undoable ProseMirror transactions
+  useImperativeHandle(ref, () => ({
+    applyAIEdits(operations) {
+      if (!editor) return;
+
+      let html = editor.getHTML();
+      let changed = false;
+
+      for (const op of operations) {
+        if (op.find && html.includes(op.find)) {
+          html = html.split(op.find).join(op.replace);
+          changed = true;
+        }
+      }
+
+      if (!changed) return;
+
+      // Parse HTML into a DOM container then into ProseMirror document
+      const container = document.createElement("div");
+      container.innerHTML = html;
+      const parsedDoc = PMDOMParser.fromSchema(editor.schema).parse(container);
+
+      // Dispatch transaction WITHOUT addToHistory:false → ProseMirror history captures it → undo/redo works
+      const { state, view } = editor;
+      const tr = state.tr.replace(0, state.doc.content.size, new Slice(parsedDoc.content, 0, 0));
+      view.dispatch(tr);
+    },
+  }), [editor]);
+
+  // Measure toolbar width and compute how many overflow-candidate buttons fit inline
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+
+    const compute = () => {
+      const W = el.getBoundingClientRect().width;
+      // Reserve space for fixed, non-hideable elements:
+      // sidebar btn (if shown) + heading btn + bold + italic + save btn + overflow btn + gaps
+      const sidebarBtn = onShowSidebar ? 40 : 0;
+      const headingBtn = 64;  // compact "P"/"H2" button
+      const alwaysVisible = 34 + 34; // bold + italic
+      const saveBtn = saveFailed ? 130 : saveJustCompleted ? 80 : 130; // "Save Changes" width
+      const overflowBtn = 34;
+      const gaps = 24;
+      const reserved = sidebarBtn + headingBtn + alwaysVisible + saveBtn + overflowBtn + gaps;
+      const available = Math.max(0, W - reserved);
+      const count = Math.min(9, Math.floor(available / 34));
+      setPrimaryCount(count);
+    };
+
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    compute(); // run immediately on mount
+    return () => ro.disconnect();
+  }, [editor, onShowSidebar, saveFailed, saveJustCompleted]);
 
   // Update editor content if it changes externally (e.g. when switching blogs or streaming)
   useEffect(() => {
@@ -340,8 +500,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
 
         insertedH2Texts.add(h2Text);
 
-        // Generate image prompt from H2 text
-        const imagePrompt = `professional illustration representing ${h2Text.toLowerCase()}`;
+        // Generate focused single-scene prompt (not the raw H2 pull-quote)
+        const imagePrompt = generateFocusedImagePrompt(h2Text);
         
         // Create placeholder HTML - just the node marker, TipTap will render it properly
         // The ImagePlaceholder extension's parseHTML looks for p[data-type="imagePlaceholder"] or p.image-placeholder
@@ -379,86 +539,53 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
     return () => clearTimeout(timeoutId);
   }, [editor, content, onChange, isStreaming]);
 
-  // Update placeholder button text with countdown and regenerate button text
+  // Keep TipTap DOM buttons in sync with generating/regenerating state + per-image timers
   useEffect(() => {
     if (!editor) return;
-    
-    const updateButtons = () => {
-      const editorElement = editor.view.dom;
-      
-      // Update placeholder buttons
-      const placeholderButtons = editorElement.querySelectorAll(".create-image-btn");
-      placeholderButtons.forEach((btn) => {
-        const placeholder = btn.closest(".image-placeholder") as HTMLElement;
-        if (!placeholder) return;
-        
-        const h2Text = placeholder.getAttribute("data-h2-text") || "";
-        const isGenerating = generatingImageFor === h2Text;
-        
-        if (isGenerating && generationTimeRemaining !== null && generationTimeRemaining > 0) {
-          btn.textContent = `Generating... ${generationTimeRemaining}s remaining`;
-          (btn as HTMLButtonElement).disabled = true;
-        } else if (isGenerating) {
-          btn.textContent = "Generating...";
-          (btn as HTMLButtonElement).disabled = true;
-        } else {
-          const buttonText = h2Text === "Cover Image" ? "Create Cover Image" : "Create Image";
-          if (btn.textContent !== buttonText) {
-            btn.textContent = buttonText;
-          }
-          (btn as HTMLButtonElement).disabled = false;
-        }
-      });
-      
-      // Update regenerate buttons
-      const regenerateButtons = editorElement.querySelectorAll(".regenerate-image-btn");
-      regenerateButtons.forEach((btn) => {
-        const textSpan = (btn as any).__textSpan;
-        const imageSrc = (btn as any).__imageSrc;
-        if (!textSpan) {
-          // If textSpan doesn't exist, find it in the button's children
-          const span = btn.querySelector("span");
-          if (span) {
-            (btn as any).__textSpan = span;
-            // Try to get image src from parent
-            const parentImg = btn.closest(".image-with-regenerate")?.querySelector("img");
-            if (parentImg) {
-              (btn as any).__imageSrc = parentImg.getAttribute("src") || "";
-            }
-          } else {
-            return;
-          }
-        }
-        
-        const currentImageSrc = (btn as any).__imageSrc || "";
-        const isRegenerating = regeneratingImage === currentImageSrc || (regeneratingImage === coverImageUrl && currentImageSrc === coverImageUrl);
-        
-        if (isRegenerating && generationTimeRemaining !== null && generationTimeRemaining > 0) {
-          if (textSpan.textContent !== ` ${generationTimeRemaining}s`) {
-            textSpan.textContent = ` ${generationTimeRemaining}s`;
-          }
-          (btn as HTMLButtonElement).disabled = true;
-        } else if (isRegenerating) {
-          if (textSpan.textContent !== " Regenerating...") {
-            textSpan.textContent = " Regenerating...";
-          }
-          (btn as HTMLButtonElement).disabled = true;
-        } else {
-          if (textSpan.textContent !== " Regenerate") {
-            textSpan.textContent = " Regenerate";
-          }
-          (btn as HTMLButtonElement).disabled = false;
-        }
-      });
-    };
-    
-    updateButtons();
-    // Only run interval if we're actively generating/regenerating
-    if (generatingImageFor || regeneratingImage) {
-      const interval = setInterval(updateButtons, 1000); // Update every second instead of 100ms
-      return () => clearInterval(interval);
-    }
-  }, [editor, generatingImageFor, generationTimeRemaining, regeneratingImage, coverImageUrl]);
+
+    const editorElement = editor.view.dom;
+
+    // Placeholder "Create Image" buttons
+    editorElement.querySelectorAll(".create-image-btn").forEach((btn) => {
+      const placeholder = btn.closest(".image-placeholder") as HTMLElement;
+      if (!placeholder) return;
+      const h2Text = placeholder.getAttribute("data-h2-text") || "";
+      const isGenerating = generatingImages.has(h2Text);
+      if (isGenerating) {
+        const secs = imageTimers.get(h2Text);
+        const label = secs && secs > 0 ? `Generating... ${secs}s` : "Generating...";
+        if (btn.textContent !== label) btn.textContent = label;
+        (btn as HTMLButtonElement).disabled = true;
+      } else {
+        const label = h2Text === "Cover Image" ? "Create Cover Image" : "Create Image";
+        if (btn.textContent !== label) btn.textContent = label;
+        (btn as HTMLButtonElement).disabled = false;
+      }
+    });
+
+    // Regenerate buttons inside TipTap NodeViews
+    editorElement.querySelectorAll(".regenerate-image-btn").forEach((btn) => {
+      let textSpan: HTMLElement | null = (btn as any).__textSpan || btn.querySelector("span");
+      if (!textSpan) return;
+      (btn as any).__textSpan = textSpan;
+
+      let src: string = (btn as any).__imageSrc || "";
+      if (!src) {
+        const img = btn.closest(".image-with-regenerate")?.querySelector("img");
+        src = img?.getAttribute("src") || "";
+        (btn as any).__imageSrc = src;
+      }
+
+      const isRegenerating = regeneratingImages.has(src);
+      if (isRegenerating) {
+        const secs = imageTimers.get(src);
+        textSpan.textContent = secs && secs > 0 ? ` ${secs}s` : " Regenerating...";
+      } else {
+        textSpan.textContent = " Regenerate";
+      }
+      (btn as HTMLButtonElement).disabled = isRegenerating;
+    });
+  }, [editor, generatingImages, regeneratingImages, imageTimers, coverImageUrl]);
 
   // Fetch CMS images when modal opens
   useEffect(() => {
@@ -561,66 +688,48 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
     editor.chain().focus().setImage({ src: url, alt }).run();
   };
 
-  const handleRegenerateImage = async (currentImageUrl: string, currentAlt: string) => {
-    if (!editor || regeneratingImage) return;
-    
-    setRegeneratingImage(currentImageUrl);
-    // Start countdown timer (nano-banana-pro typically takes 30-40 seconds for 2K)
-    const estimatedTime = 35; // seconds
-    setGenerationTimeRemaining(estimatedTime);
-    
-    const countdownInterval = setInterval(() => {
-      setGenerationTimeRemaining(prev => {
-        if (prev === null || prev <= 1) {
-          clearInterval(countdownInterval);
-          return null;
-        }
-        return prev - 1;
+  /** Start a 35-second countdown for the given key, updating imageTimers every second. */
+  const startImageTimer = (key: string) => {
+    setImageTimers(prev => new Map(prev).set(key, 35));
+    const interval = setInterval(() => {
+      setImageTimers(prev => {
+        const next = new Map(prev);
+        const remaining = (next.get(key) ?? 0) - 1;
+        if (remaining <= 0) { next.delete(key); clearInterval(interval); }
+        else next.set(key, remaining);
+        return next;
       });
     }, 1000);
-    
+    return interval;
+  };
+
+  const handleRegenerateImage = async (currentImageUrl: string, currentAlt: string) => {
+    if (!editor || regeneratingImages.has(currentImageUrl)) return;
+
+    setRegeneratingImages(prev => new Set([...prev, currentImageUrl]));
+    const timerInterval = startImageTimer(currentImageUrl);
     try {
-      // Use the alt text as the image prompt (it contains the original subject)
       const imagePrompt = currentAlt || "professional illustration";
-      
-      // Call API to generate new image
       const res = await fetch("/api/images/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subject: imagePrompt, aspect: "16:9", imageSize: "1K" }),
       });
-      
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.error || "Failed to regenerate image");
       }
-      
       const data = await res.json();
       const newImageUrl = data.url;
-      
-      // Replace the old image with the new one in editor content
+
       const currentContent = editor.getHTML();
-      // Escape special regex characters
       const escapedUrl = currentImageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      // Match img tag with its parent paragraph if it exists
       const imagePattern = new RegExp(`(<p[^>]*>)?<img[^>]+src=["']${escapedUrl}["'][^>]*>(</p>)?`, 'gi');
-      
-      // Create new image wrapped in paragraph with regenerate class
       const wrappedHtml = `<p dir="auto" class="image-with-regenerate"><img src="${newImageUrl}" alt="${currentAlt}" style="border-radius: 28px;"></p>`;
-      
-      const newContent = currentContent.replace(imagePattern, wrappedHtml);
-      editor.commands.setContent(newContent);
-      
-      clearInterval(countdownInterval);
-      setGenerationTimeRemaining(null);
-      
-      // Update the prompt mapping
+      editor.commands.setContent(currentContent.replace(imagePattern, wrappedHtml));
       setImagePrompts(prev => ({ ...prev, [newImageUrl]: imagePrompt }));
-      
     } catch (error) {
       console.error("Failed to regenerate image:", error);
-      clearInterval(countdownInterval);
-      setGenerationTimeRemaining(null);
       setErrorModal({
         isOpen: true,
         title: "Failed to regenerate image",
@@ -629,90 +738,66 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
         details: "Failed to regenerate image.",
       });
     } finally {
-      setRegeneratingImage(null);
+      clearInterval(timerInterval);
+      setImageTimers(prev => { const m = new Map(prev); m.delete(currentImageUrl); return m; });
+      setRegeneratingImages(prev => { const s = new Set(prev); s.delete(currentImageUrl); return s; });
     }
   };
 
   const handleCreatePlaceholderImage = async (h2Text: string, placeholderElement: HTMLElement) => {
-    if (!editor || generatingImageFor) return;
-    
-    setGeneratingImageFor(h2Text);
-    // Start countdown timer (nano-banana-pro typically takes 30-40 seconds for 2K)
-    const estimatedTime = 35; // seconds
-    setGenerationTimeRemaining(estimatedTime);
-    
-    const countdownInterval = setInterval(() => {
-      setGenerationTimeRemaining(prev => {
-        if (prev === null || prev <= 1) {
-          clearInterval(countdownInterval);
-          return null;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    
+    if (!editor || generatingImages.has(h2Text)) return;
+
+    setGeneratingImages(prev => new Set([...prev, h2Text]));
+    const timerInterval = startImageTimer(h2Text);
     try {
-      // Get image prompt from data attribute, or generate from H2 text
-      const imagePrompt = placeholderElement.getAttribute("data-image-prompt") || 
-                         `professional illustration representing ${h2Text.toLowerCase()}`;
-      
-      // Call API to generate image
+      // Use focused single-scene prompt instead of raw H2 text
+      const storedPrompt = placeholderElement.getAttribute("data-image-prompt");
+      const imagePrompt = (storedPrompt && !storedPrompt.startsWith("professional illustration representing"))
+        ? storedPrompt
+        : generateFocusedImagePrompt(h2Text);
+
       const res = await fetch("/api/images/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subject: imagePrompt, aspect: "16:9", imageSize: "1K" }),
       });
-      
       if (!res.ok) {
-        clearInterval(countdownInterval);
-        setGenerationTimeRemaining(null);
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.error || "Failed to generate image");
       }
-      
       const data = await res.json();
       const imageUrl = data.url;
-      clearInterval(countdownInterval);
-      setGenerationTimeRemaining(null);
-      
-      // Store the prompt for this image
       setImagePrompts(prev => ({ ...prev, [imageUrl]: imagePrompt }));
-      
-      // Find the placeholder node in the editor and replace it with an image
+
+      // Replace placeholder node with real image
       const { state } = editor;
       const { tr } = state;
-      
       state.doc.descendants((node, pos) => {
-        if (node.type.name === 'imagePlaceholder' && 
-            node.attrs.h2Text === h2Text) {
-          // Replace placeholder node with image, using imagePrompt as alt text
+        if (node.type.name === 'imagePlaceholder' && node.attrs.h2Text === h2Text) {
           const imageNode = state.schema.nodes.paragraph.create(
             { class: "image-with-regenerate" },
             state.schema.nodes.image.create({ src: imageUrl, alt: imagePrompt, style: "border-radius: 28px;" })
           );
           tr.replaceWith(pos, pos + node.nodeSize, imageNode);
-          return false; // Stop searching
+          return false;
         }
       });
-      
       if (tr.steps.length > 0) {
         editor.view.dispatch(tr);
       } else {
-        // Fallback: replace in HTML if node replacement didn't work
+        // Fallback HTML replace
         const currentContent = editor.getHTML();
         const placeholderPattern = new RegExp(
           `<p[^>]*class="image-placeholder"[^>]*data-h2-text="${h2Text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>.*?</p>`,
           'gs'
         );
-        const imageHtml = `<p dir="auto" class="image-with-regenerate"><img src="${imageUrl}" alt="${imagePrompt}" style="border-radius: 28px;"></p>`;
-        const newContent = currentContent.replace(placeholderPattern, imageHtml);
-        editor.commands.setContent(newContent);
+        editor.commands.setContent(currentContent.replace(
+          placeholderPattern,
+          `<p dir="auto" class="image-with-regenerate"><img src="${imageUrl}" alt="${imagePrompt}" style="border-radius: 28px;"></p>`
+        ));
       }
-      
     } catch (error) {
       console.error("Failed to generate image:", error);
-      clearInterval(countdownInterval);
-      setGenerationTimeRemaining(null);
       setErrorModal({
         isOpen: true,
         title: "Failed to generate image",
@@ -721,7 +806,9 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
         details: "Failed to generate image for placeholder.",
       });
     } finally {
-      setGeneratingImageFor(null);
+      clearInterval(timerInterval);
+      setImageTimers(prev => { const m = new Map(prev); m.delete(h2Text); return m; });
+      setGeneratingImages(prev => { const s = new Set(prev); s.delete(h2Text); return s; });
     }
   };
 
@@ -736,29 +823,88 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
     return null;
   }
 
-  const toggleHeading = (level: any) => {
-    editor.chain().focus().toggleHeading({ level }).run();
+  const setHeading = (level: 1 | 2 | 3 | 4 | 5 | 6) => {
+    editor.chain().focus().setHeading({ level }).run();
     setIsMenuOpen(false);
     setDropdownPosition(null);
   };
 
+  const setParagraph = () => {
+    editor.chain().focus().setParagraph().run();
+    setIsMenuOpen(false);
+    setDropdownPosition(null);
+  };
+
+  // Human-readable labels for the dropdown (full descriptions)
+  const HEADING_LABELS: Record<number, string> = {
+    1: "Title (H1)",
+    2: "Pull Quote (H2)",
+    3: "Section Header (H3)",
+    4: "Heading 4",
+    5: "Heading 5",
+    6: "Heading 6",
+  };
+
+  // Short labels for the compact toolbar button
+  const getCurrentHeadingShort = () => {
+    for (let level = 1; level <= 6; level++) {
+      if (editor.isActive("heading", { level })) return `H${level}`;
+    }
+    return "P";
+  };
+
   const getCurrentHeading = () => {
-    if (editor.isActive("heading", { level: 1 })) return "Heading 1";
-    if (editor.isActive("heading", { level: 2 })) return "Heading 2";
-    if (editor.isActive("heading", { level: 3 })) return "Heading 3";
-    if (editor.isActive("heading", { level: 4 })) return "Heading 4";
-    if (editor.isActive("heading", { level: 5 })) return "Heading 5";
-    if (editor.isActive("heading", { level: 6 })) return "Heading 6";
+    for (let level = 1; level <= 6; level++) {
+      if (editor.isActive("heading", { level })) return HEADING_LABELS[level];
+    }
     return "Paragraph";
   };
 
+  // All overflow-candidate items in priority order (most useful = show first, hide last)
+  const overflowCandidates = [
+    { id: "underline",   icon: UnderlineIcon,  title: "Underline",     active: editor.isActive("underline"),    disabled: false, action: () => editor.chain().focus().toggleUnderline().run() },
+    { id: "image",       icon: ImageIcon,      title: "Insert Image",  active: false,                           disabled: false, action: () => setIsImageModalOpen(true) },
+    { id: "link",        icon: LinkIcon,       title: "Link",          active: editor.isActive("link"),         disabled: false, action: () => { const u = window.prompt("Enter URL"); if (u) editor.chain().focus().setLink({ href: u }).run(); else if (u === "") editor.chain().focus().unsetLink().run(); } },
+    { id: "undo",        icon: Undo,           title: "Undo",          active: false,                           disabled: !editor.can().undo(), action: () => editor.chain().focus().undo().run() },
+    { id: "redo",        icon: Redo,           title: "Redo",          active: false,                           disabled: !editor.can().redo(), action: () => editor.chain().focus().redo().run() },
+    { id: "quote",       icon: Quote,          title: "Quote",         active: editor.isActive("blockquote"),   disabled: false, action: () => editor.chain().focus().toggleBlockquote().run() },
+    { id: "code",        icon: Code,           title: "Code",          active: editor.isActive("code"),         disabled: false, action: () => editor.chain().focus().toggleCode().run() },
+    { id: "bulletList",  icon: List,           title: "Bullet List",   active: editor.isActive("bulletList"),   disabled: false, action: () => editor.chain().focus().toggleBulletList().run() },
+    { id: "orderedList", icon: ListOrdered,    title: "Numbered List", active: editor.isActive("orderedList"),  disabled: false, action: () => editor.chain().focus().toggleOrderedList().run() },
+  ];
+
+  const primaryItems = overflowCandidates.slice(0, primaryCount);
+  const overflowItems = overflowCandidates.slice(primaryCount);
+  const hasOverflow = overflowItems.length > 0;
+
   return (
     <div className="flex flex-col w-full h-full relative">
-      {/* Fixed Toolbar */}
-      <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-gray-200 p-1 md:p-2 flex items-center justify-between shadow-sm overflow-x-auto overflow-y-visible">
-        <div className="flex items-center space-x-0.5 md:space-x-1 flex-shrink-0 min-w-0">
-          {/* Heading Dropdown */}
-          <div className="relative">
+      {/* Dynamic Toolbar — items move to overflow menu as viewport shrinks */}
+      <div
+        ref={toolbarRef}
+        className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-gray-200 flex items-center justify-between shadow-sm"
+        style={{ padding: "6px 8px", gap: "2px" }}
+      >
+        {/* Left side: sidebar toggle + heading dropdown + dynamic buttons */}
+        <div className="flex items-center gap-0.5 min-w-0 flex-1 overflow-hidden">
+
+          {/* Sidebar toggle embedded in toolbar (prevents hamburger overlay on mobile) */}
+          {onShowSidebar && (
+            <>
+              <button
+                onClick={onShowSidebar}
+                className="p-2 rounded-lg hover:bg-gray-100 active:bg-gray-200 transition-colors touch-manipulation flex-shrink-0"
+                aria-label="Open sidebar"
+                title="Open sidebar"
+              >
+                <Menu className="h-4 w-4 text-gray-600" />
+              </button>
+              <div className="h-5 w-px bg-gray-200 mx-1 flex-shrink-0" />
+            </>
+          )}
+
+          {/* Heading / Paragraph Dropdown — portal-rendered so it's never clipped */}
+          <div className="relative flex-shrink-0">
             <button
               ref={dropdownButtonRef}
               onClick={(e) => {
@@ -766,323 +912,165 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
                 e.stopPropagation();
                 if (!isMenuOpen && dropdownButtonRef.current) {
                   const rect = dropdownButtonRef.current.getBoundingClientRect();
-                  const viewportWidth = window.innerWidth;
-                  const dropdownWidth = 192; // w-48 = 12rem = 192px
+                  const dropdownWidth = 216;
+                  const vw = window.innerWidth;
                   let left = rect.left;
-                  
-                  // Ensure dropdown doesn't go off-screen on the right
-                  if (left + dropdownWidth > viewportWidth - 16) {
-                    left = viewportWidth - dropdownWidth - 16;
-                  }
-                  
-                  // Ensure dropdown doesn't go off-screen on the left
-                  if (left < 16) {
-                    left = 16;
-                  }
-                  
-                  setDropdownPosition({
-                    top: rect.bottom + 4,
-                    left: left,
-                  });
+                  if (left + dropdownWidth > vw - 8) left = vw - dropdownWidth - 8;
+                  if (left < 8) left = 8;
+                  setDropdownPosition({ top: rect.bottom + 6, left });
                   setIsMenuOpen(true);
                 } else {
                   setIsMenuOpen(false);
                   setDropdownPosition(null);
                 }
               }}
-              className="flex items-center space-x-1 md:space-x-2 px-2 md:px-3 py-1.5 rounded-lg hover:bg-gray-100 active:bg-gray-200 text-xs md:text-sm font-medium transition-colors touch-manipulation"
+              aria-label={`Block type: ${getCurrentHeading()}`}
+              title={getCurrentHeading()}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-100 active:bg-gray-200 text-xs font-semibold transition-colors touch-manipulation whitespace-nowrap min-w-[42px]"
             >
-              <span className="hidden sm:inline">{getCurrentHeading()}</span>
-              <span className="sm:hidden">H</span>
-              <ChevronDown className="h-3 w-3 md:h-4 md:w-4" />
+              <span className="font-mono">{getCurrentHeadingShort()}</span>
+              <ChevronDown className={cn("h-3 w-3 flex-shrink-0 transition-transform duration-150", isMenuOpen && "rotate-180")} />
             </button>
-            
-            {isMenuOpen && dropdownPosition && (
+
+            {isMenuOpen && dropdownPosition && typeof document !== "undefined" && createPortal(
               <>
-                <div 
-                  className="fixed inset-0 z-30" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsMenuOpen(false);
-                    setDropdownPosition(null);
-                  }}
-                />
-                <div 
-                  className="fixed w-48 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1 overflow-hidden"
-                  style={{
-                    top: `${dropdownPosition.top}px`,
-                    left: `${dropdownPosition.left}px`,
-                  }}
+                <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => { setIsMenuOpen(false); setDropdownPosition(null); }} />
+                <div
+                  className="fixed bg-white border border-gray-200 rounded-xl shadow-2xl py-1.5 overflow-hidden"
+                  style={{ top: dropdownPosition.top, left: dropdownPosition.left, width: 216, zIndex: 9999 }}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      editor.chain().focus().setParagraph().run();
-                      setIsMenuOpen(false);
-                      setDropdownPosition(null);
-                    }}
-                    className={cn(
-                      "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors touch-manipulation",
-                      !editor.isActive("heading") && "bg-gray-50 font-semibold"
-                    )}
+                    onMouseDown={(e) => { e.preventDefault(); setParagraph(); }}
+                    className={cn("w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between", !editor.isActive("heading") && "bg-gray-50 font-semibold")}
                   >
-                    Paragraph
+                    <span>Paragraph</span>
+                    {!editor.isActive("heading") && <span className="text-[11px] text-gray-400 font-normal">current</span>}
                   </button>
-                  {[1, 2, 3, 4, 5, 6].map((level) => (
+                  <div className="h-px bg-gray-100 my-1" />
+                  {([2, 3, 1, 4, 5, 6] as const).map((level) => (
                     <button
                       key={level}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        toggleHeading(level as any);
-                        setDropdownPosition(null);
-                      }}
-                      className={cn(
-                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors touch-manipulation",
-                        editor.isActive("heading", { level }) && "bg-gray-50 font-semibold"
-                      )}
+                      onMouseDown={(e) => { e.preventDefault(); setHeading(level); }}
+                      className={cn("w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between", editor.isActive("heading", { level }) && "bg-gray-50 font-semibold")}
                     >
-                      Heading {level}
+                      <span>{HEADING_LABELS[level]}</span>
+                      {editor.isActive("heading", { level }) && <span className="text-[11px] text-gray-400 font-normal">current</span>}
                     </button>
                   ))}
                 </div>
-              </>
+              </>,
+              document.body
             )}
           </div>
 
-          <div className="h-6 w-[1px] bg-gray-200 mx-0.5 md:mx-1 flex-shrink-0" />
+          <div className="h-5 w-px bg-gray-200 mx-1 flex-shrink-0" />
 
-          {/* Formatting Buttons */}
-          <div className="flex items-center space-x-0.5">
-            {/* Always visible on mobile */}
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleBold().run()}
-              active={editor.isActive("bold")}
-              icon={<Bold className="h-4 w-4" />}
-              title="Bold"
-            />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleItalic().run()}
-              active={editor.isActive("italic")}
-              icon={<Italic className="h-4 w-4" />}
-              title="Italic"
-            />
-            <ToolbarButton
-              onClick={() => editor.chain().focus().toggleUnderline().run()}
-              active={editor.isActive("underline")}
-              icon={<UnderlineIcon className="h-4 w-4" />}
-              title="Underline"
-            />
-            <ToolbarButton
-              onClick={() => setIsImageModalOpen(true)}
-              active={editor.isActive("image")}
-              icon={<ImageIcon className="h-4 w-4" />}
-              title="Insert Image"
-            />
-            
-            {/* Hidden on mobile, shown in overflow menu */}
-            <div className="hidden md:flex items-center space-x-0.5">
-              <ToolbarButton
-                onClick={() => {
-                  const url = window.prompt("Enter URL");
-                  if (url) {
-                    editor.chain().focus().setLink({ href: url }).run();
-                  } else if (url === "") {
-                    editor.chain().focus().unsetLink().run();
-                  }
-                }}
-                active={editor.isActive("link")}
-                icon={<LinkIcon className="h-4 w-4" />}
-                title="Link"
-              />
-              <ToolbarButton
-                onClick={() => editor.chain().focus().toggleBlockquote().run()}
-                active={editor.isActive("blockquote")}
-                icon={<Quote className="h-4 w-4" />}
-                title="Quote"
-              />
-              <ToolbarButton
-                onClick={() => editor.chain().focus().toggleCode().run()}
-                active={editor.isActive("code")}
-                icon={<Code className="h-4 w-4" />}
-                title="Code"
-              />
-              <ToolbarButton
-                onClick={() => editor.chain().focus().toggleBulletList().run()}
-                active={editor.isActive("bulletList")}
-                icon={<List className="h-4 w-4" />}
-                title="Bullet List"
-              />
-              <ToolbarButton
-                onClick={() => editor.chain().focus().toggleOrderedList().run()}
-                active={editor.isActive("orderedList")}
-                icon={<ListOrdered className="h-4 w-4" />}
-                title="Ordered List"
-              />
-            </div>
+          {/* Always-visible: Bold, Italic */}
+          <ToolbarButton onClick={() => editor.chain().focus().toggleBold().run()} active={editor.isActive("bold")} icon={<Bold className="h-4 w-4" />} title="Bold" />
+          <ToolbarButton onClick={() => editor.chain().focus().toggleItalic().run()} active={editor.isActive("italic")} icon={<Italic className="h-4 w-4" />} title="Italic" />
 
-            {/* Mobile overflow menu */}
-            <div className="md:hidden relative">
-              <button
-                ref={toolbarMenuButtonRef}
-                onClick={() => {
-                  if (!isToolbarMenuOpen && toolbarMenuButtonRef.current) {
-                    const rect = toolbarMenuButtonRef.current.getBoundingClientRect();
-                    setToolbarMenuPosition({
-                      top: rect.bottom + 4,
-                      left: rect.left,
-                    });
-                  }
-                  setIsToolbarMenuOpen(!isToolbarMenuOpen);
-                }}
-                className="p-1.5 rounded-lg hover:bg-gray-100 active:bg-gray-200 transition-colors touch-manipulation"
-                title="More options"
+          {/* Dynamic primary items — count determined by ResizeObserver */}
+          {primaryItems.map((item) => (
+            <ToolbarButton
+              key={item.id}
+              onClick={item.action}
+              active={item.active}
+              disabled={item.disabled}
+              icon={<item.icon className="h-4 w-4" />}
+              title={item.title}
+            />
+          ))}
+
+          {/* Overflow ⋯ button — shown when any candidates are hidden */}
+          {hasOverflow && (
+            <button
+              ref={toolbarMenuButtonRef}
+              onClick={() => {
+                if (!isToolbarMenuOpen && toolbarMenuButtonRef.current) {
+                  const rect = toolbarMenuButtonRef.current.getBoundingClientRect();
+                  const vw = window.innerWidth;
+                  const menuW = 192;
+                  let left = rect.left;
+                  if (left + menuW > vw - 8) left = vw - menuW - 8;
+                  if (left < 8) left = 8;
+                  setToolbarMenuPosition({ top: rect.bottom + 6, left });
+                }
+                setIsToolbarMenuOpen(prev => !prev);
+              }}
+              className={cn(
+                "p-1.5 rounded-lg transition-colors touch-manipulation flex-shrink-0",
+                isToolbarMenuOpen ? "bg-gray-200 text-black" : "hover:bg-gray-100 active:bg-gray-200 text-gray-600"
+              )}
+              aria-label="More formatting options"
+              title="More options"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Overflow menu portal */}
+          {isToolbarMenuOpen && toolbarMenuPosition && typeof document !== "undefined" && createPortal(
+            <>
+              <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => { setIsToolbarMenuOpen(false); setToolbarMenuPosition(null); }} />
+              <div
+                className="fixed bg-white border border-gray-200 rounded-xl shadow-2xl py-1.5 overflow-hidden"
+                style={{ top: toolbarMenuPosition.top, left: toolbarMenuPosition.left, width: 192, zIndex: 9999 }}
+                onClick={(e) => e.stopPropagation()}
               >
-                <MoreHorizontal className="h-4 w-4" />
-              </button>
-              
-              {isToolbarMenuOpen && toolbarMenuPosition && (
-                <>
-                  <div 
-                    className="fixed inset-0 z-30" 
-                    onClick={() => {
+                {overflowItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      item.action();
                       setIsToolbarMenuOpen(false);
                       setToolbarMenuPosition(null);
                     }}
-                  />
-                  <div 
-                    className="fixed bg-white border border-gray-200 rounded-xl shadow-xl z-40 py-1 overflow-hidden animate-in fade-in slide-in-from-top-2"
-                    style={{
-                      top: `${toolbarMenuPosition.top}px`,
-                      left: `${toolbarMenuPosition.left}px`,
-                      minWidth: "160px",
-                    }}
+                    disabled={item.disabled}
+                    className={cn(
+                      "w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors touch-manipulation",
+                      item.active && "bg-gray-50 font-semibold",
+                      item.disabled && "opacity-40 cursor-not-allowed"
+                    )}
                   >
-                    <button
-                      onClick={() => {
-                        const url = window.prompt("Enter URL");
-                        if (url) {
-                          editor.chain().focus().setLink({ href: url }).run();
-                        } else if (url === "") {
-                          editor.chain().focus().unsetLink().run();
-                        }
-                        setIsToolbarMenuOpen(false);
-                        setToolbarMenuPosition(null);
-                      }}
-                      className={cn(
-                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
-                        editor.isActive("link") && "bg-gray-50 font-semibold"
-                      )}
-                    >
-                      <LinkIcon className="h-4 w-4" />
-                      Link
-                    </button>
-                    <button
-                      onClick={() => {
-                        editor.chain().focus().toggleBlockquote().run();
-                        setIsToolbarMenuOpen(false);
-                        setToolbarMenuPosition(null);
-                      }}
-                      className={cn(
-                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
-                        editor.isActive("blockquote") && "bg-gray-50 font-semibold"
-                      )}
-                    >
-                      <Quote className="h-4 w-4" />
-                      Quote
-                    </button>
-                    <button
-                      onClick={() => {
-                        editor.chain().focus().toggleCode().run();
-                        setIsToolbarMenuOpen(false);
-                        setToolbarMenuPosition(null);
-                      }}
-                      className={cn(
-                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
-                        editor.isActive("code") && "bg-gray-50 font-semibold"
-                      )}
-                    >
-                      <Code className="h-4 w-4" />
-                      Code
-                    </button>
-                    <button
-                      onClick={() => {
-                        editor.chain().focus().toggleBulletList().run();
-                        setIsToolbarMenuOpen(false);
-                        setToolbarMenuPosition(null);
-                      }}
-                      className={cn(
-                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
-                        editor.isActive("bulletList") && "bg-gray-50 font-semibold"
-                      )}
-                    >
-                      <List className="h-4 w-4" />
-                      Bullet List
-                    </button>
-                    <button
-                      onClick={() => {
-                        editor.chain().focus().toggleOrderedList().run();
-                        setIsToolbarMenuOpen(false);
-                        setToolbarMenuPosition(null);
-                      }}
-                      className={cn(
-                        "w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2",
-                        editor.isActive("orderedList") && "bg-gray-50 font-semibold"
-                      )}
-                    >
-                      <ListOrdered className="h-4 w-4" />
-                      Numbered List
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          <div className="h-6 w-[1px] bg-gray-200 mx-0.5 md:mx-1 flex-shrink-0" />
-
-          {/* History */}
-          <div className="flex items-center space-x-0.5">
-            <ToolbarButton
-              onClick={() => {
-                editor.chain().focus().undo().run();
-              }}
-              disabled={!editor.can().undo()}
-              icon={<Undo className="h-4 w-4" />}
-              title="Undo"
-            />
-            <ToolbarButton
-              onClick={() => {
-                editor.chain().focus().redo().run();
-              }}
-              disabled={!editor.can().redo()}
-              icon={<Redo className="h-4 w-4" />}
-              title="Redo"
-            />
-          </div>
+                    <item.icon className="h-4 w-4 flex-shrink-0 text-gray-500" />
+                    <span>{item.title}</span>
+                  </button>
+                ))}
+              </div>
+            </>,
+            document.body
+          )}
         </div>
 
-        {/* Save Button */}
+        {/* Save Button — always on the right */}
         {onSave && (
           <button
             onClick={onSave}
-            disabled={isSaving || !hasChanges}
+            disabled={isSaving || (!hasChanges && !saveFailed)}
             data-testid="save-button"
-            className="flex items-center space-x-1 md:space-x-2 bg-black text-white px-3 md:px-4 py-1.5 rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-xs md:text-sm font-medium flex-shrink-0"
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all text-xs font-medium flex-shrink-0 ml-1",
+              saveFailed
+                ? "bg-red-600 hover:bg-red-700 text-white"
+                : saveJustCompleted
+                  ? "bg-green-600 hover:bg-green-700 text-white"
+                  : "bg-black hover:bg-gray-800 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            )}
           >
             {saveJustCompleted ? (
-              <span className="text-green-400">✓</span>
+              <span className="text-sm leading-none">✓</span>
+            ) : saveFailed ? (
+              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
             ) : isSaving ? (
-              <span className="animate-spin">◌</span>
+              <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin" />
             ) : (
-              <Save className="h-3 w-3 md:h-4 md:w-4" />
+              <Save className="h-3.5 w-3.5 flex-shrink-0" />
             )}
-            <span className="hidden sm:inline" data-testid="save-button-text">
-              {saveJustCompleted ? "Saved!" : isSaving ? "Saving..." : "Save Changes"}
+            <span data-testid="save-button-text" className="whitespace-nowrap">
+              {saveJustCompleted ? "Saved!" : saveFailed ? "Retry" : isSaving ? "Saving…" : "Save"}
             </span>
-            <span className="sm:hidden">{saveJustCompleted ? "Saved!" : isSaving ? "..." : "Save"}</span>
           </button>
         )}
       </div>
@@ -1160,24 +1148,11 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
                   className="create-image-btn" 
                   style={{ background: 'black', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '8px', fontSize: '14px', cursor: 'pointer', fontWeight: '500' }}
                   onClick={async () => {
-                    if (generatingImageFor) return;
-                    setGeneratingImageFor("Cover Image");
-                    // Start countdown timer (nano-banana-pro typically takes 30-40 seconds for 2K)
-                    const estimatedTime = 35; // seconds
-                    setGenerationTimeRemaining(estimatedTime);
-                    
-                    const countdownInterval = setInterval(() => {
-                      setGenerationTimeRemaining(prev => {
-                        if (prev === null || prev <= 1) {
-                          clearInterval(countdownInterval);
-                          return null;
-                        }
-                        return prev - 1;
-                      });
-                    }, 1000);
-                    
+                    if (generatingImages.has("Cover Image")) return;
+                    setGeneratingImages(prev => new Set([...prev, "Cover Image"]));
+                    const coverTimerInterval = startImageTimer("Cover Image");
                     try {
-                      const imagePrompt = `professional cover image for blog post about ${title.toLowerCase()}`;
+                      const imagePrompt = coverImageAlt || generateFocusedImagePrompt(title);
                       const res = await fetch("/api/images/generate", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -1185,13 +1160,9 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
                       });
                       if (!res.ok) throw new Error("Failed to generate image");
                       const data = await res.json();
-                      clearInterval(countdownInterval);
-                      setGenerationTimeRemaining(null);
                       onCoverImageReplace(data.url);
                     } catch (error) {
                       console.error("Failed to generate cover image:", error);
-                      clearInterval(countdownInterval);
-                      setGenerationTimeRemaining(null);
                       setErrorModal({
                         isOpen: true,
                         title: "Failed to generate image",
@@ -1200,15 +1171,15 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
                         details: "Failed to generate cover image.",
                       });
                     } finally {
-                      setGeneratingImageFor(null);
+                      clearInterval(coverTimerInterval);
+                      setImageTimers(prev => { const m = new Map(prev); m.delete("Cover Image"); return m; });
+                      setGeneratingImages(prev => { const s = new Set(prev); s.delete("Cover Image"); return s; });
                     }
                   }}
-                  disabled={!!generatingImageFor}
+                  disabled={generatingImages.has("Cover Image")}
                 >
-                  {generatingImageFor === "Cover Image" 
-                    ? (generationTimeRemaining !== null && generationTimeRemaining > 0
-                        ? `Generating... ${generationTimeRemaining}s remaining` 
-                        : "Generating...")
+                  {generatingImages.has("Cover Image")
+                    ? (imageTimers.get("Cover Image") ? `Generating... ${imageTimers.get("Cover Image")}s` : "Generating...")
                     : "Create Cover Image"}
                 </button>
               </p>
@@ -1220,15 +1191,39 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
             <div className="mb-8 relative image-with-regenerate" style={{ position: 'relative' }}>
               <img 
                 src={coverImageUrl} 
-                alt={title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image"} 
+                alt={coverImageAlt}
                 className="w-full h-auto cursor-pointer"
                 style={{ borderRadius: '0px', display: 'block' }}
                 onClick={() => {
-                  const altText = title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image";
-                  setSelectedImage({ src: coverImageUrl, alt: altText });
+                  setSelectedImage({ src: coverImageUrl, alt: coverImageAlt });
                   setIsImageEditModalOpen(true);
                 }}
               />
+              {/* Edit button for cover image */}
+              {onEditImage && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onEditImage(coverImageUrl, coverImageAlt);
+                  }}
+                  style={{
+                    position: 'absolute', bottom: '16px', right: '164px',
+                    background: 'rgba(0, 0, 0, 0.75)', color: 'white', border: 'none',
+                    borderRadius: '28px', padding: '10px 14px', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: '5px',
+                    fontSize: '12px', fontWeight: '500', transition: 'all 0.2s',
+                    zIndex: 20, backdropFilter: 'blur(8px)', opacity: 0.9,
+                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; }}
+                >
+                  <Pencil className="h-3 w-3" />
+                  <span>Edit</span>
+                </button>
+              )}
               <button
                 className="regenerate-image-btn"
                 type="button"
@@ -1250,31 +1245,19 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
                   transition: 'all 0.2s',
                   zIndex: 20,
                   backdropFilter: 'blur(8px)',
-                  opacity: regeneratingImage === coverImageUrl ? 1 : 0.9,
+                  opacity: regeneratingImages.has(coverImageUrl ?? "") ? 1 : 0.9,
                   boxShadow: '0 4px 16px rgba(0, 0, 0, 0.45)',
                   pointerEvents: 'auto',
                 }}
                 onClick={async (e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  if (regeneratingImage || !onCoverImageReplace) return;
-                  setRegeneratingImage(coverImageUrl);
-                  // Start countdown timer
-                  const estimatedTime = 35;
-                  setGenerationTimeRemaining(estimatedTime);
-                  
-                  const countdownInterval = setInterval(() => {
-                    setGenerationTimeRemaining(prev => {
-                      if (prev === null || prev <= 1) {
-                        clearInterval(countdownInterval);
-                        return null;
-                      }
-                      return prev - 1;
-                    });
-                  }, 1000);
-                  
+                  if (regeneratingImages.has(coverImageUrl ?? "") || !onCoverImageReplace) return;
+                  setRegeneratingImages(prev => new Set([...prev, coverImageUrl ?? ""]));
+                  const regenCoverKey = coverImageUrl ?? "";
+                  const regenCoverTimer = startImageTimer(regenCoverKey);
                   try {
-                    const imagePrompt = title ? `professional cover image for blog post about ${title.toLowerCase()}` : "professional cover image";
+                    const imagePrompt = coverImageAlt || "professional at work";
                     const res = await fetch("/api/images/generate", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
@@ -1282,13 +1265,9 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
                     });
                     if (!res.ok) throw new Error("Failed to regenerate image");
                     const data = await res.json();
-                    clearInterval(countdownInterval);
-                    setGenerationTimeRemaining(null);
                     onCoverImageReplace(data.url);
                   } catch (error) {
                     console.error("Failed to regenerate cover image:", error);
-                    clearInterval(countdownInterval);
-                    setGenerationTimeRemaining(null);
                     setErrorModal({
                       isOpen: true,
                       title: "Failed to regenerate image",
@@ -1297,24 +1276,26 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
                       details: "Failed to regenerate cover image.",
                     });
                   } finally {
-                    setRegeneratingImage(null);
+                    clearInterval(regenCoverTimer);
+                    setImageTimers(prev => { const m = new Map(prev); m.delete(regenCoverKey); return m; });
+                    setRegeneratingImages(prev => { const s = new Set(prev); s.delete(regenCoverKey); return s; });
                   }
                 }}
-                disabled={!!regeneratingImage}
+                disabled={regeneratingImages.has(coverImageUrl ?? "")}
                 onMouseEnter={(e) => {
-                  if (!regeneratingImage) {
+                  if (!regeneratingImages.has(coverImageUrl ?? "")) {
                     e.currentTarget.style.opacity = '1';
                   }
                 }}
                 onMouseLeave={(e) => {
-                  if (!regeneratingImage) {
+                  if (!regeneratingImages.has(coverImageUrl ?? "")) {
                     e.currentTarget.style.opacity = '0.85';
                   }
                 }}
               >
                 <Sparkles className="h-3 w-3" />
-                <span>{regeneratingImage === coverImageUrl && generationTimeRemaining !== null && generationTimeRemaining > 0 
-                  ? `${generationTimeRemaining}s` 
+                <span>{regeneratingImages.has(coverImageUrl ?? "")
+                  ? (imageTimers.get(coverImageUrl ?? "") ? `${imageTimers.get(coverImageUrl ?? "")}s` : "Regenerating...")
                   : "Regenerate"}</span>
               </button>
             </div>
@@ -1374,19 +1355,24 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
             }
           }}
           onAltTextChange={(newAlt) => {
-            if (editor && selectedImage) {
-              // Find and update the image with matching src
+            if (!selectedImage) return;
+            // Cover image: stored in React state (not a TipTap node)
+            if (selectedImage.src === coverImageUrl) {
+              setCoverImageAlt(newAlt);
+              setSelectedImage({ ...selectedImage, alt: newAlt });
+              return;
+            }
+            // Inline image: update TipTap node attrs
+            if (editor) {
               const { state } = editor;
               const { tr } = state;
               let updated = false;
-              
               state.doc.descendants((node, pos) => {
                 if (node.type.name === "image" && node.attrs.src === selectedImage.src && !updated) {
                   tr.setNodeMarkup(pos, undefined, { ...node.attrs, alt: newAlt });
                   updated = true;
                 }
               });
-              
               if (updated) {
                 editor.view.dispatch(tr);
                 setSelectedImage({ ...selectedImage, alt: newAlt });
@@ -1588,7 +1574,9 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, saveJu
       )}
     </div>
   );
-}
+});
+
+export default BlogEditor;
 
 interface ImageModalProps {
   onClose: () => void;

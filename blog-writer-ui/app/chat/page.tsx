@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Square, Loader2, Plus, Settings, Search, Menu } from "lucide-react";
+import { Send, Square, Loader2, Plus, Settings, Search, Menu, X as XIcon, Pencil } from "lucide-react";
 import { slugify } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { cn, formatDate } from "@/lib/utils";
-import BlogEditor from "@/components/BlogEditor";
+import BlogEditor, { type BlogEditorRef } from "@/components/BlogEditor";
 import SettingsModal from "@/components/SettingsModal";
 import ErrorModal from "@/components/ErrorModal";
 
@@ -39,14 +39,17 @@ function clearDraft() {
   try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
 }
 
-/** Convert any markdown the AI accidentally emits into HTML for TipTap. */
+/** Convert any markdown the AI accidentally emits into HTML, and strip blank-paragraph spacers. */
 function markdownToHtml(text: string): string {
   return text
     .replace(/^### (.+)$/gm, '<h3 dir="auto">$1</h3>')
     .replace(/^## (.+)$/gm, '<h2 dir="auto">$1</h2>')
     .replace(/^# (.+)$/gm, '<h3 dir="auto">$1</h3>')
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>");
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    // Remove blank-paragraph spacers — they create triple-spacing in Framer CMS
+    .replace(/<p[^>]*>\s*<br\s*\/?>\s*<\/p>/gi, "")
+    .replace(/<p[^>]*>\s*<\/p>/gi, "");
 }
 
 export default function ChatPage() {
@@ -63,6 +66,9 @@ export default function ChatPage() {
   const [loadingBlog, setLoadingBlog] = useState(false);
   const [savingBlog, setSavingBlog] = useState(false);
   const [saveJustCompleted, setSaveJustCompleted] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+  // Image attached to chat input for AI-driven editing
+  const [pendingEditImage, setPendingEditImage] = useState<{ url: string; alt: string } | null>(null);
   const [editableContent, setEditableContent] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Start collapsed on mobile
@@ -88,6 +94,7 @@ export default function ChatPage() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const blogPreviewRef = useRef<HTMLDivElement>(null);
+  const blogEditorRef = useRef<BlogEditorRef>(null);
   // When true, streaming text chunks are piped into the editor instead of the chat bubble
   const isBuildingBlogRef = useRef(false);
   const buildingContentRef = useRef("");
@@ -132,6 +139,13 @@ export default function ChatPage() {
     const t = setTimeout(() => setSaveJustCompleted(false), 2000);
     return () => clearTimeout(t);
   }, [saveJustCompleted]);
+
+  // Clear "Save Failed" indicator after 5 seconds
+  useEffect(() => {
+    if (!saveFailed) return;
+    const t = setTimeout(() => setSaveFailed(false), 5000);
+    return () => clearTimeout(t);
+  }, [saveFailed]);
 
   // Auto-save draft to localStorage whenever the unsaved blog content changes
   useEffect(() => {
@@ -216,6 +230,7 @@ export default function ChatPage() {
     if (!selectedBlog || savingBlog) return;
     
     setSavingBlog(true);
+    setSaveFailed(false); // Reset any previous failure indicator
     try {
       // New blogs (not yet in Framer) use POST; existing blogs use PUT
       const isNew = isNewBlogRef.current;
@@ -268,11 +283,12 @@ export default function ChatPage() {
       }
     } catch (err) {
       console.error("Save error:", err);
+      setSaveFailed(true);
       const errorMessage = err instanceof Error ? err.message : "Failed to save changes. Please try again.";
       setErrorModal({
         isOpen: true,
         title: "Failed to save blog",
-        message: errorMessage.split('\n\n')[0], // Show first line as main message
+        message: errorMessage.split('\n\n')[0],
         error: err,
         details: `Failed to save blog "${selectedBlog?.title}" to Framer CMS.\n\n${errorMessage}`,
       });
@@ -300,6 +316,48 @@ export default function ChatPage() {
     if (!messageText.trim() || loading) return;
 
     const userMessage = messageText.trim();
+
+    // Image edit mode — user typed a prompt for an attached image, call image API directly
+    if (pendingEditImage) {
+      const { url: imageUrl, alt: imageAlt } = pendingEditImage;
+      setPendingEditImage(null);
+      setLoading(true);
+      setMessages(prev => [
+        ...prev,
+        { role: "user" as const, content: `Edit image: ${userMessage}` },
+        { role: "assistant" as const, content: "Editing image…" },
+      ]);
+      try {
+        const res = await fetch("/api/images/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subject: userMessage, aspect: "16:9", imageSize: "1K", existingImageUrl: imageUrl }),
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to edit image");
+        }
+        const data = await res.json();
+        // Replace old URL with new URL in editor content
+        setEditableContent(prev => prev.replace(new RegExp(imageUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), data.url));
+        setMessages(prev => {
+          const msgs = [...prev];
+          msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: "Image updated! Click Save Changes when ready." };
+          return msgs;
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to edit image";
+        setMessages(prev => {
+          const msgs = [...prev];
+          msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: `Failed to edit image: ${msg}` };
+          return msgs;
+        });
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     setStreamingBlogContent("");
     buildingContentRef.current = "";
     readerDoneRef.current = false;
@@ -317,6 +375,8 @@ export default function ChatPage() {
         body: JSON.stringify({
           messages: [...messages, { role: "user" as const, content: userMessage }],
           currentBlogSlug: selectedBlog?.slug,
+          // Pass current blog HTML so the AI can make targeted edits
+          currentBlogContent: selectedBlog ? editableContent : undefined,
         }),
         signal: controller.signal,
       });
@@ -428,6 +488,12 @@ export default function ChatPage() {
               }
             } else if (toolName === "list_blogs") {
               fetchBlogs();
+            } else if (toolName === "edit_blog" && result?.operations) {
+              // Apply find/replace operations to the editor as undoable ProseMirror transactions
+              const ops = result.operations as Array<{ find: string; replace: string }>;
+              if (blogEditorRef.current && ops.length > 0) {
+                blogEditorRef.current.applyAIEdits(ops);
+              }
             } else if (toolName === "add_image" && result?.url) {
               // Insert the image above the specified H2 in the current editor content
               const h2Text = result.h2Text as string;
@@ -680,8 +746,9 @@ export default function ChatPage() {
 
       {/* Main Area */}
       <div className="flex-1 flex flex-col relative bg-white">
-        {/* Top Bar / Toggle Sidebar Button - Only show when sidebar is closed */}
-        {!isSidebarOpen && (
+        {/* Floating sidebar toggle — only shown on the chat/creating screen, not when editor is open
+            (when a blog is open, the toggle lives inside the editor toolbar to avoid overlap) */}
+        {!isSidebarOpen && !selectedBlog && !isCreating && (
           <div className="absolute top-2 md:top-4 left-2 md:left-4 right-2 md:right-4 z-30 flex items-center justify-between pointer-events-none">
             <button 
               onClick={() => setIsSidebarOpen(true)}
@@ -747,34 +814,37 @@ export default function ChatPage() {
 
                   return (
                     <BlogEditor 
+                      ref={blogEditorRef}
                       content={editableContent} 
                       onChange={setEditableContent}
                       onSave={handleSaveBlog}
                       isSaving={savingBlog}
                       saveJustCompleted={saveJustCompleted}
+                      saveFailed={saveFailed}
                       hasChanges={hasChanges}
                       isStreaming={isBlogStreaming}
+                      onShowSidebar={!isSidebarOpen ? () => setIsSidebarOpen(true) : undefined}
                       blogSlug={selectedBlog?.slug}
                       coverImageUrl={selectedBlog?.coverImageUrl}
                       title={selectedBlog?.title}
                       date={selectedBlog?.date}
                       onTitleChange={(newTitle) => {
                         if (!selectedBlog) return;
-                        // Only update local state - save happens on button click
                         setSelectedBlog({ ...selectedBlog, title: newTitle });
                       }}
                       onDateChange={(newDate) => {
                         if (!selectedBlog) return;
-                        // Only update local state - save happens on button click
                         setSelectedBlog({ ...selectedBlog, date: newDate });
                       }}
-                  onCoverImageReplace={async (newUrl) => {
-                    if (!selectedBlog) return;
-                    // Update both coverImageUrl and blogListImageUrl (they use the same image)
-                    setSelectedBlog({ ...selectedBlog, coverImageUrl: newUrl });
-                    // Also update in the save handler so both are saved together
-                    // The save will handle updating both fields
-                  }}
+                      onCoverImageReplace={async (newUrl) => {
+                        if (!selectedBlog) return;
+                        setSelectedBlog({ ...selectedBlog, coverImageUrl: newUrl });
+                      }}
+                      onEditImage={(imageUrl, imageAlt) => {
+                        setPendingEditImage({ url: imageUrl, alt: imageAlt });
+                        // Focus the chat input
+                        setTimeout(() => document.getElementById("chat-input")?.focus(), 50);
+                      }}
                     />
                   );
                 })()}
@@ -854,6 +924,29 @@ export default function ChatPage() {
             </div>
           )}
           <form onSubmit={handleSend} className="w-full max-w-[768px] mx-auto relative group">
+            {/* Pending image thumbnail attached to chat input */}
+            {pendingEditImage && (
+              <div className="mb-2 flex items-center gap-2 px-2">
+                <div className="relative flex-shrink-0 w-16 h-16 rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-gray-50">
+                  <img src={pendingEditImage.url} alt={pendingEditImage.alt} className="w-full h-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setPendingEditImage(null)}
+                    className="absolute top-0.5 right-0.5 bg-black/70 hover:bg-black rounded-full p-0.5 transition-colors"
+                    aria-label="Remove image"
+                  >
+                    <XIcon className="h-3 w-3 text-white" />
+                  </button>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <Pencil className="h-3 w-3 text-gray-400 flex-shrink-0" />
+                    <span className="text-xs text-gray-500 font-medium">Editing image</span>
+                  </div>
+                  <p className="text-xs text-gray-400 truncate max-w-[200px]">{pendingEditImage.alt || "No description"}</p>
+                </div>
+              </div>
+            )}
             <input
               type="text"
               id="chat-input"
@@ -861,7 +954,7 @@ export default function ChatPage() {
               aria-label="Chat input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={selectedBlog ? `Tell AI how to improve this blog...` : "What should we write about today?"}
+              placeholder={pendingEditImage ? "Describe what to change in this image..." : selectedBlog ? "Tell AI how to improve this blog..." : "What should we write about today?"}
               className="w-full bg-gray-50 border border-gray-200 rounded-[28px] py-3 md:py-4 pl-4 md:pl-6 pr-12 md:pr-14 text-sm md:text-base text-black placeholder:text-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-all shadow-sm"
             />
             {loading ? (

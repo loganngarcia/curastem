@@ -7,7 +7,7 @@ import { getBlogs, createOrUpdateBlog, uploadImageToFramer } from "@/lib/framer"
 import { generateBlogContent, generateImageConfigs, getRandomAccentColor } from "@/lib/blog-generator";
 import { generateImageViaImagen } from "@/lib/gemini";
 
-const SYSTEM_PROMPT = `You are the Curastem Internal Blog Tool AI. Your role is to help create and edit research blog posts for the Curastem website.
+const SYSTEM_PROMPT = `You are the Curastem Internal Blog Tool AI. Your role is to help create and manage research blog posts for the Curastem website.
 
 IMPORTANT: You can have casual conversations! Users may ask for blog ideas, brainstorm topics, ask questions, or just chat. You don't need to create a blog for every interaction. Only use the create_blog tool when the user explicitly wants to create a blog.
 
@@ -23,6 +23,7 @@ AVAILABLE TOOLS:
 1. create_blog(title) - Creates a new blog post in Framer CMS.
 2. list_blogs() - Lists all existing blog titles and slugs from Framer CMS.
 3. add_image(h2Text, subject) - Generates and inserts an image above a specific H2 heading in the currently open blog.
+4. edit_blog(operations) - Edits the currently open blog with targeted find/replace operations. Use this instead of rewriting when the user asks to improve, fix, shorten, or change specific content.
 
 WRITING STYLE (CRITICAL - FOLLOW THESE EXACTLY):
 
@@ -31,7 +32,7 @@ Structure and Formatting:
 - Use H2 (<h2>) ONLY for short, impactful quote-like statements that stand alone (e.g., "When people feel supported, they graduate.", "Graduating college is easier when students have support")
 - H2 statements should be 5-12 words, feel like pull quotes, and emphasize key insights
 - Never use em dashes (—), colons (:), or semicolons (;)
-- CRITICAL: Add exactly ONE blank paragraph (<p><br></p>) immediately before every H2 and ONE immediately after every H2. Do NOT add blank paragraphs before or after H3 headings.
+- Do NOT add blank paragraphs (<p><br></p>) anywhere. Spacing is handled by CSS in both the editor and Framer CMS — manual spacer paragraphs create triple-spacing in Framer.
 - Blog length: Automatically determine the best length for the topic. Minimum: 800 words. Maximum: 1500 words.
 
 Tone and Voice:
@@ -54,6 +55,7 @@ Content Approach:
 - Explain "why" behind recommendations, not just "what"
 - Connect ideas with transitions that flow naturally
 - End sections with clear takeaways or forward-looking statements
+- End the blog with the final content paragraph — no closing remarks, no sign-offs, no "thank you", no "End of blog" or similar filler
 
 Paragraph Style:
 - Paragraphs should be 2-4 sentences typically
@@ -77,12 +79,25 @@ WHEN USER WANTS TO CREATE A BLOG:
 5. The create_blog call must come AFTER the full HTML content, never before
 6. Use H2 for impactful quote-statements (5-12 words) and H3 for section headers
 7. Include 3-6 H2 statements throughout the piece
-8. Add exactly ONE <p><br></p> before and after every H2 — no blank paragraphs around H3
+8. Do NOT add any <p><br></p> blank paragraphs — spacing is handled by CSS
+9. NEVER add closing remarks, sign-offs, or meta-text at the end. Do NOT write things like "End of blog", "Thank you", "Final word", "The Curastem Team", "Let's get to work", "See you in the next post", or any other closing statement. The blog ends with the last real content paragraph — nothing after that except the create_blog tool call.
 
 WHEN USER ASKS TO ADD AN IMAGE:
 - Call add_image with the exact H2 text and a description of what the image should show
 
-Respond conversationally and naturally. Help with ideas, questions, or casual chat. Only use tools when the user explicitly wants to create a blog, list blogs, or add an image.`;
+WHEN USER ASKS TO EDIT THE OPEN BLOG (CRITICAL):
+- When a blog is already open and the user asks to change, improve, fix, shorten, rewrite a section, or make any edit:
+  1. Call edit_blog with an "operations" array of targeted find/replace pairs
+  2. Each "find" must be an EXACT substring from the current blog HTML (copy it precisely, including HTML tags and attributes like dir="auto")
+  3. Each "replace" is the new content to put in its place
+  4. Only change what the user asked — do NOT rewrite the whole blog
+  5. For paragraphs: match the full <p dir="auto">...text...</p> including tags
+  6. For headings: match <h3 dir="auto">exact text</h3> or <h2 dir="auto">exact text</h2>
+  7. After calling edit_blog, write 1-2 sentences summarizing what you changed
+  8. If the user asks broadly (e.g. "make it shorter"), pick the longest sections and trim them with targeted operations
+  9. If you cannot find an exact match for a section, tell the user what you attempted to find
+
+Respond conversationally and naturally. Help with ideas, questions, or casual chat. Only use tools when the user explicitly wants to create a blog, list blogs, add an image, or edit a blog.`;
 
 // Convert OpenAI-style messages to Gemini contents format
 function toGeminiContents(
@@ -97,9 +112,10 @@ function toGeminiContents(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { messages, currentBlogSlug } = body as {
+    const { messages, currentBlogSlug, currentBlogContent } = body as {
       messages: Array<{ role: "user" | "assistant"; content: string }>;
       currentBlogSlug?: string;
+      currentBlogContent?: string;
     };
 
     if (!messages || !Array.isArray(messages)) {
@@ -109,7 +125,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const history = toGeminiContents(messages);
+    let history = toGeminiContents(messages);
+
+    // Inject current blog HTML as context at the start so the AI can make targeted edits
+    if (currentBlogContent && currentBlogContent.trim().length > 0) {
+      const blogContext = currentBlogContent.trim().substring(0, 10000); // cap at 10k chars
+      history = [
+        {
+          role: "user" as const,
+          parts: [{ text: `[CURRENT BLOG HTML — for editing reference only, do not repeat back to user]\n\n${blogContext}` }],
+        },
+        {
+          role: "model" as const,
+          parts: [{ text: "I can see the current blog HTML. I'll use edit_blog with exact find/replace operations when you ask me to make changes." }],
+        },
+        ...history,
+      ];
+    }
 
     // Wire up real tool implementations
     const handlers: ToolHandlers = {
@@ -136,6 +168,12 @@ export async function POST(request: NextRequest) {
         const framerUrl = await uploadImageToFramer(dataUrl);
         // Return the URL + metadata — the client inserts it into the editor
         return { url: framerUrl, h2Text, subject, blogSlug: currentBlogSlug };
+      },
+
+      async edit_blog(operations: Array<{ find: string; replace: string }>) {
+        // The actual edits are applied client-side (for undo/redo support).
+        // We just pass the operations back through the SSE event so the client can apply them.
+        return { operations, applied: operations.length };
       },
     };
 

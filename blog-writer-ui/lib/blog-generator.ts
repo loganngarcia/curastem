@@ -62,8 +62,8 @@ function generateHeadline(title: string): string {
 function generateContent(title: string): string {
   const lower = title.toLowerCase();
   
-  // Wrap H2 with exactly one blank paragraph before and after
-  const h2 = (text: string) => `<p><br></p><h2 dir="auto">${text}</h2><p><br></p>`;
+  // No manual blank-paragraph spacers — CSS handles spacing in both editor and Framer CMS
+  const h2 = (text: string) => `<h2 dir="auto">${text}</h2>`;
   const h3 = (text: string) => `<h3 dir="auto">${text}</h3>`;
   const p = (text: string) => `<p dir="auto">${text}</p>`;
   

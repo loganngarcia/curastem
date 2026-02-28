@@ -92,6 +92,35 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
       required: ["h2Text", "subject"],
     },
   },
+  {
+    name: "edit_blog",
+    description:
+      "Edit the currently open blog by replacing specific text. Call this when the user asks to improve, fix, rewrite, shorten, or change any content. Make targeted changes — only edit what the user asked to change. Each operation must specify EXACT text from the current blog HTML and what to replace it with.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        operations: {
+          type: Type.ARRAY,
+          description: "Array of find-and-replace operations. Each must have 'find' (exact text in the blog) and 'replace' (new text).",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              find: {
+                type: Type.STRING,
+                description: "The exact text or HTML to find in the current blog content (case-sensitive, must match exactly).",
+              },
+              replace: {
+                type: Type.STRING,
+                description: "The new text or HTML to replace it with.",
+              },
+            },
+            required: ["find", "replace"],
+          },
+        },
+      },
+      required: ["operations"],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -119,6 +148,7 @@ export interface ToolHandlers {
   create_blog: (title: string) => Promise<unknown>;
   list_blogs: () => Promise<unknown>;
   add_image: (h2Text: string, subject: string) => Promise<unknown>;
+  edit_blog: (operations: Array<{ find: string; replace: string }>) => Promise<unknown>;
 }
 
 export async function* streamChatWithTools(
@@ -205,6 +235,10 @@ export async function* streamChatWithTools(
           result = await handlers.add_image(
             call.args.h2Text as string,
             call.args.subject as string
+          );
+        } else if (call.name === "edit_blog") {
+          result = await handlers.edit_blog(
+            call.args.operations as Array<{ find: string; replace: string }>
           );
         } else {
           result = { error: `Unknown tool: ${call.name}` };
@@ -298,4 +332,57 @@ STYLE:
 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
+// Image editing — takes an existing image URL + edit prompt, runs it through
+// Nano Banana 2 with the image as context to generate a modified version.
+// ---------------------------------------------------------------------------
+export async function editImageViaGemini(
+  existingImageUrl: string,
+  editPrompt: string,
+  accentHue: string = "Purple",
+  aspect: string = "16:9",
+  imageSize: string = "1K"
+): Promise<string> {
+  const ai = getClient();
+
+  // Fetch existing image from URL and convert to base64 (server-side, no CORS issues)
+  const imageRes = await fetch(existingImageUrl);
+  if (!imageRes.ok) throw new Error(`Failed to fetch source image: ${imageRes.status}`);
+  const imageBuffer = await imageRes.arrayBuffer();
+  const base64 = Buffer.from(imageBuffer).toString("base64");
+  const mimeType = imageRes.headers.get("content-type") || "image/jpeg";
+
+  const stylePrompt = `Edit this flat minimalist vector illustration. The requested change: ${editPrompt}.
+Maintain the same art style: flat 2D vector art, thick uniform marker-style outlines, 3-color palette (black outlines, pale ${accentHue} background, vibrant ${accentHue} accents). NO text, NO shading, NO gradients. Keep the same composition and aspect ratio.`;
+
+  console.log(`[NanaBanana2/Edit] Editing image with prompt="${editPrompt}", aspect="${aspect}"`);
+
+  const response = await ai.models.generateContent({
+    model: GEMINI_MODELS.NANO_BANANA_2,
+    contents: [{
+      role: "user",
+      parts: [
+        { inlineData: { mimeType, data: base64 } },
+        { text: stylePrompt },
+      ],
+    }],
+    config: {
+      responseModalities: ["IMAGE"],
+      imageConfig: { aspectRatio: aspect, imageSize },
+    } as Record<string, unknown>,
+  });
+
+  const parts = (response.candidates?.[0]?.content?.parts ?? []) as Array<{
+    text?: string;
+    inlineData?: { mimeType: string; data: string };
+  }>;
+  const imagePart = parts.find((p) => p.inlineData?.data);
+  if (!imagePart?.inlineData) {
+    throw new Error(`No image returned from image edit. Response: ${JSON.stringify(response).substring(0, 400)}`);
+  }
+  const { mimeType: outMime, data: b64 } = imagePart.inlineData;
+  console.log(`[NanaBanana2/Edit] Edited image generated (${b64.length} chars, ${outMime})`);
+  return `data:${outMime};base64,${b64}`;
 }
