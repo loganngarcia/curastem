@@ -28,10 +28,9 @@ import {
   X,
   Loader2,
   MoreHorizontal,
-  Sparkles,
+  RotateCcw,
   Pencil,
   AlertCircle,
-  Menu,
 } from "lucide-react";
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react";
 import { cn } from "@/lib/utils";
@@ -59,8 +58,8 @@ interface EditorProps {
   onCoverImageReplace?: (newUrl: string) => void;
   /** Called when the user clicks the Edit button on an image. */
   onEditImage?: (imageUrl: string, imageAlt: string) => void;
-  /** If provided, a sidebar-toggle button is embedded in the toolbar (fixes hamburger overlap on mobile). */
-  onShowSidebar?: () => void;
+  /** Called when the user clicks the close button to exit the editor. */
+  onClose?: () => void;
   /** When true, bypass placeholder guards and skip the H2-placeholder injection effect */
   isStreaming?: boolean;
 }
@@ -106,7 +105,7 @@ function generateFocusedImagePrompt(h2Text: string): string {
   return words.slice(0, 4).join(' ') || "professional at work";
 }
 
-const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ content, onChange, onSave, isSaving, saveJustCompleted = false, saveFailed = false, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace, onEditImage, onShowSidebar, isStreaming = false }: EditorProps, ref) {
+const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ content, onChange, onSave, isSaving, saveJustCompleted = false, saveFailed = false, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace, onEditImage, onClose, isStreaming = false }: EditorProps, ref) {
   // Set-based tracking so multiple images can generate simultaneously
   const [generatingImages, setGeneratingImages] = useState<Set<string>>(new Set()); // h2Texts currently generating
   const [regeneratingImages, setRegeneratingImages] = useState<Set<string>>(new Set()); // imageUrls currently regenerating
@@ -190,14 +189,23 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             img.className = "max-w-full h-auto rounded-lg cursor-pointer";
             wrapper.appendChild(img);
 
-            // Edit button — left of regenerate
+            // iOS-style button group — flex row anchored bottom-right
+            const btnGroup = document.createElement("div");
+            btnGroup.className = "image-btn-group";
+            btnGroup.setAttribute("contenteditable", "false");
+            btnGroup.setAttribute("data-tiptap-ignore", "true");
+            btnGroup.style.cssText = "position: absolute; bottom: 12px; right: 12px; display: flex; flex-direction: row; gap: 6px; z-index: 20; pointer-events: auto;";
+
+            const toolbarBtnStyle = "background: var(--cs-surface); color: var(--cs-text-primary); border: none; border-radius: 28px; padding: 8px 13px; cursor: pointer; display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; font-family: Inter, system-ui, sans-serif; letter-spacing: 0.01em; transition: background 0.15s; user-select: none; -webkit-user-select: none;";
+
+            // Edit button
             const editBtn = document.createElement("button");
             editBtn.className = "edit-image-btn";
             editBtn.type = "button";
             editBtn.setAttribute("contenteditable", "false");
             editBtn.setAttribute("data-tiptap-ignore", "true");
             editBtn.title = "Edit with AI";
-            editBtn.style.cssText = "position: absolute; bottom: 16px; right: 152px; background: rgba(0, 0, 0, 0.75); color: white; border: none; border-radius: 28px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.9; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); pointer-events: auto; user-select: none; -webkit-user-select: none;";
+            editBtn.style.cssText = toolbarBtnStyle;
             const pencilSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             pencilSvg.setAttribute("width", "12"); pencilSvg.setAttribute("height", "12"); pencilSvg.setAttribute("viewBox", "0 0 24 24");
             pencilSvg.setAttribute("fill", "none"); pencilSvg.setAttribute("stroke", "currentColor"); pencilSvg.setAttribute("stroke-width", "2");
@@ -210,31 +218,34 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             const editSpan = document.createElement("span");
             editSpan.textContent = "Edit";
             editBtn.append(pencilSvg, editSpan);
-            wrapper.appendChild(editBtn);
 
             (editBtn as any).__imageSrc = node.attrs.src;
             (editBtn as any).__imageAlt = node.attrs.alt || "";
 
+            // Regenerate button
             const btn = document.createElement("button");
             btn.className = "regenerate-image-btn";
             btn.type = "button";
             btn.setAttribute("contenteditable", "false");
             btn.setAttribute("data-tiptap-ignore", "true");
-            btn.style.cssText = "position: absolute; bottom: 16px; right: 16px; background: rgba(0, 0, 0, 0.9); color: white; border: none; border-radius: 28px; padding: 10px 18px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.9; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45); pointer-events: auto; user-select: none; -webkit-user-select: none;";
+            btn.style.cssText = toolbarBtnStyle;
+            // RotateCcw icon (refresh)
             const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             iconSvg.setAttribute("width", "12"); iconSvg.setAttribute("height", "12"); iconSvg.setAttribute("viewBox", "0 0 24 24");
             iconSvg.setAttribute("fill", "none"); iconSvg.setAttribute("stroke", "currentColor"); iconSvg.setAttribute("stroke-width", "2");
+            iconSvg.setAttribute("stroke-linecap", "round"); iconSvg.setAttribute("stroke-linejoin", "round");
             const p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            p1.setAttribute("d", "M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z");
-            const p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            p2.setAttribute("d", "M19 3L19.5 5.5L22 6L19.5 6.5L19 9L18.5 6.5L16 6L18.5 5.5L19 3Z");
-            const p3 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            p3.setAttribute("d", "M5 21L5.5 18.5L8 18L5.5 17.5L5 15L4.5 17.5L2 18L4.5 18.5L5 21Z");
-            iconSvg.append(p1, p2, p3);
+            p1.setAttribute("d", "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8");
+            const p2 = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+            p2.setAttribute("points", "3 3 3 8 8 8");
+            iconSvg.append(p1, p2);
             const textSpan = document.createElement("span");
-            textSpan.textContent = " Regenerate";
+            textSpan.textContent = "Regenerate";
             btn.append(iconSvg, textSpan);
-            wrapper.appendChild(btn);
+
+            btnGroup.appendChild(editBtn);
+            btnGroup.appendChild(btn);
+            wrapper.appendChild(btnGroup);
 
             (btn as any).__textSpan = textSpan;
             (btn as any).__imageSrc = node.attrs.src;
@@ -385,17 +396,21 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
 
     const compute = () => {
       const W = el.getBoundingClientRect().width;
-      // Reserve space for fixed, non-hideable elements:
-      // sidebar btn (if shown) + heading btn + bold + italic + save btn + overflow btn + gaps
-      const sidebarBtn = onShowSidebar ? 40 : 0;
-      const headingBtn = 64;  // compact "P"/"H2" button
-      const alwaysVisible = 34 + 34; // bold + italic
-      const saveBtn = saveFailed ? 130 : saveJustCompleted ? 80 : 130; // "Save Changes" width
-      const overflowBtn = 34;
-      const gaps = 24;
-      const reserved = sidebarBtn + headingBtn + alwaysVisible + saveBtn + overflowBtn + gaps;
+      const isMobile = W < 768;
+      // Curastem-style: 40×40 buttons, gap 4. Reserve: sidebar + heading + bold + italic + overflow + save + gaps
+      const sidebarBtn = 0; // Hamburger is always outside toolbar
+      const headingBtn = 140; // Paragraph / Title (H1) / Pull Quote (H2) / etc.
+      const alwaysVisible = 40 + 40; // bold + italic
+      const closeBtn = 40; // Close button only (Publish is above chat bar)
+      const overflowBtn = 40;
+      const gap = 4;
+      const leftGap = 12; // between left pill and save
+      // On mobile: add extra reserved so more items collapse into overflow menu
+      const mobileReservedExtra = isMobile ? 120 : 0;
+      const reserved = sidebarBtn + headingBtn + alwaysVisible + closeBtn + overflowBtn + (gap * 6) + leftGap + mobileReservedExtra;
       const available = Math.max(0, W - reserved);
-      const count = Math.min(9, Math.floor(available / 34));
+      const maxInline = isMobile ? 3 : 9; // fewer inline on mobile → more in ⋯ menu
+      const count = Math.min(maxInline, Math.floor(available / (40 + gap)));
       setPrimaryCount(count);
     };
 
@@ -403,7 +418,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     ro.observe(el);
     compute(); // run immediately on mount
     return () => ro.disconnect();
-  }, [editor, onShowSidebar, saveFailed, saveJustCompleted]);
+  }, [editor]);
 
   // Update editor content if it changes externally (e.g. when switching blogs or streaming)
   useEffect(() => {
@@ -587,12 +602,12 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     });
   }, [editor, generatingImages, regeneratingImages, imageTimers, coverImageUrl]);
 
-  // Fetch CMS images when modal opens
+  // Fetch CMS images when either modal opens
   useEffect(() => {
-    if (isImageModalOpen) {
+    if (isImageModalOpen || isImageEditModalOpen) {
       fetchCmsImages();
     }
-  }, [isImageModalOpen, blogSlug]);
+  }, [isImageModalOpen, isImageEditModalOpen, blogSlug]);
 
   const fetchCmsImages = async () => {
     try {
@@ -845,12 +860,12 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     6: "Heading 6",
   };
 
-  // Short labels for the compact toolbar button
-  const getCurrentHeadingShort = () => {
+  // Labels for the toolbar button (fuller than H1/H2, shorter than full dropdown labels)
+  const getCurrentHeadingButtonLabel = () => {
     for (let level = 1; level <= 6; level++) {
-      if (editor.isActive("heading", { level })) return `H${level}`;
+      if (editor.isActive("heading", { level })) return HEADING_LABELS[level];
     }
-    return "P";
+    return "Paragraph";
   };
 
   const getCurrentHeading = () => {
@@ -879,34 +894,32 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
 
   return (
     <div className="flex flex-col w-full h-full relative">
-      {/* Dynamic Toolbar — items move to overflow menu as viewport shrinks */}
+      {/* Toolbar — Curastem doc editor design (surface pill, 40×40 buttons, gap 4) */}
       <div
         ref={toolbarRef}
-        className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-gray-200 flex items-center justify-between shadow-sm"
-        style={{ padding: "6px 8px", gap: "2px" }}
+        className="sticky top-0 z-20 flex items-center justify-between border-none outline-none"
+        style={{
+          padding: "0 12px",
+          gap: 12,
+          background: "var(--cs-bg)",
+        }}
       >
-        {/* Left side: sidebar toggle + heading dropdown + dynamic buttons */}
-        <div className="flex items-center gap-0.5 min-w-0 flex-1 overflow-hidden">
-
-          {/* Sidebar toggle embedded in toolbar (prevents hamburger overlay on mobile) */}
-          {onShowSidebar && (
-            <>
-              <button
-                onClick={onShowSidebar}
-                className="p-2 rounded-lg hover:bg-gray-100 active:bg-gray-200 transition-colors touch-manipulation flex-shrink-0"
-                aria-label="Open sidebar"
-                title="Open sidebar"
-              >
-                <Menu className="h-4 w-4 text-gray-600" />
-              </button>
-              <div className="h-5 w-px bg-gray-200 mx-1 flex-shrink-0" />
-            </>
-          )}
-
-          {/* Heading / Paragraph Dropdown — portal-rendered so it's never clipped */}
+        {/* Left pill — fits content width, surface, borderRadius 28, gap 4 */}
+        <div
+          className="flex items-center flex-shrink-0 overflow-hidden flex-wrap"
+          style={{
+            background: "var(--cs-surface)",
+            borderRadius: 28,
+            gap: 4,
+            padding: 4,
+          }}
+        >
+          {/* Heading dropdown — Curastem-style 40×40 */}
           <div className="relative flex-shrink-0">
             <button
               ref={dropdownButtonRef}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -925,10 +938,24 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                 }
               }}
               aria-label={`Block type: ${getCurrentHeading()}`}
+              aria-expanded={isMenuOpen}
               title={getCurrentHeading()}
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-100 active:bg-gray-200 text-xs font-semibold transition-colors touch-manipulation whitespace-nowrap min-w-[42px]"
+              className="flex items-center justify-center gap-1 flex-shrink-0 transition-colors touch-manipulation whitespace-nowrap"
+              style={{
+                minWidth: 40,
+                height: 40,
+                paddingLeft: 12,
+                paddingRight: 8,
+                borderRadius: 28,
+                background: isMenuOpen ? "var(--cs-hover-default)" : "transparent",
+                color: "var(--cs-text-primary)",
+                fontSize: 13,
+                fontFamily: "Inter, system-ui, sans-serif",
+              }}
+              onMouseEnter={(e) => { if (!isMenuOpen) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = isMenuOpen ? "var(--cs-hover-default)" : "transparent"; }}
             >
-              <span className="font-mono">{getCurrentHeadingShort()}</span>
+              <span style={{ fontFamily: "Inter", fontWeight: 500 }}>{getCurrentHeadingButtonLabel()}</span>
               <ChevronDown className={cn("h-3 w-3 flex-shrink-0 transition-transform duration-150", isMenuOpen && "rotate-180")} />
             </button>
 
@@ -936,26 +963,54 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
               <>
                 <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => { setIsMenuOpen(false); setDropdownPosition(null); }} />
                 <div
-                  className="fixed bg-white border border-gray-200 rounded-xl shadow-2xl py-1.5 overflow-hidden"
-                  style={{ top: dropdownPosition.top, left: dropdownPosition.left, width: 216, zIndex: 9999 }}
+                  className="fixed py-1.5 overflow-hidden"
+                  style={{
+                    top: dropdownPosition.top,
+                    left: dropdownPosition.left,
+                    width: 216,
+                    zIndex: 9999,
+                    background: "var(--cs-surface)",
+                    boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                    borderRadius: 28,
+                    outline: "0.1px solid hsla(0, 0%, 0%, 0.2)",
+                    outlineOffset: "-0.1px",
+                  }}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <button
+                    type="button"
                     onMouseDown={(e) => { e.preventDefault(); setParagraph(); }}
-                    className={cn("w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between", !editor.isActive("heading") && "bg-gray-50 font-semibold")}
+                    className="w-full text-left px-4 text-[14px] transition-colors flex items-center justify-between"
+                    style={{
+                      height: 36,
+                      color: "var(--cs-text-primary)",
+                      fontFamily: "Inter",
+                      background: !editor.isActive("heading") ? "var(--cs-hover-default)" : "transparent",
+                      fontWeight: !editor.isActive("heading") ? 600 : 400,
+                    }}
+                    onMouseEnter={(e) => { if (editor.isActive("heading")) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = !editor.isActive("heading") ? "var(--cs-hover-default)" : "transparent"; }}
                   >
                     <span>Paragraph</span>
-                    {!editor.isActive("heading") && <span className="text-[11px] text-gray-400 font-normal">current</span>}
+                    {!editor.isActive("heading") && <span className="text-[11px] font-normal" style={{ color: "var(--cs-text-secondary)" }}>current</span>}
                   </button>
-                  <div className="h-px bg-gray-100 my-1" />
+                  <div className="my-1" style={{ height: 1, background: "hsla(0, 0%, 0%, 0.2)", marginLeft: 4, marginRight: 4 }} />
                   {([2, 3, 1, 4, 5, 6] as const).map((level) => (
                     <button
                       key={level}
                       onMouseDown={(e) => { e.preventDefault(); setHeading(level); }}
-                      className={cn("w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors flex items-center justify-between", editor.isActive("heading", { level }) && "bg-gray-50 font-semibold")}
+                      className={cn("w-full text-left px-4 py-2.5 text-[14px] transition-colors flex items-center justify-between", editor.isActive("heading", { level }) && "font-semibold")}
+                      style={{
+                        height: 36,
+                        color: "var(--cs-text-primary)",
+                        fontFamily: "Inter",
+                        background: editor.isActive("heading", { level }) ? "var(--cs-hover-default)" : "transparent",
+                      }}
+                      onMouseEnter={(e) => { if (!editor.isActive("heading", { level })) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = editor.isActive("heading", { level }) ? "var(--cs-hover-default)" : "transparent"; }}
                     >
                       <span>{HEADING_LABELS[level]}</span>
-                      {editor.isActive("heading", { level }) && <span className="text-[11px] text-gray-400 font-normal">current</span>}
+                      {editor.isActive("heading", { level }) && <span className="text-[11px] font-normal" style={{ color: "var(--cs-text-secondary)" }}>current</span>}
                     </button>
                   ))}
                 </div>
@@ -964,28 +1019,27 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             )}
           </div>
 
-          <div className="h-5 w-px bg-gray-200 mx-1 flex-shrink-0" />
+          {/* Bold, Italic, then dynamic primary items */}
+          <ToolbarButton onClick={() => editor.chain().focus().toggleBold().run()} active={editor.isActive("bold")} icon={<Bold className="h-4 w-4" style={{ color: "inherit" }} />} title="Bold" />
+          <ToolbarButton onClick={() => editor.chain().focus().toggleItalic().run()} active={editor.isActive("italic")} icon={<Italic className="h-4 w-4" style={{ color: "inherit" }} />} title="Italic" />
 
-          {/* Always-visible: Bold, Italic */}
-          <ToolbarButton onClick={() => editor.chain().focus().toggleBold().run()} active={editor.isActive("bold")} icon={<Bold className="h-4 w-4" />} title="Bold" />
-          <ToolbarButton onClick={() => editor.chain().focus().toggleItalic().run()} active={editor.isActive("italic")} icon={<Italic className="h-4 w-4" />} title="Italic" />
-
-          {/* Dynamic primary items — count determined by ResizeObserver */}
           {primaryItems.map((item) => (
             <ToolbarButton
               key={item.id}
               onClick={item.action}
               active={item.active}
               disabled={item.disabled}
-              icon={<item.icon className="h-4 w-4" />}
+              icon={<item.icon className="h-4 w-4" style={{ color: "inherit" }} />}
               title={item.title}
             />
           ))}
 
-          {/* Overflow ⋯ button — shown when any candidates are hidden */}
+          {/* Overflow ⋯ — Curastem 40×40 when candidates hidden */}
           {hasOverflow && (
             <button
               ref={toolbarMenuButtonRef}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 if (!isToolbarMenuOpen && toolbarMenuButtonRef.current) {
                   const rect = toolbarMenuButtonRef.current.getBoundingClientRect();
@@ -998,12 +1052,18 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                 }
                 setIsToolbarMenuOpen(prev => !prev);
               }}
-              className={cn(
-                "p-1.5 rounded-lg transition-colors touch-manipulation flex-shrink-0",
-                isToolbarMenuOpen ? "bg-gray-200 text-black" : "hover:bg-gray-100 active:bg-gray-200 text-gray-600"
-              )}
+              className="flex items-center justify-center flex-shrink-0 transition-colors touch-manipulation"
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 28,
+                background: isToolbarMenuOpen ? "var(--cs-hover-default)" : "transparent",
+                color: "var(--cs-text-primary)",
+              }}
               aria-label="More formatting options"
               title="More options"
+              onMouseEnter={(e) => { if (!isToolbarMenuOpen) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = isToolbarMenuOpen ? "var(--cs-hover-default)" : "transparent"; }}
             >
               <MoreHorizontal className="h-4 w-4" />
             </button>
@@ -1014,13 +1074,25 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             <>
               <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => { setIsToolbarMenuOpen(false); setToolbarMenuPosition(null); }} />
               <div
-                className="fixed bg-white border border-gray-200 rounded-xl shadow-2xl py-1.5 overflow-hidden"
-                style={{ top: toolbarMenuPosition.top, left: toolbarMenuPosition.left, width: 192, zIndex: 9999 }}
+                className="fixed py-1.5 overflow-hidden"
+                style={{
+                  top: toolbarMenuPosition.top,
+                  left: toolbarMenuPosition.left,
+                  width: 196,
+                  zIndex: 9999,
+                  padding: 10,
+                  background: "var(--cs-surface)",
+                  boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                  borderRadius: 28,
+                  outline: "0.1px solid hsla(0, 0%, 0%, 0.2)",
+                  outlineOffset: "-0.1px",
+                }}
                 onClick={(e) => e.stopPropagation()}
               >
                 {overflowItems.map((item) => (
                   <button
                     key={item.id}
+                    type="button"
                     onMouseDown={(e) => {
                       e.preventDefault();
                       item.action();
@@ -1028,13 +1100,19 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                       setToolbarMenuPosition(null);
                     }}
                     disabled={item.disabled}
-                    className={cn(
-                      "w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors touch-manipulation",
-                      item.active && "bg-gray-50 font-semibold",
-                      item.disabled && "opacity-40 cursor-not-allowed"
-                    )}
+                    className="w-full text-left px-4 flex items-center gap-3 touch-manipulation transition-colors"
+                    style={{
+                      height: 36,
+                      fontSize: 14,
+                      fontFamily: "Inter",
+                      color: item.disabled ? "var(--cs-text-secondary)" : "var(--cs-text-primary)",
+                      background: item.active ? "var(--cs-hover-default)" : "transparent",
+                      opacity: item.disabled ? 0.5 : 1,
+                    }}
+                    onMouseEnter={(e) => { if (!item.disabled && !item.active) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = item.active ? "var(--cs-hover-default)" : "transparent"; }}
                   >
-                    <item.icon className="h-4 w-4 flex-shrink-0 text-gray-500" />
+                    <item.icon className="h-4 w-4 flex-shrink-0" style={{ color: "var(--cs-text-secondary)" }} />
                     <span>{item.title}</span>
                   </button>
                 ))}
@@ -1044,35 +1122,37 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
           )}
         </div>
 
-        {/* Save Button — always on the right */}
-        {onSave && (
-          <button
-            onClick={onSave}
-            disabled={isSaving || (!hasChanges && !saveFailed)}
-            data-testid="save-button"
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all text-xs font-medium flex-shrink-0 ml-1",
-              saveFailed
-                ? "bg-red-600 hover:bg-red-700 text-white"
-                : saveJustCompleted
-                  ? "bg-green-600 hover:bg-green-700 text-white"
-                  : "bg-black hover:bg-gray-800 text-white disabled:opacity-50 disabled:cursor-not-allowed"
-            )}
-          >
-            {saveJustCompleted ? (
-              <span className="text-sm leading-none">✓</span>
-            ) : saveFailed ? (
-              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-            ) : isSaving ? (
-              <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin" />
-            ) : (
-              <Save className="h-3.5 w-3.5 flex-shrink-0" />
-            )}
-            <span data-testid="save-button-text" className="whitespace-nowrap">
-              {saveJustCompleted ? "Saved!" : saveFailed ? "Retry" : isSaving ? "Saving…" : "Save"}
-            </span>
-          </button>
-        )}
+        {/* Close only — Publish moved to floating bar above chat input */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close editor"
+              data-label="close-editor-button"
+              className="flex items-center justify-center transition-colors touch-manipulation"
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 28,
+                background: "var(--cs-surface)",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "var(--cs-surface)"; }}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  d="M11.1016 0.599998L0.601562 11.1M0.601562 0.599998L11.1016 11.1"
+                  stroke="var(--cs-text-primary)"
+                  strokeOpacity="0.95"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Editor Content */}
@@ -1199,7 +1279,11 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                   setIsImageEditModalOpen(true);
                 }}
               />
-              {/* Edit button for cover image */}
+              {/* iOS-style button group — same flex row as inline images */}
+              <div style={{
+                position: 'absolute', bottom: '12px', right: '12px',
+                display: 'flex', flexDirection: 'row', gap: '6px', zIndex: 20,
+              }}>
               {onEditImage && (
                 <button
                   type="button"
@@ -1208,17 +1292,23 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                     e.stopPropagation();
                     onEditImage(coverImageUrl, coverImageAlt);
                   }}
+                  className="edit-image-btn"
                   style={{
-                    position: 'absolute', bottom: '16px', right: '164px',
-                    background: 'rgba(0, 0, 0, 0.75)', color: 'white', border: 'none',
-                    borderRadius: '28px', padding: '10px 14px', cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', gap: '5px',
-                    fontSize: '12px', fontWeight: '500', transition: 'all 0.2s',
-                    zIndex: 20, backdropFilter: 'blur(8px)', opacity: 0.9,
-                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.35)',
+                    background: 'var(--cs-surface)',
+                    color: 'var(--cs-text-primary)',
+                    border: 'none',
+                    borderRadius: '28px',
+                    padding: '8px 13px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontSize: '12px',
+                    fontWeight: '500',
+                    fontFamily: 'Inter, system-ui, sans-serif',
+                    letterSpacing: '0.01em',
+                    transition: 'background 0.15s',
                   }}
-                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; }}
                 >
                   <Pencil className="h-3 w-3" />
                   <span>Edit</span>
@@ -1227,26 +1317,23 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
               <button
                 className="regenerate-image-btn"
                 type="button"
+                disabled={regeneratingImages.has(coverImageUrl ?? "")}
                 style={{
-                  position: 'absolute',
-                  bottom: '16px',
-                  right: '16px',
-                  background: 'rgba(0, 0, 0, 0.9)',
-                  color: 'white',
+                  background: 'var(--cs-surface)',
+                  color: 'var(--cs-text-primary)',
                   border: 'none',
                   borderRadius: '28px',
-                  padding: '10px 18px',
-                  cursor: 'pointer',
+                  padding: '8px 13px',
+                  cursor: regeneratingImages.has(coverImageUrl ?? "") ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
+                  gap: '5px',
                   fontSize: '12px',
                   fontWeight: '500',
-                  transition: 'all 0.2s',
-                  zIndex: 20,
-                  backdropFilter: 'blur(8px)',
-                  opacity: regeneratingImages.has(coverImageUrl ?? "") ? 1 : 0.9,
-                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.45)',
+                  fontFamily: 'Inter, system-ui, sans-serif',
+                  letterSpacing: '0.01em',
+                  transition: 'background 0.15s',
+                  opacity: regeneratingImages.has(coverImageUrl ?? "") ? 0.6 : 1,
                   pointerEvents: 'auto',
                 }}
                 onClick={async (e) => {
@@ -1281,23 +1368,13 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                     setRegeneratingImages(prev => { const s = new Set(prev); s.delete(regenCoverKey); return s; });
                   }
                 }}
-                disabled={regeneratingImages.has(coverImageUrl ?? "")}
-                onMouseEnter={(e) => {
-                  if (!regeneratingImages.has(coverImageUrl ?? "")) {
-                    e.currentTarget.style.opacity = '1';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!regeneratingImages.has(coverImageUrl ?? "")) {
-                    e.currentTarget.style.opacity = '0.85';
-                  }
-                }}
               >
-                <Sparkles className="h-3 w-3" />
+                <RotateCcw className="h-3 w-3" />
                 <span>{regeneratingImages.has(coverImageUrl ?? "")
                   ? (imageTimers.get(coverImageUrl ?? "") ? `${imageTimers.get(coverImageUrl ?? "")}s` : "Regenerating...")
                   : "Regenerate"}</span>
               </button>
+              </div>{/* end button group */}
             </div>
           )}
           
@@ -1401,72 +1478,32 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
           position: relative;
           margin: 1rem 0;
         }
-        .ProseMirror .regenerate-image-btn {
-          position: absolute;
-          bottom: 16px;
-          right: 16px;
-          background: rgba(0, 0, 0, 0.9);
-          color: white;
+        /* Edit + Regenerate — Curastem toolbar colors (inline images + cover) */
+        .edit-image-btn,
+        .regenerate-image-btn {
+          background: var(--cs-surface);
+          color: var(--cs-text-primary);
           border: none;
           border-radius: 28px;
-          padding: 10px 18px;
+          padding: 8px 13px;
           cursor: pointer;
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 5px;
           font-size: 12px;
           font-weight: 500;
-          transition: all 0.2s;
-          z-index: 20;
-          backdrop-filter: blur(8px);
-          opacity: 0.9;
-          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+          font-family: Inter, system-ui, sans-serif;
+          letter-spacing: 0.01em;
+          transition: background 0.15s;
           pointer-events: auto;
         }
-        .ProseMirror .regenerate-image-btn:hover:not(:disabled) {
-          background: rgba(0, 0, 0, 1);
-          transform: scale(1.05);
-          opacity: 1;
-          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+        .edit-image-btn:hover,
+        .regenerate-image-btn:hover:not(:disabled) {
+          background: var(--cs-hover-default) !important;
         }
-        .ProseMirror .regenerate-image-btn:disabled {
-          opacity: 0.6;
+        .regenerate-image-btn:disabled {
+          opacity: 0.5;
           cursor: not-allowed;
-        }
-        .ProseMirror .image-with-regenerate:hover .regenerate-image-btn {
-          opacity: 1;
-        }
-        /* Cover image regenerate button overlay */
-        .image-with-regenerate .regenerate-image-btn {
-          position: absolute;
-          bottom: 16px;
-          right: 16px;
-          background: rgba(0, 0, 0, 0.9);
-          color: white;
-          border: none;
-          border-radius: 28px;
-          padding: 10px 18px;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 12px;
-          font-weight: 500;
-          transition: all 0.2s;
-          z-index: 20;
-          backdrop-filter: blur(8px);
-          opacity: 0.9;
-          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
-          pointer-events: auto;
-        }
-        .image-with-regenerate:hover .regenerate-image-btn {
-          opacity: 1;
-        }
-        .image-with-regenerate .regenerate-image-btn:hover:not(:disabled) {
-          background: rgba(0, 0, 0, 1);
-          transform: scale(1.05);
-          opacity: 1;
-          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
         }
         .ProseMirror .image-placeholder {
           width: 100%;
@@ -2122,34 +2159,47 @@ function ImageEditModal({
   );
 }
 
-function ToolbarButton({ 
-  onClick, 
-  active, 
-  disabled, 
-  icon, 
-  title 
-}: { 
-  onClick: () => void; 
-  active?: boolean; 
+/** Curastem-style toolbar button — 40×40, borderRadius 28, hover.default */
+function ToolbarButton({
+  onClick,
+  active,
+  disabled,
+  icon,
+  title,
+}: {
+  onClick: () => void;
+  active?: boolean;
   disabled?: boolean;
   icon: React.ReactNode;
   title: string;
 }) {
   return (
     <button
+      type="button"
+      onMouseDown={(e) => e.preventDefault()}
+      onPointerDown={(e) => e.preventDefault()}
       onClick={(e) => {
         e.preventDefault();
         onClick();
       }}
       disabled={disabled}
       title={title}
-      className={cn(
-        "p-1.5 md:p-2 rounded-lg transition-colors disabled:opacity-30 touch-manipulation",
-        "min-w-[36px] min-h-[36px] flex items-center justify-center",
-        active 
-          ? "bg-black text-white" 
-          : "text-gray-600 hover:bg-gray-100 active:bg-gray-200"
-      )}
+      aria-label={title}
+      aria-pressed={active}
+      className="flex items-center justify-center flex-shrink-0 transition-colors disabled:opacity-30 touch-manipulation cursor-pointer border-none outline-none"
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 28,
+        background: active ? "var(--cs-hover-default)" : "transparent",
+        color: "var(--cs-text-primary)",
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled && !active) e.currentTarget.style.background = "var(--cs-hover-default)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = active ? "var(--cs-hover-default)" : "transparent";
+      }}
     >
       {icon}
     </button>

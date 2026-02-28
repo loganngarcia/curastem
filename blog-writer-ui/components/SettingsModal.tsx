@@ -32,7 +32,6 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [originalConfig, setOriginalConfig] = useState<SettingsConfig | null>(null);
   const [showFramerKey, setShowFramerKey] = useState(false);
   const [showPoeKey, setShowPoeKey] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -43,7 +42,6 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   }, [isOpen]);
 
   const fetchSettings = async () => {
-    setLoading(true);
     try {
       const res = await fetch("/api/settings");
       if (res.ok) {
@@ -60,8 +58,6 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       }
     } catch (err) {
       console.error("Failed to fetch settings", err);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -131,7 +127,11 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
   return (
     <>
-      <div 
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        data-label="settings-modal"
         className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
         onClick={onClose}
       >
@@ -155,12 +155,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-4 md:p-6">
-            {loading ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-              </div>
-            ) : (
-              <div className="space-y-6">
+            <div className="space-y-6">
                 {message && (
                   <div
                     className={cn(
@@ -265,8 +260,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     />
                   </div>
                 </div>
-              </div>
-            )}
+            </div>
           </div>
 
           {/* Footer */}
@@ -279,7 +273,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </button>
             <button
               onClick={handleSave}
-              disabled={saving || loading}
+              disabled={saving}
               className="flex items-center space-x-2 rounded-lg bg-black px-4 py-3 md:py-2 text-white hover:bg-gray-800 active:bg-gray-700 disabled:opacity-50 transition-colors touch-manipulation min-h-[44px]"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

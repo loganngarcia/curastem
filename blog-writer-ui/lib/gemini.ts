@@ -181,31 +181,64 @@ export async function* streamChatWithTools(
       },
     });
 
-    // Accumulate function calls across chunks (SDK may split them)
-    const collectedFunctionCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
-    const modelParts: Array<{ text?: string; functionCall?: { name: string; args: Record<string, unknown> } }> = [];
+    // Accumulate function calls + raw parts across chunks.
+    // We capture the raw Part objects (not the SDK abstractions) so that any
+    // thought_signature fields survive into the history we send back — Vertex AI
+    // rejects multi-turn requests if a function call part's thought_signature is
+    // stripped out between turns.
+    type RawPart = Record<string, unknown>;
+    const collectedFunctionCalls: Array<{
+      name: string;
+      args: Record<string, unknown>;
+      thoughtSignature?: string;
+    }> = [];
+    const modelParts: RawPart[] = [];
 
     for await (const chunk of response) {
-      const text = chunk.text;
-      const calls = chunk.functionCalls;
+      // Use raw parts to preserve thought_signature (SDK abstractions drop it)
+      const rawParts = (
+        (chunk as unknown as { candidates?: Array<{ content?: { parts?: RawPart[] } }> })
+          .candidates?.[0]?.content?.parts ?? []
+      ) as RawPart[];
 
-      if (calls?.length) {
-        // Function-call chunk — collect the call(s).
-        // Do NOT emit chunk.text here: Gemini sometimes serialises the call
-        // arguments into chunk.text alongside the functionCall, which would
-        // inject raw JSON into the editor content.
-        for (const call of calls) {
-          collectedFunctionCalls.push({
-            name: call.name ?? "",
-            args: (call.args ?? {}) as Record<string, unknown>,
-          });
-          modelParts.push({ functionCall: { name: call.name ?? "", args: (call.args ?? {}) as Record<string, unknown> } });
+      if (rawParts.length > 0) {
+        for (const part of rawParts) {
+          if (part.functionCall) {
+            const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
+            collectedFunctionCalls.push({
+              name: fc.name ?? "",
+              args: (fc.args ?? {}) as Record<string, unknown>,
+              thoughtSignature: part.thoughtSignature as string | undefined,
+            });
+            // Preserve the full part (including thoughtSignature) in history
+            modelParts.push(part);
+          } else if (part.text && !part.thought) {
+            // Pure text — stream to client and record
+            const event: ChatSSEEvent = { t: "text", c: part.text as string };
+            yield `data: ${JSON.stringify(event)}\n\n`;
+            modelParts.push(part);
+          } else {
+            // Thought/thinking parts — capture for history but don't emit to client
+            modelParts.push(part);
+          }
         }
-      } else if (text) {
-        // Pure text chunk — stream it to the client and record it.
-        const event: ChatSSEEvent = { t: "text", c: text };
-        yield `data: ${JSON.stringify(event)}\n\n`;
-        modelParts.push({ text });
+      } else {
+        // Fallback: use SDK abstractions if raw parts are unavailable
+        const text = chunk.text;
+        const calls = chunk.functionCalls;
+        if (calls?.length) {
+          for (const call of calls) {
+            collectedFunctionCalls.push({
+              name: call.name ?? "",
+              args: (call.args ?? {}) as Record<string, unknown>,
+            });
+            modelParts.push({ functionCall: { name: call.name ?? "", args: call.args ?? {} } });
+          }
+        } else if (text) {
+          const event: ChatSSEEvent = { t: "text", c: text };
+          yield `data: ${JSON.stringify(event)}\n\n`;
+          modelParts.push({ text });
+        }
       }
     }
 
@@ -214,13 +247,11 @@ export async function* streamChatWithTools(
       break;
     }
 
-    // Add the model's turn (with function calls) to history
-    contents.push({ role: "model", parts: modelParts as Array<{ text: string }> });
+    // Add the model's turn (with full raw parts, preserving thought_signature) to history
+    contents.push({ role: "model", parts: modelParts as unknown as Array<{ text: string }> });
 
     // Execute each tool and collect results
-    const functionResponseParts: Array<{
-      functionResponse: { name: string; response: { output: unknown } };
-    }> = [];
+    const functionResponseParts: RawPart[] = [];
 
     for (const call of collectedFunctionCalls) {
       yield `data: ${JSON.stringify({ t: "tool_start", n: call.name, a: call.args } satisfies ChatSSEEvent)}\n\n`;
@@ -246,18 +277,24 @@ export async function* streamChatWithTools(
 
         yield `data: ${JSON.stringify({ t: "tool_done", n: call.name, r: result } satisfies ChatSSEEvent)}\n\n`;
 
-        functionResponseParts.push({
+        // Echo thought_signature in the function response (required by Vertex AI)
+        const responsePart: RawPart = {
           functionResponse: { name: call.name, response: { output: result } },
-        });
+        };
+        if (call.thoughtSignature) {
+          responsePart.thoughtSignature = call.thoughtSignature;
+        }
+        functionResponseParts.push(responsePart);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         yield `data: ${JSON.stringify({ t: "tool_error", n: call.name, err: errMsg } satisfies ChatSSEEvent)}\n\n`;
-        functionResponseParts.push({
-          functionResponse: {
-            name: call.name,
-            response: { output: { error: errMsg } },
-          },
-        });
+        const errPart: RawPart = {
+          functionResponse: { name: call.name, response: { output: { error: errMsg } } },
+        };
+        if (call.thoughtSignature) {
+          errPart.thoughtSignature = call.thoughtSignature;
+        }
+        functionResponseParts.push(errPart);
       }
     }
 

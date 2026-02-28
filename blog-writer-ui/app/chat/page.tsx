@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { Send, Square, Loader2, Plus, Settings, Search, Menu, X as XIcon, Pencil } from "lucide-react";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { Loader2, Plus, Settings, X as XIcon, Pencil, Save, AlertCircle } from "lucide-react";
 import { slugify } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { cn, formatDate } from "@/lib/utils";
@@ -22,6 +22,8 @@ interface Blog {
   date: string;
   content?: string;
   coverImageUrl?: string;
+  /** Zoom-out version for blog list (25% larger, dominant color fill). Generated when cover changes. */
+  blogListImageUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -37,6 +39,47 @@ function loadDraft(): { blog: Blog; content: string } | null {
 }
 function clearDraft() {
   try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// Chat persistence — up to 25 chats on device
+// ---------------------------------------------------------------------------
+const CHATS_KEY = "curastem_chats";
+const MAX_CHATS = 25;
+
+export interface SavedChat {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: number;
+}
+
+function loadChats(): SavedChat[] {
+  try {
+    const raw = localStorage.getItem(CHATS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveChats(chats: SavedChat[]) {
+  try {
+    const trimmed = chats.slice(0, MAX_CHATS);
+    localStorage.setItem(CHATS_KEY, JSON.stringify(trimmed));
+  } catch {
+    /* quota */
+  }
+}
+
+function chatTitleFromMessages(messages: Message[]): string {
+  const firstUser = messages.find((m) => m.role === "user");
+  if (firstUser?.content) {
+    const t = firstUser.content.trim().slice(0, 40);
+    return t + (firstUser.content.length > 40 ? "…" : "");
+  }
+  return "New chat";
 }
 
 /** Convert any markdown the AI accidentally emits into HTML, and strip blank-paragraph spacers. */
@@ -72,6 +115,9 @@ export default function ChatPage() {
   const [editableContent, setEditableContent] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Start collapsed on mobile
+  const [chats, setChats] = useState<SavedChat[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [chatsExpanded, setChatsExpanded] = useState(false);
   // Tracks a newly generated blog that hasn't been saved to Framer yet
   const [unsavedBlog, setUnsavedBlog] = useState<Blog | null>(null);
   // True while blog HTML is actively streaming — tells BlogEditor to skip placeholder guards
@@ -107,12 +153,11 @@ export default function ChatPage() {
 
   useEffect(() => {
     fetchBlogs();
-    // Restore any unsaved draft from a previous session
+    setChats(loadChats());
     const draft = loadDraft();
     if (draft) {
       setUnsavedBlog(draft.blog);
     }
-    // Set sidebar open on desktop, closed on mobile
     const checkScreenSize = () => {
       setIsSidebarOpen(window.innerWidth >= 768);
     };
@@ -120,6 +165,30 @@ export default function ChatPage() {
     window.addEventListener("resize", checkScreenSize);
     return () => window.removeEventListener("resize", checkScreenSize);
   }, []);
+
+  // Persist current chat to list when messages change (has at least one user message)
+  useEffect(() => {
+    const userCount = messages.filter((m) => m.role === "user").length;
+    if (userCount === 0) return;
+    const id = selectedChatId ?? `chat-${Date.now()}`;
+    const title = chatTitleFromMessages(messages);
+    setChats((prev) => {
+      const existing = prev.find((c) => c.id === id);
+      const chat: SavedChat = {
+        id,
+        title,
+        messages,
+        createdAt: existing?.createdAt ?? Date.now(),
+      };
+      const next = existing
+        ? prev.map((c) => (c.id === id ? chat : c))
+        : [chat, ...prev].slice(0, MAX_CHATS);
+      saveChats(next);
+      return next;
+    });
+    if (!selectedChatId) setSelectedChatId(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only persist when messages change
+  }, [messages]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -197,6 +266,7 @@ export default function ChatPage() {
     title: string;
     date: string;
     coverImageUrl?: string;
+    blogListImageUrl?: string;
   } | null>(null);
 
   const handleBlogClick = async (blog: Blog) => {
@@ -213,6 +283,7 @@ export default function ChatPage() {
           title: fullBlog.title || "",
           date: fullBlog.date || "",
           coverImageUrl: fullBlog.coverImageUrl,
+          blogListImageUrl: fullBlog.blogListImageUrl,
         });
         // Scroll to top of editor
         if (blogPreviewRef.current) {
@@ -228,11 +299,29 @@ export default function ChatPage() {
 
   const handleSaveBlog = async () => {
     if (!selectedBlog || savingBlog) return;
-    
+
     setSavingBlog(true);
-    setSaveFailed(false); // Reset any previous failure indicator
+    setSaveFailed(false);
     try {
-      // New blogs (not yet in Framer) use POST; existing blogs use PUT
+      let blogListImageUrl = selectedBlog.blogListImageUrl;
+      if (
+        selectedBlog.coverImageUrl &&
+        (!blogListImageUrl || blogListImageUrl === selectedBlog.coverImageUrl)
+      ) {
+        const zoomRes = await fetch("/api/images/zoom-out", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageUrl: selectedBlog.coverImageUrl }),
+        });
+        if (zoomRes.ok) {
+          const { zoomOutUrl } = await zoomRes.json();
+          blogListImageUrl = zoomOutUrl;
+          setSelectedBlog((prev) =>
+            prev ? { ...prev, blogListImageUrl: zoomOutUrl } : prev
+          );
+        }
+      }
+
       const isNew = isNewBlogRef.current;
       const res = isNew
         ? await fetch("/api/blogs", {
@@ -246,6 +335,7 @@ export default function ChatPage() {
               content: editableContent,
               date: selectedBlog.date,
               coverImageUrl: selectedBlog.coverImageUrl,
+              blogListImageUrl: blogListImageUrl ?? selectedBlog.coverImageUrl,
             }),
           })
         : await fetch(`/api/blogs/${selectedBlog.slug}`, {
@@ -256,7 +346,7 @@ export default function ChatPage() {
               title: selectedBlog.title,
               date: selectedBlog.date,
               coverImageUrl: selectedBlog.coverImageUrl,
-              blogListImageUrl: selectedBlog.coverImageUrl,
+              blogListImageUrl: blogListImageUrl ?? selectedBlog.coverImageUrl,
             }),
           });
 
@@ -271,6 +361,7 @@ export default function ChatPage() {
           title: selectedBlog.title,
           date: selectedBlog.date || "",
           coverImageUrl: selectedBlog.coverImageUrl,
+          blogListImageUrl: updatedBlog.blogListImageUrl,
         });
         fetchBlogs();
         setSaveJustCompleted(true);
@@ -297,6 +388,31 @@ export default function ChatPage() {
     }
   };
 
+  const handleNewChat = () => {
+    setSelectedBlog(null);
+    setIsCreating(false);
+    setStreamingBlogContent("");
+    setOriginalBlogState(null);
+    setMessages([
+      { role: "assistant", content: "Hello! I'm the Curastem Blog Tool. How can I help you today? You can ask me to create a new blog or list existing ones." },
+    ]);
+    setSelectedChatId(null);
+    setInput("");
+    setPendingEditImage(null);
+    isBuildingBlogRef.current = false;
+    buildingContentRef.current = "";
+    abortControllerRef.current?.abort();
+  };
+
+  const handleSelectChat = (chat: SavedChat) => {
+    setSelectedBlog(null);
+    setIsCreating(false);
+    setStreamingBlogContent("");
+    setOriginalBlogState(null);
+    setMessages(chat.messages);
+    setSelectedChatId(chat.id);
+  };
+
   const handleCloseBlog = () => {
     // If the blog is still unsaved, persist current content to localStorage before closing
     if (isNewBlogRef.current && selectedBlog) {
@@ -311,6 +427,17 @@ export default function ChatPage() {
     buildingContentRef.current = "";
     // Don't reset isNewBlogRef or unsavedBlog — keep draft alive in sidebar
   };
+
+  // Computed for sidebar indicator: red dot when unsaved changes, none when saved
+  const blogHasChanges = useMemo(() => {
+    if (!originalBlogState || !selectedBlog) return false;
+    return (
+      editableContent !== originalBlogState.content ||
+      selectedBlog.title !== originalBlogState.title ||
+      (selectedBlog.date || "") !== originalBlogState.date ||
+      (selectedBlog.coverImageUrl || "") !== (originalBlogState.coverImageUrl || "")
+    );
+  }, [originalBlogState, selectedBlog, editableContent]);
 
   const sendMessage = async (messageText: string) => {
     if (!messageText.trim() || loading) return;
@@ -338,9 +465,29 @@ export default function ChatPage() {
           throw new Error(errData.error || "Failed to edit image");
         }
         const data = await res.json();
-        // Replace old URL with new URL in editor content
-        setEditableContent(prev => prev.replace(new RegExp(imageUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), data.url));
-        setMessages(prev => {
+        const newUrl = data.url;
+        const isCoverImage = selectedBlog && imageUrl === selectedBlog.coverImageUrl;
+        if (isCoverImage) {
+          setSelectedBlog((prev) => (prev ? { ...prev, coverImageUrl: newUrl } : prev));
+          try {
+            const zoomRes = await fetch("/api/images/zoom-out", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ imageUrl: newUrl }),
+            });
+            if (zoomRes.ok) {
+              const { zoomOutUrl } = await zoomRes.json();
+              setSelectedBlog((prev) => (prev ? { ...prev, blogListImageUrl: zoomOutUrl } : prev));
+            }
+          } catch {
+            /* zoom-out optional */
+          }
+        } else {
+          setEditableContent((prev) =>
+            prev.replace(new RegExp(imageUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), newUrl)
+          );
+        }
+        setMessages((prev) => {
           const msgs = [...prev];
           msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: "Image updated! Click Save Changes when ready." };
           return msgs;
@@ -586,103 +733,194 @@ export default function ChatPage() {
     await sendMessage(messageText);
   };
 
-  const filteredBlogs = blogs.filter(blog => 
-    blog.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredBlogs = blogs
+    .filter((blog) => blog.title.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
 
   return (
-    <div className="flex h-screen bg-white overflow-hidden text-black font-sans">
+    <div className="flex h-screen bg-white overflow-hidden text-black font-sans" role="main" aria-label="Curastem Blog Tool">
       {/* Mobile Overlay */}
       {isSidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40 md:hidden"
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Close sidebar"
+          data-label="sidebar-overlay"
+          className="fixed inset-0 z-40 md:hidden"
+          style={{ background: "var(--cs-overlay)" }}
           onClick={() => setIsSidebarOpen(false)}
+          onKeyDown={(e) => e.key === "Enter" && setIsSidebarOpen(false)}
         />
       )}
-      
-      {/* Sidebar */}
-      <div className={cn(
-        "bg-gray-50 flex flex-col transition-all duration-300 ease-in-out border-r border-gray-200",
-        "fixed md:relative z-50 md:z-auto h-full",
-        isSidebarOpen ? "w-full md:w-[260px]" : "w-0 -translate-x-full md:translate-x-0 md:overflow-hidden",
-        !isSidebarOpen && "md:border-r-0"
-      )}>
-        {/* Sidebar Top Nav */}
-        <div className="p-2 flex flex-col gap-3">
-          <div className="flex items-center justify-between px-2 pt-2">
+
+      {/* Sidebar — Curastem design: 260px on mobile (slides in, pushes content like web.tsx) */}
+      <aside
+        className={cn(
+        "curastem-sidebar flex flex-col transition-transform duration-300 ease-out md:transition-none",
+        "fixed md:relative left-0 top-0 bottom-0 z-50 md:z-auto h-full",
+        "w-[260px] flex-shrink-0",
+        isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+        !isSidebarOpen && "md:w-0 md:min-w-0 md:overflow-hidden md:border-r-0"
+      )}
+      style={{ background: "var(--cs-bg)" }}
+      aria-label="Navigation sidebar"
+      data-label="sidebar"
+    >
+        {/* Sidebar Top Nav — padding 8, gap 12, buttons 36×36, borderRadius 28 */}
+        <div className="flex flex-col gap-3" style={{ padding: 8 }}>
+          <div className="flex items-center justify-between" data-label="sidebar-top-actions-row">
             {isSidebarOpen && (
-              <button 
+              <button
+                type="button"
                 onClick={() => setIsSidebarOpen(false)}
-                className="p-2 hover:bg-gray-200 active:bg-gray-300 rounded-[28px] transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
+                aria-label="Close sidebar"
+                data-label="sidebar-close"
+                className="flex items-center justify-center rounded-[28px] transition-colors touch-manipulation hover:opacity-90"
+                style={{ width: 36, height: 36 }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
               >
-                <Menu className="h-5 w-5 text-gray-600" />
+                <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                  <path d="M10 14H26M10 22H20" stroke="var(--cs-text-primary)" strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
               </button>
             )}
-            {!isSidebarOpen && <div />}
+            {!isSidebarOpen && <div aria-hidden />}
             {isSidebarOpen && (
-              <div className="flex items-center gap-1">
-                <button 
-                  onClick={() => setIsSettingsOpen(true)}
-                  className="p-2 hover:bg-gray-200 active:bg-gray-300 rounded-[28px] transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
-                >
-                  <Settings className="h-5 w-5 text-gray-600" />
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(true)}
+                aria-label="Open settings"
+                data-label="settings-button"
+                className="flex items-center justify-center rounded-[28px] transition-colors touch-manipulation"
+                style={{ width: 36, height: 36 }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >
+                <Settings className="h-5 w-5" style={{ color: "var(--cs-text-primary)" }} aria-hidden />
+              </button>
             )}
           </div>
 
-          {/* Search Bar - Only show when sidebar is open */}
+          {/* Search Bar — height 36, paddingLeft 12, borderRadius 50, background surface */}
           {isSidebarOpen && (
-            <div className="px-2">
-              <div className="relative group">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 group-focus-within:text-gray-600 transition-colors" />
-                <input 
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search blogs..."
-                  className="w-full bg-white border border-gray-200 rounded-[28px] py-3 md:py-2 pl-10 pr-4 text-base md:text-sm text-black placeholder:text-gray-400 focus:ring-1 focus:ring-gray-300 focus:bg-white transition-all outline-none"
-                />
-              </div>
+            <div data-label="search-container" style={{ height: 36, paddingLeft: 12, background: "var(--cs-surface)", borderRadius: 50 }} className="flex items-center overflow-hidden">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0 mr-2" aria-hidden>
+                <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.5224C12.6167 8.09311 11.9837 9.5995 10.8571 10.7102C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7102C1.2345 9.5995 0.601563 8.09311 0.601562 6.5224C0.601563 4.95168 1.2345 3.44529 2.36113 2.33463C3.48777 1.22396 5.01581 0.599998 6.60911 0.599998C8.20241 0.599998 9.73045 1.22396 10.8571 2.33463C11.9837 3.44529 12.6167 4.95168 12.6167 6.5224Z" stroke="var(--cs-text-primary)" strokeOpacity="0.65" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search blogs..."
+                aria-label="Search blogs"
+                data-label="search-blogs-input"
+                className="flex-1 min-w-0 bg-transparent text-[14px] font-normal outline-none placeholder:opacity-65"
+                style={{ color: "var(--cs-text-primary)", fontFamily: "Inter, system-ui, sans-serif" }}
+              />
             </div>
           )}
 
-          {/* Actions - Only show when sidebar is open */}
+          {/* New chat — same item style as web.tsx (minHeight 36, padding 10, borderRadius 28) */}
           {isSidebarOpen && (
-            <div className="flex flex-col gap-0.5 px-2">
-              <button 
-                id="new-blog-button"
-                data-testid="new-blog-button"
-                aria-label="Create new blog"
-                onClick={() => {
-                  // Close current editor (equivalent to Close Editor)
-                  setSelectedBlog(null);
-                  setIsCreating(false);
-                  setStreamingBlogContent("");
-                  setOriginalBlogState(null);
-                  // Send message to AI to create a blog - AI will decide the title
-                  sendMessage("Create a new blog");
-                }}
-                className="w-full flex items-center gap-3 px-3 py-3 md:py-2.5 rounded-[28px] hover:bg-gray-200 active:bg-gray-300 transition-colors text-base md:text-sm text-gray-700 touch-manipulation min-h-[44px]"
+            <div className="flex flex-col" data-label="sidebar-actions">
+              <button
+                id="new-chat-button"
+                data-testid="new-chat-button"
+                data-label="new-chat-button"
+                aria-label="Start new chat"
+                onClick={handleNewChat}
+                className="w-full flex items-center gap-3 rounded-[28px] transition-colors touch-manipulation text-[14px] font-normal"
+                style={{ minHeight: 36, paddingLeft: 10, paddingRight: 10, color: "var(--cs-text-primary)" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-strong)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
               >
-                <Plus className="h-4 w-4" />
-                <span>New blog</span>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0" aria-hidden>
+                  <path
+                    d="M14.9998 8.00011C14.9998 11.1823 14.9998 12.773 13.9747 13.7615C12.9496 14.75 11.2992 14.75 7.99988 14.75C4.69983 14.75 3.05019 14.75 2.02509 13.7615C1 12.773 1 11.1816 1 8.00011C1 4.81792 1 3.22719 2.02509 2.23871C3.05019 1.25023 4.7006 1.25023 7.99988 1.25023M6.08114 7.36262C5.81571 7.61895 5.66661 7.96637 5.66659 8.32861V10.2501H7.67167C8.04733 10.2501 8.40821 10.1061 8.6742 9.84958L14.5852 4.14668C14.7168 4.01979 14.8213 3.86913 14.8925 3.70332C14.9637 3.53751 15.0004 3.3598 15.0004 3.18032C15.0004 3.00084 14.9637 2.82313 14.8925 2.65732C14.8213 2.49151 14.7168 2.34085 14.5852 2.21396L14.0011 1.65072C13.8695 1.52369 13.7132 1.42291 13.5412 1.35415C13.3692 1.28539 13.1848 1.25 12.9986 1.25C12.8124 1.25 12.628 1.28539 12.4559 1.35415C12.2839 1.42291 12.1276 1.52369 11.996 1.65072L6.08114 7.36262Z"
+                    stroke="var(--cs-text-primary)"
+                    strokeOpacity="0.95"
+                    strokeWidth="1.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                <span>New chat</span>
               </button>
             </div>
           )}
         </div>
 
-        {/* Blog List - Only show when sidebar is open */}
+        {/* Sidebar Lists — section padding 8, title 14px secondary, items minHeight 36 padding 10 borderRadius 28 */}
         {isSidebarOpen && (
-          <div className="flex-1 overflow-y-auto px-2 py-4 custom-scrollbar">
-            <div className="px-3 mb-2">
-              <h2 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Your blogs</h2>
+          <div className="flex-1 overflow-y-auto custom-scrollbar" data-label="sidebar-lists" style={{ padding: 8, paddingTop: 0 }}>
+            {/* Your chats — collapsible, default 3 visible; hidden when empty */}
+            {chats.length > 0 && (
+            <div className="flex flex-col" style={{ marginBottom: 12 }} data-label="your-chats-section">
+              <button
+                type="button"
+                onClick={() => setChatsExpanded((e) => !e)}
+                data-label="your-chats-toggle"
+                aria-label={chatsExpanded ? "Collapse your chats" : "Expand your chats"}
+                aria-expanded={chatsExpanded}
+                className="w-full flex items-center justify-between cursor-pointer touch-manipulation rounded-[12px]"
+                style={{ padding: "8px 10px" }}
+              >
+                <span className="text-[14px] font-normal" style={{ color: "var(--cs-text-secondary)", fontFamily: "Inter" }}>Your Chats</span>
+                {chats.length >= 4 && (
+                  <span className={cn("flex-shrink-0 inline-flex items-center justify-center transition-transform", chatsExpanded && "rotate-90")} style={{ width: 16, height: 24, color: "var(--cs-text-secondary)" }} aria-hidden>
+                    <svg width="6" height="10" viewBox="0 0 6 10" fill="none"><path d="M0.601562 8.60001L4.60156 4.60001L0.601562 0.600006" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  </span>
+                )}
+              </button>
+              <div className="flex flex-col gap-0.5" data-label="chat-list">
+                {(chatsExpanded ? chats : chats.slice(0, 3)).map((chat) => (
+                  <div
+                    key={chat.id}
+                    data-label="chat-item"
+                    data-chat-id={chat.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open chat: ${chat.title}`}
+                    onClick={() => handleSelectChat(chat)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSelectChat(chat)}
+                    className="flex items-center justify-between rounded-[28px] cursor-pointer transition-colors touch-manipulation text-[14px] font-normal relative"
+                    style={{
+                      minHeight: 36,
+                      paddingLeft: 10,
+                      paddingRight: 10,
+                      marginBottom: 2,
+                      color: "var(--cs-text-primary)",
+                      background: selectedChatId === chat.id && !selectedBlog ? "var(--cs-hover-medium)" : "transparent",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedChatId !== chat.id || selectedBlog) e.currentTarget.style.background = "var(--cs-hover-strong)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = selectedChatId === chat.id && !selectedBlog ? "var(--cs-hover-medium)" : "transparent";
+                    }}
+                  >
+                    <span className="truncate flex-1" style={{ fontFamily: "Inter" }}>{chat.title}</span>
+                  </div>
+                ))}
+              </div>
             </div>
+            )}
+
+            {/* Your blogs */}
+            <div data-label="your-blogs-section">
+              <div className="rounded-[12px]" style={{ padding: "8px 10px", marginBottom: 8 }}>
+                <h2 className="text-[14px] font-normal" style={{ color: "var(--cs-text-secondary)", fontFamily: "Inter" }} data-label="your-blogs-heading">Your Blogs</h2>
+              </div>
           
           <div className="flex flex-col gap-0.5">
             {/* Unsaved new blog — shown at top with red dot */}
             {unsavedBlog && (
               <div
+                role="button"
+                tabIndex={0}
+                aria-label={`Open unsaved blog: ${unsavedBlog.title}`}
+                data-label="unsaved-blog-item"
                 onClick={() => {
                   // Restore from in-memory buffer first, then fall back to localStorage
                   const memContent = buildingContentRef.current;
@@ -697,66 +935,107 @@ export default function ChatPage() {
                   isNewBlogRef.current = true;
                   setOriginalBlogState({ content: "", title: unsavedBlog.title, date: unsavedBlog.date });
                 }}
-                className={cn(
-                  "group px-3 py-3 md:py-2.5 rounded-[28px] transition-all cursor-pointer text-base md:text-sm relative flex items-center justify-between touch-manipulation min-h-[44px]",
-                  selectedBlog?.id === unsavedBlog.id
-                    ? "bg-gray-200 text-black font-medium"
-                    : "text-gray-600 hover:bg-gray-100 active:bg-gray-200 hover:text-black"
-                )}
+                className="flex items-center justify-between rounded-[28px] cursor-pointer transition-colors touch-manipulation text-[14px] font-normal relative"
+                style={{
+                  minHeight: 36,
+                  paddingLeft: 10,
+                  paddingRight: 10,
+                  marginBottom: 2,
+                  color: "var(--cs-text-primary)",
+                  background: selectedBlog?.id === unsavedBlog.id ? "var(--cs-hover-medium)" : "transparent",
+                }}
+                onMouseEnter={(e) => {
+                  if (selectedBlog?.id !== unsavedBlog.id) e.currentTarget.style.background = "var(--cs-hover-strong)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = selectedBlog?.id === unsavedBlog.id ? "var(--cs-hover-medium)" : "transparent";
+                }}
               >
-                <span className="truncate flex-1">{unsavedBlog.title}</span>
-                <div className="h-2 w-2 rounded-full bg-red-500 flex-shrink-0" title="Unsaved" />
+                <span className="truncate flex-1" style={{ fontFamily: "Inter" }}>{unsavedBlog.title}</span>
+                {(selectedBlog?.id === unsavedBlog.id ? blogHasChanges : true) && (
+                  <div className="h-2 w-2 rounded-full bg-red-500 flex-shrink-0" title="Unsaved" aria-hidden />
+                )}
               </div>
             )}
 
             {fetchingBlogs ? (
-              <div className="flex justify-center py-4">
-                <Loader2 className="h-4 w-4 animate-spin text-gray-300" />
+              <div className="flex justify-center py-4" data-label="blogs-loading">
+                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--cs-text-secondary)" }} aria-hidden />
               </div>
             ) : filteredBlogs.length === 0 && !unsavedBlog ? (
-              <div className="px-3 py-2 text-xs text-gray-400 italic">
+              <div className="px-3 py-2 text-[14px] italic" style={{ color: "var(--cs-text-secondary)" }} data-label="no-blogs">
                 {searchQuery ? "No matching blogs" : "No blogs yet"}
               </div>
             ) : (
-              filteredBlogs.map(blog => (
-                <div 
-                  key={blog.id} 
+              filteredBlogs.map((blog) => (
+                <div
+                  key={blog.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open blog: ${blog.title}`}
+                  data-label="blog-item"
+                  data-blog-id={blog.id}
                   onClick={() => handleBlogClick(blog)}
-                  className={cn(
-                    "group px-3 py-3 md:py-2.5 rounded-[28px] transition-all cursor-pointer text-base md:text-sm relative flex items-center justify-between touch-manipulation min-h-[44px]",
-                    selectedBlog?.id === blog.id
-                      ? "bg-gray-200 text-black font-medium"
-                      : "text-gray-600 hover:bg-gray-100 active:bg-gray-200 hover:text-black"
-                  )}
+                  onKeyDown={(e) => e.key === "Enter" && handleBlogClick(blog)}
+                  className="flex items-center justify-between rounded-[28px] cursor-pointer transition-colors touch-manipulation text-[14px] font-normal relative"
+                  style={{
+                    minHeight: 36,
+                    paddingLeft: 10,
+                    paddingRight: 10,
+                    marginBottom: 2,
+                    color: "var(--cs-text-primary)",
+                    background: selectedBlog?.id === blog.id ? "var(--cs-hover-medium)" : "transparent",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (selectedBlog?.id !== blog.id) e.currentTarget.style.background = "var(--cs-hover-strong)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = selectedBlog?.id === blog.id ? "var(--cs-hover-medium)" : "transparent";
+                  }}
                 >
-                  <span className="truncate flex-1">{blog.title}</span>
-                  {selectedBlog?.id === blog.id && !loadingBlog && (
-                    <div className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+                  <span className="truncate flex-1" style={{ fontFamily: "Inter" }}>{blog.title}</span>
+                  {selectedBlog?.id === blog.id && !loadingBlog && blogHasChanges && (
+                    <div className="h-2 w-2 rounded-full bg-red-500 flex-shrink-0" title="Unsaved changes" aria-hidden />
                   )}
                   {loadingBlog && selectedBlog?.id === blog.id && (
-                    <Loader2 className="h-3 w-3 animate-spin text-gray-400" />
+                    <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" style={{ color: "var(--cs-text-secondary)" }} />
                   )}
                 </div>
               ))
             )}
           </div>
+            </div>
           </div>
         )}
-      </div>
+      </aside>
 
-      {/* Main Area */}
-      <div className="flex-1 flex flex-col relative bg-white">
-        {/* Floating sidebar toggle — only shown on the chat/creating screen, not when editor is open
-            (when a blog is open, the toggle lives inside the editor toolbar to avoid overlap) */}
-        {!isSidebarOpen && !selectedBlog && !isCreating && (
-          <div className="absolute top-2 md:top-4 left-2 md:left-4 right-2 md:right-4 z-30 flex items-center justify-between pointer-events-none">
-            <button 
+      {/* Main Area — shifts right on mobile when sidebar opens (web.tsx behavior) */}
+      <div
+        className={cn(
+          "flex-1 flex flex-col relative bg-white min-w-0 min-h-0",
+          "transition-transform duration-300 ease-out md:transition-none",
+          isSidebarOpen && "translate-x-[260px] md:translate-x-0"
+        )}
+        data-label="main-content"
+      >
+        {/* Floating sidebar toggle — always outside toolbar, shown when sidebar is closed */}
+        {!isSidebarOpen && !isCreating && (
+          <div className="absolute top-2 md:top-4 left-2 md:left-4 right-2 md:right-4 z-30 flex items-center justify-between pointer-events-none" data-label="floating-nav">
+            <button
+              type="button"
               onClick={() => setIsSidebarOpen(true)}
-              className="p-2 bg-gray-50 hover:bg-gray-100 active:bg-gray-200 rounded-[28px] transition-colors border border-gray-200 pointer-events-auto touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
+              aria-label="Open sidebar"
+              data-label="open-sidebar-button"
+              className="flex items-center justify-center rounded-[28px] transition-colors pointer-events-auto touch-manipulation"
+              style={{ width: 36, height: 36 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
             >
-              <Menu className="h-5 w-5 text-gray-600" />
+              <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                <path d="M10 14H26M10 22H20" stroke="var(--cs-text-primary)" strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </button>
-            <div />
+            <div aria-hidden />
           </div>
         )}
 
@@ -802,28 +1081,18 @@ export default function ChatPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex-1 flex flex-col overflow-hidden bg-white text-black md:rounded-tl-[28px] md:mt-2 md:ml-2 md:border-l md:border-t md:border-gray-100 shadow-sm">
-                {(() => {
-                  // Check if there are actual changes
-                  const hasChanges = originalBlogState && selectedBlog ? (
-                    editableContent !== originalBlogState.content ||
-                    selectedBlog.title !== originalBlogState.title ||
-                    (selectedBlog.date || '') !== originalBlogState.date ||
-                    (selectedBlog.coverImageUrl || '') !== (originalBlogState.coverImageUrl || '')
-                  ) : false;
-
-                  return (
-                    <BlogEditor 
+              <div className="flex-1 flex flex-col overflow-hidden text-black md:rounded-tl-[28px] md:mt-2 md:ml-2">
+                <BlogEditor
                       ref={blogEditorRef}
-                      content={editableContent} 
+                      content={editableContent}
                       onChange={setEditableContent}
                       onSave={handleSaveBlog}
+                      onClose={handleCloseBlog}
                       isSaving={savingBlog}
                       saveJustCompleted={saveJustCompleted}
                       saveFailed={saveFailed}
-                      hasChanges={hasChanges}
+                      hasChanges={blogHasChanges}
                       isStreaming={isBlogStreaming}
-                      onShowSidebar={!isSidebarOpen ? () => setIsSidebarOpen(true) : undefined}
                       blogSlug={selectedBlog?.slug}
                       coverImageUrl={selectedBlog?.coverImageUrl}
                       title={selectedBlog?.title}
@@ -839,6 +1108,21 @@ export default function ChatPage() {
                       onCoverImageReplace={async (newUrl) => {
                         if (!selectedBlog) return;
                         setSelectedBlog({ ...selectedBlog, coverImageUrl: newUrl });
+                        try {
+                          const res = await fetch("/api/images/zoom-out", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ imageUrl: newUrl }),
+                          });
+                          if (res.ok) {
+                            const { zoomOutUrl } = await res.json();
+                            setSelectedBlog((prev) =>
+                              prev ? { ...prev, blogListImageUrl: zoomOutUrl } : prev
+                            );
+                          }
+                        } catch (err) {
+                          console.error("Zoom-out failed:", err);
+                        }
                       }}
                       onEditImage={(imageUrl, imageAlt) => {
                         setPendingEditImage({ url: imageUrl, alt: imageAlt });
@@ -846,8 +1130,6 @@ export default function ChatPage() {
                         setTimeout(() => document.getElementById("chat-input")?.focus(), 50);
                       }}
                     />
-                  );
-                })()}
               </div>
             )}
           </div>
@@ -859,8 +1141,11 @@ export default function ChatPage() {
                 <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse"></div>
                 <span className="text-xs font-medium text-gray-600 uppercase tracking-wider">Live Preview</span>
               </div>
-              <button 
+              <button
+                type="button"
                 onClick={() => setStreamingBlogContent("")}
+                aria-label="Hide live preview"
+                data-label="hide-preview-button"
                 className="text-[10px] uppercase tracking-widest text-gray-400 hover:text-black transition-colors"
               >
                 Hide Preview
@@ -879,21 +1164,51 @@ export default function ChatPage() {
             </div>
           </div>
         ) : (
-          /* Chat Messages */
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6 pb-32 md:pb-40 custom-scrollbar">
-            <div className="w-full mx-auto pt-8 md:pt-20 px-4">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-6 pb-32 md:pb-40 custom-scrollbar" role="log" aria-live="polite" data-label="chat-messages">
+            <div className="w-full mx-auto pt-8 md:pt-20 px-4" style={{ maxWidth: 816 }}>
               {messages.map((msg, i) => (
-                <div key={i} className={cn(
-                  "flex flex-col mb-8 animate-fade-in",
-                  msg.role === "user" ? "items-end" : "items-start"
-                )}>
-                  <div className={cn(
-                    "p-3 md:p-4 rounded-[28px] text-sm md:text-base leading-relaxed shadow-sm border",
-                    msg.role === "user"
-                      ? "bg-gray-900 text-white border-gray-800 rounded-tr-none max-w-[85%] md:max-w-[75%]"
-                      : "bg-white text-gray-800 border-gray-100 rounded-tl-none w-full max-w-full md:max-w-[85%]"
-                  )}>
-                    {msg.content || (loading && i === messages.length - 1 ? <Loader2 className="h-4 w-4 animate-spin opacity-20" /> : null)}
+                <div
+                  key={i}
+                  className="animate-fade-in"
+                  data-label={`message-${msg.role}-${i}`}
+                  role="article"
+                  style={{
+                    display: "flex",
+                    justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                    width: "100%",
+                    scrollMarginTop: 24,
+                    marginTop: msg.role === "user" ? 24 : 0,
+                    marginBottom: msg.role === "user" ? 8 : 0,
+                  }}
+                >
+                  <div
+                    style={{
+                      maxWidth: msg.role === "user" ? "80%" : "100%",
+                      width: msg.role === "user" ? "auto" : "100%",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      alignItems: msg.role === "user" ? "flex-end" : "flex-start",
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: msg.role === "user" ? "6px 16px" : 0,
+                        borderRadius: msg.role === "user" ? 20 : 0,
+                        background: msg.role === "user" ? "var(--cs-hover-message)" : "transparent",
+                        color: "var(--cs-text-primary)",
+                        fontSize: 16,
+                        lineHeight: 1.6,
+                        maxWidth: "100%",
+                        minWidth: 0,
+                        overflowWrap: "anywhere",
+                        wordBreak: "break-word",
+                        whiteSpace: "pre-wrap",
+                        fontFamily: "Inter, system-ui, sans-serif",
+                      }}
+                    >
+                      {msg.content || (loading && i === messages.length - 1 ? <Loader2 className="h-4 w-4 animate-spin opacity-40" style={{ color: "var(--cs-text-secondary)" }} /> : null)}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -906,78 +1221,203 @@ export default function ChatPage() {
           "absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-white via-white/80 to-transparent pt-16 md:pt-20 z-20",
           selectedBlog && "px-4 md:px-12"
         )}>
-          {selectedBlog && (
-            <div className="w-full max-w-[768px] mx-auto mb-4 px-3 md:px-4 py-2 bg-gray-50 border border-gray-200 rounded-[28px] flex items-center justify-between animate-slide-up">
-              <div className="flex items-center space-x-2 min-w-0 flex-1">
-                <div className="h-2 w-2 bg-gray-400 rounded-full animate-pulse flex-shrink-0"></div>
-                <span className="text-gray-500 truncate font-normal" style={{ fontSize: '14px', fontFamily: 'inherit' }}>
-                  Editing: <span className="text-black font-normal">{selectedBlog.title}</span>
-                </span>
-              </div>
-              <button 
-                onClick={handleCloseBlog}
-                className="text-black hover:opacity-80 transition-opacity flex-shrink-0 font-normal"
-                style={{ fontSize: '14px', fontFamily: 'inherit', letterSpacing: '0.05em' }}
+          {/* Publish button — centered above chat bar, only when edit ready */}
+          {selectedBlog && (blogHasChanges || saveFailed || saveJustCompleted) && (
+            <div className="flex justify-center mb-3">
+              <button
+                type="button"
+                onClick={handleSaveBlog}
+                disabled={savingBlog || (!blogHasChanges && !saveFailed)}
+                data-testid="save-button"
+                className="flex items-center gap-2 transition-colors touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  height: 40,
+                  paddingLeft: 16,
+                  paddingRight: 16,
+                  borderRadius: 28,
+                  background: saveFailed
+                    ? "hsl(0, 84%, 50%)"
+                    : saveJustCompleted
+                      ? "hsl(142, 71%, 45%)"
+                      : "var(--cs-accent)",
+                  color: "var(--cs-bg)",
+                  fontSize: 14,
+                  fontFamily: "Inter",
+                  fontWeight: 500,
+                }}
               >
-                Close Editor
+                {saveJustCompleted ? (
+                  <span className="text-sm leading-none">✓</span>
+                ) : saveFailed ? (
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                ) : savingBlog ? (
+                  <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4 flex-shrink-0" />
+                )}
+                <span data-testid="save-button-text" className="whitespace-nowrap">
+                  {saveJustCompleted ? "Published!" : saveFailed ? "Retry" : savingBlog ? "Publishing…" : "Publish"}
+                </span>
               </button>
             </div>
           )}
-          <form onSubmit={handleSend} className="w-full max-w-[768px] mx-auto relative group">
-            {/* Pending image thumbnail attached to chat input */}
+          <form onSubmit={handleSend} className="w-full max-w-[816px] mx-auto" aria-label="Chat form" data-label="chat-form">
+            {/* Pending image thumbnail — Curastem attachment style */}
             {pendingEditImage && (
-              <div className="mb-2 flex items-center gap-2 px-2">
-                <div className="relative flex-shrink-0 w-16 h-16 rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-gray-50">
+              <div className="mb-3 flex items-center gap-2">
+                <div className="relative flex-shrink-0 w-[86px] h-[86px] rounded-2xl overflow-hidden" style={{ background: "var(--cs-surface)", border: "0.33px solid hsla(0,0%,0%,0.2)" }}>
                   <img src={pendingEditImage.url} alt={pendingEditImage.alt} className="w-full h-full object-cover" />
                   <button
                     type="button"
                     onClick={() => setPendingEditImage(null)}
-                    className="absolute top-0.5 right-0.5 bg-black/70 hover:bg-black rounded-full p-0.5 transition-colors"
-                    aria-label="Remove image"
+                    className="absolute top-1.5 right-1.5 rounded-full p-0.5 transition-colors"
+                    style={{ background: "var(--cs-surface)", color: "var(--cs-text-primary)" }}
+                    aria-label="Remove image from chat"
+                    data-label="remove-edit-image"
                   >
-                    <XIcon className="h-3 w-3 text-white" />
+                    <XIcon className="h-3 w-3" aria-hidden />
                   </button>
                 </div>
                 <div className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-1.5">
-                    <Pencil className="h-3 w-3 text-gray-400 flex-shrink-0" />
-                    <span className="text-xs text-gray-500 font-medium">Editing image</span>
+                    <Pencil className="h-3 w-3 flex-shrink-0" style={{ color: "var(--cs-text-secondary)" }} aria-hidden />
+                    <span className="text-[13px] font-medium" style={{ color: "var(--cs-text-secondary)" }}>Editing image</span>
                   </div>
-                  <p className="text-xs text-gray-400 truncate max-w-[200px]">{pendingEditImage.alt || "No description"}</p>
+                  <p className="text-[13px] truncate max-w-[200px]" style={{ color: "var(--cs-text-secondary)" }}>{pendingEditImage.alt || "No description"}</p>
                 </div>
               </div>
             )}
-            <input
-              type="text"
-              id="chat-input"
-              data-testid="chat-input"
-              aria-label="Chat input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={pendingEditImage ? "Describe what to change in this image..." : selectedBlog ? "Tell AI how to improve this blog..." : "What should we write about today?"}
-              className="w-full bg-gray-50 border border-gray-200 rounded-[28px] py-3 md:py-4 pl-4 md:pl-6 pr-12 md:pr-14 text-sm md:text-base text-black placeholder:text-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-all shadow-sm"
-            />
-            {loading ? (
-              <button
-                type="button"
-                aria-label="Stop generation"
-                onClick={() => abortControllerRef.current?.abort()}
-                className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-2 bg-black text-white rounded-[28px] hover:bg-gray-800 active:bg-gray-700 transition-colors touch-manipulation"
+            {/* Chat input bar — exact Curastem design (web.tsx ChatInputBar) */}
+            <div
+              data-layer="chat-input-bar"
+              className="flex flex-col overflow-visible"
+              style={{
+                flex: "1 1 0",
+                minWidth: 0,
+                width: "100%",
+                maxWidth: "100%",
+                minHeight: 56,
+                maxHeight: 384,
+                padding: 0,
+                background: "var(--cs-bg)",
+                border: "0.33px solid hsla(0, 0%, 0%, 0.2)",
+                boxShadow: "0px 8px 24px hsla(0, 0%, 0%, 0.04)",
+                borderRadius: 28,
+                justifyContent: "flex-end",
+                gap: 16,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-end",
+                  gap: 8,
+                  width: "100%",
+                  padding: "0 10px 10px 10px",
+                }}
               >
-                <Square className="h-4 w-4 md:h-5 md:w-5" fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                type="submit"
-                id="chat-submit"
-                data-testid="chat-submit"
-                aria-label="Send message"
-                disabled={!input.trim()}
-                className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-2 bg-black text-white rounded-[28px] hover:bg-gray-800 active:bg-gray-700 transition-colors disabled:opacity-10 touch-manipulation"
-              >
-                <Send className="h-4 w-4 md:h-5 md:w-5" />
-              </button>
-            )}
+                {/* Plus button — matches web.tsx upload trigger */}
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Add image to chat"
+                  data-label="upload-trigger"
+                  onClick={() => document.getElementById("chat-image-input")?.click()}
+                  onKeyDown={(e) => e.key === "Enter" && document.getElementById("chat-image-input")?.click()}
+                  className="flex items-center justify-center flex-shrink-0 cursor-pointer rounded-full transition-colors"
+                  style={{
+                    width: 36,
+                    height: 36,
+                    marginBottom: 0,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-subtle)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  <input
+                    id="chat-image-input"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file?.type.startsWith("image/")) return;
+                      const url = URL.createObjectURL(file);
+                      setPendingEditImage({ url, alt: file.name });
+                      e.target.value = "";
+                    }}
+                  />
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ opacity: 0.95 }}>
+                    <path d="M12 5V19M5 12H19" stroke="var(--cs-text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+                {/* Text input wrapper — matches TextAreaWrapper */}
+                <div
+                  className="flex-1 min-w-0 flex items-center"
+                  style={{
+                    alignSelf: "stretch",
+                    paddingTop: 6,
+                    paddingBottom: 6,
+                  }}
+                >
+                  <input
+                    type="text"
+                    id="chat-input"
+                    data-testid="chat-input"
+                    data-label="chat-input"
+                    aria-label="Chat input"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={pendingEditImage ? "Describe what to change in this image..." : selectedBlog ? "Edit blog" : "Ask anything"}
+                    className="w-full min-w-0 bg-transparent text-[14px] font-normal outline-none placeholder:opacity-65"
+                    style={{ color: "var(--cs-text-primary)", fontFamily: "Inter, system-ui, sans-serif", fontSize: 16 }}
+                  />
+                </div>
+                {/* Send / Stop — matches web.tsx SendButton */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  {loading ? (
+                    <button
+                      type="button"
+                      aria-label="Stop generation"
+                      data-label="stop-generation-button"
+                      onClick={() => abortControllerRef.current?.abort()}
+                      className="cursor-pointer touch-manipulation"
+                      style={{ width: 36, height: 36 }}
+                    >
+                      <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                        <rect width="36" height="36" rx="18" fill="var(--cs-text-primary)" fillOpacity="0.95" />
+                        <rect x="12" y="12" width="12" height="12" rx="2" fill="var(--cs-bg)" fillOpacity="0.95" />
+                      </svg>
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      id="chat-submit"
+                      data-testid="chat-submit"
+                      data-label="send-message-button"
+                      aria-label="Send message"
+                      disabled={!input.trim()}
+                      className="cursor-pointer touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{
+                        width: 36,
+                        height: 36,
+                        display: input.trim() ? "block" : "none",
+                      }}
+                    >
+                      <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                        <rect width="36" height="36" rx="18" fill="var(--cs-text-primary)" fillOpacity="0.95" />
+                        <path
+                          fillRule="evenodd"
+                          clipRule="evenodd"
+                          d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z"
+                          fill="var(--cs-bg)"
+                          fillOpacity="0.95"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           </form>
         </div>
       </div>
@@ -1013,12 +1453,6 @@ export default function ChatPage() {
           background: rgba(0, 0, 0, 0.1);
         }
       `}</style>
-
-      {/* Settings Modal */}
-      <SettingsModal 
-        isOpen={isSettingsOpen} 
-        onClose={() => setIsSettingsOpen(false)} 
-      />
     </div>
   );
 }

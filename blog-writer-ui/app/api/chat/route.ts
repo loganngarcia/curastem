@@ -125,22 +125,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let history = toGeminiContents(messages);
+    const rawHistory = toGeminiContents(messages);
 
-    // Inject current blog HTML as context at the start so the AI can make targeted edits
-    if (currentBlogContent && currentBlogContent.trim().length > 0) {
-      const blogContext = currentBlogContent.trim().substring(0, 10000); // cap at 10k chars
-      history = [
-        {
-          role: "user" as const,
-          parts: [{ text: `[CURRENT BLOG HTML — for editing reference only, do not repeat back to user]\n\n${blogContext}` }],
-        },
-        {
-          role: "model" as const,
-          parts: [{ text: "I can see the current blog HTML. I'll use edit_blog with exact find/replace operations when you ask me to make changes." }],
-        },
-        ...history,
-      ];
+    // Inject blog HTML directly into the last user message so the AI can make targeted edits.
+    // We deliberately avoid adding synthetic model turns to the history because fabricated
+    // model turns without proper thought_signatures cause Vertex AI to reject the request.
+    let history = rawHistory;
+    if (currentBlogContent && currentBlogContent.trim().length > 0 && history.length > 0) {
+      const blogContext = currentBlogContent.trim().substring(0, 12000);
+      const lastIdx = history.length - 1;
+      const lastMsg = history[lastIdx];
+      if (lastMsg.role === "user" && lastMsg.parts.length > 0) {
+        const originalText = lastMsg.parts[0].text;
+        history = [
+          ...history.slice(0, lastIdx),
+          {
+            role: "user" as const,
+            parts: [{ text: `[CURRENT BLOG HTML — editing reference only, do not repeat back]\n${blogContext}\n\n---\n${originalText}` }],
+          },
+        ];
+      }
     }
 
     // Wire up real tool implementations

@@ -47,6 +47,10 @@ export default function ErrorModal({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="error-modal-title"
+      data-label="error-modal"
       className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
       onClick={onClose}
     >
@@ -61,14 +65,16 @@ export default function ErrorModal({
               <AlertCircle className="h-5 w-5 text-amber-600" />
             </div>
             <div>
-              <h2 className="text-lg md:text-xl font-semibold text-gray-900">{title}</h2>
+              <h2 id="error-modal-title" className="text-lg md:text-xl font-semibold text-gray-900">{title}</h2>
               <p className="text-sm text-gray-500 mt-0.5">Internal tool error</p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors touch-manipulation"
-            aria-label="Close"
+            aria-label="Close error modal"
+            data-label="error-modal-close"
           >
             <X className="h-5 w-5 text-gray-500" />
           </button>

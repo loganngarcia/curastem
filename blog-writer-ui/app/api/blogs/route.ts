@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
 
     // Save a brand-new blog with AI-generated content (no template needed)
     if (action === "save") {
-      const { slug, headline = "", content = "", date, coverImageUrl } = body;
+      const { slug, headline = "", content = "", date, coverImageUrl, blogListImageUrl } = body;
       if (!slug) {
         return NextResponse.json({ error: "Slug is required for save action" }, { status: 400 });
       }
@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
         date: date || new Date().toISOString(),
         featured: false,
         coverImageUrl,
-        blogListImageUrl: coverImageUrl,
+        blogListImageUrl: blogListImageUrl ?? coverImageUrl,
       });
       return NextResponse.json(blog);
     }
