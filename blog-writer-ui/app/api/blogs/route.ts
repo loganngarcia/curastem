@@ -10,7 +10,6 @@ import {
   generateBlogContent,
   generateImageConfigs,
 } from "@/lib/blog-generator";
-import { generateImageViaPoe, delay } from "@/lib/poe";
 
 export async function GET() {
   try {
@@ -47,6 +46,25 @@ export async function POST(request: NextRequest) {
         { error: "Title is required" },
         { status: 400 }
       );
+    }
+
+    // Save a brand-new blog with AI-generated content (no template needed)
+    if (action === "save") {
+      const { slug, headline = "", content = "", date, coverImageUrl } = body;
+      if (!slug) {
+        return NextResponse.json({ error: "Slug is required for save action" }, { status: 400 });
+      }
+      const blog = await createOrUpdateBlog({
+        slug,
+        title,
+        headline,
+        content,
+        date: date || new Date().toISOString(),
+        featured: false,
+        coverImageUrl,
+        blogListImageUrl: coverImageUrl,
+      });
+      return NextResponse.json(blog);
     }
 
     if (action === "create") {
@@ -121,13 +139,13 @@ export async function POST(request: NextRequest) {
     let userMessage = `Error: ${errorMessage}`;
     const collectionName = (process.env.FRAMER_BLOG_COLLECTION || "Services").trim();
     
-    if (errorMessage.includes("Poe") || errorMessage.includes("POE_API_KEY") || errorMessage.includes("image")) {
-      if (errorMessage.includes("POE_API_KEY") || errorMessage.includes("not configured")) {
-        userMessage = "Poe API key not configured. Please add POE_API_KEY in settings.";
-      } else if (errorMessage.includes("No image URL")) {
-        userMessage = "Image generation completed but no image URL was returned. The Poe bot may not have generated an image.";
+    if (errorMessage.includes("Gemini") || errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("Imagen") || errorMessage.includes("image")) {
+      if (errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("not configured")) {
+        userMessage = "Gemini API key not configured. Please add GEMINI_API_KEY in settings.";
+      } else if (errorMessage.includes("No image")) {
+        userMessage = "Image generation completed but no image was returned. Please try again.";
       } else {
-        userMessage = `Image generation failed: ${errorMessage}. Please check your Poe API key and try again.`;
+        userMessage = `Image generation failed: ${errorMessage}. Please check your Gemini API key and try again.`;
       }
     } else if (errorMessage.includes("Collection")) {
       userMessage = `Framer collection "${collectionName}" not found. ${errorMessage}`;

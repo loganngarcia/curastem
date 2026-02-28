@@ -83,7 +83,7 @@ See `.env.example` for the required variables.
 
 - **Next.js 15** - React framework with App Router
 - **Tiptap** - Rich text editor for blog content
-- **Poe API** - AI text generation (Gemini-3-Flash) and image generation (nano-banana-pro)
+- **Poe API** - AI text generation (Gemini-3-Flash) and image generation (nano-banana-2)
 - **Framer API** - Direct CMS integration for publishing
 - **Vercel** - Hosting and deployment
 - **Tailwind CSS** - Styling and responsive design

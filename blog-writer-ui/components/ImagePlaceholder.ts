@@ -2,11 +2,14 @@ import { Node, mergeAttributes } from '@tiptap/core';
 
 export const ImagePlaceholder = Node.create({
   name: 'imagePlaceholder',
-  
+
+  /** Higher than default (50) so we parse before paragraph and render as imagePlaceholder node */
+  priority: 1000,
+
   group: 'block',
-  
+
   atom: true,
-  
+
   addAttributes() {
     return {
       h2Text: {
@@ -22,6 +25,7 @@ export const ImagePlaceholder = Node.create({
     return [
       {
         tag: 'p[data-type="imagePlaceholder"]',
+        priority: 60, // Higher than default paragraph (50) so we parse first
         getAttrs: (node) => {
           if (typeof node === 'string') return false;
           const el = node as HTMLElement;
@@ -33,6 +37,7 @@ export const ImagePlaceholder = Node.create({
       },
       {
         tag: 'p.image-placeholder',
+        priority: 60,
         getAttrs: (node) => {
           if (typeof node === 'string') return false;
           const el = node as HTMLElement;
@@ -45,32 +50,17 @@ export const ImagePlaceholder = Node.create({
     ];
   },
   
+  // Serialize to minimal HTML - NO text content. The NodeView renders the full UI.
+  // Including span/button here would add "professional illustration..." and "Create Image" to saved blog content.
   renderHTML({ HTMLAttributes }) {
     return [
       'p',
       mergeAttributes(HTMLAttributes, {
         class: 'image-placeholder',
+        'data-type': 'imagePlaceholder',
         'data-h2-text': HTMLAttributes.h2Text,
         'data-image-prompt': HTMLAttributes.imagePrompt,
-        style: 'width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;',
       }),
-      [
-        'span',
-        {
-          style: 'font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%;',
-        },
-        HTMLAttributes.imagePrompt || 'Image placeholder',
-      ],
-      [
-        'button',
-        {
-          class: 'create-image-btn',
-          contenteditable: 'false',
-          'data-tiptap-ignore': 'true',
-          style: 'background: black; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500;',
-        },
-        'Create Image',
-      ],
     ];
   },
   
@@ -101,6 +91,9 @@ export const ImagePlaceholder = Node.create({
       
       return {
         dom,
+        // Ignore mutations inside our custom DOM (button text updates during generation)
+        // so ProseMirror doesn't try to reconcile and cause glitches
+        ignoreMutation: () => true,
       };
     };
   },

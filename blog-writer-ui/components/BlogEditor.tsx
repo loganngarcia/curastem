@@ -37,6 +37,7 @@ interface EditorProps {
   onChange: (content: string) => void;
   onSave?: () => void;
   isSaving?: boolean;
+  saveJustCompleted?: boolean;
   hasChanges?: boolean;
   blogSlug?: string;
   coverImageUrl?: string;
@@ -45,9 +46,11 @@ interface EditorProps {
   onTitleChange?: (title: string) => void;
   onDateChange?: (date: string) => void;
   onCoverImageReplace?: (newUrl: string) => void;
+  /** When true, bypass placeholder guards and skip the H2-placeholder injection effect */
+  isStreaming?: boolean;
 }
 
-export default function BlogEditor({ content, onChange, onSave, isSaving, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace }: EditorProps) {
+export default function BlogEditor({ content, onChange, onSave, isSaving, saveJustCompleted = false, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace, isStreaming = false }: EditorProps) {
   const [generatingImageFor, setGeneratingImageFor] = useState<string | null>(null);
   const [regeneratingImage, setRegeneratingImage] = useState<string | null>(null);
   const [imagePrompts, setImagePrompts] = useState<Record<string, string>>({}); // Store prompts for each image URL
@@ -97,7 +100,6 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
               tag: 'img[src]',
               getAttrs: (element) => {
                 if (typeof element === 'string') return false;
-                // Don't parse if it's inside a regenerate button
                 if (element.closest('.regenerate-image-btn')) return false;
                 return {};
               },
@@ -105,9 +107,49 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           ];
         },
         renderHTML({ HTMLAttributes }) {
-          // Remove any button-related attributes that might have been added
           const { 'data-tiptap-ignore': _, ...cleanAttrs } = HTMLAttributes;
           return ['img', cleanAttrs];
+        },
+        addNodeView() {
+          return ({ node }) => {
+            const wrapper = document.createElement("span");
+            wrapper.className = "image-with-regenerate";
+            wrapper.setAttribute("data-tiptap-ignore", "true");
+            wrapper.style.cssText = "position: relative; display: block; width: fit-content; max-width: 100%; margin: 1rem 0;";
+
+            const img = document.createElement("img");
+            img.src = node.attrs.src;
+            img.alt = node.attrs.alt || "";
+            img.style.cssText = "border-radius: 0; display: block; max-width: 100%; height: auto; cursor: pointer;";
+            img.className = "max-w-full h-auto rounded-lg cursor-pointer";
+            wrapper.appendChild(img);
+
+            const btn = document.createElement("button");
+            btn.className = "regenerate-image-btn";
+            btn.type = "button";
+            btn.setAttribute("contenteditable", "false");
+            btn.setAttribute("data-tiptap-ignore", "true");
+            btn.style.cssText = "position: absolute; bottom: 16px; right: 16px; background: rgba(0, 0, 0, 0.9); color: white; border: none; border-radius: 28px; padding: 10px 18px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.9; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45); pointer-events: auto; user-select: none; -webkit-user-select: none;";
+            const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            iconSvg.setAttribute("width", "12"); iconSvg.setAttribute("height", "12"); iconSvg.setAttribute("viewBox", "0 0 24 24");
+            iconSvg.setAttribute("fill", "none"); iconSvg.setAttribute("stroke", "currentColor"); iconSvg.setAttribute("stroke-width", "2");
+            const p1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            p1.setAttribute("d", "M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z");
+            const p2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            p2.setAttribute("d", "M19 3L19.5 5.5L22 6L19.5 6.5L19 9L18.5 6.5L16 6L18.5 5.5L19 3Z");
+            const p3 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            p3.setAttribute("d", "M5 21L5.5 18.5L8 18L5.5 17.5L5 15L4.5 17.5L2 18L4.5 18.5L5 21Z");
+            iconSvg.append(p1, p2, p3);
+            const textSpan = document.createElement("span");
+            textSpan.textContent = " Regenerate";
+            btn.append(iconSvg, textSpan);
+            wrapper.appendChild(btn);
+
+            (btn as any).__textSpan = textSpan;
+            (btn as any).__imageSrc = node.attrs.src;
+
+            return { dom: wrapper, ignoreMutation: () => true };
+          };
         },
       }).configure({
         allowBase64: true,
@@ -203,47 +245,47 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     },
   });
 
-  // Update editor content if it changes externally (e.g. when switching blogs)
-  // Only update if content actually changed to preserve undo/redo history
+  // Update editor content if it changes externally (e.g. when switching blogs or streaming)
   useEffect(() => {
     if (!editor) return;
     
     const currentEditorContent = editor.getHTML();
-    // Only update if content is significantly different (more than just whitespace)
     const normalizedContent = content.trim();
     const normalizedEditorContent = currentEditorContent.trim();
-    
-    // Don't overwrite if editor has placeholders that parent doesn't - that causes a sync loop
-    const editorHasPlaceholders = normalizedEditorContent.includes('data-type="imagePlaceholder"') || normalizedEditorContent.includes('image-placeholder');
-    const contentHasPlaceholders = normalizedContent.includes('data-type="imagePlaceholder"') || normalizedContent.includes('image-placeholder');
-    if (editorHasPlaceholders && !contentHasPlaceholders && normalizedContent.length > 0) {
-      // Editor was enhanced with placeholders by our effect; parent has raw content
-      // Don't overwrite - let the H2 effect handle sync via onChange
+
+    if (normalizedContent === normalizedEditorContent) return;
+
+    if (isStreaming) {
+      // During streaming: always sync, skip placeholder guard (placeholders are added after done)
+      editor.commands.setContent(content, { emitUpdate: false });
       return;
     }
     
-    if (normalizedContent !== normalizedEditorContent) {
-      // Reset processed ref when content changes externally (e.g., switching blogs)
-      h2PlaceholdersProcessedRef.current = "";
-      // Store current selection
-      const { from, to } = editor.state.selection;
-      // Set content - this will reset history, but only happens when switching blogs
-      editor.commands.setContent(content, { emitUpdate: false });
-      // Try to restore selection if possible
-      try {
-        const docSize = editor.state.doc.content.size;
-        if (from <= docSize && to <= docSize) {
-          editor.commands.setTextSelection({ from: Math.min(from, docSize), to: Math.min(to, docSize) });
-        }
-      } catch {
-        // Selection might be invalid after content change, that's okay
-      }
+    // Non-streaming: don't overwrite editor-injected placeholders with raw content
+    const editorHasPlaceholders = normalizedEditorContent.includes('data-type="imagePlaceholder"') || normalizedEditorContent.includes('image-placeholder');
+    const contentHasPlaceholders = normalizedContent.includes('data-type="imagePlaceholder"') || normalizedContent.includes('image-placeholder');
+    if (editorHasPlaceholders && !contentHasPlaceholders && normalizedContent.length > 0) {
+      return;
     }
-  }, [content, editor]);
+    
+    // Reset processed ref when content changes externally (e.g., switching blogs)
+    h2PlaceholdersProcessedRef.current = "";
+    const { from, to } = editor.state.selection;
+    editor.commands.setContent(content, { emitUpdate: false });
+    try {
+      const docSize = editor.state.doc.content.size;
+      if (from <= docSize && to <= docSize) {
+        editor.commands.setTextSelection({ from: Math.min(from, docSize), to: Math.min(to, docSize) });
+      }
+    } catch {
+      // Selection may be invalid after content change
+    }
+  }, [content, editor, isStreaming]);
 
   // Ensure H2 placeholders are added for existing blogs (only once per content, debounced)
+  // Skipped during streaming — placeholders are injected once streaming finishes
   useEffect(() => {
-    if (!editor || !content) return;
+    if (!editor || !content || isStreaming) return;
     
     const currentContent = editor.getHTML();
     
@@ -269,24 +311,35 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         h2PlaceholdersProcessedRef.current = currentContent;
         return;
       }
-      
+
+      // Safety: never add more placeholders than H2s (prevents spamming from effect re-runs)
+      const existingPlaceholderCount = (checkContent.match(/class="image-placeholder"/g) || []).length;
+      if (existingPlaceholderCount >= h2Matches.length) {
+        h2PlaceholdersProcessedRef.current = checkContent;
+        return;
+      }
+
       let contentUpdated = false;
       let updatedContent = checkContent;
-      
+      const insertedH2Texts = new Set<string>(); // Only one placeholder per unique H2 text
+
       // Process in reverse order to maintain positions
       for (let i = h2Matches.length - 1; i >= 0; i--) {
         const match = h2Matches[i];
         if (!match || match.index === undefined) continue;
-        
+
         const h2Text = match[1].replace(/<[^>]*>/g, '').trim();
+        if (insertedH2Texts.has(h2Text)) continue; // Skip duplicate H2 headings
         const insertPosition = match.index;
-        
+
         // Check if there's already an image or placeholder before this H2 (within 300 chars)
         const beforeH2 = updatedContent.slice(Math.max(0, insertPosition - 300), insertPosition);
         if (beforeH2.includes('<img') || beforeH2.includes('image-placeholder') || beforeH2.includes('data-type="imagePlaceholder"')) {
           continue; // Skip if image/placeholder already exists
         }
-        
+
+        insertedH2Texts.add(h2Text);
+
         // Generate image prompt from H2 text
         const imagePrompt = `professional illustration representing ${h2Text.toLowerCase()}`;
         
@@ -324,7 +377,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
     }, 300); // 300ms debounce
     
     return () => clearTimeout(timeoutId);
-  }, [editor, content, onChange]);
+  }, [editor, content, onChange, isStreaming]);
 
   // Update placeholder button text with countdown and regenerate button text
   useEffect(() => {
@@ -406,137 +459,6 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       return () => clearInterval(interval);
     }
   }, [editor, generatingImageFor, generationTimeRemaining, regeneratingImage, coverImageUrl]);
-
-  // Add regenerate buttons to images after editor renders (only when content changes, not on every update)
-  useEffect(() => {
-    if (!editor) return;
-    
-    let isProcessing = false;
-    
-    const addRegenerateButtons = () => {
-      // Prevent concurrent runs
-      if (isProcessing) return;
-      isProcessing = true;
-      
-      // Use requestAnimationFrame to batch DOM operations
-      requestAnimationFrame(() => {
-        try {
-          const editorElement = editor.view.dom;
-          const images = editorElement.querySelectorAll("img");
-          
-          images.forEach((img) => {
-            // Skip if button already exists - check both in parent and as sibling
-            const imgParent = img.parentElement;
-            const existingBtn = imgParent?.querySelector(".regenerate-image-btn") || 
-                              img.closest(".image-with-regenerate")?.querySelector(".regenerate-image-btn");
-            if (existingBtn) {
-              // Button exists, just ensure it's properly configured
-              existingBtn.setAttribute("contenteditable", "false");
-              existingBtn.setAttribute("data-tiptap-ignore", "true");
-              return;
-            }
-            
-            let parent = img.parentElement;
-            // Ensure parent is a paragraph
-            if (!parent || parent.tagName !== "P") {
-              // Wrap img in paragraph if needed
-              const wrapper = document.createElement("p");
-              wrapper.className = "image-with-regenerate";
-              wrapper.setAttribute("dir", "auto");
-              img.parentNode?.insertBefore(wrapper, img);
-              wrapper.appendChild(img);
-              parent = wrapper;
-            }
-            
-            if (parent && !parent.classList.contains("image-with-regenerate")) {
-              parent.classList.add("image-with-regenerate");
-              // Mark parent as having non-editable content to prevent TipTap from serializing buttons
-              parent.setAttribute("data-tiptap-ignore", "true");
-            }
-            
-            // Ensure image has 28px border-radius and is marked as non-editable
-            if (!img.style.borderRadius || img.style.borderRadius !== '28px') {
-              img.style.borderRadius = '28px';
-            }
-            img.setAttribute("contenteditable", "false");
-            
-            // Ensure parent has position relative for absolute positioning of button
-            if (parent && !parent.style.position) {
-              parent.style.position = "relative";
-            }
-            
-            // Create regenerate button with Sparkles icon (overlay on image)
-            const regenerateBtn = document.createElement("button");
-            regenerateBtn.className = "regenerate-image-btn";
-            regenerateBtn.type = "button";
-            // CRITICAL: Mark as non-editable so TipTap doesn't serialize its text content
-            regenerateBtn.setAttribute("contenteditable", "false");
-            regenerateBtn.setAttribute("data-tiptap-ignore", "true");
-            // Set inline styles to ensure overlay positioning
-            regenerateBtn.style.cssText = "position: absolute; bottom: 16px; right: 16px; background: rgba(0, 0, 0, 0.9); color: white; border: none; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; transition: all 0.2s; z-index: 20; backdrop-filter: blur(8px); opacity: 0.85; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); pointer-events: auto; user-select: none; -webkit-user-select: none;";
-            // Create Sparkles icon SVG
-            const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-            iconSvg.setAttribute("width", "12");
-            iconSvg.setAttribute("height", "12");
-            iconSvg.setAttribute("viewBox", "0 0 24 24");
-            iconSvg.setAttribute("fill", "none");
-            iconSvg.setAttribute("stroke", "currentColor");
-            iconSvg.setAttribute("stroke-width", "2");
-            iconSvg.setAttribute("stroke-linecap", "round");
-            iconSvg.setAttribute("stroke-linejoin", "round");
-            iconSvg.setAttribute("contenteditable", "false");
-            // Sparkles icon paths (multiple small stars/sparkles)
-            const path1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            path1.setAttribute("d", "M12 2L13.09 8.26L20 9L13.09 9.74L12 16L10.91 9.74L4 9L10.91 8.26L12 2Z");
-            const path2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            path2.setAttribute("d", "M19 3L19.5 5.5L22 6L19.5 6.5L19 9L18.5 6.5L16 6L18.5 5.5L19 3Z");
-            const path3 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            path3.setAttribute("d", "M5 21L5.5 18.5L8 18L5.5 17.5L5 15L4.5 17.5L2 18L4.5 18.5L5 21Z");
-            iconSvg.appendChild(path1);
-            iconSvg.appendChild(path2);
-            iconSvg.appendChild(path3);
-            regenerateBtn.appendChild(iconSvg);
-            const textSpan = document.createElement("span");
-            textSpan.setAttribute("contenteditable", "false");
-            textSpan.textContent = " Regenerate";
-            regenerateBtn.appendChild(textSpan);
-            const imgSrc = img.getAttribute("src") || "";
-            regenerateBtn.onclick = (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const alt = img.getAttribute("alt") || "";
-              handleRegenerateImage(imgSrc, alt);
-            };
-            // Append to parent, but ensure parent doesn't serialize button content
-            parent.appendChild(regenerateBtn);
-            
-            // Store reference to text span and image src for countdown updates
-            (regenerateBtn as any).__textSpan = textSpan;
-            (regenerateBtn as any).__imageSrc = imgSrc;
-          });
-        } finally {
-          isProcessing = false;
-        }
-      });
-    };
-    
-    // Add buttons after a short delay when editor is ready
-    const timeout = setTimeout(addRegenerateButtons, 300);
-    
-    // Run when content changes (e.g. new image added) - heavily debounced to prevent layout thrashing
-    let debounceTimeout: ReturnType<typeof setTimeout>;
-    const handleContentChange = () => {
-      clearTimeout(debounceTimeout);
-      debounceTimeout = setTimeout(addRegenerateButtons, 800);
-    };
-    editor.on("update", handleContentChange);
-    
-    return () => {
-      clearTimeout(timeout);
-      clearTimeout(debounceTimeout);
-      editor.off("update", handleContentChange);
-    };
-  }, [editor]);
 
   // Fetch CMS images when modal opens
   useEffect(() => {
@@ -665,7 +587,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       const res = await fetch("/api/images/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9" }),
+        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9", imageSize: "1K" }),
       });
       
       if (!res.ok) {
@@ -738,7 +660,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       const res = await fetch("/api/images/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9" }),
+        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9", imageSize: "1K" }),
       });
       
       if (!res.ok) {
@@ -1150,13 +1072,17 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
             data-testid="save-button"
             className="flex items-center space-x-1 md:space-x-2 bg-black text-white px-3 md:px-4 py-1.5 rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-xs md:text-sm font-medium flex-shrink-0"
           >
-            {isSaving ? (
+            {saveJustCompleted ? (
+              <span className="text-green-400">✓</span>
+            ) : isSaving ? (
               <span className="animate-spin">◌</span>
             ) : (
               <Save className="h-3 w-3 md:h-4 md:w-4" />
             )}
-            <span className="hidden sm:inline" data-testid="save-button-text">{isSaving ? "Saving..." : "Save Changes"}</span>
-            <span className="sm:hidden">{isSaving ? "..." : "Save"}</span>
+            <span className="hidden sm:inline" data-testid="save-button-text">
+              {saveJustCompleted ? "Saved!" : isSaving ? "Saving..." : "Save Changes"}
+            </span>
+            <span className="sm:hidden">{saveJustCompleted ? "Saved!" : isSaving ? "..." : "Save"}</span>
           </button>
         )}
       </div>
@@ -1164,13 +1090,22 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
       {/* Editor Content */}
       <div className="flex-1 overflow-y-auto bg-white" style={{ minHeight: 0 }}>
         <div className="w-full mx-auto p-3 md:p-8 max-w-4xl">
-          {/* Title */}
+          {/* Title — textarea so long titles wrap instead of clipping */}
           {title !== undefined && (
-            <input
-              type="text"
+            <textarea
               value={title}
-              onChange={(e) => onTitleChange?.(e.target.value)}
-              className="text-2xl md:text-4xl font-bold mb-4 md:mb-6 w-full bg-transparent border-none outline-none focus:outline-none p-0 resize-none"
+              onChange={(e) => {
+                onTitleChange?.(e.target.value);
+                // Auto-resize
+                e.target.style.height = "auto";
+                e.target.style.height = `${e.target.scrollHeight}px`;
+              }}
+              ref={(el) => {
+                // Set initial height on mount
+                if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; }
+              }}
+              rows={1}
+              className="text-2xl md:text-4xl font-bold mb-4 md:mb-6 w-full bg-transparent border-none outline-none focus:outline-none p-0 resize-none overflow-hidden leading-tight"
               placeholder="Blog title..."
             />
           )}
@@ -1246,7 +1181,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                       const res = await fetch("/api/images/generate", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9" }),
+                        body: JSON.stringify({ subject: imagePrompt, aspect: "16:9", imageSize: "2K" }),
                       });
                       if (!res.ok) throw new Error("Failed to generate image");
                       const data = await res.json();
@@ -1286,8 +1221,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
               <img 
                 src={coverImageUrl} 
                 alt={title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image"} 
-                className="w-full h-auto cursor-pointer rounded-[28px]"
-                style={{ borderRadius: '28px', display: 'block' }}
+                className="w-full h-auto cursor-pointer"
+                style={{ borderRadius: '0px', display: 'block' }}
                 onClick={() => {
                   const altText = title ? `professional cover image for blog post about ${title.toLowerCase()}` : "Cover image";
                   setSelectedImage({ src: coverImageUrl, alt: altText });
@@ -1304,8 +1239,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                   background: 'rgba(0, 0, 0, 0.9)',
                   color: 'white',
                   border: 'none',
-                  borderRadius: '8px',
-                  padding: '10px 14px',
+                  borderRadius: '28px',
+                  padding: '10px 18px',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -1315,8 +1250,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                   transition: 'all 0.2s',
                   zIndex: 20,
                   backdropFilter: 'blur(8px)',
-                  opacity: regeneratingImage === coverImageUrl ? 1 : 0.85,
-                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+                  opacity: regeneratingImage === coverImageUrl ? 1 : 0.9,
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.45)',
                   pointerEvents: 'auto',
                 }}
                 onClick={async (e) => {
@@ -1343,7 +1278,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
                     const res = await fetch("/api/images/generate", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ subject: imagePrompt, aspect: "16:9" }),
+                      body: JSON.stringify({ subject: imagePrompt, aspect: "16:9", imageSize: "2K" }),
                     });
                     if (!res.ok) throw new Error("Failed to regenerate image");
                     const data = await res.json();
@@ -1467,7 +1402,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
         .ProseMirror img {
           max-width: 100%;
           height: auto;
-          border-radius: 28px;
+          border-radius: 0;
           margin: 1rem 0;
           display: block;
           cursor: pointer;
@@ -1476,7 +1411,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           outline: 2px solid #000;
           outline-offset: 2px;
         }
-        .ProseMirror p.image-with-regenerate {
+        .ProseMirror .image-with-regenerate {
           position: relative;
           margin: 1rem 0;
         }
@@ -1487,8 +1422,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           background: rgba(0, 0, 0, 0.9);
           color: white;
           border: none;
-          border-radius: 8px;
-          padding: 10px 14px;
+          border-radius: 28px;
+          padding: 10px 18px;
           cursor: pointer;
           display: flex;
           align-items: center;
@@ -1498,8 +1433,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           transition: all 0.2s;
           z-index: 20;
           backdrop-filter: blur(8px);
-          opacity: 0.85;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+          opacity: 0.9;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
           pointer-events: auto;
         }
         .ProseMirror .regenerate-image-btn:hover:not(:disabled) {
@@ -1512,7 +1447,7 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           opacity: 0.6;
           cursor: not-allowed;
         }
-        .ProseMirror p.image-with-regenerate:hover .regenerate-image-btn {
+        .ProseMirror .image-with-regenerate:hover .regenerate-image-btn {
           opacity: 1;
         }
         /* Cover image regenerate button overlay */
@@ -1523,8 +1458,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           background: rgba(0, 0, 0, 0.9);
           color: white;
           border: none;
-          border-radius: 8px;
-          padding: 10px 14px;
+          border-radius: 28px;
+          padding: 10px 18px;
           cursor: pointer;
           display: flex;
           align-items: center;
@@ -1534,8 +1469,8 @@ export default function BlogEditor({ content, onChange, onSave, isSaving, hasCha
           transition: all 0.2s;
           z-index: 20;
           backdrop-filter: blur(8px);
-          opacity: 0.85;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+          opacity: 0.9;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
           pointer-events: auto;
         }
         .image-with-regenerate:hover .regenerate-image-btn {

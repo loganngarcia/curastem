@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, Plus, Settings, Search, Menu } from "lucide-react";
+import { Send, Square, Loader2, Plus, Settings, Search, Menu } from "lucide-react";
+import { slugify } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { cn, formatDate } from "@/lib/utils";
 import BlogEditor from "@/components/BlogEditor";
@@ -23,6 +24,31 @@ interface Blog {
   coverImageUrl?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Draft persistence — survives editor close and page refresh
+// ---------------------------------------------------------------------------
+const DRAFT_KEY = "curastem_draft_blog";
+
+function saveDraft(blog: Blog, content: string) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ blog, content })); } catch { /* quota */ }
+}
+function loadDraft(): { blog: Blog; content: string } | null {
+  try { const raw = localStorage.getItem(DRAFT_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+}
+
+/** Convert any markdown the AI accidentally emits into HTML for TipTap. */
+function markdownToHtml(text: string): string {
+  return text
+    .replace(/^### (.+)$/gm, '<h3 dir="auto">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 dir="auto">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h3 dir="auto">$1</h3>')
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>");
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([
@@ -36,9 +62,14 @@ export default function ChatPage() {
   const [selectedBlog, setSelectedBlog] = useState<Blog | null>(null);
   const [loadingBlog, setLoadingBlog] = useState(false);
   const [savingBlog, setSavingBlog] = useState(false);
+  const [saveJustCompleted, setSaveJustCompleted] = useState(false);
   const [editableContent, setEditableContent] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Start collapsed on mobile
+  // Tracks a newly generated blog that hasn't been saved to Framer yet
+  const [unsavedBlog, setUnsavedBlog] = useState<Blog | null>(null);
+  // True while blog HTML is actively streaming — tells BlogEditor to skip placeholder guards
+  const [isBlogStreaming, setIsBlogStreaming] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [creationStatus, setCreationStatus] = useState("");
   const [creationProgress, setCreationProgress] = useState(0);
@@ -57,9 +88,23 @@ export default function ChatPage() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const blogPreviewRef = useRef<HTMLDivElement>(null);
+  // When true, streaming text chunks are piped into the editor instead of the chat bubble
+  const isBuildingBlogRef = useRef(false);
+  const buildingContentRef = useRef("");
+  // When true, the blog hasn't been saved to Framer yet — Save button will POST instead of PUT
+  const isNewBlogRef = useRef(false);
+  // Signals the SSE reader loop to stop after a "done" event is received
+  const readerDoneRef = useRef(false);
+  // AbortController for the current streaming fetch — used by the Stop button
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     fetchBlogs();
+    // Restore any unsaved draft from a previous session
+    const draft = loadDraft();
+    if (draft) {
+      setUnsavedBlog(draft.blog);
+    }
     // Set sidebar open on desktop, closed on mobile
     const checkScreenSize = () => {
       setIsSidebarOpen(window.innerWidth >= 768);
@@ -80,6 +125,20 @@ export default function ChatPage() {
       blogPreviewRef.current.scrollTop = 0;
     }
   }, [selectedBlog]);
+
+  // Clear "Saved!" feedback after 2 seconds
+  useEffect(() => {
+    if (!saveJustCompleted) return;
+    const t = setTimeout(() => setSaveJustCompleted(false), 2000);
+    return () => clearTimeout(t);
+  }, [saveJustCompleted]);
+
+  // Auto-save draft to localStorage whenever the unsaved blog content changes
+  useEffect(() => {
+    if (isNewBlogRef.current && unsavedBlog && editableContent) {
+      saveDraft(unsavedBlog, editableContent);
+    }
+  }, [editableContent, unsavedBlog]);
 
   const fetchBlogs = async () => {
     setFetchingBlogs(true);
@@ -158,22 +217,40 @@ export default function ChatPage() {
     
     setSavingBlog(true);
     try {
-      const res = await fetch(`/api/blogs/${selectedBlog.slug}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          content: editableContent,
-          title: selectedBlog.title,
-          date: selectedBlog.date,
-          coverImageUrl: selectedBlog.coverImageUrl,
-          blogListImageUrl: selectedBlog.coverImageUrl, // Use same image for both cover and list
-        }),
-      });
+      // New blogs (not yet in Framer) use POST; existing blogs use PUT
+      const isNew = isNewBlogRef.current;
+      const res = isNew
+        ? await fetch("/api/blogs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "save",
+              slug: selectedBlog.slug,
+              title: selectedBlog.title,
+              headline: selectedBlog.headline || "",
+              content: editableContent,
+              date: selectedBlog.date,
+              coverImageUrl: selectedBlog.coverImageUrl,
+            }),
+          })
+        : await fetch(`/api/blogs/${selectedBlog.slug}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              content: editableContent,
+              title: selectedBlog.title,
+              date: selectedBlog.date,
+              coverImageUrl: selectedBlog.coverImageUrl,
+              blogListImageUrl: selectedBlog.coverImageUrl,
+            }),
+          });
 
       if (res.ok) {
         const updatedBlog = await res.json();
         setSelectedBlog(updatedBlog);
-        // Update original state after successful save
+        isNewBlogRef.current = false; // Now exists in Framer — subsequent saves use PUT
+        setUnsavedBlog(null); // No longer unsaved
+        clearDraft(); // Remove from localStorage
         setOriginalBlogState({
           content: editableContent,
           title: selectedBlog.title,
@@ -181,15 +258,7 @@ export default function ChatPage() {
           coverImageUrl: selectedBlog.coverImageUrl,
         });
         fetchBlogs();
-        // Show success feedback
-        const saveButtonText = document.querySelector('[data-testid="save-button-text"]');
-        if (saveButtonText) {
-          const originalText = saveButtonText.textContent;
-          saveButtonText.textContent = "Saved!";
-          setTimeout(() => {
-            if (saveButtonText) saveButtonText.textContent = originalText;
-          }, 2000);
-        }
+        setSaveJustCompleted(true);
       } else {
         const errorData = await res.json().catch(() => ({ error: "Unknown error" }));
         console.error("Save error response:", errorData);
@@ -213,9 +282,18 @@ export default function ChatPage() {
   };
 
   const handleCloseBlog = () => {
+    // If the blog is still unsaved, persist current content to localStorage before closing
+    if (isNewBlogRef.current && selectedBlog) {
+      saveDraft(selectedBlog, editableContent);
+      // Keep unsavedBlog in the sidebar so the user can reopen it
+    }
     setSelectedBlog(null);
     setIsCreating(false);
+    setIsBlogStreaming(false);
     setStreamingBlogContent("");
+    isBuildingBlogRef.current = false;
+    buildingContentRef.current = "";
+    // Don't reset isNewBlogRef or unsavedBlog — keep draft alive in sidebar
   };
 
   const sendMessage = async (messageText: string) => {
@@ -223,27 +301,30 @@ export default function ChatPage() {
 
     const userMessage = messageText.trim();
     setStreamingBlogContent("");
+    buildingContentRef.current = "";
+    readerDoneRef.current = false;
     setMessages(prev => [...prev, { role: "user" as const, content: userMessage }]);
     setLoading(true);
+
+    // Create a fresh AbortController for this request
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          messages: [...messages, { role: "user" as const, content: userMessage }] 
+        body: JSON.stringify({
+          messages: [...messages, { role: "user" as const, content: userMessage }],
+          currentBlogSlug: selectedBlog?.slug,
         }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
         const text = await res.text();
         let errorMsg = "Failed to get response";
-        try {
-          const data = JSON.parse(text);
-          errorMsg = data.error || errorMsg;
-        } catch (e) {
-          errorMsg = text || errorMsg;
-        }
+        try { const data = JSON.parse(text); errorMsg = data.error || errorMsg; } catch { errorMsg = text || errorMsg; }
         throw new Error(errorMsg);
       }
 
@@ -254,84 +335,180 @@ export default function ChatPage() {
       setMessages(prev => [...prev, { role: "assistant", content: "" }]);
 
       const decoder = new TextDecoder();
+      let buffer = "";
+
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-        
-        const chunk = decoder.decode(value, { stream: true });
-        
-        // Check for stream-level errors
-        if (chunk.includes("[ERROR:")) {
-          const errorMatch = chunk.match(/\[ERROR: (.*?)\]/);
-          throw new Error(errorMatch ? errorMatch[1] : "Stream error");
-        }
+        if (done || readerDoneRef.current) break;
 
-        assistantMessage += chunk;
-        
-        // If the message contains blog-like content (H2, H3), show it in the streaming preview
-        if (assistantMessage.includes("##") || assistantMessage.includes("###")) {
-          setStreamingBlogContent(assistantMessage);
-        }
-        
-        setMessages(prev => {
-          const newMessages = [...prev];
-          newMessages[newMessages.length - 1].content = assistantMessage;
-          return newMessages;
-        });
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
 
-        const toolMatch = assistantMessage.match(/\[TOOL:(\w+)(\{.*?\})\]/);
-        if (toolMatch) {
-          const toolName = toolMatch[1];
-          const toolArgs = JSON.parse(toolMatch[2]);
-          
-          if (toolName === "create_blog") {
-            handleCreateBlog(toolArgs.title);
-            break;
-          } else if (toolName === "list_blogs") {
-            fetchBlogs();
-            setMessages(prev => [...prev, { role: "assistant", content: "I've updated the blog list in the sidebar for you." }]);
-            break;
-          } else if (toolName === "add_image" && selectedBlog) {
-            // AI wants to add an image at a specific location
-            const { h2Text, subject } = toolArgs;
-            if (h2Text && subject) {
-              // Find the H2 and add image above it
-              const currentContent = editableContent;
-              const h2Pattern = new RegExp(`(<h2[^>]*>[^<]*${h2Text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^<]*</h2>)`, 'i');
-              const match = currentContent.match(h2Pattern);
-              
-              if (match) {
-                // Generate image
-                try {
-                  const res = await fetch("/api/images/generate", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ subject, aspect: "16:9" }),
-                  });
-                  
-                  if (res.ok) {
-                    const data = await res.json();
-                    // Use the subject as alt text (it's the image prompt)
-                    const imageHtml = `<p dir="auto" class="image-with-regenerate"><img src="${data.url}" alt="${subject}"></p>`;
-                    const newContent = currentContent.replace(h2Pattern, imageHtml + match[0]);
-                    setEditableContent(newContent);
-                    setMessages(prev => [...prev, { role: "assistant", content: `I've added an image above "${h2Text}".` }]);
-                  }
-                } catch (err) {
-                  console.error("Failed to add image:", err);
-                }
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+
+          let event: { t: string; c?: string; n?: string; a?: Record<string, unknown>; r?: unknown; err?: string };
+          try { event = JSON.parse(raw); } catch { continue; }
+
+          if (event.t === "text" && event.c) {
+            const chunk = event.c as string;
+
+            if (isBuildingBlogRef.current) {
+              // Buffer everything; slice from the first HTML tag to strip any preamble
+              buildingContentRef.current += chunk;
+              const htmlStart = buildingContentRef.current.indexOf("<");
+              if (htmlStart >= 0) {
+                setEditableContent(markdownToHtml(buildingContentRef.current.slice(htmlStart)));
+              }
+              setMessages(prev => {
+                const msgs = [...prev];
+                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: "Writing your blog…" };
+                return msgs;
+              });
+            } else {
+              // Not yet building — check if HTML blog content is starting
+              // (AI writes content BEFORE calling create_blog)
+              assistantMessage += chunk;
+              buildingContentRef.current += chunk;
+              const htmlStart = buildingContentRef.current.indexOf("<");
+              if (!selectedBlog && htmlStart >= 0) {
+                // HTML detected — open editor optimistically before the tool call arrives
+                const tempSlug = "new-blog-" + Date.now();
+                const tempBlog = { id: "pending", slug: tempSlug, title: "New Blog", headline: "", date: new Date().toISOString() };
+                setSelectedBlog(tempBlog);
+                setUnsavedBlog(tempBlog);
+                setOriginalBlogState({ content: "", title: "New Blog", date: tempBlog.date });
+                setEditableContent(markdownToHtml(buildingContentRef.current.slice(htmlStart)));
+                isBuildingBlogRef.current = true;
+                isNewBlogRef.current = true;
+                setIsBlogStreaming(true);
+              } else if (!selectedBlog) {
+                // Normal chat text (no HTML yet)
+                setMessages(prev => {
+                  const msgs = [...prev];
+                  msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: assistantMessage };
+                  return msgs;
+                });
               }
             }
+
+          } else if (event.t === "tool_start") {
+            const toolName = event.n ?? "";
+            const statusMap: Record<string, string> = {
+              list_blogs: "Fetching blog list...",
+              add_image: "Generating and uploading image...",
+            };
+            if (statusMap[toolName]) {
+              setCreationStatus(statusMap[toolName]);
+            }
+
+            if (toolName === "create_blog") {
+              // Content already streaming — update the title/slug now that we know them
+              const title = (event.a?.title as string) || "New Blog";
+              const slug = slugify(title);
+              setSelectedBlog(prev => {
+                const updated = prev ? { ...prev, slug, title } : { id: "pending", slug, title, headline: "", date: new Date().toISOString() };
+                setUnsavedBlog(updated);
+                return updated;
+              });
+              isNewBlogRef.current = true;
+            }
+
+          } else if (event.t === "tool_done") {
+            const toolName = event.n ?? "";
+            const result = event.r as Record<string, unknown> | undefined;
+
+            if (toolName === "create_blog" && result) {
+              // Editor already open — just confirm the final slug from the server
+              if (result.slug) {
+                setSelectedBlog(prev => prev ? { ...prev, slug: String(result.slug), title: String(result.title ?? prev.title) } : prev);
+              }
+            } else if (toolName === "list_blogs") {
+              fetchBlogs();
+            } else if (toolName === "add_image" && result?.url) {
+              // Insert the image above the specified H2 in the current editor content
+              const h2Text = result.h2Text as string;
+              const imageUrl = result.url as string;
+              const subject = result.subject as string;
+              setEditableContent(prev => {
+                const h2Pattern = new RegExp(
+                  `(<h2[^>]*>[^<]*${h2Text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^<]*<\/h2>)`,
+                  "i"
+                );
+                const match = prev.match(h2Pattern);
+                if (!match) return prev;
+                const imageHtml = `<p dir="auto" class="image-with-regenerate"><img src="${imageUrl}" alt="${subject}"></p>`;
+                return prev.replace(h2Pattern, imageHtml + match[0]);
+              });
+            }
+
+          } else if (event.t === "tool_error") {
+            const errMsg = event.err ?? "Unknown error";
+            console.error(`Tool error (${event.n ?? "stream"}):`, errMsg);
+            setIsCreating(false);
+            setCreationProgress(0);
+            setCreationStatus("");
+            // Stream-level error (no tool name) = AI failed entirely, show in chat
+            if (!event.n) {
+              assistantMessage = `Sorry, I ran into an error: ${errMsg}`;
+              setMessages(prev => {
+                const msgs = [...prev];
+                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: assistantMessage };
+                return msgs;
+              });
+            }
+
+          } else if (event.t === "done") {
+            if (isBuildingBlogRef.current) {
+              isBuildingBlogRef.current = false;
+              setIsBlogStreaming(false); // Let BlogEditor add H2 placeholders now
+              // Persist the completed draft so it survives close/refresh
+              setUnsavedBlog(prev => {
+                if (prev) saveDraft(prev, buildingContentRef.current);
+                return prev;
+              });
+              setMessages(prev => {
+                const msgs = [...prev];
+                msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: "Blog written! Review it in the editor and hit Save Changes when ready." };
+                return msgs;
+              });
+            }
+            // Signal outer reader loop to stop
+            readerDoneRef.current = true;
             break;
           }
         }
       }
     } catch (err) {
-      console.error(err);
-      const msg = err instanceof Error ? err.message : String(err);
-      setMessages(prev => [...prev, { role: "assistant", content: `Sorry, I encountered an error: ${msg}. Please try again.` }]);
+      // AbortError = user clicked Stop — not a real error, just clean up quietly
+      if (err instanceof Error && err.name === "AbortError") {
+        setMessages(prev => {
+          const msgs = [...prev];
+          if (msgs[msgs.length - 1]?.role === "assistant" && !msgs[msgs.length - 1].content) {
+            msgs.pop(); // Remove empty assistant bubble if nothing was generated
+          } else if (msgs[msgs.length - 1]?.content === "Writing your blog…") {
+            msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: "Stopped." };
+          }
+          return msgs;
+        });
+      } else {
+        console.error(err);
+        const msg = err instanceof Error ? err.message : String(err);
+        setMessages(prev => [...prev, { role: "assistant", content: `Sorry, I encountered an error: ${msg}. Please try again.` }]);
+      }
     } finally {
+      abortControllerRef.current = null;
       setLoading(false);
+      setIsCreating(false);
+      setIsBlogStreaming(false);
+      setCreationProgress(0);
+      setCreationStatus("");
+      isBuildingBlogRef.current = false;
+      buildingContentRef.current = "";
+      // Don't reset isNewBlogRef here — it should persist until the user saves
     }
   };
 
@@ -341,45 +518,6 @@ export default function ChatPage() {
     const messageText = input.trim();
     setInput("");
     await sendMessage(messageText);
-  };
-
-  const handleCreateBlog = async (title: string) => {
-    setIsCreating(true);
-    setCreationStatus("Starting blog creation...");
-    setCreationProgress(10);
-    setMessages(prev => [...prev, { role: "assistant", content: `I'm starting to build your blog: "${title}". I'll generate the content and images, then sync everything to Framer. This usually takes about 2 minutes.` }]);
-    
-    try {
-      // Step 1: Generate content and initial Framer entry
-      setCreationStatus("Generating content and creating Framer entry...");
-      setCreationProgress(30);
-      const res = await fetch("/api/blogs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, action: "create" }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message || data.details || "Failed to create blog");
-      }
-
-      const blog = await res.json();
-      setCreationProgress(100);
-      setCreationStatus("Blog created successfully!");
-      setMessages(prev => [...prev, { role: "assistant", content: `Successfully created blog: "${blog.title}"! You can now see it in your sidebar and edit it.` }]);
-      
-      // Auto-select the new blog
-      handleBlogClick(blog);
-      fetchBlogs();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setMessages(prev => [...prev, { role: "assistant", content: `❌ Failed to create blog: ${msg}` }]);
-    } finally {
-      setIsCreating(false);
-      setCreationStatus("");
-      setCreationProgress(0);
-    }
   };
 
   const filteredBlogs = blogs.filter(blog => 
@@ -476,11 +614,40 @@ export default function ChatPage() {
             </div>
           
           <div className="flex flex-col gap-0.5">
+            {/* Unsaved new blog — shown at top with red dot */}
+            {unsavedBlog && (
+              <div
+                onClick={() => {
+                  // Restore from in-memory buffer first, then fall back to localStorage
+                  const memContent = buildingContentRef.current;
+                  const htmlIdx = memContent.indexOf("<");
+                  if (htmlIdx >= 0) {
+                    setEditableContent(markdownToHtml(memContent.slice(htmlIdx)));
+                  } else {
+                    const draft = loadDraft();
+                    setEditableContent(draft?.content ? markdownToHtml(draft.content) : "");
+                  }
+                  setSelectedBlog(unsavedBlog);
+                  isNewBlogRef.current = true;
+                  setOriginalBlogState({ content: "", title: unsavedBlog.title, date: unsavedBlog.date });
+                }}
+                className={cn(
+                  "group px-3 py-3 md:py-2.5 rounded-[28px] transition-all cursor-pointer text-base md:text-sm relative flex items-center justify-between touch-manipulation min-h-[44px]",
+                  selectedBlog?.id === unsavedBlog.id
+                    ? "bg-gray-200 text-black font-medium"
+                    : "text-gray-600 hover:bg-gray-100 active:bg-gray-200 hover:text-black"
+                )}
+              >
+                <span className="truncate flex-1">{unsavedBlog.title}</span>
+                <div className="h-2 w-2 rounded-full bg-red-500 flex-shrink-0" title="Unsaved" />
+              </div>
+            )}
+
             {fetchingBlogs ? (
               <div className="flex justify-center py-4">
                 <Loader2 className="h-4 w-4 animate-spin text-gray-300" />
               </div>
-            ) : filteredBlogs.length === 0 ? (
+            ) : filteredBlogs.length === 0 && !unsavedBlog ? (
               <div className="px-3 py-2 text-xs text-gray-400 italic">
                 {searchQuery ? "No matching blogs" : "No blogs yet"}
               </div>
@@ -527,28 +694,33 @@ export default function ChatPage() {
         )}
 
         {isCreating ? (
-          <div className="flex-1 flex items-center justify-center bg-gray-50/50">
-            <div className="max-w-md w-full p-8 bg-white rounded-[28px] border border-gray-200 shadow-xl text-center animate-fade-in">
-              <div className="mb-6 relative h-24 w-24 mx-auto">
-                <div className="absolute inset-0 border-4 border-gray-100 rounded-full"></div>
-                <div 
-                  className="absolute inset-0 border-4 border-black rounded-full transition-all duration-500 ease-out"
-                  style={{ 
-                    clipPath: `polygon(50% 50%, -50% -50%, ${creationProgress > 25 ? '150% -50%' : '50% -50%'}, ${creationProgress > 50 ? '150% 150%' : '50% 50%'}, ${creationProgress > 75 ? '-50% 150%' : '50% 50%'}, -50% -50%)`,
-                    transform: `rotate(${creationProgress * 3.6}deg)`
-                  }}
-                ></div>
+          <div className="flex-1 flex items-center justify-center bg-white">
+            <div className="max-w-xs w-full mx-6 p-10 bg-white rounded-[32px] border border-gray-100 shadow-[0_8px_48px_rgba(0,0,0,0.08)] text-center animate-fade-in">
+              {/* SVG ring progress */}
+              <div className="mb-8 relative h-20 w-20 mx-auto">
+                <svg className="w-full h-full -rotate-90" viewBox="0 0 80 80" fill="none">
+                  <circle cx="40" cy="40" r="33" stroke="#f3f4f6" strokeWidth="5.5" />
+                  <circle
+                    cx="40" cy="40" r="33"
+                    stroke="black" strokeWidth="5.5"
+                    strokeLinecap="round"
+                    strokeDasharray={`${2 * Math.PI * 33}`}
+                    strokeDashoffset={`${2 * Math.PI * 33 * (1 - creationProgress / 100)}`}
+                    className="transition-all duration-700 ease-out"
+                  />
+                </svg>
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <Loader2 className="h-8 w-8 animate-spin text-black" />
+                  <span className="text-sm font-semibold tabular-nums">{creationProgress}%</span>
                 </div>
               </div>
-              <h2 className="text-xl font-bold mb-2">Building your blog...</h2>
-              <p className="text-gray-500 text-sm mb-6">{creationStatus}</p>
-              <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                <div 
-                  className="bg-black h-full transition-all duration-500 ease-out"
+              <h2 className="text-[17px] font-semibold tracking-tight mb-1.5">Building your blog...</h2>
+              <p className="text-gray-400 text-[13px] mb-8 leading-relaxed">{creationStatus || "Preparing…"}</p>
+              {/* Progress bar with shimmer */}
+              <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden">
+                <div
+                  className="bg-black h-full rounded-full transition-all duration-700 ease-out"
                   style={{ width: `${creationProgress}%` }}
-                ></div>
+                />
               </div>
             </div>
           </div>
@@ -579,7 +751,9 @@ export default function ChatPage() {
                       onChange={setEditableContent}
                       onSave={handleSaveBlog}
                       isSaving={savingBlog}
+                      saveJustCompleted={saveJustCompleted}
                       hasChanges={hasChanges}
+                      isStreaming={isBlogStreaming}
                       blogSlug={selectedBlog?.slug}
                       coverImageUrl={selectedBlog?.coverImageUrl}
                       title={selectedBlog?.title}
@@ -688,19 +862,29 @@ export default function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder={selectedBlog ? `Tell AI how to improve this blog...` : "What should we write about today?"}
-              disabled={loading}
-              className="w-full bg-gray-50 border border-gray-200 rounded-[28px] py-3 md:py-4 pl-4 md:pl-6 pr-12 md:pr-14 text-sm md:text-base text-black placeholder:text-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-all disabled:opacity-50 shadow-sm"
+              className="w-full bg-gray-50 border border-gray-200 rounded-[28px] py-3 md:py-4 pl-4 md:pl-6 pr-12 md:pr-14 text-sm md:text-base text-black placeholder:text-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-all shadow-sm"
             />
-            <button
-              type="submit"
-              id="chat-submit"
-              data-testid="chat-submit"
-              aria-label="Send message"
-              disabled={loading || !input.trim()}
-              className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-2 bg-black text-white rounded-[28px] hover:bg-gray-800 active:bg-gray-700 transition-colors disabled:opacity-10 touch-manipulation"
-            >
-              {loading ? <Loader2 className="h-4 w-4 md:h-5 md:w-5 animate-spin" /> : <Send className="h-4 w-4 md:h-5 md:w-5" />}
-            </button>
+            {loading ? (
+              <button
+                type="button"
+                aria-label="Stop generation"
+                onClick={() => abortControllerRef.current?.abort()}
+                className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-2 bg-black text-white rounded-[28px] hover:bg-gray-800 active:bg-gray-700 transition-colors touch-manipulation"
+              >
+                <Square className="h-4 w-4 md:h-5 md:w-5" fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                id="chat-submit"
+                data-testid="chat-submit"
+                aria-label="Send message"
+                disabled={!input.trim()}
+                className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 p-2 bg-black text-white rounded-[28px] hover:bg-gray-800 active:bg-gray-700 transition-colors disabled:opacity-10 touch-manipulation"
+              >
+                <Send className="h-4 w-4 md:h-5 md:w-5" />
+              </button>
+            )}
           </form>
         </div>
       </div>

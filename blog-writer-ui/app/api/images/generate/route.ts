@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateImageViaPoe } from "@/lib/poe";
+import { generateImageViaImagen } from "@/lib/gemini";
 import { uploadImageToFramer } from "@/lib/framer";
 import { getRandomAccentColor } from "@/lib/blog-generator";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { subject, aspect = "16:9" } = body;
+    const { subject, aspect = "16:9", imageSize = "1K" } = body;
 
     if (!subject) {
       return NextResponse.json(
@@ -15,18 +15,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`Generating image for subject: ${subject}`);
-    
-    // Generate image via Poe
-    const accentHue = getRandomAccentColor();
-    const poeUrl = await generateImageViaPoe(subject, accentHue, aspect);
-    
-    // Upload to Framer
-    console.log("Uploading generated image to Framer...");
-    const framerUrl = await uploadImageToFramer(poeUrl);
-    
-    console.log("Image generated and uploaded successfully:", framerUrl);
+    console.log(`Generating image for subject: ${subject} at ${imageSize}`);
 
+    // Generate image via Nano Banana 2 — returns a base64 data URL
+    const accentHue = getRandomAccentColor();
+    const dataUrl = await generateImageViaImagen(subject, accentHue, aspect, imageSize);
+
+    // Upload base64 data URL to Framer
+    console.log("Uploading generated image to Framer...");
+    const framerUrl = await uploadImageToFramer(dataUrl);
+
+    console.log("Image generated and uploaded successfully:", framerUrl);
     return NextResponse.json({ url: framerUrl });
   } catch (error) {
     console.error("Failed to generate image:", error);
