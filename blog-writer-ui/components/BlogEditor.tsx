@@ -21,7 +21,8 @@ import {
   List, 
   ListOrdered, 
   ChevronDown,
-  Save,
+  Download,
+  Globe,
   Undo,
   Redo,
   Image as ImageIcon,
@@ -33,9 +34,10 @@ import {
   Pencil,
   AlertCircle,
 } from "lucide-react";
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react";
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import { cn } from "@/lib/utils";
 import ErrorModal from "./ErrorModal";
+import { htmlWithInlineImages } from "@/lib/exportUtils";
 
 export interface BlogEditorRef {
   /** Apply AI-generated find/replace edits as a ProseMirror transaction (supports undo/redo). Returns true if any edit was applied. */
@@ -57,6 +59,8 @@ interface EditorProps {
   onTitleChange?: (title: string) => void;
   onDateChange?: (date: string) => void;
   onCoverImageReplace?: (newUrl: string) => void;
+  /** Called whenever the cover image alt text changes so the parent can persist it to CMS. */
+  onCoverImageAltChange?: (newAlt: string) => void;
   /** Called when the user clicks the Edit button on an image. */
   onEditImage?: (imageUrl: string, imageAlt: string) => void;
   /** Called when the user clicks the close button to exit the editor. */
@@ -120,7 +124,7 @@ const AIEditHighlight = Mark.create({
   },
 });
 
-const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ content, onChange, onSave, isSaving, saveJustCompleted = false, saveFailed = false, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace, onEditImage, onClose, isStreaming = false }: EditorProps, ref) {
+const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ content, onChange, onSave, isSaving, saveJustCompleted = false, saveFailed = false, hasChanges = true, blogSlug, coverImageUrl, title, date, onTitleChange, onDateChange, onCoverImageReplace, onCoverImageAltChange, onEditImage, onClose, isStreaming = false }: EditorProps, ref) {
   // Set-based tracking so multiple images can generate simultaneously
   const [generatingImages, setGeneratingImages] = useState<Set<string>>(new Set()); // h2Texts currently generating
   const [regeneratingImages, setRegeneratingImages] = useState<Set<string>>(new Set()); // imageUrls currently regenerating
@@ -131,10 +135,11 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [isImageEditModalOpen, setIsImageEditModalOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState<{ src: string; alt: string } | null>(null);
-  // Tracks the cover image alt text so user edits persist across regenerations
+  // Tracks the cover image alt text / prompt so user edits persist across regenerations
   const [coverImageAlt, setCoverImageAlt] = useState<string>(() =>
     title ? generateFocusedImagePrompt(title) : "professional at work"
   );
+  const [isEditingCoverPrompt, setIsEditingCoverPrompt] = useState(false);
   const [cmsImages, setCmsImages] = useState<Array<{ url: string; alt: string; source: string }>>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadTab, setUploadTab] = useState<"upload" | "cms" | "url">("upload");
@@ -144,6 +149,9 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
   const [isToolbarMenuOpen, setIsToolbarMenuOpen] = useState(false);
   const [toolbarMenuPosition, setToolbarMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const toolbarMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [downloadMenuPosition, setDownloadMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const downloadButtonRef = useRef<HTMLButtonElement>(null);
   const h2PlaceholdersProcessedRef = useRef<string>(""); // Track processed content to prevent infinite loops
   const isUpdatingFromEffectRef = useRef<boolean>(false); // Track if we're updating from an effect
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
@@ -151,7 +159,6 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
   const toolbarRef = useRef<HTMLDivElement>(null);
   const titleTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [primaryCount, setPrimaryCount] = useState(9); // how many overflow-candidates to show inline
-  const [editorFocused, setEditorFocused] = useState(false);
   const [errorModal, setErrorModal] = useState<{
     isOpen: boolean;
     title?: string;
@@ -323,6 +330,62 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
         click: (view, event) => {
           const target = event.target as HTMLElement;
           
+          // Handle inline prompt editing — click on prompt span to edit in-place
+          if (target.classList.contains("placeholder-prompt-span")) {
+            event.preventDefault();
+            const placeholder = target.closest(".image-placeholder") as HTMLElement;
+            if (!placeholder) return false;
+            const h2Text = placeholder.getAttribute("data-h2-text") || "";
+            const currentPrompt = target.textContent || "";
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.value = currentPrompt;
+            input.style.cssText = "font-size: 14px; color: #374151; text-align: center; background: rgba(255,255,255,0.9); border: 1px solid #6b7280; border-radius: 6px; padding: 4px 8px; outline: none; width: 80%; max-width: 80%; margin-bottom: 12px;";
+            target.parentNode?.replaceChild(input, target);
+            input.focus();
+            input.select();
+
+            const savePrompt = () => {
+              const newPrompt = input.value.trim() || currentPrompt;
+              const newSpan = document.createElement("span");
+              newSpan.className = "placeholder-prompt-span";
+              newSpan.setAttribute("contenteditable", "false");
+              newSpan.style.cssText = "font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%; cursor: text; transition: color 0.15s;";
+              newSpan.title = "Click to edit image prompt";
+              newSpan.textContent = newPrompt;
+              input.parentNode?.replaceChild(newSpan, input);
+              // Update TipTap node attribute so the new prompt is used when generating
+              if (editor) {
+                const { state } = editor;
+                const { tr } = state;
+                state.doc.descendants((node, pos) => {
+                  if (node.type.name === "imagePlaceholder" && node.attrs.h2Text === h2Text) {
+                    tr.setNodeMarkup(pos, undefined, { ...node.attrs, imagePrompt: newPrompt });
+                    return false;
+                  }
+                });
+                if (tr.steps.length > 0) editor.view.dispatch(tr);
+              }
+              placeholder.setAttribute("data-image-prompt", newPrompt);
+            };
+
+            input.addEventListener("keydown", (e) => {
+              if (e.key === "Enter") { e.preventDefault(); savePrompt(); }
+              if (e.key === "Escape") {
+                const origSpan = document.createElement("span");
+                origSpan.className = "placeholder-prompt-span";
+                origSpan.setAttribute("contenteditable", "false");
+                origSpan.style.cssText = "font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%; cursor: text; transition: color 0.15s;";
+                origSpan.title = "Click to edit image prompt";
+                origSpan.textContent = currentPrompt;
+                input.parentNode?.replaceChild(origSpan, input);
+              }
+            });
+            input.addEventListener("blur", savePrompt);
+            return true;
+          }
+
           // Handle placeholder image button clicks
           if (target.classList.contains("create-image-btn") || target.closest(".create-image-btn")) {
             event.preventDefault();
@@ -417,51 +480,31 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     },
   }), [editor]);
 
-  // Show toolbar when hovering prose/toolbar or when editor has focus
-  useEffect(() => {
-    if (!editor) return;
-    const onFocus = () => setEditorFocused(true);
-    const onBlur = () => setEditorFocused(false);
-    editor.on("focus", onFocus);
-    editor.on("blur", onBlur);
-    return () => {
-      editor.off("focus", onFocus);
-      editor.off("blur", onBlur);
-    };
-  }, [editor]);
-
-  const showFormattingToolbar = editorFocused || isMenuOpen || isToolbarMenuOpen;
-
-  // Measure toolbar width and compute how many overflow-candidate buttons fit inline
+  // Measure toolbar width and compute how many overflow-candidate buttons fit inline.
+  // Reserve plenty for the right pill (Download + Close) so it never gets pushed off screen.
   useEffect(() => {
     const el = toolbarRef.current;
     if (!el) return;
 
     const compute = () => {
       const W = el.getBoundingClientRect().width;
-      const isMobile = W < 768;
-      // Curastem-style: 40×40 buttons, gap 4. Reserve: sidebar + heading + bold + italic + overflow + save + gaps
-      const sidebarBtn = 0; // Hamburger is always outside toolbar
-      const headingBtn = 140; // Paragraph / Title (H1) / Pull Quote (H2) / etc.
-      const alwaysVisible = 40 * 4; // bold + italic + undo + redo
-      const closeBtn = 40; // Close button only (Publish is above chat bar)
-      const overflowBtn = 40;
       const gap = 4;
-      const leftGap = 12; // between left pill and save
-      // On mobile: add extra reserved so more items collapse into overflow menu
-      const mobileReservedExtra = isMobile ? 120 : 0;
-      const reserved = sidebarBtn + headingBtn + alwaysVisible + closeBtn + overflowBtn + (gap * 6) + leftGap + mobileReservedExtra;
+      const btnWithGap = 40 + gap;
+      // Left pill fixed overhead: heading (160px) + undo (44px) + redo (44px) + overflow ⋯ (44px) + pill padding (8px)
+      const leftPillOverhead = 160 + 44 + 44 + 44 + 8;
+      // Right pill: download (40) + close (40) + pill padding (8) + gap between pills (8)
+      const rightReserved = 40 + 40 + 8 + 8;
+      const reserved = leftPillOverhead + rightReserved;
       const available = Math.max(0, W - reserved);
-      const maxInline = isMobile ? 3 : 9; // fewer inline on mobile → more in ⋯ menu
-      const count = Math.min(maxInline, Math.floor(available / (40 + gap)));
-      setPrimaryCount(count);
+      const count = Math.floor(available / btnWithGap);
+      setPrimaryCount(Math.max(0, count));
     };
 
     const ro = new ResizeObserver(compute);
     ro.observe(el);
-    compute(); // run immediately on mount
+    compute();
     return () => ro.disconnect();
-  }, [editor, showFormattingToolbar]);
+  }, [editor]);
 
   // Update editor content if it changes externally (e.g. when switching blogs or streaming)
   useEffect(() => {
@@ -886,6 +929,101 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     }
   };
 
+  const handleDownload = useCallback(
+    async (format: "pdf" | "docx") => {
+      if (format === "pdf") {
+        const htmlContent = await htmlWithInlineImages(content);
+        const header = `<html><head><meta charset='utf-8'><title>${(title || "Blog").replace(/</g, "&lt;")}</title><style>@page{size:8.5in 11in;margin:0.5in;}body{margin:0;padding:0;font-family:Inter,sans-serif;font-size:14pt;line-height:1.6;}h1{font-size:28px;font-weight:700;}h2{font-size:22px;font-weight:700;border-bottom:1px solid #ddd;margin-top:1.5em;}h3{font-size:18px;font-weight:600;}img{max-width:100%;height:auto;}</style></head><body>`;
+        const titleBlock = title ? `<h1>${title.replace(/</g, "&lt;")}</h1>` : "";
+        const dateBlock = date ? `<p style="color:#666;font-size:12pt;">${date.replace(/</g, "&lt;")}</p>` : "";
+        const footer = "</body></html>";
+        const sourceHTML = header + titleBlock + dateBlock + htmlContent + footer;
+        const iframe = document.createElement("iframe");
+        iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+        document.body.appendChild(iframe);
+        const doc = iframe.contentWindow?.document;
+        if (doc) {
+          doc.open();
+          doc.write(sourceHTML);
+          doc.close();
+          setTimeout(() => {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+            setTimeout(() => document.body.removeChild(iframe), 1000);
+          }, 250);
+        }
+      } else if (format === "docx") {
+        try {
+          const { Document, Packer, Paragraph, TextRun, HeadingLevel, ImageRun, AlignmentType } = await import("docx");
+          const { fetchImageAsBuffer } = await import("@/lib/exportUtils");
+          const parser = new DOMParser();
+          const docEl = parser.parseFromString(content, "text/html");
+          const docxChildren: unknown[] = [];
+          const getRuns = (nodes: NodeListOf<ChildNode>, opts: { bold?: boolean; size?: number } = {}): InstanceType<typeof TextRun>[] => {
+            const runs: InstanceType<typeof TextRun>[] = [];
+            nodes.forEach((node) => {
+              if (node.nodeType === Node.TEXT_NODE && node.textContent) {
+                runs.push(new TextRun({ text: node.textContent, bold: opts.bold, size: opts.size ?? 24 }));
+              } else if (node.nodeType === Node.ELEMENT_NODE) {
+                const el = node as HTMLElement;
+                if (el.tagName === "STRONG" || el.tagName === "B") {
+                  getRuns(el.childNodes, { ...opts, bold: true }).forEach((r) => runs.push(r));
+                } else if (el.tagName === "EM" || el.tagName === "I") {
+                  getRuns(el.childNodes, opts).forEach((r) => runs.push(r));
+                } else if (el.tagName === "IMG") {
+                  runs.push(new TextRun({ text: "[Image]", break: 1 }));
+                } else {
+                  getRuns(el.childNodes, opts).forEach((r) => runs.push(r));
+                }
+              }
+            });
+            return runs;
+          };
+          for (const node of Array.from(docEl.body.childNodes)) {
+            if (node.nodeType !== Node.ELEMENT_NODE) continue;
+            const el = node as HTMLElement;
+            if (el.tagName === "H1") {
+              docxChildren.push(new Paragraph({ children: getRuns(el.childNodes, { size: 32 }), heading: HeadingLevel.TITLE }));
+            } else if (el.tagName === "H2") {
+              docxChildren.push(new Paragraph({ children: getRuns(el.childNodes), heading: HeadingLevel.HEADING_1 }));
+            } else if (el.tagName === "H3") {
+              docxChildren.push(new Paragraph({ children: getRuns(el.childNodes), heading: HeadingLevel.HEADING_2 }));
+            } else if (el.tagName === "IMG") {
+              const src = el.getAttribute("src");
+              if (src) {
+                const img = await fetchImageAsBuffer(src);
+                if (img) docxChildren.push(new Paragraph({ children: [new ImageRun({ data: img.buffer, type: img.type, transformation: { width: img.width, height: img.height } })], alignment: AlignmentType.CENTER }));
+              }
+            } else {
+              const runs = getRuns(el.childNodes);
+              if (runs.length) docxChildren.push(new Paragraph({ children: runs }));
+            }
+          }
+          const doc = new Document({
+            sections: [{ properties: {}, children: docxChildren.filter(Boolean) as InstanceType<typeof Paragraph>[] }],
+          });
+          const blob = await Packer.toBlob(doc);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `${(title || "blog").replace(/[^a-z0-9]/gi, "-")}.docx`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error("DOCX export failed:", err);
+          setErrorModal({
+            isOpen: true,
+            title: "Export failed",
+            message: err instanceof Error ? err.message : "Failed to export DOCX",
+            error: err,
+          });
+        }
+      }
+      setShowDownloadMenu(false);
+    },
+    [content, title, date]
+  );
+
   if (!editor) {
     return null;
   }
@@ -912,14 +1050,15 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     6: "Heading 6",
   };
 
-  // Labels for the toolbar button (fuller than H1/H2, shorter than full dropdown labels)
-  const getCurrentHeadingButtonLabel = () => {
+  // Short label shown in the toolbar button (P / H1 / H2 / H3 / …)
+  const getButtonLabel = () => {
     for (let level = 1; level <= 6; level++) {
-      if (editor.isActive("heading", { level })) return HEADING_LABELS[level];
+      if (editor.isActive("heading", { level })) return `H${level}`;
     }
     return "Paragraph";
   };
 
+  // Full aria/title label
   const getCurrentHeading = () => {
     for (let level = 1; level <= 6; level++) {
       if (editor.isActive("heading", { level })) return HEADING_LABELS[level];
@@ -927,17 +1066,18 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     return "Paragraph";
   };
 
-  // All overflow-candidate items in priority order (most useful = show first, hide last)
+  // Overflow-candidate items in display priority order (show first = hide last).
+  // Heading, Undo, Redo are always visible and handled separately.
   const overflowCandidates = [
-    { id: "underline",   icon: UnderlineIcon,  title: "Underline",     active: editor.isActive("underline"),    disabled: false, action: () => editor.chain().focus().toggleUnderline().run() },
     { id: "image",       icon: ImageIcon,      title: "Insert Image",  active: false,                           disabled: false, action: () => setIsImageModalOpen(true) },
     { id: "link",        icon: LinkIcon,       title: "Link",          active: editor.isActive("link"),         disabled: false, action: () => { const u = window.prompt("Enter URL"); if (u) editor.chain().focus().setLink({ href: u }).run(); else if (u === "") editor.chain().focus().unsetLink().run(); } },
-    { id: "undo",        icon: Undo,           title: "Undo",          active: false,                           disabled: !editor.can().undo(), action: () => editor.chain().focus().undo().run() },
-    { id: "redo",        icon: Redo,           title: "Redo",          active: false,                           disabled: !editor.can().redo(), action: () => editor.chain().focus().redo().run() },
-    { id: "quote",       icon: Quote,          title: "Quote",         active: editor.isActive("blockquote"),   disabled: false, action: () => editor.chain().focus().toggleBlockquote().run() },
-    { id: "code",        icon: Code,           title: "Code",          active: editor.isActive("code"),         disabled: false, action: () => editor.chain().focus().toggleCode().run() },
     { id: "bulletList",  icon: List,           title: "Bullet List",   active: editor.isActive("bulletList"),   disabled: false, action: () => editor.chain().focus().toggleBulletList().run() },
     { id: "orderedList", icon: ListOrdered,    title: "Numbered List", active: editor.isActive("orderedList"),  disabled: false, action: () => editor.chain().focus().toggleOrderedList().run() },
+    { id: "bold",        icon: Bold,           title: "Bold",          active: editor.isActive("bold"),         disabled: false, action: () => editor.chain().focus().toggleBold().run() },
+    { id: "italic",      icon: Italic,         title: "Italic",        active: editor.isActive("italic"),       disabled: false, action: () => editor.chain().focus().toggleItalic().run() },
+    { id: "underline",   icon: UnderlineIcon,  title: "Underline",     active: editor.isActive("underline"),    disabled: false, action: () => editor.chain().focus().toggleUnderline().run() },
+    { id: "quote",       icon: Quote,          title: "Quote",         active: editor.isActive("blockquote"),   disabled: false, action: () => editor.chain().focus().toggleBlockquote().run() },
+    { id: "code",        icon: Code,           title: "Code",          active: editor.isActive("code"),         disabled: false, action: () => editor.chain().focus().toggleCode().run() },
   ];
 
   const primaryItems = overflowCandidates.slice(0, primaryCount);
@@ -949,19 +1089,19 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
       {/* Toolbar — floats above content, never takes layout space */}
       <div
         ref={toolbarRef}
-        className="absolute top-2 left-2 right-2 md:top-4 md:left-4 md:right-4 z-20 flex items-center justify-between"
+        className="absolute top-3 left-3 right-3 flex items-start justify-between"
+        style={{ zIndex: 9999, gap: 8 }}
       >
-        {/* Left pill — formatting, shown when editor focused */}
+        {/* Left pill — formatting, always visible */}
         <div
-          className={cn(
-            "flex items-center flex-shrink-0 overflow-hidden flex-wrap transition-all duration-200",
-            !showFormattingToolbar && "max-w-0 opacity-0 pointer-events-none"
-          )}
+          className="flex items-center flex-shrink-0"
           style={{
+            height: 40,
             background: "var(--cs-surface)",
             borderRadius: 28,
             gap: 4,
-            padding: 4,
+            paddingLeft: 4,
+            paddingRight: 4,
           }}
         >
           {/* Heading dropdown — Curastem-style 40×40 */}
@@ -992,10 +1132,9 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
               title={getCurrentHeading()}
               className="flex items-center justify-center gap-1 flex-shrink-0 transition-colors touch-manipulation whitespace-nowrap"
               style={{
-                minWidth: 40,
                 height: 40,
-                paddingLeft: 12,
-                paddingRight: 8,
+                paddingLeft: 10,
+                paddingRight: 6,
                 borderRadius: 28,
                 background: isMenuOpen ? "var(--cs-hover-default)" : "transparent",
                 color: "var(--cs-text-primary)",
@@ -1005,7 +1144,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
               onMouseEnter={(e) => { if (!isMenuOpen) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = isMenuOpen ? "var(--cs-hover-default)" : "transparent"; }}
             >
-              <span style={{ fontFamily: "Inter", fontWeight: 500 }}>{getCurrentHeadingButtonLabel()}</span>
+              <span style={{ fontFamily: "Inter", fontWeight: 500 }}>{getButtonLabel()}</span>
               <ChevronDown className={cn("h-3 w-3 flex-shrink-0 transition-transform duration-150", isMenuOpen && "rotate-180")} />
             </button>
 
@@ -1013,69 +1152,94 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
               <>
                 <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => { setIsMenuOpen(false); setDropdownPosition(null); }} />
                 <div
-                  className="fixed py-1.5 overflow-hidden"
                   style={{
+                    position: "fixed",
                     top: dropdownPosition.top,
                     left: dropdownPosition.left,
-                    width: 216,
+                    width: 200,
                     zIndex: 9999,
-                    background: "var(--cs-surface)",
+                    padding: 10,
+                    background: "var(--cs-surface-menu)",
                     boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
                     borderRadius: 28,
-                    outline: "0.1px solid hsla(0, 0%, 0%, 0.2)",
-                    outlineOffset: "-0.1px",
+                    outline: "0.33px solid hsla(0, 0%, 0%, 0.2)",
+                    outlineOffset: "-0.33px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
                   }}
                   onClick={(e) => e.stopPropagation()}
                 >
+                  {/* Paragraph */}
                   <button
                     type="button"
                     onMouseDown={(e) => { e.preventDefault(); setParagraph(); }}
-                    className="w-full text-left px-4 text-[14px] transition-colors flex items-center justify-between"
                     style={{
-                      height: 36,
-                      color: "var(--cs-text-primary)",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 12px",
+                      borderRadius: 20,
+                      fontSize: 14,
                       fontFamily: "Inter",
-                      background: !editor.isActive("heading") ? "var(--cs-hover-default)" : "transparent",
                       fontWeight: !editor.isActive("heading") ? 600 : 400,
+                      color: "var(--cs-text-primary)",
+                      background: !editor.isActive("heading") ? "var(--cs-hover-default)" : "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
                     }}
-                    onMouseEnter={(e) => { if (editor.isActive("heading")) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = !editor.isActive("heading") ? "var(--cs-hover-default)" : "transparent"; }}
                   >
                     <span>Paragraph</span>
-                    {!editor.isActive("heading") && <span className="text-[11px] font-normal" style={{ color: "var(--cs-text-secondary)" }}>current</span>}
+                    {!editor.isActive("heading") && <span style={{ fontSize: 11, fontWeight: 400, color: "var(--cs-text-secondary)" }}>current</span>}
                   </button>
-                  <div className="my-1" style={{ height: 1, background: "hsla(0, 0%, 0%, 0.2)", marginLeft: 4, marginRight: 4 }} />
-                  {([2, 3, 1, 4, 5, 6] as const).map((level) => (
-                    <button
-                      key={level}
-                      onMouseDown={(e) => { e.preventDefault(); setHeading(level); }}
-                      className={cn("w-full text-left px-4 py-2.5 text-[14px] transition-colors flex items-center justify-between", editor.isActive("heading", { level }) && "font-semibold")}
-                      style={{
-                        height: 36,
-                        color: "var(--cs-text-primary)",
-                        fontFamily: "Inter",
-                        background: editor.isActive("heading", { level }) ? "var(--cs-hover-default)" : "transparent",
-                      }}
-                      onMouseEnter={(e) => { if (!editor.isActive("heading", { level })) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = editor.isActive("heading", { level }) ? "var(--cs-hover-default)" : "transparent"; }}
-                    >
-                      <span>{HEADING_LABELS[level]}</span>
-                      {editor.isActive("heading", { level }) && <span className="text-[11px] font-normal" style={{ color: "var(--cs-text-secondary)" }}>current</span>}
-                    </button>
-                  ))}
+                  <div style={{ height: 1, background: "hsla(0,0%,0%,0.08)", margin: "2px 4px" }} />
+                  {([2, 3, 1, 4, 5, 6] as const).map((level) => {
+                    const isActive = editor.isActive("heading", { level });
+                    return (
+                      <button
+                        key={level}
+                        type="button"
+                        onMouseDown={(e) => { e.preventDefault(); setHeading(level); }}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "8px 12px",
+                          borderRadius: 20,
+                          fontSize: 14,
+                          fontFamily: "Inter",
+                          fontWeight: isActive ? 600 : 400,
+                          color: "var(--cs-text-primary)",
+                          background: isActive ? "var(--cs-hover-default)" : "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = isActive ? "var(--cs-hover-default)" : "transparent"; }}
+                      >
+                        <span>{HEADING_LABELS[level]}</span>
+                        {isActive && <span style={{ fontSize: 11, fontWeight: 400, color: "var(--cs-text-secondary)" }}>current</span>}
+                      </button>
+                    );
+                  })}
                 </div>
               </>,
               document.body
             )}
           </div>
 
-          {/* Bold, Italic, Undo, Redo — always visible for AI edit reverts */}
-          <ToolbarButton onClick={() => editor.chain().focus().toggleBold().run()} active={editor.isActive("bold")} icon={<Bold className="h-4 w-4" style={{ color: "inherit" }} />} title="Bold" />
-          <ToolbarButton onClick={() => editor.chain().focus().toggleItalic().run()} active={editor.isActive("italic")} icon={<Italic className="h-4 w-4" style={{ color: "inherit" }} />} title="Italic" />
+          {/* Undo / Redo — always visible */}
           <ToolbarButton onClick={() => editor.chain().focus().undo().run()} active={false} disabled={!editor.can().undo()} icon={<Undo className="h-4 w-4" style={{ color: "inherit" }} />} title="Undo" />
           <ToolbarButton onClick={() => editor.chain().focus().redo().run()} active={false} disabled={!editor.can().redo()} icon={<Redo className="h-4 w-4" style={{ color: "inherit" }} />} title="Redo" />
 
-          {primaryItems.filter((item) => item.id !== "undo" && item.id !== "redo").map((item) => (
+          {/* Dynamic items — hide last when space is tight */}
+          {primaryItems.map((item) => (
             <ToolbarButton
               key={item.id}
               onClick={item.action}
@@ -1126,18 +1290,21 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             <>
               <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => { setIsToolbarMenuOpen(false); setToolbarMenuPosition(null); }} />
               <div
-                className="fixed py-1.5 overflow-hidden"
                 style={{
+                  position: "fixed",
                   top: toolbarMenuPosition.top,
                   left: toolbarMenuPosition.left,
-                  width: 196,
+                  width: 192,
                   zIndex: 9999,
                   padding: 10,
-                  background: "var(--cs-surface)",
+                  background: "var(--cs-surface-menu)",
                   boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
                   borderRadius: 28,
-                  outline: "0.1px solid hsla(0, 0%, 0%, 0.2)",
-                  outlineOffset: "-0.1px",
+                  outline: "0.33px solid hsla(0, 0%, 0%, 0.2)",
+                  outlineOffset: "-0.33px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -1152,16 +1319,23 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                       setToolbarMenuPosition(null);
                     }}
                     disabled={item.disabled}
-                    className="w-full text-left px-4 flex items-center gap-3 touch-manipulation transition-colors"
                     style={{
-                      height: 36,
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 12px",
+                      borderRadius: 20,
                       fontSize: 14,
                       fontFamily: "Inter",
                       color: item.disabled ? "var(--cs-text-secondary)" : "var(--cs-text-primary)",
                       background: item.active ? "var(--cs-hover-default)" : "transparent",
                       opacity: item.disabled ? 0.5 : 1,
+                      border: "none",
+                      cursor: item.disabled ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
                     }}
-                    onMouseEnter={(e) => { if (!item.disabled && !item.active) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+                    onMouseEnter={(e) => { if (!item.disabled) e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = item.active ? "var(--cs-hover-default)" : "transparent"; }}
                   >
                     <item.icon className="h-4 w-4 flex-shrink-0" style={{ color: "var(--cs-text-secondary)" }} />
@@ -1174,23 +1348,127 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
           )}
         </div>
 
-        {/* Close — always in fixed top-right position */}
-        {onClose && (
-          <div className="absolute top-0 right-0 flex-shrink-0">
+        {/* Right pill — Download + Close (matches DocEditor HeaderActions) */}
+        <div
+          className="flex items-center flex-shrink-0"
+          style={{
+            height: 40,
+            paddingLeft: 4,
+            paddingRight: 4,
+            background: "var(--cs-surface)",
+            borderRadius: 28,
+            gap: 0,
+          }}
+        >
+          {/* Download */}
+          <div className="relative flex-shrink-0">
             <button
+              ref={downloadButtonRef}
               type="button"
-              onClick={onClose}
-              aria-label="Close editor"
-              data-label="close-editor-button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                if (!showDownloadMenu && downloadButtonRef.current) {
+                  const rect = downloadButtonRef.current.getBoundingClientRect();
+                  const vw = window.innerWidth;
+                  const menuW = 128;
+                  let left = rect.left;
+                  if (left + menuW > vw - 8) left = vw - menuW - 8;
+                  if (left < 8) left = 8;
+                  setDownloadMenuPosition({ top: rect.bottom + 6, left });
+                }
+                setShowDownloadMenu((prev) => !prev);
+              }}
+              aria-label="Download"
+              title="Download as PDF or DOCX"
               className="flex items-center justify-center transition-colors touch-manipulation"
               style={{
                 width: 40,
                 height: 40,
                 borderRadius: 28,
-                background: "var(--cs-surface)",
+                background: showDownloadMenu ? "var(--cs-hover-default)" : "transparent",
+                color: "var(--cs-text-primary)",
+              }}
+              onMouseEnter={(e) => { if (!showDownloadMenu) e.currentTarget.style.background = "var(--cs-hover-default)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = showDownloadMenu ? "var(--cs-hover-default)" : "transparent"; }}
+            >
+              <Download className="h-4 w-4" style={{ color: "var(--cs-text-primary)" }} aria-hidden />
+            </button>
+          </div>
+          {showDownloadMenu && downloadMenuPosition && typeof document !== "undefined" && createPortal(
+            <>
+              <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => { setShowDownloadMenu(false); setDownloadMenuPosition(null); }} />
+              <div
+                style={{
+                  position: "fixed",
+                  top: downloadMenuPosition.top,
+                  left: downloadMenuPosition.left,
+                  width: 140,
+                  padding: 10,
+                  background: "var(--cs-surface-menu)",
+                  boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                  borderRadius: 28,
+                  outline: "0.33px solid hsla(0, 0%, 0%, 0.2)",
+                  outlineOffset: "-0.33px",
+                  zIndex: 9999,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ padding: "4px 12px", fontSize: 12, fontFamily: "Inter", fontWeight: 500, color: "var(--cs-text-secondary)", lineHeight: "16px" }}>
+                  Save as
+                </div>
+                {[
+                  { label: ".pdf", format: "pdf" as const },
+                  { label: ".docx", format: "docx" as const },
+                ].map(({ label, format }) => (
+                  <button
+                    key={format}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => { handleDownload(format); setShowDownloadMenu(false); setDownloadMenuPosition(null); }}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 12px",
+                      borderRadius: 20,
+                      fontSize: 14,
+                      fontFamily: "Inter",
+                      fontWeight: 400,
+                      color: "var(--cs-text-primary)",
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>,
+            document.body
+          )}
+
+          {/* Close */}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close editor"
+              data-label="close-editor-button"
+              className="flex items-center justify-center transition-colors touch-manipulation flex-shrink-0"
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 28,
+                background: "transparent",
+                color: "var(--cs-text-primary)",
               }}
               onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-default)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "var(--cs-surface)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path
@@ -1203,8 +1481,8 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                 />
               </svg>
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
       </div>
 
@@ -1277,12 +1555,31 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
               <p className="image-placeholder" 
                  data-type="imagePlaceholder" 
                  data-h2-text="Cover Image" 
-                 data-image-prompt={`professional cover image for blog post about ${title.toLowerCase()}`}
-                 style={{ width: '100%', aspectRatio: '16/9', backgroundColor: '#f6f6f6', borderRadius: '28px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', margin: '2rem 0', position: 'relative', cursor: 'pointer', minHeight: '200px', padding: '1rem' }}
+                 data-image-prompt={coverImageAlt}
+                 style={{ width: '100%', aspectRatio: '16/9', backgroundColor: '#f6f6f6', borderRadius: '28px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', margin: '2rem 0', position: 'relative', cursor: 'default', minHeight: '200px', padding: '1rem' }}
               >
-                <span style={{ fontSize: '14px', color: '#6b7280', marginBottom: '12px', textAlign: 'center', maxWidth: '80%' }}>
-                  Cover & Blog List Image: professional cover image for blog post about {title.toLowerCase()}
-                </span>
+                {isEditingCoverPrompt ? (
+                  <input
+                    autoFocus
+                    type="text"
+                    defaultValue={coverImageAlt}
+                    onBlur={(e) => { const v = e.target.value.trim() || coverImageAlt; setCoverImageAlt(v); onCoverImageAltChange?.(v); setIsEditingCoverPrompt(false); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { const v = e.currentTarget.value.trim() || coverImageAlt; setCoverImageAlt(v); onCoverImageAltChange?.(v); setIsEditingCoverPrompt(false); }
+                      if (e.key === "Escape") setIsEditingCoverPrompt(false);
+                    }}
+                    style={{ fontSize: '14px', color: '#374151', marginBottom: '12px', textAlign: 'center', width: '80%', background: 'rgba(255,255,255,0.9)', border: '1px solid #6b7280', borderRadius: '6px', padding: '4px 8px', outline: 'none' }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span
+                    title="Click to edit image prompt"
+                    onClick={(e) => { e.stopPropagation(); setIsEditingCoverPrompt(true); }}
+                    style={{ fontSize: '14px', color: '#6b7280', marginBottom: '12px', textAlign: 'center', maxWidth: '80%', cursor: 'text' }}
+                  >
+                    {coverImageAlt}
+                  </span>
+                )}
                 <button 
                   className="create-image-btn" 
                   style={{ background: 'black', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '8px', fontSize: '14px', cursor: 'pointer', fontWeight: '500' }}
@@ -1442,9 +1739,12 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
         </div>
       </div>
 
-      {/* Publish — bottom right, always visible (desktop + mobile), above chat input on mobile overlay */}
+      {/* Publish — fixed bottom-left, floats above content (no layout space / margin) */}
       {onSave && (hasChanges || saveFailed || saveJustCompleted) && (
-        <div className="flex-shrink-0 flex justify-end items-center p-4 pb-6 md:pb-4">
+        <div
+          className="absolute bottom-3 right-3 md:bottom-4 md:right-4 flex items-center"
+          style={{ zIndex: 9999, pointerEvents: "auto" }}
+        >
           <button
             type="button"
             onClick={onSave}
@@ -1474,7 +1774,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             ) : isSaving ? (
               <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
             ) : (
-              <Save className="h-4 w-4 flex-shrink-0" />
+              <Globe className="h-4 w-4 flex-shrink-0" />
             )}
             <span data-testid="save-button-text" className="whitespace-nowrap">
               {saveJustCompleted ? "Published!" : saveFailed ? "Retry" : isSaving ? "Publishing…" : "Publish"}
@@ -1483,18 +1783,21 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
         </div>
       )}
 
-      {/* Image Edit Modal */}
-      {/* Error Modal */}
-      <ErrorModal
-        isOpen={errorModal.isOpen}
-        onClose={() => setErrorModal({ ...errorModal, isOpen: false })}
-        title={errorModal.title}
-        message={errorModal.message}
-        error={errorModal.error}
-        details={errorModal.details}
-      />
+      {/* Error Modal — portaled to body to escape the BlogEditor stacking context */}
+      {typeof document !== "undefined" && createPortal(
+        <ErrorModal
+          isOpen={errorModal.isOpen}
+          onClose={() => setErrorModal({ ...errorModal, isOpen: false })}
+          title={errorModal.title}
+          message={errorModal.message}
+          error={errorModal.error}
+          details={errorModal.details}
+        />,
+        document.body
+      )}
 
-      {isImageEditModalOpen && selectedImage && (
+      {/* Image Edit Modal — portaled to body so it renders above the sidebar */}
+      {isImageEditModalOpen && selectedImage && typeof document !== "undefined" && createPortal(
         <ImageEditModal
           image={selectedImage}
           onClose={() => {
@@ -1533,9 +1836,10 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
           }}
           onAltTextChange={(newAlt) => {
             if (!selectedImage) return;
-            // Cover image: stored in React state (not a TipTap node)
+            // Cover image: stored in React state and propagated to parent
             if (selectedImage.src === coverImageUrl) {
               setCoverImageAlt(newAlt);
+              onCoverImageAltChange?.(newAlt);
               setSelectedImage({ ...selectedImage, alt: newAlt });
               return;
             }
@@ -1557,7 +1861,8 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             }
           }}
           cmsImages={cmsImages}
-        />
+        />,
+        document.body
       )}
 
       {/* Image Styles */}
@@ -1701,7 +2006,8 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
       `}</style>
 
       {/* Image Modal */}
-      {isImageModalOpen && (
+      {/* Image Insert Modal — portaled to body so it renders above the sidebar */}
+      {isImageModalOpen && typeof document !== "undefined" && createPortal(
         <ImageModal
           onClose={() => setIsImageModalOpen(false)}
           onInsert={insertImage}
@@ -1713,7 +2019,8 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
           uploading={uploading}
           fileInputRef={fileInputRef}
           onFileSelect={handleFileSelect}
-        />
+        />,
+        document.body
       )}
     </div>
   );
@@ -1763,7 +2070,8 @@ function ImageModal({
   return (
     <>
       <div 
-        className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-0 md:p-4"
+        className="fixed inset-0 bg-black/50 flex items-center justify-center p-0 md:p-4"
+        style={{ zIndex: 20000 }}
         onClick={onClose}
       >
         <div 
@@ -2039,7 +2347,8 @@ function ImageEditModal({
   return (
     <>
       <div 
-        className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+        className="fixed inset-0 bg-black/50 flex items-center justify-center p-4"
+        style={{ zIndex: 20000 }}
         onClick={onClose}
       >
         <div 

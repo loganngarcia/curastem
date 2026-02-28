@@ -51,7 +51,8 @@ export default function ErrorModal({
       aria-modal="true"
       aria-labelledby="error-modal-title"
       data-label="error-modal"
-      className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black/50 flex items-center justify-center p-4"
+      style={{ zIndex: 20000 }}
       onClick={onClose}
     >
       <div

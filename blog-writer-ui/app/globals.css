@@ -30,6 +30,7 @@
   --cs-hover-strong: hsla(0, 0%, 0%, 0.05);
   --cs-hover-subtle: hsla(0, 0%, 0%, 0.02);
   --cs-hover-message: hsla(0, 0%, 0%, 0.04);
+  --cs-surface-menu: hsl(0, 0%, 98%);
   --cs-text-link: hsl(210, 100%, 50%);
   --cs-accent: hsl(204, 100%, 50%); /* Curastem semantic accent blue (from web.tsx lightColors.semantic.accent) */
   --cs-overlay: hsla(0, 0%, 0%, 0.5);

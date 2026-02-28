@@ -5,12 +5,10 @@ export async function GET() {
   const config = {
     framerProjectUrl: maskValue(process.env.FRAMER_PROJECT_URL, "url"),
     framerApiKey: maskApiKey(process.env.FRAMER_API_KEY),
-    poeApiKey: maskApiKey(process.env.POE_API_KEY),
     framerBlogCollection: process.env.FRAMER_BLOG_COLLECTION || "Services",
     isConfigured: {
       framerProjectUrl: !!process.env.FRAMER_PROJECT_URL,
       framerApiKey: !!process.env.FRAMER_API_KEY,
-      poeApiKey: !!process.env.POE_API_KEY,
       framerBlogCollection: !!process.env.FRAMER_BLOG_COLLECTION,
     },
   };
@@ -21,7 +19,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { framerProjectUrl, framerApiKey, poeApiKey, framerBlogCollection } = body;
+    const { framerProjectUrl, framerApiKey, framerBlogCollection } = body;
     
     // Use Vercel API to update environment variables
     const vercelToken = process.env.VERCEL_TOKEN;
@@ -40,7 +38,6 @@ export async function POST(request: NextRequest) {
     if (framerProjectUrl) envVars.push({ key: "FRAMER_PROJECT_URL", value: framerProjectUrl, type: "plain" });
     if (framerApiKey) envVars.push({ key: "FRAMER_API_KEY", value: framerApiKey, type: "encrypted" });
     if (framerBlogCollection !== undefined) envVars.push({ key: "FRAMER_BLOG_COLLECTION", value: framerBlogCollection || "Services", type: "plain" });
-    if (poeApiKey !== undefined) envVars.push({ key: "POE_API_KEY", value: poeApiKey || "", type: "encrypted" });
     
     if (envVars.length === 0) {
       return NextResponse.json({ error: "No fields provided to update" }, { status: 400 });

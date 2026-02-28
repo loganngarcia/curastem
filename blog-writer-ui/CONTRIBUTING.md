@@ -14,7 +14,7 @@ We're building this in the open because we believe that **good tools should be a
 
 This is a **Next.js 15** application that acts as an intelligent layer between human creativity and the Framer CMS. It combines:
 
-- **AI-powered content generation** (via Poe API) to turn ideas into structured blog posts
+- **AI-powered content generation** (via Google Gemini) to turn ideas into structured blog posts
 - **Automated image creation** using AI to generate brand-consistent visuals
 - **Rich text editing** for final human refinement
 - **Direct CMS integration** to sync everything to Framer without manual copy-pasting
@@ -39,7 +39,6 @@ The entire flow—from "I want to write about X" to "published on the website"�
    - `FRAMER_PROJECT_URL` - Your Framer project URL
    - `FRAMER_API_KEY` - Framer API token
    - `FRAMER_BLOG_COLLECTION` - Name of your blog collection (defaults to "Services")
-   - `POE_API_KEY` - Poe API key for AI generation
    - `AUTH_PASSWORD` - Password for the login gate
    - `SESSION_SECRET` - Random string for JWT signing (generate with `openssl rand -hex 32`)
 
@@ -54,7 +53,7 @@ The entire flow—from "I want to write about X" to "published on the website"�
 
 ### Key Maintenance Tasks
 
-- **Monitor API Rate Limits**: Both Poe and Framer APIs have rate limits. The code includes delays and error handling, but watch for 429 errors in production logs.
+- **Monitor API Rate Limits**: Both Gemini and Framer APIs have rate limits. The code includes delays and error handling, but watch for 429 errors in production logs.
 - **Update Dependencies**: Run `npm audit` regularly and update packages when security patches are released.
 - **Test Framer Field Changes**: If your Framer collection structure changes (new fields, renamed fields), update `lib/framer.ts` accordingly.
 - **Review Error Logs**: Check Vercel function logs for any recurring errors, especially around image generation or Framer sync.
@@ -84,7 +83,7 @@ blog-writer-ui/
 │
 ├── lib/                          # Core business logic
 │   ├── framer.ts                 # Framer API client & CMS operations
-│   ├── poe.ts                    # Poe API client for AI generation
+│   ├── gemini.ts                 # Google Gemini API client for AI generation
 │   ├── blog-generator.ts         # Blog content generation logic
 │   ├── auth.ts                   # JWT authentication utilities
 │   ├── api-utils.ts              # Shared API helpers
@@ -105,7 +104,7 @@ blog-writer-ui/
 
 **`app/` directory**: Next.js 15 uses the App Router, which groups routes and API endpoints together. This makes it easy to see what's public (`/api/`) vs. what's protected (everything else).
 
-**`lib/` directory**: We separate "how we talk to external services" (Framer, Poe) from "what we do with that data" (blog generation). This makes it easier to swap out APIs or add new integrations without touching the core logic.
+**`lib/` directory**: We separate "how we talk to external services" (Framer, Gemini) from "what we do with that data" (blog generation). This makes it easier to swap out APIs or add new integrations without touching the core logic.
 
 **`components/` directory**: These are reusable UI pieces. The `BlogEditor` uses Tiptap for rich text editing, which gives us full control over formatting without relying on a third-party service.
 

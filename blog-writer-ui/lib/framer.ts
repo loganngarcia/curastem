@@ -13,6 +13,8 @@ export interface BlogItem {
   headline?: string;
   content?: string;
   coverImageUrl?: string;
+  /** Alt text for the cover image, used for SEO and accessibility. */
+  coverImageAlt?: string;
   blogListImageUrl?: string;
   date?: string;
   featured?: boolean;
@@ -171,13 +173,19 @@ export async function getBlogs(): Promise<BlogItem[]> {
         ? (getVal(fd, fields.title) as string) 
         : (getVal(fd, fields.content) as string)?.substring(0, 100);
 
+      const coverImageRaw = getVal(fd, fields.coverImage);
+      const coverImageAlt = (coverImageRaw && typeof coverImageRaw === "object" && "alt" in coverImageRaw)
+        ? (coverImageRaw as { alt?: string }).alt
+        : undefined;
+
       return {
         id: item.id,
         slug: item.slug || "",
         title: title || item.slug || "Untitled",
         headline: (getVal(fd, fields.headline) as string) || "",
         content: (getVal(fd, fields.content) as string) || "",
-        coverImageUrl: getUrl(getVal(fd, fields.coverImage)),
+        coverImageUrl: getUrl(coverImageRaw),
+        coverImageAlt,
         blogListImageUrl: getUrl(getVal(fd, fields.blogListImage)),
         date: (getVal(fd, fields.date) as string) || "",
         featured: (getVal(fd, fields.featured) as boolean) || false,
@@ -269,8 +277,11 @@ export async function createOrUpdateBlog(blog: Partial<BlogItem> & { slug: strin
       fieldData[fields.featured] = { type: "boolean", value: blog.featured };
     }
     if (blog.coverImageUrl !== undefined) {
-      fieldData[fields.coverImage] = { type: "image", value: blog.coverImageUrl };
-      console.log(`[createOrUpdateBlog] Setting coverImage field (${fields.coverImage}):`, blog.coverImageUrl);
+      // Include alt text if provided — Framer image fields support an optional alt property
+      fieldData[fields.coverImage] = blog.coverImageAlt
+        ? { type: "image", value: blog.coverImageUrl, alt: blog.coverImageAlt }
+        : { type: "image", value: blog.coverImageUrl };
+      console.log(`[createOrUpdateBlog] Setting coverImage field (${fields.coverImage}):`, blog.coverImageUrl, blog.coverImageAlt ? `(alt: "${blog.coverImageAlt}")` : "");
     }
     if (blog.blogListImageUrl !== undefined) {
       fieldData[fields.blogListImage] = { type: "image", value: blog.blogListImageUrl };

@@ -1,18 +1,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Settings, Save, X, Eye, EyeOff, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Save, Eye, EyeOff, Loader2 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface SettingsConfig {
   framerProjectUrl: string;
   framerApiKey: string;
-  poeApiKey: string;
   framerBlogCollection: string;
   isConfigured?: {
     framerProjectUrl: boolean;
     framerApiKey: boolean;
-    poeApiKey: boolean;
     framerBlogCollection: boolean;
   };
 }
@@ -26,14 +24,21 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [config, setConfig] = useState<SettingsConfig>({
     framerProjectUrl: "",
     framerApiKey: "",
-    poeApiKey: "",
     framerBlogCollection: "Services",
   });
   const [originalConfig, setOriginalConfig] = useState<SettingsConfig | null>(null);
   const [showFramerKey, setShowFramerKey] = useState(false);
-  const [showPoeKey, setShowPoeKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobile(typeof window !== "undefined" && window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -49,7 +54,6 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         const loadedConfig = {
           framerProjectUrl: data.framerProjectUrl || "",
           framerApiKey: data.framerApiKey || "",
-          poeApiKey: data.poeApiKey || "",
           framerBlogCollection: data.framerBlogCollection || "Services",
           isConfigured: data.isConfigured,
         };
@@ -68,18 +72,15 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const handleSave = async () => {
     setSaving(true);
     setMessage(null);
-    
+
     const payload: Partial<SettingsConfig> = {};
-    
+
     if (originalConfig) {
       if (config.framerProjectUrl && !isMaskedValue(config.framerProjectUrl) && config.framerProjectUrl !== originalConfig.framerProjectUrl) {
         payload.framerProjectUrl = config.framerProjectUrl;
       }
       if (config.framerApiKey && !isMaskedValue(config.framerApiKey) && config.framerApiKey !== originalConfig.framerApiKey) {
         payload.framerApiKey = config.framerApiKey;
-      }
-      if (config.poeApiKey && !isMaskedValue(config.poeApiKey) && config.poeApiKey !== originalConfig.poeApiKey) {
-        payload.poeApiKey = config.poeApiKey;
       }
       if (config.framerBlogCollection && config.framerBlogCollection !== originalConfig.framerBlogCollection) {
         payload.framerBlogCollection = config.framerBlogCollection;
@@ -91,7 +92,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setSaving(false);
       return;
     }
-    
+
     try {
       const res = await fetch("/api/settings", {
         method: "POST",
@@ -100,7 +101,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       });
 
       const data = await res.json();
-      
+
       if (res.ok && data.success) {
         setMessage({
           type: "success",
@@ -123,165 +124,289 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     }
   };
 
+  const inputWrapperStyle = {
+    alignSelf: "stretch" as const,
+    height: 44,
+    padding: "0 16px",
+    background: "var(--cs-surface)",
+    border: "0.33px solid hsla(0, 0%, 0%, 0.12)",
+    borderRadius: 28,
+    display: "flex" as const,
+    alignItems: "center" as const,
+  };
+
+  const labelStyle = {
+    color: "var(--cs-text-primary)",
+    fontSize: 14,
+    fontFamily: "Inter",
+    fontWeight: 400,
+  };
+
+  const inputStyle = {
+    width: "100%" as const,
+    background: "transparent",
+    border: "none",
+    color: "var(--cs-text-primary)",
+    fontSize: 14,
+    outline: "none" as const,
+    fontFamily: "Inter",
+  };
+
   if (!isOpen) return null;
 
   return (
-    <>
+    <AnimatePresence>
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
         data-label="settings-modal"
-        className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-        onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 30000,
+          display: "flex",
+          justifyContent: isMobile ? "flex-end" : "center",
+          alignItems: isMobile ? "flex-end" : "center",
+          pointerEvents: "auto",
+        }}
       >
-        <div 
-          className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col mx-0 md:mx-4 h-full md:h-auto"
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: isMobile ? 0.2 : 0.1 }}
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "var(--cs-overlay)",
+          }}
+          onClick={onClose}
+        />
+
+        <motion.div
+          initial={isMobile ? { y: "100%", scale: 0, opacity: 0 } : { opacity: 0 }}
+          animate={isMobile ? { y: "0%", scale: 1, opacity: 1 } : { opacity: 1 }}
+          exit={isMobile ? { y: "100%", scale: 0, opacity: 0 } : { opacity: 0 }}
+          transition={{ duration: isMobile ? 0.25 : 0.1, ease: "easeInOut" }}
           onClick={(e) => e.stopPropagation()}
+          style={{
+            flex: isMobile ? "none" : "1 1 0",
+            width: isMobile ? "100%" : undefined,
+            maxWidth: isMobile ? "none" : 400,
+            maxHeight: isMobile ? "calc(100% - 16px)" : 600,
+            paddingTop: 24,
+            paddingBottom: 28,
+            paddingLeft: isMobile ? 16 : 28,
+            paddingRight: isMobile ? 16 : 28,
+            background: "var(--cs-bg)",
+            boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.04)",
+            overflow: "hidden",
+            borderRadius: isMobile ? "24px 24px 0 0" : 48,
+            outline: "0.33px solid hsla(0, 0%, 0%, 0.12)",
+            outlineOffset: "-0.33px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 24,
+            position: "relative",
+            zIndex: 1,
+          }}
         >
-          {/* Header */}
-          <div className="flex items-center justify-between p-4 md:p-6 border-b border-gray-200">
-            <div className="flex items-center space-x-2">
-              <Settings className="h-5 w-5 md:h-6 md:w-6" />
-              <h1 className="text-xl md:text-2xl font-bold">Settings</h1>
-            </div>
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-gray-100 active:bg-gray-200 rounded-lg transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
+          <style>{`
+            .settings-input::placeholder { color: var(--cs-text-secondary); opacity: 0.8; }
+            .settings-input::-webkit-input-placeholder { color: var(--cs-text-secondary); opacity: 0.8; }
+          `}</style>
+          {/* Header — matches You design */}
+          <div style={{ alignSelf: "stretch", position: "relative" }}>
+            <h2
+              style={{
+                margin: 0,
+                padding: 0,
+                color: "var(--cs-text-primary)",
+                fontSize: 16,
+                fontFamily: "Inter",
+                fontWeight: 400,
+                lineHeight: "18px",
+              }}
             >
-              <X className="h-5 w-5" />
+              Settings
+            </h2>
+            <p
+              style={{
+                margin: "8px 0 0 0",
+                color: "var(--cs-text-secondary)",
+                fontSize: 12,
+                fontFamily: "Inter",
+                fontWeight: 400,
+                lineHeight: "17px",
+              }}
+            >
+              Framer CMS and AI API configuration for publishing blogs.
+            </p>
+            <button
+              type="button"
+              aria-label="Close settings"
+              onClick={onClose}
+              onMouseEnter={() => setIsCloseHovered(true)}
+              onMouseLeave={() => setIsCloseHovered(false)}
+              style={{
+                position: "absolute",
+                right: isMobile ? 0 : -12,
+                top: -12,
+                width: 36,
+                height: 36,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: isCloseHovered ? "var(--cs-hover-strong)" : "transparent",
+                borderRadius: "50%",
+                border: "none",
+                cursor: "pointer",
+                transition: "background 0.2s",
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                <path d="M11.1016 0.599998L0.601562 11.1M0.601562 0.599998L11.1016 11.1" stroke="var(--cs-text-primary)" strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </button>
           </div>
 
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto p-4 md:p-6">
-            <div className="space-y-6">
-                {message && (
-                  <div
-                    className={cn(
-                      "rounded-lg border p-4",
-                      message.type === "success"
-                        ? "border-green-200 bg-green-50 text-green-800"
-                        : "border-red-200 bg-red-50 text-red-800"
-                    )}
-                  >
-                    {message.text}
-                  </div>
-                )}
+          {/* Content — scrollable */}
+          <div style={{ flex: "1 1 auto", overflowY: "auto", display: "flex", flexDirection: "column", gap: 24, minHeight: 0 }}>
+            {message && (
+              <div
+                style={{
+                  padding: "12px 16px",
+                  borderRadius: 28,
+                  fontSize: 14,
+                  fontFamily: "Inter",
+                  background: message.type === "success" ? "hsla(142, 71%, 45%, 0.15)" : "hsla(0, 84%, 50%, 0.15)",
+                  color: message.type === "success" ? "hsl(142, 71%, 35%)" : "hsl(0, 84%, 45%)",
+                  border: `0.33px solid ${message.type === "success" ? "hsla(142, 71%, 45%, 0.3)" : "hsla(0, 84%, 50%, 0.3)"}`,
+                }}
+              >
+                {message.text}
+              </div>
+            )}
 
-                <div className="space-y-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Framer Project URL
-                      </label>
-                      {config.isConfigured?.framerProjectUrl && (
-                        <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">Configured</span>
-                      )}
-                    </div>
-                    <input
-                      type="text"
-                      value={config.framerProjectUrl}
-                      onChange={(e) => setConfig({ ...config, framerProjectUrl: e.target.value })}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-3 md:py-2 focus:border-black focus:outline-none focus:ring-1 focus:ring-black text-base"
-                      placeholder={config.isConfigured?.framerProjectUrl ? "Enter new URL to update" : "https://framer.com/projects/..."}
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Framer API Key
-                      </label>
-                      {config.isConfigured?.framerApiKey && (
-                        <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">Configured</span>
-                      )}
-                    </div>
-                    <div className="relative">
-                      <input
-                        type={showFramerKey ? "text" : "password"}
-                        value={config.framerApiKey}
-                        onChange={(e) => setConfig({ ...config, framerApiKey: e.target.value })}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
-                        placeholder={config.isConfigured?.framerApiKey ? "Enter new API key to update" : "Enter Framer API key"}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowFramerKey(!showFramerKey)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black"
-                      >
-                        {showFramerKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Poe API Key
-                      </label>
-                      {config.isConfigured?.poeApiKey && (
-                        <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">Configured</span>
-                      )}
-                    </div>
-                    <div className="relative">
-                      <input
-                        type={showPoeKey ? "text" : "password"}
-                        value={config.poeApiKey}
-                        onChange={(e) => setConfig({ ...config, poeApiKey: e.target.value })}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
-                        placeholder={config.isConfigured?.poeApiKey ? "Enter new API key to update" : "Enter Poe API key"}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPoeKey(!showPoeKey)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black"
-                      >
-                        {showPoeKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Framer Blog Collection Name
-                      </label>
-                      {config.isConfigured?.framerBlogCollection && (
-                        <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">Configured</span>
-                      )}
-                    </div>
-                    <input
-                      type="text"
-                      value={config.framerBlogCollection}
-                      onChange={(e) => setConfig({ ...config, framerBlogCollection: e.target.value })}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-3 md:py-2 focus:border-black focus:outline-none focus:ring-1 focus:ring-black text-base"
-                      placeholder="Services"
-                    />
-                  </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+              {/* Framer Project URL */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={labelStyle}>Framer Project URL</div>
+                <div style={{ ...inputWrapperStyle, position: "relative" }}>
+                  {config.isConfigured?.framerProjectUrl && (
+                    <span style={{ position: "absolute", right: 12, fontSize: 11, color: "var(--cs-text-secondary)" }}>Configured</span>
+                  )}
+                  <input
+                    type="text"
+                    value={config.framerProjectUrl}
+                    onChange={(e) => setConfig({ ...config, framerProjectUrl: e.target.value })}
+                    placeholder={config.isConfigured?.framerProjectUrl ? "Enter new URL to update" : "https://framer.com/projects/..."}
+                    style={inputStyle}
+                    className="settings-input"
+                  />
                 </div>
+              </div>
+
+              {/* Framer API Key */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={labelStyle}>Framer API Key</div>
+                <div style={{ ...inputWrapperStyle, position: "relative", paddingRight: 44 }}>
+                  {config.isConfigured?.framerApiKey && (
+                    <span style={{ position: "absolute", right: 44, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cs-text-secondary)" }}>Configured</span>
+                  )}
+                  <input
+                    type={showFramerKey ? "text" : "password"}
+                    value={config.framerApiKey}
+                    onChange={(e) => setConfig({ ...config, framerApiKey: e.target.value })}
+                    placeholder={config.isConfigured?.framerApiKey ? "Enter new key to update" : "Enter Framer API key"}
+                    style={inputStyle}
+                    className="settings-input"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowFramerKey(!showFramerKey)}
+                    style={{
+                      position: "absolute",
+                      right: 12,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "var(--cs-text-secondary)",
+                      padding: 4,
+                    }}
+                    aria-label={showFramerKey ? "Hide" : "Show"}
+                  >
+                    {showFramerKey ? <EyeOff style={{ width: 16, height: 16 }} /> : <Eye style={{ width: 16, height: 16 }} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Framer Blog Collection */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={labelStyle}>Framer Blog Collection Name</div>
+                <div style={inputWrapperStyle}>
+                  <input
+                    type="text"
+                    value={config.framerBlogCollection}
+                    onChange={(e) => setConfig({ ...config, framerBlogCollection: e.target.value })}
+                    placeholder="Services"
+                    style={inputStyle}
+                    className="settings-input"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Footer */}
-          <div className="flex flex-col sm:flex-row justify-end gap-2 sm:gap-3 p-4 md:p-6 border-t border-gray-200">
+          {/* Footer — Save / Cancel */}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, flexShrink: 0 }}>
             <button
+              type="button"
               onClick={onClose}
-              className="px-4 py-3 md:py-2 text-gray-700 hover:text-black active:text-gray-900 transition-colors touch-manipulation min-h-[44px]"
+              style={{
+                padding: "10px 16px",
+                background: "transparent",
+                border: "none",
+                color: "var(--cs-text-secondary)",
+                fontSize: 14,
+                fontFamily: "Inter",
+                cursor: "pointer",
+                borderRadius: 28,
+                minHeight: 44,
+              }}
             >
               Cancel
             </button>
             <button
+              type="button"
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center space-x-2 rounded-lg bg-black px-4 py-3 md:py-2 text-white hover:bg-gray-800 active:bg-gray-700 disabled:opacity-50 transition-colors touch-manipulation min-h-[44px]"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "10px 20px",
+                background: "var(--cs-accent)",
+                color: "var(--cs-bg)",
+                border: "none",
+                borderRadius: 28,
+                fontSize: 14,
+                fontFamily: "Inter",
+                fontWeight: 500,
+                cursor: saving ? "not-allowed" : "pointer",
+                minHeight: 44,
+                opacity: saving ? 0.7 : 1,
+              }}
             >
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {saving ? <Loader2 className="animate-spin" style={{ width: 16, height: 16 }} /> : <Save style={{ width: 16, height: 16 }} />}
               <span>Save Settings</span>
             </button>
           </div>
-        </div>
+        </motion.div>
       </div>
-    </>
+    </AnimatePresence>
   );
 }

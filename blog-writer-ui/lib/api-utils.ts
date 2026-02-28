@@ -27,12 +27,6 @@ export function handleApiError(error: unknown) {
   console.error("API Error:", error);
   
   if (error instanceof Error) {
-    if (error.message.includes("Poe API error")) {
-      return NextResponse.json(
-        { error: "AI service is currently unavailable. Please try again later." },
-        { status: 503 }
-      );
-    }
     if (error.message.includes("Framer credentials")) {
       return NextResponse.json(
         { error: "CMS connection error. Please check configuration." },

@@ -42,7 +42,7 @@ Once you have access, you can start using the tool immediately.
 This tool is designed as an **internal team tool**, not a public-facing application:
 
 - **Security & Access Control**: Protected by authentication; only authorized team members can access
-- **API Keys Stay Private**: Your Poe API and Framer API keys are server-side only, never exposed to clients
+- **API Keys Stay Private**: Your Framer API keys are server-side only, never exposed to clients
 - **Team-Focused Workflow**: All team members work within the same Framer CMS collection
 - **Cost Efficiency**: Shared resources, no per-user costs, simple deployment
 
@@ -54,7 +54,7 @@ If you want to run your own instance of this tool, you will need to provide your
 
 ### Requirements
 
-1. **Poe API**: For AI text and image generation
+1. **Google Gemini API**: For AI text and image generation
 2. **Framer API**: For CMS integration
 3. **Auth**: A custom password and session secret for the login gate
 
@@ -83,7 +83,7 @@ See `.env.example` for the required variables.
 
 - **Next.js 15** - React framework with App Router
 - **Tiptap** - Rich text editor for blog content
-- **Poe API** - AI text generation (Gemini-3-Flash) and image generation (nano-banana-2)
+- **Google Gemini** - AI text generation and image generation
 - **Framer API** - Direct CMS integration for publishing
 - **Vercel** - Hosting and deployment
 - **Tailwind CSS** - Styling and responsive design
@@ -100,10 +100,10 @@ See `.env.example` for the required variables.
 - Single source of truth (Framer CMS)
 - Real-time updates visible immediately
 
-**Why Poe API?**
+**Why Google Gemini?**
 - Cost-effective AI generation
 - Supports both text and image generation
-- OpenAI-compatible API makes it easy to integrate
+- Easy to integrate via Google AI SDK
 
 ## Hosting: Vercel Free Tier
 
@@ -140,7 +140,7 @@ This tool is hosted on **Vercel's Free (Hobby) Tier**, which is perfect for our 
 4. **Cost-Effective for Internal Tools**
    - **$0/month** hosting cost
    - No need for paid tiers until we outgrow free tier (unlikely for internal use)
-   - All budget goes to API costs (Poe API), not infrastructure
+   - All budget goes to API costs (Gemini), not infrastructure
 
 5. **Easy Maintenance**
    - Automatic deployments from Git

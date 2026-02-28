@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useMotionValue, useTransform, animate } from "framer-motion";
 import { Loader2, Plus, Settings, X as XIcon, Pencil } from "lucide-react";
 import { slugify } from "@/lib/utils";
 import { useRouter } from "next/navigation";
@@ -23,6 +23,8 @@ interface Blog {
   date: string;
   content?: string;
   coverImageUrl?: string;
+  /** Alt text for the cover image, used for SEO and accessibility. */
+  coverImageAlt?: string;
   /** Zoom-out version for blog list (35% larger, edge-dominant color fill). Generated when cover changes. */
   blogListImageUrl?: string;
 }
@@ -140,7 +142,36 @@ export default function ChatPage() {
   const [pendingEditImage, setPendingEditImage] = useState<{ url: string; alt: string } | null>(null);
   const [editableContent, setEditableContent] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Start collapsed on mobile
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("curastem_blog_sidebar_open");
+      if (saved !== null) return saved === "true";
+    }
+    return false;
+  });
+  const [isSidebarBtnHovered, setIsSidebarBtnHovered] = useState(false);
+  const [isCloseSidebarHovered, setIsCloseSidebarHovered] = useState(false);
+
+  // Spring-animated sidebar motion values — matches web.tsx
+  const sidebarX = useMotionValue(-260);
+  const sidebarOverlayOpacity = useTransform(sidebarX, [-260, 0], [0, 1]);
+  const contentX = useTransform(sidebarX, [-260, 0], [0, 260]);
+
+  useEffect(() => {
+    animate(sidebarX, isSidebarOpen ? 0 : -260, {
+      type: "spring",
+      stiffness: 700,
+      damping: 50,
+    });
+  }, [isSidebarOpen, sidebarX]);
+
+  // Persist sidebar state
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("curastem_blog_sidebar_open", isSidebarOpen.toString());
+    }
+  }, [isSidebarOpen]);
+
   const [chatWidth, setChatWidth] = useState(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("curastem_blog_chat_width");
@@ -192,6 +223,7 @@ export default function ChatPage() {
   const readerDoneRef = useRef(false);
   // AbortController for the current streaming fetch — used by the Stop button
   const abortControllerRef = useRef<AbortController | null>(null);
+  const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -383,6 +415,7 @@ export default function ChatPage() {
               content: editableContent,
               date: selectedBlog.date,
               coverImageUrl: selectedBlog.coverImageUrl,
+              coverImageAlt: selectedBlog.coverImageAlt,
               blogListImageUrl: blogListImageUrl ?? selectedBlog.coverImageUrl,
             }),
           })
@@ -394,6 +427,7 @@ export default function ChatPage() {
               title: selectedBlog.title,
               date: selectedBlog.date,
               coverImageUrl: selectedBlog.coverImageUrl,
+              coverImageAlt: selectedBlog.coverImageAlt,
               blogListImageUrl: blogListImageUrl ?? selectedBlog.coverImageUrl,
             }),
           });
@@ -900,6 +934,11 @@ export default function ChatPage() {
     if (!input.trim() || loading) return;
     const messageText = input.trim();
     setInput("");
+    // Reset textarea height after clearing
+    if (chatTextareaRef.current) {
+      chatTextareaRef.current.style.height = "auto";
+      chatTextareaRef.current.style.overflowY = "hidden";
+    }
     await sendMessage(messageText);
   };
 
@@ -907,124 +946,192 @@ export default function ChatPage() {
     .filter((blog) => blog.title.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
 
+  const filteredChats = chats.filter((chat) =>
+    chat.title.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
-    <div className="flex h-screen bg-white overflow-hidden text-black font-sans" role="main" aria-label="Curastem Blog Tool">
-      {/* Mobile Overlay */}
-      {isSidebarOpen && (
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label="Close sidebar"
-          data-label="sidebar-overlay"
-          className="fixed inset-0 z-40 md:hidden"
-          style={{ background: "var(--cs-overlay)" }}
+    <div className="flex h-screen bg-white overflow-hidden text-black font-sans relative" role="main" aria-label="Curastem Blog Tool">
+
+      {/* Open Sidebar Button — always at top-left, absolute, matches web.tsx */}
+      {!isSidebarOpen && (
+        <button
+          data-layer="open sidebar"
+          aria-label="Open navigation menu"
+          data-label="sidebar-open"
+          style={{
+            left: 8,
+            top: 8,
+            position: "absolute",
+            zIndex: 100,
+            cursor: "ew-resize",
+            background: isSidebarBtnHovered ? "var(--cs-hover-medium)" : "transparent",
+            borderRadius: "50%",
+            width: 36,
+            height: 36,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "none",
+            padding: 0,
+          }}
+          onMouseEnter={() => setIsSidebarBtnHovered(true)}
+          onMouseLeave={() => setIsSidebarBtnHovered(false)}
+          onClick={(e) => { e.stopPropagation(); setIsSidebarOpen(true); }}
+        >
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+            <path d="M10 14H26M10 22H20" stroke="var(--cs-text-primary)" strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
+
+      {/* Mobile Overlay — motion opacity matches web.tsx */}
+      {isMobileLayout && (
+        <motion.div
+          role="presentation"
+          aria-hidden
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "var(--cs-overlay)",
+            zIndex: 9999,
+            opacity: sidebarOverlayOpacity,
+            pointerEvents: isSidebarOpen ? "auto" : "none",
+          }}
           onClick={() => setIsSidebarOpen(false)}
-          onKeyDown={(e) => e.key === "Enter" && setIsSidebarOpen(false)}
         />
       )}
 
-      {/* Sidebar — Curastem design: 260px on mobile (slides in, pushes content like web.tsx) */}
-      <aside
-        className={cn(
-        "curastem-sidebar flex flex-col transition-transform duration-300 ease-out md:transition-none",
-        "fixed md:relative left-0 top-0 bottom-0 z-50 md:z-auto h-full",
-        "w-[260px] flex-shrink-0",
-        isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
-        !isSidebarOpen && "md:w-0 md:min-w-0 md:overflow-hidden md:border-r-0"
-      )}
-      style={{ background: "var(--cs-bg)" }}
-      aria-label="Navigation sidebar"
-      data-label="sidebar"
-    >
-        {/* Sidebar Top Nav — padding 8, gap 12, buttons 36×36, borderRadius 28 */}
-        <div className="flex flex-col gap-3" style={{ padding: 8 }}>
-          <div className="flex items-center justify-between" data-label="sidebar-top-actions-row">
-            {isSidebarOpen && (
-              <button
-                type="button"
-                onClick={() => setIsSidebarOpen(false)}
-                aria-label="Close sidebar"
-                data-label="sidebar-close"
-                className="flex items-center justify-center rounded-[28px] transition-colors touch-manipulation hover:opacity-90"
-                style={{ width: 36, height: 36 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                  <path d="M10 14H26M10 22H20" stroke="var(--cs-text-primary)" strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            )}
-            {!isSidebarOpen && <div aria-hidden />}
+      {/* Sidebar — motion.div with spring animation, absolute overlay (web.tsx pattern) */}
+      <motion.div
+        data-layer="left sidebar"
+        role="navigation"
+        aria-label="Navigation sidebar"
+        data-label="sidebar"
+        style={{
+          x: sidebarX,
+          width: 260,
+          height: "100%",
+          position: "absolute",
+          top: 0,
+          left: 0,
+          bottom: 0,
+          background: "var(--cs-bg)",
+          zIndex: 10000,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "visible",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Fixed top nav — pinned inside sidebar */}
+        <div
+          data-layer="fixed top nav"
+          style={{
+            width: "100%",
+            padding: 8,
+            position: "sticky",
+            top: 0,
+            background: "var(--cs-bg)",
+            flexDirection: "column",
+            display: "flex",
+            gap: 12,
+            flexShrink: 0,
+            zIndex: 1,
+          }}
+        >
+          {/* Top actions row: close button (left) */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }} data-label="sidebar-top-actions-row">
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label="Close navigation sidebar"
+              data-label="sidebar-close"
+              onClick={(e) => { e.stopPropagation(); setIsSidebarOpen(false); }}
+              onMouseEnter={() => setIsCloseSidebarHovered(true)}
+              onMouseLeave={() => setIsCloseSidebarHovered(false)}
+              style={{
+                width: 36,
+                height: 36,
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                cursor: "ew-resize",
+                borderRadius: 28,
+                background: isCloseSidebarHovered ? "var(--cs-hover-medium)" : "transparent",
+              }}
+            >
+              <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                <path d="M10 14H26M10 22H20" stroke="var(--cs-text-primary)" strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
           </div>
 
-          {/* Search Bar — height 36, paddingLeft 12, borderRadius 50, background surface */}
-          {isSidebarOpen && (
-            <div data-label="search-container" style={{ height: 36, paddingLeft: 12, background: "var(--cs-surface)", borderRadius: 50 }} className="flex items-center overflow-hidden">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0 mr-2" aria-hidden>
-                <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.5224C12.6167 8.09311 11.9837 9.5995 10.8571 10.7102C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7102C1.2345 9.5995 0.601563 8.09311 0.601562 6.5224C0.601563 4.95168 1.2345 3.44529 2.36113 2.33463C3.48777 1.22396 5.01581 0.599998 6.60911 0.599998C8.20241 0.599998 9.73045 1.22396 10.8571 2.33463C11.9837 3.44529 12.6167 4.95168 12.6167 6.5224Z" stroke="var(--cs-text-primary)" strokeOpacity="0.65" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search blogs..."
-                aria-label="Search blogs"
-                data-label="search-blogs-input"
-                className="flex-1 min-w-0 bg-transparent text-[14px] font-normal outline-none placeholder:opacity-65"
-                style={{ color: "var(--cs-text-primary)", fontFamily: "Inter, system-ui, sans-serif" }}
-              />
-            </div>
-          )}
+          {/* Search Bar */}
+          <div data-label="search-container" style={{ height: 36, paddingLeft: 12, background: "var(--cs-surface)", borderRadius: 50, overflow: "hidden", display: "flex", alignItems: "center", gap: 8 }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }} aria-hidden>
+              <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.5224C12.6167 8.09311 11.9837 9.5995 10.8571 10.7102C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7102C1.2345 9.5995 0.601563 8.09311 0.601562 6.5224C0.601563 4.95168 1.2345 3.44529 2.36113 2.33463C3.48777 1.22396 5.01581 0.599998 6.60911 0.599998C8.20241 0.599998 9.73045 1.22396 10.8571 2.33463C11.9837 3.44529 12.6167 4.95168 12.6167 6.5224Z" stroke="var(--cs-text-primary)" strokeOpacity="0.65" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search"
+              aria-label="Search blogs and chats"
+              data-label="search-input"
+              style={{
+                flex: "1 1 0",
+                color: "var(--cs-text-primary)",
+                fontSize: 14,
+                fontFamily: "Inter, system-ui, sans-serif",
+                fontWeight: 400,
+                background: "transparent",
+                border: "none",
+                outline: "none",
+                padding: 0,
+                height: "100%",
+              }}
+            />
+          </div>
 
-          {/* New blog + Settings — same item style as web.tsx (minHeight 36, padding 10, borderRadius 28) */}
-          {isSidebarOpen && (
-            <div className="flex flex-col gap-0.5" data-label="sidebar-actions">
-              <button
-                id="new-chat-button"
-                data-testid="new-chat-button"
-                data-label="new-chat-button"
-                aria-label="Start new blog"
-                onClick={handleNewChat}
-                className="w-full flex items-center gap-3 rounded-[28px] transition-colors touch-manipulation text-[14px] font-normal"
-                style={{ minHeight: 36, paddingLeft: 10, paddingRight: 10, color: "var(--cs-text-primary)" }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-strong)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0" aria-hidden>
-                  <path
-                    d="M14.9998 8.00011C14.9998 11.1823 14.9998 12.773 13.9747 13.7615C12.9496 14.75 11.2992 14.75 7.99988 14.75C4.69983 14.75 3.05019 14.75 2.02509 13.7615C1 12.773 1 11.1816 1 8.00011C1 4.81792 1 3.22719 2.02509 2.23871C3.05019 1.25023 4.7006 1.25023 7.99988 1.25023M6.08114 7.36262C5.81571 7.61895 5.66661 7.96637 5.66659 8.32861V10.2501H7.67167C8.04733 10.2501 8.40821 10.1061 8.6742 9.84958L14.5852 4.14668C14.7168 4.01979 14.8213 3.86913 14.8925 3.70332C14.9637 3.53751 15.0004 3.3598 15.0004 3.18032C15.0004 3.00084 14.9637 2.82313 14.8925 2.65732C14.8213 2.49151 14.7168 2.34085 14.5852 2.21396L14.0011 1.65072C13.8695 1.52369 13.7132 1.42291 13.5412 1.35415C13.3692 1.28539 13.1848 1.25 12.9986 1.25C12.8124 1.25 12.628 1.28539 12.4559 1.35415C12.2839 1.42291 12.1276 1.52369 11.996 1.65072L6.08114 7.36262Z"
-                    stroke="var(--cs-text-primary)"
-                    strokeOpacity="0.95"
-                    strokeWidth="1.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                <span>New blog</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsSettingsOpen(true)}
-                aria-label="Open settings"
-                data-label="settings-button"
-                className="w-full flex items-center gap-3 rounded-[28px] transition-colors touch-manipulation text-[14px] font-normal"
-                style={{ minHeight: 36, paddingLeft: 10, paddingRight: 10, color: "var(--cs-text-primary)" }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-strong)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <Settings className="h-4 w-4 flex-shrink-0" style={{ color: "var(--cs-text-primary)" }} aria-hidden />
-                <span>Settings</span>
-              </button>
-            </div>
-          )}
+          {/* New blog + Settings */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }} data-label="sidebar-actions">
+            <button
+              id="new-chat-button"
+              data-testid="new-chat-button"
+              data-label="new-chat-button"
+              aria-label="Start new blog"
+              onClick={handleNewChat}
+              className="w-full flex items-center gap-3 touch-manipulation text-[14px] font-normal"
+              style={{ minHeight: 36, paddingLeft: 10, paddingRight: 10, borderRadius: 28, color: "var(--cs-text-primary)", background: "transparent" }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-strong)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0" aria-hidden>
+                <path d="M14.9998 8.00011C14.9998 11.1823 14.9998 12.773 13.9747 13.7615C12.9496 14.75 11.2992 14.75 7.99988 14.75C4.69983 14.75 3.05019 14.75 2.02509 13.7615C1 12.773 1 11.1816 1 8.00011C1 4.81792 1 3.22719 2.02509 2.23871C3.05019 1.25023 4.7006 1.25023 7.99988 1.25023M6.08114 7.36262C5.81571 7.61895 5.66661 7.96637 5.66659 8.32861V10.2501H7.67167C8.04733 10.2501 8.40821 10.1061 8.6742 9.84958L14.5852 4.14668C14.7168 4.01979 14.8213 3.86913 14.8925 3.70332C14.9637 3.53751 15.0004 3.3598 15.0004 3.18032C15.0004 3.00084 14.9637 2.82313 14.8925 2.65732C14.8213 2.49151 14.7168 2.34085 14.5852 2.21396L14.0011 1.65072C13.8695 1.52369 13.7132 1.42291 13.5412 1.35415C13.3692 1.28539 13.1848 1.25 12.9986 1.25C12.8124 1.25 12.628 1.28539 12.4559 1.35415C12.2839 1.42291 12.1276 1.52369 11.996 1.65072L6.08114 7.36262Z" stroke="var(--cs-text-primary)" strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>New blog</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(true)}
+              aria-label="Open settings"
+              data-label="settings-button"
+              className="w-full flex items-center gap-3 touch-manipulation text-[14px] font-normal"
+              style={{ minHeight: 36, paddingLeft: 10, paddingRight: 10, borderRadius: 28, color: "var(--cs-text-primary)", background: "transparent" }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-strong)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <Settings className="h-4 w-4 flex-shrink-0" style={{ color: "var(--cs-text-primary)" }} aria-hidden />
+              <span>Settings</span>
+            </button>
+          </div>
         </div>
 
-        {/* Sidebar Lists — section padding 8, title 14px secondary, items minHeight 36 padding 10 borderRadius 28 */}
-        {isSidebarOpen && (
-          <div className="flex-1 overflow-y-auto custom-scrollbar" data-label="sidebar-lists" style={{ padding: 8, paddingTop: 0 }}>
-            {/* Your chats — collapsible, default 3 visible; hidden when empty */}
-            {chats.length > 0 && (
+        {/* Sidebar scrollable lists */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar" data-label="sidebar-lists" style={{ padding: 8, paddingTop: 0 }}>
+            {/* Your chats — collapsible, default 3 visible; hidden when empty and not searching */}
+            {(chats.length > 0 && filteredChats.length > 0) && (
             <div className="flex flex-col" style={{ marginBottom: 12 }} data-label="your-chats-section">
               <button
                 type="button"
@@ -1032,18 +1139,18 @@ export default function ChatPage() {
                 data-label="your-chats-toggle"
                 aria-label={chatsExpanded ? "Collapse your chats" : "Expand your chats"}
                 aria-expanded={chatsExpanded}
-                className="w-full flex items-center justify-start gap-2 cursor-pointer touch-manipulation rounded-[12px]"
-                style={{ padding: "8px 10px" }}
+                className="w-full flex items-center justify-start cursor-pointer touch-manipulation rounded-[12px]"
+                style={{ padding: "8px 10px", gap: 4 }}
               >
-                <span className="text-[14px] font-normal" style={{ color: "var(--cs-text-secondary)", fontFamily: "Inter" }}>Your Chats</span>
-                {chats.length >= 4 && (
-                  <span className={cn("flex-shrink-0 inline-flex items-center justify-center transition-transform", chatsExpanded && "rotate-90")} style={{ width: 16, height: 24, color: "var(--cs-text-secondary)" }} aria-hidden>
+                <span className="text-[14px] font-normal" style={{ color: "var(--cs-text-secondary)", fontFamily: "Inter" }}>Your chats</span>
+                {filteredChats.length >= 4 && !searchQuery && (
+                  <span className={cn("flex-shrink-0 inline-flex items-center justify-center transition-transform", chatsExpanded && "rotate-90")} style={{ width: 12, height: 24, color: "var(--cs-text-secondary)" }} aria-hidden>
                     <svg width="6" height="10" viewBox="0 0 6 10" fill="none"><path d="M0.601562 8.60001L4.60156 4.60001L0.601562 0.600006" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   </span>
                 )}
               </button>
               <div className="flex flex-col gap-0.5" data-label="chat-list">
-                {(chatsExpanded ? chats : chats.slice(0, 3)).map((chat) => (
+                {(chatsExpanded || searchQuery ? filteredChats : filteredChats.slice(0, 3)).map((chat) => (
                   <div
                     key={chat.id}
                     data-label="chat-item"
@@ -1079,7 +1186,7 @@ export default function ChatPage() {
             {/* Your blogs */}
             <div data-label="your-blogs-section">
               <div className="rounded-[12px]" style={{ padding: "8px 10px", marginBottom: 8 }}>
-                <h2 className="text-[14px] font-normal" style={{ color: "var(--cs-text-secondary)", fontFamily: "Inter" }} data-label="your-blogs-heading">Your Blogs</h2>
+                <h2 className="text-[14px] font-normal" style={{ color: "var(--cs-text-secondary)", fontFamily: "Inter" }} data-label="your-blogs-heading">Blogs</h2>
                 {fetchingBlogs && (
                   <div className="flex items-center gap-2 mt-1.5" data-label="blogs-loading">
                     <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" style={{ color: "var(--cs-text-secondary)" }} aria-hidden />
@@ -1177,19 +1284,22 @@ export default function ChatPage() {
           </div>
             </div>
           </div>
-        )}
-      </aside>
+      </motion.div>
 
       {/* Main Area — chat left, blog right (web.tsx / curastem layout) */}
+      {/* Desktop: paddingLeft animates to 260 when sidebar open. Mobile: x shifts right. */}
       <motion.div
-        className={cn(
-          "flex-1 flex relative bg-white min-w-0 min-h-0 overflow-hidden",
-          "transition-transform duration-300 ease-out md:transition-none",
-          isSidebarOpen && "translate-x-[260px] md:translate-x-0"
-        )}
+        data-layer="main-content-layout"
         data-label="main-content"
-        style={{ display: "flex" }}
+        animate={{ paddingLeft: !isMobileLayout && isSidebarOpen ? 260 : 0 }}
         transition={{ type: "spring", stiffness: 700, damping: 50 }}
+        style={{
+          display: "flex",
+          width: "100%",
+          height: "100%",
+          overflow: "hidden",
+          x: isMobileLayout ? contentX : 0,
+        }}
       >
         {/* Chat Panel — left, always visible on desktop; shrinks when blog open; resizable via drag */}
         <motion.div
@@ -1202,26 +1312,6 @@ export default function ChatPage() {
           transition={isResizing ? { duration: 0 } : { type: "spring", stiffness: 700, damping: 50 }}
           style={{ flexShrink: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 20 }}
         >
-          {/* Floating sidebar toggle */}
-          {!isSidebarOpen && !isCreating && (
-            <div className="absolute top-2 md:top-4 left-2 md:left-4 right-2 md:right-4 z-30 flex items-center justify-between pointer-events-none" data-label="floating-nav">
-              <button
-                type="button"
-                onClick={() => setIsSidebarOpen(true)}
-                aria-label="Open sidebar"
-                data-label="open-sidebar-button"
-                className="flex items-center justify-center rounded-[28px] transition-colors pointer-events-auto touch-manipulation"
-                style={{ width: 36, height: 36 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-medium)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                  <path d="M10 14H26M10 22H20" stroke="var(--cs-text-primary)" strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-              <div aria-hidden />
-            </div>
-          )}
 
           {isCreating ? (
             <div className="flex-1 flex items-center justify-center bg-white">
@@ -1262,15 +1352,41 @@ export default function ChatPage() {
           ) : (
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-6 pb-32 md:pb-40 custom-scrollbar" role="log" aria-live="polite" data-label="chat-messages">
               <div className="w-full mx-auto pt-8 md:pt-20 px-4" style={{ maxWidth: 816 }}>
-                {messages.map((msg, i) => (
-                  <div key={i} className="animate-fade-in" data-label={`message-${msg.role}-${i}`} role="article" style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", width: "100%", scrollMarginTop: 24, marginTop: msg.role === "user" ? 24 : 0, marginBottom: msg.role === "user" ? 8 : 0 }}>
-                    <div style={{ maxWidth: msg.role === "user" ? "80%" : "100%", width: msg.role === "user" ? "auto" : "100%", display: "flex", flexDirection: "column", gap: 8, alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
-                      <div style={{ padding: msg.role === "user" ? "6px 16px" : 0, borderRadius: msg.role === "user" ? 20 : 0, background: msg.role === "user" ? "var(--cs-hover-message)" : "transparent", color: "var(--cs-text-primary)", fontSize: 16, lineHeight: 1.6, maxWidth: "100%", minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap", fontFamily: "Inter, system-ui, sans-serif" }}>
-                        {msg.content || (loading && i === messages.length - 1 ? <Loader2 className="h-4 w-4 animate-spin opacity-40" style={{ color: "var(--cs-text-secondary)" }} /> : null)}
+                {messages.map((msg, i) => {
+                  // Don't render empty assistant placeholder bubbles — the pulsing star below handles that state
+                  if (!msg.content && msg.role === "assistant") return null;
+                  return (
+                    <div key={i} className="animate-fade-in" data-label={`message-${msg.role}-${i}`} role="article" style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", width: "100%", scrollMarginTop: 24, marginTop: msg.role === "user" ? 24 : 0, marginBottom: msg.role === "user" ? 8 : 0 }}>
+                      <div style={{ maxWidth: msg.role === "user" ? "80%" : "100%", width: msg.role === "user" ? "auto" : "100%", display: "flex", flexDirection: "column", gap: 8, alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
+                        <div style={{ padding: msg.role === "user" ? "6px 16px" : 0, borderRadius: msg.role === "user" ? 20 : 0, background: msg.role === "user" ? "var(--cs-hover-message)" : "transparent", color: "var(--cs-text-primary)", fontSize: 16, lineHeight: 1.6, maxWidth: "100%", minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap", fontFamily: "Inter, system-ui, sans-serif" }}>
+                          {msg.content}
+                        </div>
                       </div>
                     </div>
+                  );
+                })}
+
+                {/* Pulsing star — shown while AI is thinking (matches web.tsx pulseStar animation) */}
+                {loading && (
+                  messages.length === 0 ||
+                  messages[messages.length - 1].role === "user" ||
+                  !messages[messages.length - 1].content
+                ) && (
+                  <div style={{ marginLeft: 0, paddingBottom: 8, paddingTop: 8 }}>
+                    <div style={{ animation: "pulseStar 1.5s infinite ease-in-out", width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="AI thinking" role="img">
+                        <g clipPath="url(#clipPulseStar)">
+                          <path d="M9.291 1.32935C9.59351 0.762163 10.4065 0.762164 10.709 1.32935L13.4207 6.41384C13.4582 6.48418 13.5158 6.54176 13.5861 6.57927L18.6706 9.29099C19.2378 9.59349 19.2378 10.4065 18.6706 10.709L13.5861 13.4207C13.5158 13.4582 13.4582 13.5158 13.4207 13.5862L10.709 18.6706C10.4065 19.2378 9.59351 19.2378 9.291 18.6706L6.57927 13.5862C6.54176 13.5158 6.48417 13.4582 6.41384 13.4207L1.32934 10.709C0.762155 10.4065 0.762157 9.59349 1.32935 9.29099L6.41384 6.57927C6.48417 6.54176 6.54176 6.48418 6.57927 6.41384L9.291 1.32935Z" fill="var(--cs-text-primary)" />
+                        </g>
+                        <defs>
+                          <clipPath id="clipPulseStar">
+                            <rect width="20" height="20" fill="white" />
+                          </clipPath>
+                        </defs>
+                      </svg>
+                    </div>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           )}
@@ -1378,28 +1494,46 @@ export default function ChatPage() {
                     <path d="M12 5V19M5 12H19" stroke="var(--cs-text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </div>
-                {/* Text input wrapper — matches TextAreaWrapper */}
-                <div
-                  className="flex-1 min-w-0 flex items-center"
-                  style={{
-                    alignSelf: "stretch",
-                    paddingTop: 6,
-                    paddingBottom: 6,
+                {/* Auto-growing textarea — matches web.tsx contenteditable height behaviour */}
+                <textarea
+                  ref={chatTextareaRef}
+                  id="chat-input"
+                  data-testid="chat-input"
+                  data-label="chat-input"
+                  aria-label="Chat input"
+                  value={input}
+                  rows={1}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    e.target.style.height = "0px";
+                    const next = Math.min(e.target.scrollHeight, 148);
+                    e.target.style.height = next + "px";
+                    e.target.style.overflowY = e.target.scrollHeight > 148 ? "auto" : "hidden";
                   }}
-                >
-                  <input
-                    type="text"
-                    id="chat-input"
-                    data-testid="chat-input"
-                    data-label="chat-input"
-                    aria-label="Chat input"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder={pendingEditImage ? "Describe what to change in this image..." : selectedBlog ? "Edit blog" : "Ask anything"}
-                    className="w-full min-w-0 bg-transparent text-[14px] font-normal outline-none placeholder:opacity-65"
-                    style={{ color: "var(--cs-text-primary)", fontFamily: "Inter, system-ui, sans-serif", fontSize: 16 }}
-                  />
-                </div>
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (input.trim() && !loading) handleSend(e as unknown as React.FormEvent);
+                    }
+                  }}
+                  placeholder={pendingEditImage ? "Describe what to change in this image..." : selectedBlog ? "Edit blog" : "Ask anything"}
+                  style={{
+                    flex: "1 1 0",
+                    minWidth: 0,
+                    background: "transparent",
+                    border: "none",
+                    outline: "none",
+                    resize: "none",
+                    overflowY: "hidden",
+                    color: "var(--cs-text-primary)",
+                    fontFamily: "Inter, system-ui, sans-serif",
+                    fontSize: 16,
+                    lineHeight: "24px",
+                    padding: "6px 0",
+                    minHeight: 36,
+                    maxHeight: 148,
+                  }}
+                />
                 {/* Send / Stop — matches web.tsx SendButton */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                   {loading ? (
@@ -1536,6 +1670,10 @@ export default function ChatPage() {
                         console.error("Zoom-out failed:", err);
                       }
                     }}
+                    onCoverImageAltChange={(newAlt) => {
+                      if (!selectedBlog) return;
+                      setSelectedBlog((prev) => prev ? { ...prev, coverImageAlt: newAlt } : prev);
+                    }}
                     onEditImage={(imageUrl, imageAlt) => {
                       setPendingEditImage({ url: imageUrl, alt: imageAlt });
                       setTimeout(() => document.getElementById("chat-input")?.focus(), 50);
@@ -1604,6 +1742,10 @@ export default function ChatPage() {
                       console.error("Zoom-out failed:", err);
                     }
                   }}
+                  onCoverImageAltChange={(newAlt) => {
+                    if (!selectedBlog) return;
+                    setSelectedBlog((prev) => prev ? { ...prev, coverImageAlt: newAlt } : prev);
+                  }}
                   onEditImage={(imageUrl, imageAlt) => {
                     setPendingEditImage({ url: imageUrl, alt: imageAlt });
                     setTimeout(() => document.getElementById("chat-input")?.focus(), 50);
@@ -1611,18 +1753,126 @@ export default function ChatPage() {
                 />
               </div>
             )}
-            {/* Mobile: persistent chat input at bottom of overlay */}
-            <div className="flex-shrink-0 p-4 bg-gradient-to-t from-white via-white/95 to-transparent pt-8 border-t border-gray-100">
+            {/* Mobile: persistent chat input at bottom of overlay — matches main ChatInputBar design */}
+            <div
+              className="flex-shrink-0"
+              style={{
+                padding: "28px 16px 16px",
+                background: "linear-gradient(to bottom, transparent, white 44%)",
+              }}
+            >
               <form onSubmit={handleSend} className="w-full max-w-[816px] mx-auto" aria-label="Chat form">
-                <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "0 10px 10px", background: "var(--cs-bg)", border: "0.33px solid hsla(0,0%,0%,0.2)", boxShadow: "0px 8px 24px hsla(0,0,0,0.04)", borderRadius: 28 }}>
-                  <div role="button" tabIndex={0} onClick={() => document.getElementById("chat-image-input")?.click()} className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center cursor-pointer" onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-subtle)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                    <input id="chat-image-input" type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f?.type.startsWith("image/")) { setPendingEditImage({ url: URL.createObjectURL(f), alt: f.name }); e.target.value = ""; } }} />
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="var(--cs-text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                <div
+                  data-layer="chat-input-bar"
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    width: "100%",
+                    minHeight: 56,
+                    maxHeight: 160,
+                    padding: 0,
+                    background: "var(--cs-bg)",
+                    border: "0.33px solid hsla(0, 0%, 0%, 0.2)",
+                    boxShadow: "0px 8px 24px hsla(0, 0%, 0%, 0.04)",
+                    borderRadius: 28,
+                    justifyContent: "flex-end",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 8, width: "100%", padding: "0 10px 10px 10px" }}>
+                    {/* Plus / image upload button */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Add image to chat"
+                      onClick={() => document.getElementById("mobile-chat-image-input")?.click()}
+                      onKeyDown={(e) => e.key === "Enter" && document.getElementById("mobile-chat-image-input")?.click()}
+                      className="flex items-center justify-center flex-shrink-0 cursor-pointer rounded-full transition-colors"
+                      style={{ width: 36, height: 36 }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-subtle)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <input
+                        id="mobile-chat-image-input"
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f?.type.startsWith("image/")) {
+                            setPendingEditImage({ url: URL.createObjectURL(f), alt: f.name });
+                            e.target.value = "";
+                          }
+                        }}
+                      />
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 5V19M5 12H19" stroke="var(--cs-text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </div>
+                    {/* Auto-growing textarea — allows 2+ lines */}
+                    <textarea
+                      value={input}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        e.target.style.height = "0px";
+                        e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          if (input.trim()) handleSend({ preventDefault: () => {} } as React.FormEvent);
+                        }
+                      }}
+                      placeholder="Edit blog"
+                      rows={1}
+                      aria-label="Chat input"
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        background: "transparent",
+                        border: "none",
+                        outline: "none",
+                        resize: "none",
+                        overflowY: "hidden",
+                        color: "var(--cs-text-primary)",
+                        fontFamily: "Inter, system-ui, sans-serif",
+                        fontSize: 16,
+                        lineHeight: "1.5",
+                        paddingTop: 10,
+                        paddingBottom: 0,
+                      }}
+                    />
+                    {/* Send / Stop button */}
+                    <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                      {loading ? (
+                        <button
+                          type="button"
+                          aria-label="Stop generation"
+                          onClick={() => abortControllerRef.current?.abort()}
+                          className="cursor-pointer touch-manipulation"
+                          style={{ width: 36, height: 36 }}
+                        >
+                          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden>
+                            <rect width="36" height="36" rx="18" fill="var(--cs-text-primary)" fillOpacity="0.95" />
+                            <rect x="12" y="12" width="12" height="12" rx="2" fill="var(--cs-bg)" fillOpacity="0.95" />
+                          </svg>
+                        </button>
+                      ) : (
+                        <button
+                          type="submit"
+                          aria-label="Send message"
+                          disabled={!input.trim()}
+                          className="cursor-pointer touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed"
+                          style={{ width: 36, height: 36, display: input.trim() ? "block" : "none" }}
+                        >
+                          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden>
+                            <rect width="36" height="36" rx="18" fill="var(--cs-text-primary)" fillOpacity="0.95" />
+                            <path fillRule="evenodd" clipRule="evenodd" d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z" fill="var(--cs-bg)" fillOpacity="0.95" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <input type="text" id="chat-input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Edit blog" className="flex-1 min-w-0 bg-transparent text-[14px] outline-none" style={{ color: "var(--cs-text-primary)", fontFamily: "Inter", fontSize: 16 }} />
-                  <button type="submit" disabled={!input.trim()} className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center disabled:opacity-40">
-                    <svg width="36" height="36" viewBox="0 0 36 36" fill="none"><rect width="36" height="36" rx="18" fill="var(--cs-text-primary)" fillOpacity="0.95" /><path fillRule="evenodd" clipRule="evenodd" d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z" fill="var(--cs-bg)" fillOpacity="0.95" /></svg>
-                  </button>
                 </div>
               </form>
             </div>
@@ -1659,6 +1909,11 @@ export default function ChatPage() {
         }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
           background: rgba(0, 0, 0, 0.1);
+        }
+        @keyframes pulseStar {
+          0%   { opacity: 0.5; transform: scale(0.85); }
+          50%  { opacity: 1;   transform: scale(1.0);  }
+          100% { opacity: 0.5; transform: scale(0.85); }
         }
       `}</style>
     </div>

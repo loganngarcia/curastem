@@ -75,8 +75,10 @@ export const ImagePlaceholder = Node.create({
       dom.style.cssText = 'width: 100%; aspect-ratio: 16/9; background-color: #f6f6f6; border-radius: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 2rem 0; position: relative; cursor: pointer; min-height: 200px; padding: 1rem;';
       
       const promptSpan = document.createElement('span');
+      promptSpan.className = 'placeholder-prompt-span';
       promptSpan.setAttribute('contenteditable', 'false');
-      promptSpan.style.cssText = 'font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%;';
+      promptSpan.style.cssText = 'font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%; cursor: text; transition: color 0.15s;';
+      promptSpan.title = 'Click to edit image prompt';
       promptSpan.textContent = node.attrs.imagePrompt || 'Image placeholder';
       
       const button = document.createElement('button');
