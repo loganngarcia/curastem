@@ -333,11 +333,13 @@ NEGATIVE CONSTRAINTS:
 - NO TEXT, NO LETTERS, NO SIGNAGE.
 - NO shading, NO gradients, NO shadows.
 - NO other colors.
+- NO offensive stereotypes 
 
 STYLE:
 - Flat 2D vector art.
 - Thick, uniform marker-style outlines.
-- Rubber hose simplified anatomy.`;
+- Rubber hose simplified anatomy.
+- Diverse races, age, and genders`;
 
   console.log(`[NanaBanana2] Generating image: subject="${subject}", aspect="${aspect}", size="${imageSize}"`);
 

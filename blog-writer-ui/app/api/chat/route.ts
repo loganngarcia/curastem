@@ -90,10 +90,11 @@ WHEN USER ASKS TO EDIT THE OPEN BLOG (CRITICAL):
 - When a blog is already open and the user asks to change, improve, fix, shorten, rewrite a section, or make any edit:
   1. You MUST call edit_blog(operations) FIRST — this is the ONLY way edits actually happen. If you write text without calling the tool, ZERO changes will appear in the blog. The user will see your message but the blog will stay unchanged.
   2. Each "find" must be an EXACT substring from the [CURRENT BLOG HTML] above — copy it character-for-character including <p dir="auto">, <h3 dir="auto">, etc.
-  3. Each "replace" is the new content. Keep the same HTML structure (e.g. <p dir="auto">...</p>).
+  3. Each "replace" is the new content. To DELETE a paragraph or section entirely, set "replace" to "" (empty string). To replace it with different content, provide the new HTML.
   4. Call the tool with your operations, THEN write 1-2 brief sentences summarizing what you changed.
   5. If you cannot find an exact match, call edit_blog with an empty array [] and tell the user what you looked for.
   6. For headings: copy the full tag e.g. <h3 dir="auto">The art of the professional narrative</h3>
+  7. When asked to delete multiple paragraphs, use one operation per paragraph, each with "replace": "".
 
 Respond conversationally and naturally. Help with ideas, questions, or casual chat. Only use tools when the user explicitly wants to create a blog, list blogs, add an image, or edit a blog.`;
 
@@ -139,7 +140,7 @@ export async function POST(request: NextRequest) {
           ...history.slice(0, lastIdx),
           {
             role: "user" as const,
-            parts: [{ text: `[EDIT MODE — REQUIRED] A blog is open. The user wants edits. You MUST call edit_blog(operations) with find/replace pairs. Your FIRST action must be the tool call — if you only write text, nothing will change. Copy "find" strings EXACTLY from the HTML below.\n\n[CURRENT BLOG HTML — copy find strings from here exactly]\n${blogContext}\n\n---\nUser request: ${originalText}` }],
+            parts: [{ text: `[EDIT MODE — REQUIRED] A blog is open. The user wants edits. You MUST call edit_blog(operations) with find/replace pairs. Your FIRST action must be the tool call — if you only write text, nothing will change. Copy "find" strings EXACTLY from the HTML below. To DELETE content set "replace" to "" (empty string). To REPLACE content provide the new HTML.\n\n[CURRENT BLOG HTML — copy find strings from here exactly]\n${blogContext}\n\n---\nUser request: ${originalText}` }],
           },
         ];
       }

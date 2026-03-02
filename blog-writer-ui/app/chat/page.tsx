@@ -119,6 +119,9 @@ const BLOG_EDITOR_SHADOW = "-2px 0 24px 2px rgba(0,0,0,0.04)"; // curastem-style
 export default function ChatPage() {
   const router = useRouter();
   const [isMobileLayout, setIsMobileLayout] = useState(false);
+  // Controls blog-editor overlay visibility on mobile independently of blog selection.
+  // Closing the overlay keeps the blog selected so the chat still has blog context.
+  const [isMobileEditorOpen, setIsMobileEditorOpen] = useState(false);
   useEffect(() => {
     const check = () => setIsMobileLayout(typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT);
     check();
@@ -141,6 +144,9 @@ export default function ChatPage() {
   // Image attached to chat input for AI-driven editing
   const [pendingEditImage, setPendingEditImage] = useState<{ url: string; alt: string } | null>(null);
   const [editableContent, setEditableContent] = useState("");
+  // Ref always holds the latest editableContent so timeout callbacks read fresh values
+  const editableContentRef = useRef("");
+  useEffect(() => { editableContentRef.current = editableContent; }, [editableContent]);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     if (typeof window !== "undefined") {
@@ -351,6 +357,7 @@ export default function ChatPage() {
 
   const handleBlogClick = async (blog: Blog) => {
     setLoadingBlog(true);
+    if (isMobileLayout) setIsMobileEditorOpen(true);
     try {
       const res = await fetch(`/api/blogs/${blog.slug}`);
       if (res.ok) {
@@ -384,9 +391,14 @@ export default function ChatPage() {
     setSaveFailed(false);
     try {
       let blogListImageUrl = selectedBlog.blogListImageUrl;
+      // Always regenerate zoom-out when: no existing one, existing one is just the raw cover URL,
+      // OR the cover image URL has changed since the blog was last saved/loaded.
+      const coverChanged =
+        originalBlogState !== null &&
+        (selectedBlog.coverImageUrl || "") !== (originalBlogState.coverImageUrl || "");
       if (
         selectedBlog.coverImageUrl &&
-        (!blogListImageUrl || blogListImageUrl === selectedBlog.coverImageUrl)
+        (!blogListImageUrl || blogListImageUrl === selectedBlog.coverImageUrl || coverChanged)
       ) {
         const zoomRes = await fetch("/api/images/zoom-out", {
           method: "POST",
@@ -496,10 +508,14 @@ export default function ChatPage() {
   };
 
   const handleCloseBlog = () => {
-    // If the blog is still unsaved, persist current content to localStorage before closing
+    // On mobile: just collapse the editor overlay — keep blog selected so chat retains context
+    if (isMobileLayout) {
+      setIsMobileEditorOpen(false);
+      return;
+    }
+    // Desktop: fully deselect
     if (isNewBlogRef.current && selectedBlog) {
       saveDraft(selectedBlog, editableContent);
-      // Keep unsavedBlog in the sidebar so the user can reopen it
     }
     setSelectedBlog(null);
     setIsCreating(false);
@@ -507,7 +523,6 @@ export default function ChatPage() {
     setStreamingBlogContent("");
     isBuildingBlogRef.current = false;
     buildingContentRef.current = "";
-    // Don't reset isNewBlogRef or unsavedBlog — keep draft alive in sidebar
   };
 
   // Drag-to-resize between chat and blog (curastem style)
@@ -574,6 +589,20 @@ export default function ChatPage() {
       (selectedBlog.coverImageUrl || "") !== (originalBlogState.coverImageUrl || "")
     );
   }, [originalBlogState, selectedBlog, editableContent]);
+
+  // Re-baseline originalBlogState.content after TipTap normalizes HTML on first open.
+  // TipTap's placeholder effect runs with a 300ms debounce and calls onChange() with the
+  // normalized content — which would otherwise make blogHasChanges true before any user edit.
+  useEffect(() => {
+    if (!selectedBlog?.slug) return;
+    const timer = setTimeout(() => {
+      setOriginalBlogState(prev =>
+        prev ? { ...prev, content: editableContentRef.current } : prev
+      );
+    }, 700); // 300ms placeholder debounce + buffer
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBlog?.slug]);
 
   const sendMessage = async (messageText: string) => {
     if (!messageText.trim() || loading) return;
@@ -951,7 +980,7 @@ export default function ChatPage() {
   );
 
   return (
-    <div className="flex h-screen bg-white overflow-hidden text-black font-sans relative" role="main" aria-label="Curastem Blog Tool">
+    <div className="flex bg-white overflow-hidden text-black font-sans relative" style={{ height: "100dvh" }} role="main" aria-label="Curastem Blog Tool">
 
       {/* Open Sidebar Button — always at top-left, absolute, matches web.tsx */}
       {!isSidebarOpen && (
@@ -1395,7 +1424,7 @@ export default function ChatPage() {
         <div className={cn(
           "absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-white via-white/80 to-transparent pt-16 md:pt-20 z-20",
           selectedBlog && "px-4 md:px-12"
-        )}>
+        )} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
           <form onSubmit={handleSend} className="w-full max-w-[816px] mx-auto" aria-label="Chat form" data-label="chat-form">
             {/* Chat input bar — exact Curastem design (web.tsx ChatInputBar) */}
             <div
@@ -1686,16 +1715,29 @@ export default function ChatPage() {
         </AnimatePresence>
       </motion.div>
 
-      {/* Mobile: Blog overlay — full-screen from bottom (web.tsx style) */}
+      {/* Mobile: Blog editor overlay — slides up from bottom, X hides it but keeps blog selected */}
       <AnimatePresence>
-        {isMobileLayout && selectedBlog && (
+        {isMobileLayout && selectedBlog && isMobileEditorOpen && (
           <motion.div
             data-layer="mobile-blog-overlay"
-            initial={{ y: "100%", scale: 0.98, opacity: 0 }}
-            animate={{ y: "0%", scale: 1, opacity: 1 }}
-            exit={{ y: "100%", scale: 0.98, opacity: 0 }}
+            initial={{ y: "100%", opacity: 0 }}
+            animate={{ y: "0%", opacity: 1 }}
+            exit={{ y: "100%", opacity: 0 }}
             transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
-            style={{ position: "fixed", inset: 0, zIndex: 2000, background: BLOG_EDITOR_BG, transformOrigin: "bottom center", display: "flex", flexDirection: "column" }}
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              // Use 100dvh so iOS Safari keyboard doesn't push content off screen
+              height: "100dvh",
+              zIndex: 2000,
+              background: BLOG_EDITOR_BG,
+              display: "flex",
+              flexDirection: "column",
+              // Pad bottom by safe area so content never hides behind home indicator
+              paddingBottom: "env(safe-area-inset-bottom)",
+            }}
           >
             {loadingBlog ? (
               <div className="flex-1 flex items-center justify-center text-gray-300">
@@ -1705,7 +1747,7 @@ export default function ChatPage() {
                 </div>
               </div>
             ) : (
-              <div ref={blogPreviewRef} className="flex-1 flex flex-col overflow-hidden text-black">
+              <div ref={blogPreviewRef} className="flex-1 flex flex-col overflow-hidden text-black" style={{ minHeight: 0 }}>
                 <BlogEditor
                   ref={blogEditorRef}
                   content={editableContent}
@@ -1748,135 +1790,57 @@ export default function ChatPage() {
                   }}
                   onEditImage={(imageUrl, imageAlt) => {
                     setPendingEditImage({ url: imageUrl, alt: imageAlt });
-                    setTimeout(() => document.getElementById("chat-input")?.focus(), 50);
+                    // Close overlay so user can type in the real chat input
+                    setIsMobileEditorOpen(false);
+                    setTimeout(() => document.getElementById("chat-input")?.focus(), 300);
                   }}
                 />
               </div>
             )}
-            {/* Mobile: persistent chat input at bottom of overlay — matches main ChatInputBar design */}
-            <div
-              className="flex-shrink-0"
-              style={{
-                padding: "28px 16px 16px",
-                background: "linear-gradient(to bottom, transparent, white 44%)",
-              }}
-            >
-              <form onSubmit={handleSend} className="w-full max-w-[816px] mx-auto" aria-label="Chat form">
-                <div
-                  data-layer="chat-input-bar"
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    width: "100%",
-                    minHeight: 56,
-                    maxHeight: 160,
-                    padding: 0,
-                    background: "var(--cs-bg)",
-                    border: "0.33px solid hsla(0, 0%, 0%, 0.2)",
-                    boxShadow: "0px 8px 24px hsla(0, 0%, 0%, 0.04)",
-                    borderRadius: 28,
-                    justifyContent: "flex-end",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "flex-end", gap: 8, width: "100%", padding: "0 10px 10px 10px" }}>
-                    {/* Plus / image upload button */}
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      aria-label="Add image to chat"
-                      onClick={() => document.getElementById("mobile-chat-image-input")?.click()}
-                      onKeyDown={(e) => e.key === "Enter" && document.getElementById("mobile-chat-image-input")?.click()}
-                      className="flex items-center justify-center flex-shrink-0 cursor-pointer rounded-full transition-colors"
-                      style={{ width: 36, height: 36 }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--cs-hover-subtle)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                    >
-                      <input
-                        id="mobile-chat-image-input"
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f?.type.startsWith("image/")) {
-                            setPendingEditImage({ url: URL.createObjectURL(f), alt: f.name });
-                            e.target.value = "";
-                          }
-                        }}
-                      />
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                        <path d="M12 5V19M5 12H19" stroke="var(--cs-text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </div>
-                    {/* Auto-growing textarea — allows 2+ lines */}
-                    <textarea
-                      value={input}
-                      onChange={(e) => {
-                        setInput(e.target.value);
-                        e.target.style.height = "0px";
-                        e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          if (input.trim()) handleSend({ preventDefault: () => {} } as React.FormEvent);
-                        }
-                      }}
-                      placeholder="Edit blog"
-                      rows={1}
-                      aria-label="Chat input"
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        background: "transparent",
-                        border: "none",
-                        outline: "none",
-                        resize: "none",
-                        overflowY: "hidden",
-                        color: "var(--cs-text-primary)",
-                        fontFamily: "Inter, system-ui, sans-serif",
-                        fontSize: 16,
-                        lineHeight: "1.5",
-                        paddingTop: 10,
-                        paddingBottom: 0,
-                      }}
-                    />
-                    {/* Send / Stop button */}
-                    <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-                      {loading ? (
-                        <button
-                          type="button"
-                          aria-label="Stop generation"
-                          onClick={() => abortControllerRef.current?.abort()}
-                          className="cursor-pointer touch-manipulation"
-                          style={{ width: 36, height: 36 }}
-                        >
-                          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden>
-                            <rect width="36" height="36" rx="18" fill="var(--cs-text-primary)" fillOpacity="0.95" />
-                            <rect x="12" y="12" width="12" height="12" rx="2" fill="var(--cs-bg)" fillOpacity="0.95" />
-                          </svg>
-                        </button>
-                      ) : (
-                        <button
-                          type="submit"
-                          aria-label="Send message"
-                          disabled={!input.trim()}
-                          className="cursor-pointer touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed"
-                          style={{ width: 36, height: 36, display: input.trim() ? "block" : "none" }}
-                        >
-                          <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden>
-                            <rect width="36" height="36" rx="18" fill="var(--cs-text-primary)" fillOpacity="0.95" />
-                            <path fillRule="evenodd" clipRule="evenodd" d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z" fill="var(--cs-bg)" fillOpacity="0.95" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </form>
-            </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Mobile: "Open editor" pill — shown when a blog is selected but editor overlay is closed */}
+      <AnimatePresence>
+        {isMobileLayout && selectedBlog && !isMobileEditorOpen && (
+          <motion.button
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 20, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setIsMobileEditorOpen(true)}
+            aria-label="Open blog editor"
+            style={{
+              position: "fixed",
+              bottom: `calc(80px + env(safe-area-inset-bottom))`,
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 1500,
+              background: "var(--cs-text-primary)",
+              color: "var(--cs-bg)",
+              border: "none",
+              borderRadius: 28,
+              height: 40,
+              paddingLeft: 20,
+              paddingRight: 20,
+              fontSize: 14,
+              fontWeight: 500,
+              fontFamily: "Inter, system-ui, sans-serif",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              cursor: "pointer",
+              boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            View editor
+          </motion.button>
         )}
       </AnimatePresence>
 
@@ -1897,6 +1861,11 @@ export default function ChatPage() {
       />
 
       <style jsx global>{`
+        /* iOS Safari: fill the actual visual viewport, not the layout viewport (100vh).
+           This prevents layout jumping when the address bar hides/shows. */
+        @supports (height: 100dvh) {
+          html, body { height: 100dvh; }
+        }
         .custom-scrollbar::-webkit-scrollbar {
           width: 4px;
         }

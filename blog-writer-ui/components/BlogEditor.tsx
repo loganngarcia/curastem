@@ -1,7 +1,7 @@
 "use client";
 
 import { useEditor, EditorContent } from "@tiptap/react";
-import { Mark } from "@tiptap/core";
+import { Mark, Extension } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import Image from "@tiptap/extension-image";
@@ -140,7 +140,30 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     title ? generateFocusedImagePrompt(title) : "professional at work"
   );
   const [isEditingCoverPrompt, setIsEditingCoverPrompt] = useState(false);
-  const [cmsImages, setCmsImages] = useState<Array<{ url: string; alt: string; source: string }>>([]);
+
+  // ---- Custom undo/redo for state that lives outside TipTap (title, date, cover image) ----
+  type OuterChange =
+    | { kind: 'title'; before: string; after: string }
+    | { kind: 'date'; before: string; after: string }
+    | { kind: 'coverImage'; beforeUrl: string | undefined; afterUrl: string | undefined };
+  const [outerUndo, setOuterUndo] = useState<OuterChange[]>([]);
+  const [outerRedo, setOuterRedo] = useState<OuterChange[]>([]);
+  // Debounce title history: capture "before" on focus, commit 800ms after last keystroke
+  const titleUndoBeforeRef = useRef<string | null>(null);
+  const titleUndoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentTitleRef = useRef(title ?? "");
+  // Keep currentTitleRef in sync with the prop (updated by parent on every keystroke)
+  useEffect(() => { currentTitleRef.current = title ?? ""; }, [title]);
+  // Clear custom history when the user opens a different blog
+  useEffect(() => {
+    setOuterUndo([]);
+    setOuterRedo([]);
+    titleUndoBeforeRef.current = null;
+    if (titleUndoTimerRef.current) { clearTimeout(titleUndoTimerRef.current); titleUndoTimerRef.current = null; }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blogSlug]);
+
+  const [cmsImages, setCmsImages] = useState<Array<{ url: string; alt: string; source: string }>>([]); 
   const [uploading, setUploading] = useState(false);
   const [uploadTab, setUploadTab] = useState<"upload" | "cms" | "url">("upload");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -168,6 +191,26 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
   }>({
     isOpen: false,
     message: "",
+  });
+
+  // Preserve `dir` (and `style`) on block-level nodes so TipTap doesn't strip attributes
+  // that Framer CMS relies on (e.g. dir="auto" on every paragraph/heading).
+  const PreserveBlockAttrs = Extension.create({
+    name: "preserveBlockAttrs",
+    addGlobalAttributes() {
+      return [
+        {
+          types: ["paragraph", "heading", "bulletList", "orderedList", "listItem", "blockquote", "codeBlock"],
+          attributes: {
+            dir: {
+              default: null,
+              parseHTML: (el) => el.getAttribute("dir") || null,
+              renderHTML: (attrs) => (attrs.dir ? { dir: attrs.dir } : {}),
+            },
+          },
+        },
+      ];
+    },
   });
 
   const editor = useEditor({
@@ -286,6 +329,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
         },
       }),
       ImagePlaceholder,
+      PreserveBlockAttrs,
       Placeholder.configure({
         placeholder: "Start writing your blog post...",
       }),
@@ -294,33 +338,11 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     onUpdate: ({ editor }) => {
       // Skip if we're updating from an effect to prevent infinite loops
       if (isUpdatingFromEffectRef.current) return;
-      
-      // TipTap's getHTML() reads from the document model, not DOM
-      // Buttons added to DOM shouldn't be serialized, but let's be safe
-      const html = editor.getHTML();
-      // Use DOMParser to safely remove button elements if they somehow got serialized
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      doc.querySelectorAll('.regenerate-image-btn, button.regenerate-image-btn').forEach(btn => btn.remove());
-      // Also remove any stray "Regenerate" text that might have been serialized
-      const body = doc.body;
-      if (body) {
-        // Walk through text nodes and remove standalone "Regenerate" text
-        const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-        const textNodes: Text[] = [];
-        let node;
-        while (node = walker.nextNode()) {
-          if (node.textContent?.trim() === 'Regenerate' || node.textContent?.trim().startsWith('Regenerate ')) {
-            textNodes.push(node as Text);
-          }
-        }
-        textNodes.forEach(textNode => {
-          if (textNode.parentElement && !textNode.parentElement.closest('.regenerate-image-btn')) {
-            textNode.remove();
-          }
-        });
-      }
-      onChange(body ? body.innerHTML : html);
+      // getHTML() serialises from ProseMirror's schema — buttons/overlays live only in
+      // node-view DOM and are never part of the schema, so they will never appear here.
+      // Avoid DOMParser: it re-serialises innerHTML and can silently alter whitespace or
+      // strip attributes that Framer CMS depends on (e.g. dir="auto").
+      onChange(editor.getHTML());
     },
     editorProps: {
       attributes: {
@@ -338,51 +360,88 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             const h2Text = placeholder.getAttribute("data-h2-text") || "";
             const currentPrompt = target.textContent || "";
 
-            const input = document.createElement("input");
-            input.type = "text";
-            input.value = currentPrompt;
-            input.style.cssText = "font-size: 14px; color: #374151; text-align: center; background: rgba(255,255,255,0.9); border: 1px solid #6b7280; border-radius: 6px; padding: 4px 8px; outline: none; width: 80%; max-width: 80%; margin-bottom: 12px;";
-            target.parentNode?.replaceChild(input, target);
-            input.focus();
-            input.select();
+            // Mount a floating input in document.body — completely outside ProseMirror's DOM
+            // so keyboard events never reach ProseMirror and backspace can't delete the node.
+            // Use position:absolute + scroll offset to avoid CSS-transform containing-block issues.
+            const placeholderRect = placeholder.getBoundingClientRect();
+            const spanRect = target.getBoundingClientRect();
+            const scrollX = window.scrollX ?? window.pageXOffset ?? 0;
+            const scrollY = window.scrollY ?? window.pageYOffset ?? 0;
+            const floatWidth = Math.min(placeholderRect.width * 0.78, 480);
+            const floatLeft = placeholderRect.left + (placeholderRect.width - floatWidth) / 2 + scrollX;
+            const floatTop = spanRect.top + scrollY;
 
-            const savePrompt = () => {
-              const newPrompt = input.value.trim() || currentPrompt;
-              const newSpan = document.createElement("span");
-              newSpan.className = "placeholder-prompt-span";
-              newSpan.setAttribute("contenteditable", "false");
-              newSpan.style.cssText = "font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%; cursor: text; transition: color 0.15s;";
-              newSpan.title = "Click to edit image prompt";
-              newSpan.textContent = newPrompt;
-              input.parentNode?.replaceChild(newSpan, input);
-              // Update TipTap node attribute so the new prompt is used when generating
-              if (editor) {
-                const { state } = editor;
-                const { tr } = state;
-                state.doc.descendants((node, pos) => {
-                  if (node.type.name === "imagePlaceholder" && node.attrs.h2Text === h2Text) {
-                    tr.setNodeMarkup(pos, undefined, { ...node.attrs, imagePrompt: newPrompt });
-                    return false;
-                  }
-                });
-                if (tr.steps.length > 0) editor.view.dispatch(tr);
-              }
-              placeholder.setAttribute("data-image-prompt", newPrompt);
+            const floatInput = document.createElement("input");
+            floatInput.type = "text";
+            floatInput.value = currentPrompt;
+            floatInput.style.cssText = [
+              "position: absolute",
+              `left: ${floatLeft}px`,
+              `top: ${floatTop}px`,
+              `width: ${floatWidth}px`,
+              `height: ${spanRect.height + 2}px`,
+              "font-size: 14px",
+              "color: #6b7280",
+              "text-align: center",
+              "background: transparent",
+              "border: none",
+              "outline: none",
+              "font-family: inherit",
+              "padding: 0 4px",
+              `z-index: 999999`,
+              "box-sizing: border-box",
+            ].join("; ");
+
+            // Hide the underlying span text so it doesn't show through the transparent input
+            target.style.color = "transparent";
+
+            document.body.appendChild(floatInput);
+            floatInput.focus();
+            floatInput.select();
+
+            // Guard against double-execution (blur fires before keydown Enter in some paths)
+            let saved = false;
+
+            const cleanup = (restoredPrompt?: string) => {
+              if (floatInput.parentNode) floatInput.parentNode.removeChild(floatInput);
+              // Restore span visibility
+              target.style.color = "";
+              if (restoredPrompt !== undefined) target.textContent = restoredPrompt;
             };
 
-            input.addEventListener("keydown", (e) => {
+            const savePrompt = () => {
+              if (saved) return;
+              saved = true;
+              const newPrompt = floatInput.value.trim() || currentPrompt;
+              // Update the span text and data attribute immediately so any pending
+              // click (e.g. Create Image) reads the new prompt before TipTap re-renders
+              target.textContent = newPrompt;
+              placeholder.setAttribute("data-image-prompt", newPrompt);
+              cleanup();
+              // Defer the TipTap dispatch so a pending click fires first
+              setTimeout(() => {
+                if (editor) {
+                  const { state } = editor;
+                  const { tr } = state;
+                  state.doc.descendants((node, pos) => {
+                    if (node.type.name === "imagePlaceholder" && node.attrs.h2Text === h2Text) {
+                      tr.setNodeMarkup(pos, undefined, { ...node.attrs, imagePrompt: newPrompt });
+                      return false;
+                    }
+                  });
+                  if (tr.steps.length > 0) editor.view.dispatch(tr);
+                }
+              }, 80);
+            };
+
+            floatInput.addEventListener("keydown", (e) => {
               if (e.key === "Enter") { e.preventDefault(); savePrompt(); }
               if (e.key === "Escape") {
-                const origSpan = document.createElement("span");
-                origSpan.className = "placeholder-prompt-span";
-                origSpan.setAttribute("contenteditable", "false");
-                origSpan.style.cssText = "font-size: 14px; color: #6b7280; margin-bottom: 12px; text-align: center; max-width: 80%; cursor: text; transition: color 0.15s;";
-                origSpan.title = "Click to edit image prompt";
-                origSpan.textContent = currentPrompt;
-                input.parentNode?.replaceChild(origSpan, input);
+                saved = true;
+                cleanup(currentPrompt);
               }
             });
-            input.addEventListener("blur", savePrompt);
+            floatInput.addEventListener("blur", savePrompt);
             return true;
           }
 
@@ -798,9 +857,9 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
     editor.chain().focus().setImage({ src: url, alt }).run();
   };
 
-  /** Start a 35-second countdown for the given key, updating imageTimers every second. */
+  /** Start a 60-second countdown for the given key, updating imageTimers every second. */
   const startImageTimer = (key: string) => {
-    setImageTimers(prev => new Map(prev).set(key, 35));
+    setImageTimers(prev => new Map(prev).set(key, 60));
     const interval = setInterval(() => {
       setImageTimers(prev => {
         const next = new Map(prev);
@@ -832,11 +891,30 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
       const data = await res.json();
       const newImageUrl = data.url;
 
-      const currentContent = editor.getHTML();
-      const escapedUrl = currentImageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const imagePattern = new RegExp(`(<p[^>]*>)?<img[^>]+src=["']${escapedUrl}["'][^>]*>(</p>)?`, 'gi');
-      const wrappedHtml = `<p dir="auto" class="image-with-regenerate"><img src="${newImageUrl}" alt="${currentAlt}" style="border-radius: 28px;"></p>`;
-      editor.commands.setContent(currentContent.replace(imagePattern, wrappedHtml));
+      // Replace image via ProseMirror transaction so the change lands in the undo stack
+      const { state, view } = editor;
+      const { tr } = state;
+      let found = false;
+      state.doc.descendants((node, pos) => {
+        if (node.type.name === "image" && node.attrs.src === currentImageUrl && !found) {
+          tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: newImageUrl, alt: currentAlt });
+          found = true;
+        }
+      });
+      if (found) {
+        view.dispatch(tr);
+      } else {
+        // Fallback: parse-and-replace via transaction (still goes into undo history)
+        const currentHTML = editor.getHTML();
+        const escapedUrl = currentImageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const imagePattern = new RegExp(`(<p[^>]*>)?<img[^>]+src=["']${escapedUrl}["'][^>]*>(</p>)?`, 'gi');
+        const newHTML = currentHTML.replace(imagePattern, `<p dir="auto" class="image-with-regenerate"><img src="${newImageUrl}" alt="${currentAlt}" style="border-radius: 28px;"></p>`);
+        const container = document.createElement('div');
+        container.innerHTML = newHTML;
+        const parsedDoc = PMDOMParser.fromSchema(editor.schema).parse(container);
+        const replaceTr = editor.state.tr.replace(0, editor.state.doc.content.size, new Slice(parsedDoc.content, 0, 0));
+        view.dispatch(replaceTr);
+      }
       setImagePrompts(prev => ({ ...prev, [newImageUrl]: imagePrompt }));
     } catch (error) {
       console.error("Failed to regenerate image:", error);
@@ -853,6 +931,14 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
       setRegeneratingImages(prev => { const s = new Set(prev); s.delete(currentImageUrl); return s; });
     }
   };
+
+  // Wrapper that pushes a cover-image history entry before delegating to the parent callback.
+  // All internal cover-image replacements must go through this so undo/redo works.
+  const handleCoverImageReplace = useCallback((newUrl: string) => {
+    setOuterUndo(prev => [...prev, { kind: 'coverImage', beforeUrl: coverImageUrl, afterUrl: newUrl }]);
+    setOuterRedo([]);
+    onCoverImageReplace?.(newUrl);
+  }, [coverImageUrl, onCoverImageReplace]);
 
   const handleCreatePlaceholderImage = async (h2Text: string, placeholderElement: HTMLElement) => {
     if (!editor || generatingImages.has(h2Text)) return;
@@ -895,16 +981,21 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
       if (tr.steps.length > 0) {
         editor.view.dispatch(tr);
       } else {
-        // Fallback HTML replace
-        const currentContent = editor.getHTML();
+        // Fallback: parse-and-replace via transaction (preserves undo history)
+        const currentHTML = editor.getHTML();
         const placeholderPattern = new RegExp(
           `<p[^>]*class="image-placeholder"[^>]*data-h2-text="${h2Text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>.*?</p>`,
           'gs'
         );
-        editor.commands.setContent(currentContent.replace(
+        const newHTML = currentHTML.replace(
           placeholderPattern,
           `<p dir="auto" class="image-with-regenerate"><img src="${imageUrl}" alt="${imagePrompt}" style="border-radius: 28px;"></p>`
-        ));
+        );
+        const container = document.createElement('div');
+        container.innerHTML = newHTML;
+        const parsedDoc = PMDOMParser.fromSchema(editor.schema).parse(container);
+        const fallbackTr = editor.state.tr.replace(0, editor.state.doc.content.size, new Slice(parsedDoc.content, 0, 0));
+        editor.view.dispatch(fallbackTr);
       }
     } catch (error) {
       console.error("Failed to generate image:", error);
@@ -1234,9 +1325,48 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
             )}
           </div>
 
-          {/* Undo / Redo — always visible */}
-          <ToolbarButton onClick={() => editor.chain().focus().undo().run()} active={false} disabled={!editor.can().undo()} icon={<Undo className="h-4 w-4" style={{ color: "inherit" }} />} title="Undo" />
-          <ToolbarButton onClick={() => editor.chain().focus().redo().run()} active={false} disabled={!editor.can().redo()} icon={<Redo className="h-4 w-4" style={{ color: "inherit" }} />} title="Redo" />
+          {/* Undo / Redo — always visible; checks both TipTap history and outer (title/date/cover) history */}
+          <ToolbarButton
+            onClick={() => {
+              if (editor.can().undo()) {
+                editor.chain().focus().undo().run();
+              } else {
+                const entry = outerUndo[outerUndo.length - 1];
+                if (!entry) return;
+                setOuterUndo(prev => prev.slice(0, -1));
+                setOuterRedo(prev => [...prev, entry]);
+                if (entry.kind === 'title') onTitleChange?.(entry.before);
+                else if (entry.kind === 'date') onDateChange?.(entry.before);
+                else if (entry.kind === 'coverImage' && entry.beforeUrl !== undefined) onCoverImageReplace?.(entry.beforeUrl);
+                else if (entry.kind === 'coverImage' && entry.beforeUrl === undefined) {
+                  // Cover was created from nothing — undo by clearing it (no-op for now; parent owns the state)
+                }
+              }
+            }}
+            active={false}
+            disabled={!editor.can().undo() && outerUndo.length === 0}
+            icon={<Undo className="h-4 w-4" style={{ color: "inherit" }} />}
+            title="Undo"
+          />
+          <ToolbarButton
+            onClick={() => {
+              if (editor.can().redo()) {
+                editor.chain().focus().redo().run();
+              } else {
+                const entry = outerRedo[outerRedo.length - 1];
+                if (!entry) return;
+                setOuterRedo(prev => prev.slice(0, -1));
+                setOuterUndo(prev => [...prev, entry]);
+                if (entry.kind === 'title') onTitleChange?.(entry.after);
+                else if (entry.kind === 'date') onDateChange?.(entry.after);
+                else if (entry.kind === 'coverImage' && entry.afterUrl !== undefined) onCoverImageReplace?.(entry.afterUrl);
+              }
+            }}
+            active={false}
+            disabled={!editor.can().redo() && outerRedo.length === 0}
+            icon={<Redo className="h-4 w-4" style={{ color: "inherit" }} />}
+            title="Redo"
+          />
 
           {/* Dynamic items — hide last when space is tight */}
           {primaryItems.map((item) => (
@@ -1493,13 +1623,44 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
           {title !== undefined && (
             <textarea
               value={title}
+              onFocus={() => {
+                // Capture "before" value at the moment the user starts editing
+                if (titleUndoBeforeRef.current === null) {
+                  titleUndoBeforeRef.current = title ?? "";
+                }
+              }}
               onChange={(e) => {
-                onTitleChange?.(e.target.value);
+                const newVal = e.target.value;
+                onTitleChange?.(newVal);
+                // Debounce: commit a history entry 800 ms after the last keystroke
+                if (titleUndoBeforeRef.current === null) titleUndoBeforeRef.current = title ?? "";
+                if (titleUndoTimerRef.current) clearTimeout(titleUndoTimerRef.current);
+                titleUndoTimerRef.current = setTimeout(() => {
+                  const before = titleUndoBeforeRef.current;
+                  const after = currentTitleRef.current;
+                  if (before !== null && before !== after) {
+                    setOuterUndo(prev => [...prev, { kind: 'title', before, after }]);
+                    setOuterRedo([]);
+                    titleUndoBeforeRef.current = after; // next session starts from here
+                  }
+                  titleUndoTimerRef.current = null;
+                }, 800);
                 // Auto-resize: collapse first so scrollHeight reflects content, not parent
                 const ta = e.target;
                 ta.style.height = "0px";
                 const h = Math.min(ta.scrollHeight, 200);
                 ta.style.height = `${h}px`;
+              }}
+              onBlur={() => {
+                // Commit immediately on blur so history is up to date
+                if (titleUndoTimerRef.current) { clearTimeout(titleUndoTimerRef.current); titleUndoTimerRef.current = null; }
+                const before = titleUndoBeforeRef.current;
+                const after = title ?? "";
+                if (before !== null && before !== after) {
+                  setOuterUndo(prev => [...prev, { kind: 'title', before, after }]);
+                  setOuterRedo([]);
+                }
+                titleUndoBeforeRef.current = null;
               }}
               ref={(el) => {
                 titleTextareaRef.current = el;
@@ -1530,16 +1691,25 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                 onChange={(e) => {
                   const value = e.target.value;
                   if (!value) {
+                    if (date) {
+                      setOuterUndo(prev => [...prev, { kind: 'date', before: date, after: '' }]);
+                      setOuterRedo([]);
+                    }
                     onDateChange('');
                     return;
                   }
-                  // Parse mm/dd/yyyy format
+                  // Parse mm/dd/yyyy format — only commit history when a complete valid date is entered
                   const match = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
                   if (match) {
                     const [, month, day, year] = match;
                     const dateObj = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
                     if (!isNaN(dateObj.getTime())) {
-                      onDateChange(dateObj.toISOString());
+                      const newISO = dateObj.toISOString();
+                      if (newISO !== date) {
+                        setOuterUndo(prev => [...prev, { kind: 'date', before: date ?? '', after: newISO }]);
+                        setOuterRedo([]);
+                      }
+                      onDateChange(newISO);
                     }
                   }
                 }}
@@ -1582,7 +1752,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                 )}
                 <button 
                   className="create-image-btn" 
-                  style={{ background: 'black', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '8px', fontSize: '14px', cursor: 'pointer', fontWeight: '500' }}
+                  style={{ background: 'black', color: 'white', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', height: 40, paddingLeft: 16, paddingRight: 16, borderRadius: 28, fontSize: '14px', cursor: 'pointer', fontWeight: '500' }}
                   onClick={async () => {
                     if (generatingImages.has("Cover Image")) return;
                     setGeneratingImages(prev => new Set([...prev, "Cover Image"]));
@@ -1596,7 +1766,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                       });
                       if (!res.ok) throw new Error("Failed to generate image");
                       const data = await res.json();
-                      onCoverImageReplace(data.url);
+                      handleCoverImageReplace(data.url);
                     } catch (error) {
                       console.error("Failed to generate cover image:", error);
                       setErrorModal({
@@ -1708,7 +1878,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
                     });
                     if (!res.ok) throw new Error("Failed to regenerate image");
                     const data = await res.json();
-                    onCoverImageReplace(data.url);
+                    handleCoverImageReplace(data.url);
                   } catch (error) {
                     console.error("Failed to regenerate cover image:", error);
                     setErrorModal({
@@ -1747,7 +1917,17 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
         >
           <button
             type="button"
-            onClick={onSave}
+            onClick={() => {
+              // Clear all AI edit highlights before publishing — the user approves them by saving
+              if (editor) {
+                editor.chain()
+                  .selectAll()
+                  .unsetMark("aiEditHighlight")
+                  .setTextSelection(0)
+                  .run();
+              }
+              onSave?.();
+            }}
             disabled={isSaving || (!hasChanges && !saveFailed)}
             data-testid="save-button"
             className="flex items-center gap-2 transition-colors touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1807,7 +1987,7 @@ const BlogEditor = forwardRef<BlogEditorRef, EditorProps>(function BlogEditor({ 
           onReplace={(newUrl) => {
             // Check if this is the cover image
             if (selectedImage.src === coverImageUrl && onCoverImageReplace) {
-              onCoverImageReplace(newUrl);
+              handleCoverImageReplace(newUrl);
               setIsImageEditModalOpen(false);
               setSelectedImage(null);
               return;

@@ -2,42 +2,74 @@ import { NextRequest, NextResponse } from "next/server";
 import sharp from "sharp";
 import { uploadImageToFramer } from "@/lib/framer";
 
-const EXPAND_RATIO = 0.35; // 35% size increase (17.5% left/right, 35% top)
+// 30% size increase: adds 30% of the original height to the top,
+// and 15% to each side, keeping the original aspect ratio.
+const EXPAND_RATIO = 0.30;
 
-/** Sample dominant color from image edges (where fill will be adjacent) for better match */
-async function getEdgeDominantColor(
+/**
+ * Compute the mean RGB color of the outermost pixel strip on each edge.
+ * Sampling raw pixels and averaging gives a much more accurate fill color
+ * than sharp's dominant-color bucket — especially for gradient backgrounds.
+ *
+ * The top strip is weighted 2× since that's where most expansion is added.
+ */
+async function getEdgeMeanColor(
   imgBuffer: Buffer,
   width: number,
   height: number
 ): Promise<{ r: number; g: number; b: number }> {
-  const edgePct = 0.08; // sample 8% of image from each edge
-  const topRows = Math.max(2, Math.min(Math.round(height * edgePct), height));
-  const sideCols = Math.max(2, Math.min(Math.round(width * edgePct), width));
+  // Sample a thin strip — 3px or 1% of the shorter dimension, whichever is larger
+  const stripPx = Math.max(3, Math.round(Math.min(width, height) * 0.01));
 
-  const regions = [
-    { left: 0, top: 0, width, height: topRows }, // top edge
-    { left: 0, top: 0, width: sideCols, height }, // left edge
-    { left: Math.max(0, width - sideCols), top: 0, width: Math.min(sideCols, width), height }, // right edge
+  const strips = [
+    // top — 2× weight because we expand most from there
+    { left: 0, top: 0,                          width,      height: Math.min(stripPx, height) },
+    { left: 0, top: 0,                          width,      height: Math.min(stripPx, height) },
+    // left
+    { left: 0, top: 0,                          width: Math.min(stripPx, width), height },
+    // right
+    { left: Math.max(0, width - stripPx), top: 0, width: Math.min(stripPx, width), height },
   ];
 
-  const colors: Array<{ r: number; g: number; b: number }> = [];
-  for (const region of regions) {
-    const cropped = await sharp(imgBuffer).extract(region).toBuffer();
-    const stats = await sharp(cropped).stats();
-    if (stats.dominant) {
-      colors.push(stats.dominant);
+  let rSum = 0, gSum = 0, bSum = 0, totalCount = 0;
+
+  for (const region of strips) {
+    try {
+      const { data, info } = await sharp(imgBuffer)
+        .extract(region)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const channels = info.channels; // 4 (RGBA)
+      for (let i = 0; i < data.length; i += channels) {
+        const alpha = data[i + 3] ?? 255;
+        if (alpha < 10) continue; // skip fully transparent pixels
+        rSum += data[i];
+        gSum += data[i + 1];
+        bSum += data[i + 2];
+        totalCount++;
+      }
+    } catch {
+      // skip a strip if it fails (e.g. tiny image edge case)
     }
   }
 
-  if (colors.length === 0) {
+  if (totalCount === 0) {
+    // Fallback: mean of the whole image
     const stats = await sharp(imgBuffer).stats();
-    return stats.dominant ?? { r: 245, g: 245, b: 245 };
+    return {
+      r: Math.round(stats.channels[0].mean),
+      g: Math.round(stats.channels[1].mean),
+      b: Math.round(stats.channels[2].mean),
+    };
   }
 
-  const r = Math.round(colors.reduce((s, c) => s + c.r, 0) / colors.length);
-  const g = Math.round(colors.reduce((s, c) => s + c.g, 0) / colors.length);
-  const b = Math.round(colors.reduce((s, c) => s + c.b, 0) / colors.length);
-  return { r, g, b };
+  return {
+    r: Math.round(rSum / totalCount),
+    g: Math.round(gSum / totalCount),
+    b: Math.round(bSum / totalCount),
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -101,8 +133,9 @@ export async function POST(request: NextRequest) {
       pipeline = sharp(inputBuffer);
     }
 
-    const { r, g, b } = await getEdgeDominantColor(inputBuffer, width, height);
+    const { r, g, b } = await getEdgeMeanColor(inputBuffer, width, height);
 
+    // Distribute padding: all expansion on top (keeps subject visible), equal left/right
     const top = Math.round(height * EXPAND_RATIO);
     const leftRight = Math.round(width * (EXPAND_RATIO / 2));
     const bottom = 0;

@@ -85,7 +85,7 @@ export const ImagePlaceholder = Node.create({
       button.className = 'create-image-btn';
       button.setAttribute('contenteditable', 'false');
       button.setAttribute('data-tiptap-ignore', 'true');
-      button.style.cssText = 'background: black; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 500;';
+      button.style.cssText = 'background: black; color: white; border: none; display: flex; align-items: center; justify-content: center; height: 40px; padding-left: 16px; padding-right: 16px; border-radius: 28px; font-size: 14px; cursor: pointer; font-weight: 500;';
       button.textContent = 'Create Image';
       
       dom.appendChild(promptSpan);
