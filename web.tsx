@@ -31,6 +31,239 @@ import {
 } from "https://esm.sh/tldraw@2.1.0?external=react,react-dom"
 
 // -----------------------------------------------------------------------------
+// Haptics — dual-engine haptic feedback (mirrors the web-haptics npm package):
+//
+//   • Android / Chrome   → navigator.vibrate() with pulse-pattern arrays
+//   • iOS Safari 17.4+   → hidden <input type="checkbox" switch> click trick:
+//       WebKit fires its native UIImpactFeedbackGenerator whenever this
+//       switch-type checkbox is clicked, giving real iOS haptics on the web.
+//       Multiple clicks with timed delays simulate success/error patterns.
+//
+// WHY no npm package: this repo only allows react/react-dom/framer/framer-motion.
+// We replicate web-haptics' dual-engine approach inline with zero dependencies.
+//
+// Pattern guide (matches Apple HIG):
+//   light     — subtle tap, copy, minor action
+//   medium    — primary button press, send, new chat
+//   heavy     — major state change (reserved)
+//   success   — async op completed: P2P connected, call started  (double pulse)
+//   warning   — destructive / caution: end call
+//   error     — failure  (triple pulse)
+//   selection — discrete step: menu open
+// -----------------------------------------------------------------------------
+
+// Lazily create a hidden <input type="checkbox" switch> + label for iOS haptics.
+//
+// CRITICAL: iOS WebKit fires the Taptic Engine when the LABEL is clicked, NOT
+// when the input is clicked directly. Both web-haptics and use-haptic libraries
+// click the label element (label.click() / labelRef.current.click()), which
+// propagates to the switch input and triggers the native haptic feedback.
+// Clicking the input element directly is silently ignored by iOS.
+//
+// Both elements use display:none — confirmed working by the web-haptics demo.
+// Appended to document.body once and reused for the lifetime of the page.
+let _hapticLabel: HTMLLabelElement | null = null
+function _getHapticLabel(): HTMLLabelElement | null {
+    if (typeof document === "undefined") return null
+    if (_hapticLabel) return _hapticLabel
+    const input = document.createElement("input")
+    input.type = "checkbox"
+    input.id = "curastem-haptic-switch"
+    input.setAttribute("switch", "") // Safari 18 / iOS 17.4+ switch control
+    input.style.display = "none"
+    document.body.appendChild(input)
+    const label = document.createElement("label")
+    label.htmlFor = "curastem-haptic-switch"
+    label.style.display = "none"
+    document.body.appendChild(label)
+    _hapticLabel = label
+    return label
+}
+
+// Fire N haptic pulses on iOS, with `gapMs` milliseconds between each.
+// Must be called synchronously from a user-gesture handler (click / touchend)
+// so iOS recognises it as user-initiated and allows the haptic.
+function _iosHaptic(times: number, gapMs = 0): void {
+    const label = _getHapticLabel()
+    if (!label) return
+    if (times === 1) { label.click(); return }
+    let n = 0
+    const fire = () => { label.click(); if (++n < times) setTimeout(fire, gapMs) }
+    fire()
+}
+
+const haptic = {
+    // Single light tick — copy, minor action
+    light: () => {
+        typeof navigator !== "undefined" && navigator.vibrate?.(10)
+        _iosHaptic(1)
+    },
+    // Single medium tap — send message, new chat, primary button
+    medium: () => {
+        typeof navigator !== "undefined" && navigator.vibrate?.(20)
+        _iosHaptic(1)
+    },
+    // Single heavy press — reserved for major state changes
+    heavy: () => {
+        typeof navigator !== "undefined" && navigator.vibrate?.(40)
+        _iosHaptic(1)
+    },
+    // Double pulse — P2P connected, call started (matches Apple success pattern)
+    success: () => {
+        typeof navigator !== "undefined" && navigator.vibrate?.([10, 50, 10])
+        _iosHaptic(2, 60)
+    },
+    // Single warning pulse — end call, destructive action
+    warning: () => {
+        typeof navigator !== "undefined" && navigator.vibrate?.(30)
+        _iosHaptic(1)
+    },
+    // Triple pulse — error / failure
+    error: () => {
+        typeof navigator !== "undefined" && navigator.vibrate?.([50, 30, 50])
+        _iosHaptic(3, 40)
+    },
+    // Very short tick — menu open, discrete selection
+    selection: () => {
+        typeof navigator !== "undefined" && navigator.vibrate?.(5)
+        _iosHaptic(1)
+    },
+}
+
+// -----------------------------------------------------------------------------
+// UI sounds — synthesized via Web Audio API (no imports, no files).
+//
+// playCallStartSound  — cute ascending sparkle chime (C maj arpeggio, ~0.7s)
+//   Plays when: "Get free help", "Volunteer", or "Start AI live call" clicked.
+//
+// playCallEndSound    — gentle descending farewell tones (~0.8s)
+//   Plays when: the end-call button is clicked.
+//
+// Both are called directly from onClick handlers so AudioContext creation
+// is inside the browser's user-interaction window (required on iOS/Safari).
+// Both silently no-op if Web Audio is unavailable (SSR, old browser, error).
+// -----------------------------------------------------------------------------
+
+// Shared helper: create an AudioContext that works on iOS Safari.
+//
+// Two iOS-specific pitfalls we work around here:
+//
+// 1. Hardware mute switch — iOS Safari blocks Web Audio API (oscillators,
+//    buffer sources) when the ringer switch is muted, even with a valid user
+//    gesture. The `navigator.audioSession.type = 'playback'` API (Safari-only,
+//    shipped Nov 2025) overrides this and tells WebKit to treat audio like a
+//    music app, bypassing the mute switch.
+//    Safe no-op on Chrome/Firefox because of the `'audioSession' in navigator`
+//    guard. Spec: https://www.w3.org/TR/audio-session/
+//
+// 2. Suspended AudioContext — iOS Safari creates AudioContext in a suspended
+//    state. `resume()` MUST be called synchronously inside the user-gesture
+//    call stack (not inside a Promise/async) for WebKit to honour it.
+//
+// Call this function directly from an onClick/onTouchEnd handler, never from
+// a useEffect, setTimeout, or async chain.
+const _makeCtx = (): AudioContext | null => {
+    if (typeof window === "undefined") return null
+    try {
+        // Use "play-and-record" instead of "playback" so that sounds from this
+        // AudioContext do NOT block subsequent getUserMedia calls on iOS.
+        // "playback" sets an exclusive audio session that prevents microphone
+        // capture — "play-and-record" allows both simultaneously.
+        if ("audioSession" in navigator) {
+            ;(navigator as any).audioSession.type = "play-and-record"
+        }
+        const AC = window.AudioContext ?? (window as any).webkitAudioContext
+        if (!AC) return null
+        const ctx = new AC() as AudioContext
+        // Synchronous resume — iOS requires this in the same call stack as
+        // the gesture; do NOT await or move into a Promise chain.
+        ctx.resume()
+        return ctx
+    } catch (_) { return null }
+}
+
+// Shared signal chain tail: compressor → destination.
+// DynamicsCompressor makes oscillator tones noticeably louder and punchier
+// on phone speakers by bringing up the average level without hard clipping.
+const _withCompressor = (ctx: AudioContext) => {
+    const comp = ctx.createDynamicsCompressor()
+    comp.threshold.value = -18
+    comp.knee.value      = 8
+    comp.ratio.value     = 6
+    comp.attack.value    = 0.003
+    comp.release.value   = 0.15
+    comp.connect(ctx.destination)
+    return comp
+}
+
+const playCallStartSound = (): void => {
+    const ctx = _makeCtx()
+    if (!ctx) return
+    try {
+        const now  = ctx.currentTime
+        const out  = _withCompressor(ctx)
+
+        // C-major arpeggio ascending: C5 → E5 → G5 → C6
+        // Cute, bright, musical — like a magical "ding ding ding ding"
+        const notes = [523, 659, 784, 1047]   // Hz
+        notes.forEach((freq, i) => {
+            const osc  = ctx.createOscillator()
+            const gain = ctx.createGain()
+            const t    = now + i * 0.10          // stagger each note 100ms apart
+
+            osc.type = "sine"
+            osc.frequency.setValueAtTime(freq, t)
+            // Tiny upward pitch nudge gives each note a "sparkle" feel
+            osc.frequency.linearRampToValueAtTime(freq * 1.04, t + 0.25)
+
+            gain.gain.setValueAtTime(0.0001, t)
+            gain.gain.linearRampToValueAtTime(0.55, t + 0.04)   // fast attack
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.60) // gentle tail
+
+            osc.connect(gain)
+            gain.connect(out)
+            osc.start(t)
+            osc.stop(t + 0.65)
+        })
+
+        setTimeout(() => { try { ctx.close() } catch (_) {} }, 1400)
+    } catch (_) {}
+}
+
+const playCallEndSound = (): void => {
+    const ctx = _makeCtx()
+    if (!ctx) return
+    try {
+        const now  = ctx.currentTime
+        const out  = _withCompressor(ctx)
+
+        // Descending: G4 → E4 → C4 — soft, warm, non-jarring farewell
+        const notes = [392, 330, 262]          // Hz
+        notes.forEach((freq, i) => {
+            const osc  = ctx.createOscillator()
+            const gain = ctx.createGain()
+            const t    = now + i * 0.13
+
+            osc.type = "sine"
+            osc.frequency.setValueAtTime(freq, t)
+            // Gentle downward drift for a melting-away feel
+            osc.frequency.linearRampToValueAtTime(freq * 0.97, t + 0.45)
+
+            gain.gain.setValueAtTime(0.0001, t)
+            gain.gain.linearRampToValueAtTime(0.45, t + 0.05)
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.60)
+
+            osc.connect(gain)
+            gain.connect(out)
+            osc.start(t)
+            osc.stop(t + 0.60)
+        })
+
+        setTimeout(() => { try { ctx.close() } catch (_) {} }, 1200)
+    } catch (_) {}
+}
+
+// -----------------------------------------------------------------------------
 // Constants for Gemini Live
 // -----------------------------------------------------------------------------
 const SUGGESTION_MODEL_ID = "gemini-3-flash-preview"
@@ -1700,6 +1933,12 @@ interface Message {
         name: string
         response: any
     }
+    /**
+     * Set when the model created/updated a tool panel via delimiter streaming
+     * ("app" or "doc"). Mirrors what functionCall.name provided for real tool
+     * calls so renderChatSection can show the correct tag badge in both cases.
+     */
+    toolUsed?: "app" | "doc"
 }
 
 interface FileAttachmentProps {
@@ -5044,8 +5283,19 @@ interface ChatInputProps {
     onRemoveSkill?: (skillId: string) => void
     /** Called whenever the contenteditable HTML changes (for P2P sync) */
     onHtmlChange?: (html: string) => void
-    /** Applied from peer: sets the contenteditable HTML + extracts skills. seq increments each sync. */
-    peerSync?: { html: string; skills: Array<{ id: string; name: string; description?: string }>; seq: number } | null
+    /** Called whenever the local caret position changes (character offset in plain text). Used to broadcast cursor to peer. */
+    onCursorChange?: (offset: number) => void
+    /**
+     * Applied from peer: sets the contenteditable HTML + extracts skills. seq increments each sync.
+     * cursorOffset is the partner's caret position (character offset). When present and the local
+     * user has not manually repositioned their own caret, the local caret follows the partner's.
+     */
+    peerSync?: {
+        html: string
+        skills: Array<{ id: string; name: string; description?: string }>
+        seq: number
+        cursorOffset?: number
+    } | null
 }
 
 const ChatInput = React.memo(function ChatInput({
@@ -5090,6 +5340,7 @@ const ChatInput = React.memo(function ChatInput({
     onSelectSkill,
     onRemoveSkill,
     onHtmlChange,
+    onCursorChange,
     peerSync,
 }: ChatInputProps) {
     const editableRef = React.useRef<HTMLDivElement | null>(null)
@@ -5098,6 +5349,23 @@ const ChatInput = React.memo(function ChatInput({
     // Track whether content came from peer sync or local typing (so we apply peer updates when content is from peer)
     const contentOriginRef = React.useRef<"peer" | "local" | "empty">("empty")
     const isApplyingPeerSyncRef = React.useRef(false)
+    // True when the user has explicitly repositioned their caret (click or arrow key).
+    // While true, incoming peer cursorOffset is NOT applied — the user is independently editing.
+    // Resets to false when the input is fully cleared (after send).
+    const manualCursorRef = React.useRef(false)
+
+    // Returns the current caret position as a plain-text character offset inside the contenteditable.
+    const getCursorOffset = React.useCallback((): number => {
+        if (typeof window === "undefined" || !editableRef.current) return 0
+        const sel = window.getSelection()
+        if (!sel || sel.rangeCount === 0) return 0
+        const range = sel.getRangeAt(0)
+        if (!editableRef.current.contains(range.startContainer)) return 0
+        const preRange = document.createRange()
+        preRange.setStart(editableRef.current, 0)
+        preRange.setEnd(range.startContainer, range.startOffset)
+        return preRange.toString().length
+    }, [])
     // Callback ref so new DOM nodes get content restored after layout switch
     const setEditableRef = React.useCallback((el: HTMLDivElement | null) => {
         editableRef.current = el
@@ -5499,8 +5767,69 @@ const ChatInput = React.memo(function ChatInput({
         }
 
         const text = getEditableText(editableRef.current)
+
+        // -----------------------------------------------------------------------
+        // Real-time censorship: apply sanitizeMessage() to the contenteditable
+        // DOM in-place so the user sees censored text immediately, AND so the
+        // HTML broadcast to the P2P partner via input-sync is already sanitized.
+        //
+        // WHY this is safe without cursor adjustment:
+        //   sanitizeMessage() is length-preserving — every matched pattern is
+        //   replaced with the exact same number of '*' characters. This means
+        //   each text node's character count stays the same, so the browser's
+        //   existing caret offset remains valid after the substitution.
+        //
+        // WHY we walk text nodes instead of setting innerHTML:
+        //   Overwriting innerHTML resets skill chip <span> elements. Walking
+        //   NodeFilter.SHOW_TEXT touches only the raw text in between chips.
+        // -----------------------------------------------------------------------
+        const sanitized = sanitizeMessage(text)
+        if (sanitized !== text && editableRef.current) {
+            // Save the caret offset BEFORE mutating the DOM.
+            // Changing textNode.textContent — even with the same character count — triggers
+            // a browser selection reset that moves the cursor to position 0. We restore it
+            // explicitly after the walk. sanitizeMessage() is length-preserving so the
+            // saved offset is still valid in the updated text.
+            const savedOffset = getCursorOffset()
+
+            let charOffset = 0
+            const walker = document.createTreeWalker(
+                editableRef.current,
+                NodeFilter.SHOW_TEXT
+            )
+            let node: Node | null
+            while ((node = walker.nextNode())) {
+                const textNode = node as Text
+                const len = textNode.textContent?.length ?? 0
+                const segment = sanitized.substring(charOffset, charOffset + len)
+                if (segment !== textNode.textContent) {
+                    textNode.textContent = segment
+                }
+                charOffset += len
+            }
+
+            // Restore the caret to exactly where it was before the sanitization pass
+            const pos = findPositionOfCharacter(editableRef.current, savedOffset)
+            if (pos) {
+                const sel = window.getSelection()
+                if (sel) {
+                    const r = document.createRange()
+                    r.setStart(pos.node, pos.offset)
+                    r.collapse(true)
+                    sel.removeAllRanges()
+                    sel.addRange(r)
+                }
+            }
+
+            // Re-capture the now-sanitized innerHTML so the peer broadcast is clean
+            savedEditableContentRef.current = editableRef.current.innerHTML
+        }
+
         onHtmlChange?.(savedEditableContentRef.current)
-        onChange({ target: { value: text } } as React.ChangeEvent<HTMLTextAreaElement>)
+        onChange({ target: { value: sanitized } } as React.ChangeEvent<HTMLTextAreaElement>)
+        // Typing is not a "manual" reposition — reset so cursor can still follow peer
+        manualCursorRef.current = false
+        onCursorChange?.(getCursorOffset())
         // Overflow detection: if content height > single line, lock into 2-row
         if (editableRef.current.scrollHeight > SINGLE_LINE_HEIGHT + 4) {
             setHasExpandedToTwoRows(true)
@@ -5593,8 +5922,22 @@ const ChatInput = React.memo(function ChatInput({
         }
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault()
-            if (hasContent && !isLoading) onSend()
+            if (hasContent && !isLoading) {
+                haptic.medium()
+                onSend()
+            }
             return
+        }
+
+        // Arrow / Home / End keys intentionally reposition the caret — mark as manual
+        // so incoming peer cursorOffset is ignored while the user is navigating.
+        const isNavKey = e.key === "ArrowLeft" || e.key === "ArrowRight" ||
+                         e.key === "ArrowUp"   || e.key === "ArrowDown"  ||
+                         e.key === "Home"      || e.key === "End"
+        if (isNavKey) {
+            manualCursorRef.current = true
+            // Report new caret position after the browser has moved it
+            requestAnimationFrame(() => onCursorChange?.(getCursorOffset()))
         }
     }
 
@@ -5632,6 +5975,8 @@ const ChatInput = React.memo(function ChatInput({
             onInput={handleEditableInput}
             onKeyDown={handleEditableKeyDown}
             onPaste={handleEditablePaste}
+            onMouseDown={() => { manualCursorRef.current = true }}
+            onMouseUp={() => { onCursorChange?.(getCursorOffset()) }}
             style={{
                 flex: "1 1 0",
                 color: themeColors.text.primary,
@@ -5720,6 +6065,8 @@ const ChatInput = React.memo(function ChatInput({
             editableRef.current.innerHTML = ""
             savedEditableContentRef.current = ""
             contentOriginRef.current = "empty"
+            // Message was sent — cursor is free to follow the peer again
+            manualCursorRef.current = false
         }
         prevValueRef.current = value
     }, [value, selectedSkills.length])
@@ -5733,6 +6080,23 @@ const ChatInput = React.memo(function ChatInput({
         editableRef.current.innerHTML = peerSync.html
         savedEditableContentRef.current = peerSync.html
         contentOriginRef.current = "peer"
+
+        // Mirror partner's caret position UNLESS user has manually repositioned theirs.
+        // This gives a collaborative "follow" feel — your cursor tracks where they're typing.
+        if (!manualCursorRef.current && peerSync.cursorOffset != null) {
+            const pos = findPositionOfCharacter(editableRef.current, peerSync.cursorOffset)
+            if (pos) {
+                const sel = window.getSelection()
+                if (sel) {
+                    const r = document.createRange()
+                    r.setStart(pos.node, pos.offset)
+                    r.collapse(true)
+                    sel.removeAllRanges()
+                    sel.addRange(r)
+                }
+            }
+        }
+
         isApplyingPeerSyncRef.current = false
     // seq changes each time a new sync arrives, re-running the effect
     }, [peerSync?.seq]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -6771,12 +7135,10 @@ const ChatInput = React.memo(function ChatInput({
                             onClick={(e) => {
                                 e.stopPropagation()
                                 if (attachments.length < 10) {
+                                    haptic.medium()
                                     const nextState = !showMenu
                                     setShowMenu(nextState)
-                                    // Hide tooltip if menu is opening
-                                    if (nextState) {
-                                        setIsAddFilesTooltipHovered(false)
-                                    }
+                                    if (nextState) setIsAddFilesTooltipHovered(false)
                                 }
                             }}
                             onMouseEnter={() => {
@@ -7052,6 +7414,7 @@ const ChatInput = React.memo(function ChatInput({
                                 if (isLoading && onStop) {
                                     onStop()
                                 } else if (hasContent) {
+                                    haptic.medium()
                                     onSend()
                                 }
                             }}
@@ -7187,6 +7550,7 @@ const ChatInput = React.memo(function ChatInput({
                             onClick={(e) => {
                                 e.stopPropagation()
                                 if (attachments.length < 10) {
+                                    haptic.medium()
                                     const nextState = !showMenu
                                     setShowMenu(nextState)
                                     if (nextState) setIsAddFilesTooltipHovered(false)
@@ -7513,7 +7877,7 @@ const ChatInput = React.memo(function ChatInput({
                         data-svg-wrapper
                         data-layer="end call button."
                         className="EndCallButton"
-                        onClick={onEndCall}
+                        onClick={() => { playCallEndSound(); onEndCall() }}
                         onMouseEnter={() =>
                             isHoverCapable() && setIsEndCallTooltipHovered(true)
                         }
@@ -10156,6 +10520,7 @@ const MessageBubble = React.memo(
                                             typeof navigator !== "undefined" &&
                                             navigator.clipboard
                                         ) {
+                                            haptic.light()
                                             navigator.clipboard.writeText(
                                                 msg.text
                                             )
@@ -10586,6 +10951,7 @@ const MessageBubble = React.memo(
                                             typeof navigator !== "undefined" &&
                                             navigator.clipboard
                                         ) {
+                                            haptic.light()
                                             navigator.clipboard.writeText(
                                                 stripMarkdown(msg.text)
                                             )
@@ -10673,9 +11039,10 @@ const MessageBubble = React.memo(
                                     onMouseLeave={() =>
                                         setIsDislikeHovered(false)
                                     }
-                                    onClick={() =>
+                                    onClick={() => {
+                                        haptic.light()
                                         setIsDislikeActive(!isDislikeActive)
-                                    }
+                                    }}
                                 >
                                     {isDislikeActive ? (
                                         <div
@@ -10771,10 +11138,10 @@ const RoleSelectionButton = React.memo(
         colors: typeof darkColors
     }) => {
         const isStudent = type === "student"
-        const label = isStudent ? "Get free help" : "Volunteer"
+        const label = isStudent ? "Call a mentor" : "Volunteer"
         const desc = isStudent
-            ? "Video call with a mentor"
-            : "Give free career and college advice"
+            ? "Free college and career advice"
+            : "Offer free support to students"
         // Student tile text always white (dark mode), volunteer uses theme colors
         const textColor = isStudent
             ? darkColors.text.primary
@@ -11130,17 +11497,16 @@ const MiniIDE = React.memo(
             if (mode !== "player") return
 
             const handleMessage = (e: MessageEvent) => {
-                if (e.data) {
+                // AI-generated code inside the iframe can call window.parent.postMessage()
+                // with arbitrary data. Wrap in try-catch so a misbehaving app can never
+                // crash the parent page or drop the P2P call.
+                try {
+                    if (!e.data || typeof e.data !== "object") return
                     if (e.data.type === "iframe-cursor-move") {
                         if (onCursorMove) {
                             onCursorMove(e.data.x, e.data.y)
                         }
                     } else if (e.data.type === "iframe-interaction") {
-                        // if (debugMode)
-                        //     console.log(
-                        //         "[MiniIDE] Received iframe-interaction:",
-                        //         e.data
-                        //     )
                         if (onAppInteraction) {
                             onAppInteraction(e.data)
                         }
@@ -11149,21 +11515,17 @@ const MiniIDE = React.memo(
                             onAppMutation(e.data.payload)
                         }
                     } else if (e.data.type === "iframe-initial-state") {
-                        // if (debugMode)
-                        //     console.log(
-                        //         "[MiniIDE] Received iframe-initial-state:",
-                        //         e.data.payload
-                        //     )
                         if (onAppInitialState) {
                             onAppInitialState(e.data.payload)
                         }
                     } else if (e.data.type === "request-initial-state") {
-                        // if (debugMode)
-                        //     console.log("[MiniIDE] Received request-initial-state")
                         if (onRequestInitialState) {
                             onRequestInitialState()
                         }
                     }
+                    // Unknown message types from the iframe are silently ignored
+                } catch (e) {
+                    console.error("[App Player] Error handling iframe message:", e)
                 }
             }
 
@@ -11346,7 +11708,14 @@ const MiniIDE = React.memo(
                                     width: "100%",
                                 }}
                             >
-                                {highlightSyntax(code, themeColors)}
+                                {(() => {
+                                    try {
+                                        return highlightSyntax(code, themeColors)
+                                    } catch {
+                                        // If syntax highlighting fails on unusual code, render plain text
+                                        return code
+                                    }
+                                })()}
                             </pre>
 
                             {/* Input Layer */}
@@ -11540,6 +11909,9 @@ const MiniIDE = React.memo(
                             <iframe
                                 ref={iframeRef}
                                 srcDoc={(() => {
+                                    // Entire srcDoc computation is wrapped in try-catch so
+                                    // malformed AI-generated code never crashes the React render.
+                                    try {
                                     // HOST SCRIPT: Captures mutations + Replays interactions
                                     const hostScript = `<script>
                                     // Utility to generate a selector for an element
@@ -12038,6 +12410,10 @@ const MiniIDE = React.memo(
                                               )
                                             : `<base target="_blank">${clientScript}${finalCode}`
                                     }
+                                    } catch (e) {
+                                        console.error("[App Player] Failed to build srcDoc:", e)
+                                        return `<!DOCTYPE html><html><body style="background:#141414;color:#fff;font-family:sans-serif;padding:86px 24px 24px;margin:0"><p style="opacity:0.7">⚠️ Could not render app. Open the editor to fix the code.</p></body></html>`
+                                    }
                                 })()}
                                 style={{
                                     width: "100%",
@@ -12076,7 +12452,7 @@ export default function OmegleMentorshipUI(props: Props) {
         skillsApiUrl,
         systemPrompt,
         accentColor,
-        model = "gemini-3-flash-preview",
+        model = "gemini-3.1-flash-lite-preview",
         debugMode = false,
         showAds = true,
         defaultSuggestions = [],
@@ -12455,7 +12831,7 @@ export default function OmegleMentorshipUI(props: Props) {
     const isAppOpenRef = React.useRef(false)
     const [appCode, setAppCode] = React.useState(
         `<h1>Welcome to Apps</h1>
-<p>Ask Curastem to build portfolios, quizzes, games, and anything you can imagine</p>`
+<p>Ask Curastem to build presentations, quizzes, portfolios, and anything you can imagine</p>`
     )
     const [appMode, setAppMode] = React.useState<"editor" | "player">("editor")
 
@@ -12599,16 +12975,116 @@ export default function OmegleMentorshipUI(props: Props) {
         }
     }, [])
 
-    const getSystemPromptWithContext = React.useCallback(() => {
-        if (role === "volunteer") return systemPrompt || ""
-        const now = new Date()
-        let prompt = systemPrompt || ""
-        prompt += `\n\n[System Context]\nCurrent Date: ${now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}\nCurrent Time: ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-        if (locationInfo) {
-            prompt += `\nLocation: ${locationInfo.city}, ${locationInfo.region}, ${locationInfo.country}`
-        }
-        return prompt
-    }, [systemPrompt, locationInfo, role])
+    // ---------------------------------------------------------------------------
+    // getSystemPromptWithContext(forVoice?)
+    //
+    // forVoice=false (default) → text chat path. Includes XML delimiter instructions
+    //   so the model streams <curastem-app>, <curastem-doc>, and <curastem-suggestions>
+    //   blocks that the UI parses in real time (see the stream loop below).
+    //
+    // forVoice=true → Gemini Live (audio) path. Delimiter tags are OMITTED entirely
+    //   because Gemini Live uses responseModalities: ["AUDIO"]. If the model received
+    //   delimiter instructions, it would literally SPEAK the XML tag names out loud
+    //   (e.g. "curastem-suggestions open bracket..."), which then appear verbatim in
+    //   the outputAudioTranscription and pollute the chat UI.
+    //   For voice: suggestions are generated via a separate fetchAiSuggestions() call;
+    //   app/doc creation tells the user to switch to text chat.
+    // ---------------------------------------------------------------------------
+    const getSystemPromptWithContext = React.useCallback(
+        (forVoice = false) => {
+            if (role === "volunteer") return systemPrompt || ""
+            const now = new Date()
+            let prompt = systemPrompt || ""
+            prompt += `\n\n[System Context]\nCurrent Date: ${now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}\nCurrent Time: ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+            if (locationInfo) {
+                prompt += `\nLocation: ${locationInfo.city}, ${locationInfo.region}, ${locationInfo.country}`
+            }
+
+            if (forVoice) {
+                // Voice session: natural speech only — no XML tags, no delimiters.
+                // Suggestions are generated separately via fetchAiSuggestions().
+                // App/doc creation is not supported mid-voice; guide the user to text chat.
+                prompt += `
+
+[VOICE SESSION — SPEAK NATURALLY]
+This is a live voice call. Rules:
+- Respond naturally and conversationally — no lists, no headers, no markdown.
+- NEVER output any XML tags such as <curastem-app>, <curastem-doc>, or <curastem-suggestions>. These are text-chat-only features and will be read aloud verbatim if you output them, which is broken.
+- If the user asks you to build an app, create a document, or do anything that requires the app/doc editor, acknowledge warmly and let them know they can send a message in text chat to create it.
+- Keep responses concise and easy to follow by ear.`
+            } else {
+                // ---------------------------------------------------------------------------
+                // DELIMITER STREAMING INSTRUCTIONS (text chat only)
+                //
+                // The Gemini API does not stream tool-call arguments incrementally — the full
+                // JSON blob for create_app / update_doc arrives in one chunk after the model
+                // finishes generating it, causing a blank editor for 5–20 s on complex apps.
+                // This is a confirmed API limitation (github.com/googleapis/python-genai #1940).
+                //
+                // Workaround (mirrors Google's own Gemini Canvas): the model streams content
+                // as ordinary text inside special XML-style tags. The UI opens the correct
+                // editor the moment it sees the opening tag and feeds each token directly into
+                // the editor panel — real-time streaming, no buffering.
+                //
+                // WHY XML tags instead of markdown code fences:
+                // Code fences (```language) are frequently abbreviated or reformatted by
+                // LLMs (e.g. the model outputs ```-doc instead of ```curastem-doc).
+                // XML-style tags (<curastem-app>, <curastem-doc> etc.) are followed precisely
+                // because models are trained extensively on XML/HTML structured formats.
+                //
+                // When GCP adds streaming tool-call arg support, remove these instructions
+                // and restore create_app / update_doc as proper tool declarations (see the
+                // tools array above, which has a full revert checklist in its comment block).
+                // ---------------------------------------------------------------------------
+                prompt += `
+
+[UI CAPABILITIES — OUTPUT FORMAT IS STRICT, FOLLOW EXACTLY]
+
+CREATING APPS — ONLY when the user explicitly asks to BUILD, MAKE, or CREATE an app, game, quiz, or interactive tool (e.g. "build me a game", "make a quiz", "create a portfolio"). Do NOT use for explanations, lists, or general answers.
+Write one sentence that includes intro and asks what other features they want, then output:
+<curastem-app>
+<!DOCTYPE html>...complete self-contained HTML/CSS/JS...
+</curastem-app>
+App requirements (non-negotiable):
+- Add many features and are highly useful to a diverse audience, even if it wasn't requested.
+- Every button fully interactive
+- Unique id="..." on EVERY interactive element (buttons, inputs, clickable divs, canvas)
+- Mobile + desktop support, 56px top margin always
+- Add automatic light and dark mode based on system preference
+- links open in new tab
+- Style: 36px rounded corners
+- NO gradients and NO strokes
+- use large, neobrutalist variable fonts. make trendy and Gen Z
+- edge-to-edge like every pixel was considered and used wisely
+- creative but always elegant. can use rotation, scaling, 3d effects, and vibrant but accessible colors. Code a ton of design details dont just do a few lines do a lot of lines of code
+- add microinteractions and beautiful smooth drop shadows and blurs
+
+CREATING DOCUMENTS — ONLY when the user explicitly asks you to WRITE, DRAFT, or CREATE a specific document they will use (e.g. "write my resume", "draft a cover letter", "write an email to my professor"). Do NOT use for general info, how-to answers, resource lists, or anything the user didn't ask to be saved as a document.
+Write one sentence that includes intro and asks how it can be improved, then output:
+<curastem-doc>
+<h1>Title</h1><p>Content...</p>
+</curastem-doc>
+Use HTML only: <h1>/<h2> headings, <p> body, <ul>/<li> lists, <b>/<strong> bold, <i>/<em> italic, <a href="..."> links.
+
+FOLLOW-UP SUGGESTIONS (required at the end of EVERY response, no exceptions):
+<curastem-suggestions>
+["Short question 1?","Short question 2?","Short question 3?"]
+</curastem-suggestions>
+Rules: always 3–5 suggestions, each under 5 words, specific to what you just said, plain strings only.
+
+CRITICAL RULES:
+- Default to plain conversational text. Most responses do NOT need a doc or app.
+- Use <curastem-app> ONLY on explicit build/make/create requests for interactive tools.
+- Use <curastem-doc> ONLY on explicit write/draft requests for a specific document.
+- NEVER open a doc or app just because the answer is long, structured, or has bullet points.
+- Always end with <curastem-suggestions> — every single response without exception.
+- Do NOT wrap these tags in markdown code fences or add any extra formatting around them.`
+            }
+
+            return prompt
+        },
+        [systemPrompt, locationInfo, role]
+    )
 
     const docContentRef = React.useRef(docContent)
     React.useEffect(() => {
@@ -13056,18 +13532,32 @@ Do not include markdown formatting or explanations.`
                 if (text) {
                     const parsed = JSON.parse(text)
                     if (Array.isArray(parsed)) {
-                        // setSuggestions(parsed.slice(0, 3))
-                        // Suggestion logic needs to be connected or removed if unused
+                        // Filter to strings and cap at 5 suggestions
+                        const suggs = parsed
+                            .filter((s: any) => typeof s === "string")
+                            .slice(0, 5)
+                        if (suggs.length > 0) {
+                            setAiGeneratedSuggestions(suggs)
+                            broadcastData({
+                                type: "ai-suggestions",
+                                payload: suggs,
+                            })
+                        }
                     }
                 }
             } catch (error) {
                 console.error("Suggestion fetch error:", error)
             }
         },
+        // NOTE: broadcastData is defined later in this component (line ~15974) so it
+        // cannot be placed in the deps array (TDZ). broadcastData is a stable useCallback
+        // reference, so capturing it via closure is safe and causes no stale-closure bugs.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         [geminiApiKey, captureCurrentContext, isDocOpen, docContent]
     )
 
     const stopLiveSession = React.useCallback(() => {
+        haptic.warning()
         if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current)
             silenceTimerRef.current = null
@@ -13378,6 +13868,7 @@ Do not include markdown formatting or explanations.`
             log("Missing Gemini API Key")
             return
         }
+        haptic.medium()
 
         // Use the exact model string that works in gemini.tsx
         const liveModel = "models/gemini-2.5-flash-native-audio-preview-12-2025"
@@ -13414,7 +13905,14 @@ Do not include markdown formatting or explanations.`
                             },
                             systemInstruction: {
                                 parts: [
-                                    { text: getSystemPromptWithContext() + docContext },
+                                    // forVoice=true: strips delimiter instructions so the
+                                    // model doesn't speak XML tag names aloud during the call.
+                                    // Suggestions are handled via fetchAiSuggestions() instead.
+                                    {
+                                        text:
+                                            getSystemPromptWithContext(true) +
+                                            docContext,
+                                    },
                                 ],
                             },
                             inputAudioTranscription: {},
@@ -13436,21 +13934,30 @@ Do not include markdown formatting or explanations.`
                 liveNextPlayTimeRef.current = audioCtx.currentTime + 0.1
 
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({
-                        video: true,
-                        audio: {
-                            sampleRate: 16000,
-                            channelCount: 1,
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true,
-                            latency: 0.01,
-                        } as any,
-                    })
-
-                    // Set as local stream for UI
-                    localStreamRef.current = stream
-                    setLocalStream(stream)
+                    // Reuse any stream already acquired by handleConnectWithAI
+                    // (which called getUserMedia inside the user-gesture handler —
+                    // required on iOS Safari so the permission dialog appears).
+                    // Only fall back to a new getUserMedia if no stream yet.
+                    let stream = localStreamRef.current
+                    if (!stream) {
+                        // Same iOS audioSession fix as startChat()
+                        if (typeof navigator !== "undefined" && "audioSession" in navigator) {
+                            ;(navigator as any).audioSession.type = "play-and-record"
+                        }
+                        stream = await navigator.mediaDevices.getUserMedia({
+                            video: true,
+                            audio: {
+                                sampleRate: 16000,
+                                channelCount: 1,
+                                echoCancellation: true,
+                                noiseSuppression: true,
+                                autoGainControl: true,
+                                latency: 0.01,
+                            } as any,
+                        })
+                        localStreamRef.current = stream
+                        setLocalStream(stream)
+                    }
 
                     liveInputStreamRef.current = stream
                     const source = audioCtx.createMediaStreamSource(stream)
@@ -13707,7 +14214,18 @@ Do not include markdown formatting or explanations.`
                     }
 
                     if (data.serverContent?.outputTranscription?.text) {
-                        const text = data.serverContent.outputTranscription.text
+                        const rawText =
+                            data.serverContent.outputTranscription.text
+
+                        // Safety net: strip any <curastem-*> tags that leaked into the
+                        // audio transcription. This should not happen with forVoice=true
+                        // system prompt, but guards against stale sessions or API quirks.
+                        const text = rawText
+                            .replace(
+                                /<curastem-[^>]*>[\s\S]*?<\/curastem-[^>]*>/g,
+                                ""
+                            )
+                            .replace(/<\/?curastem-[^>]*>/g, "")
 
                         if (transcriptionTimeoutRef.current) {
                             clearTimeout(transcriptionTimeoutRef.current)
@@ -13822,7 +14340,7 @@ Do not include markdown formatting or explanations.`
 
     const handleConnectWithAI = React.useCallback(() => {
         log(`handleConnectWithAI clicked. Status: ${status}, Role: ${role}`)
-        // Switch to Live Mode
+        playCallStartSound()
         startLiveSession()
     }, [startLiveSession, status, role])
 
@@ -14212,6 +14730,7 @@ Do not include markdown formatting or explanations.`
         }
     }, [isSidebarOpen])
 
+
     // Motion values for sidebar gesture
     const sidebarX = useMotionValue(-260)
     const sidebarOverlayOpacity = useTransform(sidebarX, [-260, 0], [0, 1])
@@ -14492,17 +15011,30 @@ Do not include markdown formatting or explanations.`
                     ? Date.now()
                     : existing?.timestamp || Date.now()
 
-                // Update specific tool timestamps
+                // Update specific tool timestamps.
+                // Timestamps are cleared (→ undefined) when content is blank/default so
+                // the item disappears from "Your Stuff" — no empty cards shown to users.
                 const now = Date.now()
-                const docEditorLastEdited = hasDocChanges
-                    ? now
-                    : existing?.docEditorLastEdited
+
+                const isDocBlank =
+                    !docContentRef.current?.trim() ||
+                    docContentRef.current.trim() === DEFAULT_DOC_CONTENT
+                const docEditorLastEdited: number | undefined = isDocBlank
+                    ? undefined // blank/default doc → don't list in Your Stuff
+                    : hasDocChanges
+                      ? now
+                      : existing?.docEditorLastEdited
+
                 const whiteboardLastEdited = hasWhiteboardChanges
                     ? now
                     : existing?.whiteboardLastEdited
-                const miniIdeLastEdited = hasAppChanges
-                    ? now
-                    : existing?.miniIdeLastEdited
+
+                const isAppBlank = !appCodeRef.current
+                const miniIdeLastEdited: number | undefined = isAppBlank
+                    ? undefined // empty app → don't list in Your Stuff
+                    : hasAppChanges
+                      ? now
+                      : existing?.miniIdeLastEdited
 
                 const sessionToSave: ChatSession = {
                     id: currentChatId,
@@ -14954,7 +15486,10 @@ Do not include markdown formatting or explanations.`
         html: string
         skills: Array<{ id: string; name: string; description?: string }>
         seq: number
+        cursorOffset?: number
     } | null>(null)
+    // Tracks own caret position (character offset) to include in input-sync broadcasts
+    const inputCursorRef = React.useRef(0)
 
     // --- STATE: RESPONSIVE UI ---
     // Initialize height from localStorage if available, else default to 300 (will be auto-sized for new users)
@@ -15633,6 +16168,7 @@ Do not include markdown formatting or explanations.`
     const handleRoleSelect = React.useCallback(
         (selectedRole: "student" | "volunteer") => {
             log(`Role selected: ${selectedRole}`)
+            playCallStartSound()
 
             if (typeof window !== "undefined") {
                 const currentHash = window.location.hash
@@ -16559,6 +17095,8 @@ Do not include markdown formatting or explanations.`
     const startChat = async (reuseStream = false) => {
         setStatus("searching")
         log("Requesting media permissions...")
+        // Also log to browser console for remote debugging via Safari Web Inspector
+        console.log("[Curastem] startChat called — requesting getUserMedia")
 
         try {
             let stream = localStreamRef.current
@@ -16571,17 +17109,39 @@ Do not include markdown formatting or explanations.`
                     localStreamRef.current = null
                 }
 
+                // Set audio session to "play-and-record" before getUserMedia.
+                // iOS Safari sets the audio session to "playback" whenever an
+                // AudioContext is created (e.g. by Framer's animation engine or
+                // our sound functions). "playback" blocks microphone access.
+                // "play-and-record" explicitly permits both output and capture.
+                // Guard: this API is Safari/iOS-only; safe no-op on other browsers.
+                if (typeof navigator !== "undefined" && "audioSession" in navigator) {
+                    ;(navigator as any).audioSession.type = "play-and-record"
+                }
+                console.log("[Curastem] calling getUserMedia...")
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: true,
                     audio: true,
                 })
+                console.log("[Curastem] getUserMedia granted ✓")
                 localStreamRef.current = stream
                 setLocalStream(stream)
             }
 
             initPeerJS()
         } catch (err: any) {
-            log(`Media Error: ${err.message}`)
+            console.error("[Curastem] getUserMedia error:", err.name, err.message)
+            log(`Media Error: ${err.name} — ${err.message}`)
+
+            // NotAllowedError = user denied OR iOS Settings blocked the site.
+            // On iOS: Settings → Privacy & Security → Camera → Safari → Allow
+            if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+                log("Camera blocked. On iOS: Settings → Privacy & Security → Camera → Safari → turn on for this site.")
+            }
+            // NotFoundError = no camera/mic device found
+            if (err.name === "NotFoundError") {
+                log("No camera or microphone found on this device.")
+            }
             setStatus("idle")
         }
     }
@@ -17498,6 +18058,8 @@ Do not include markdown formatting or explanations.`
 
         const onOpen = () => {
             log("Data connection established")
+            // Fire a success haptic so the user feels the moment their partner connects.
+            haptic.success()
 
             // SYNC STRATEGY:
             // If I have content open (Doc or Whiteboard), I am the source of truth for this connection.
@@ -17670,6 +18232,7 @@ Do not include markdown formatting or explanations.`
                             html: data.payload.html,
                             skills: data.payload.skills ?? [],
                             seq: data.payload.seq ?? Date.now(),
+                            cursorOffset: data.payload.cursorOffset,
                         })
                     }
                     if (data.payload.skills) {
@@ -17841,99 +18404,10 @@ Do not include markdown formatting or explanations.`
         })
     }
 
-    const generateSuggestedReplies = React.useCallback(
-        async (lastAiText: string) => {
-            if (!geminiApiKey || !lastAiText.trim()) {
-                setAiGeneratedSuggestions([])
-                return
-            }
-
-            setAiGeneratedSuggestions([])
-
-            const isAnyMobile =
-                isMobileLayoutRef.current ||
-                Array.from(peerMetadataRef.current.values()).some(
-                    (p: any) => p.isMobile
-                )
-            const count = isAnyMobile ? 5 : 3
-            const countWord = isAnyMobile ? "five" : "three"
-
-            const suggestionPrompt = `Based on the last AI message:\n\n"${lastAiText}"\n\nSuggest ${countWord} helpful, short (max 5 words) follow-up questions that make sense at a glance and the user might ask or say next. Present them as a JSON array of strings. For example: ["Tell me more.", "How does it work?", "What is that?"]`
-
-            try {
-                const response = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiApiKey}`,
-                    {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: suggestionPrompt }] }],
-                            generationConfig: {
-                                temperature: 0.7,
-                                maxOutputTokens: 100,
-                                stopSequences: ["\n\n"],
-                            },
-                        }),
-                    }
-                )
-
-                if (!response.ok) {
-                    console.warn("Failed to generate suggestions")
-                    setAiGeneratedSuggestions([])
-                    return
-                }
-
-                const data = await response.json()
-                const responseText =
-                    data.candidates?.[0]?.content?.parts?.[0]?.text || ""
-
-                if (responseText) {
-                    try {
-                        const jsonMatch = responseText.match(/(\[[\s\S]*?\])/)
-                        if (jsonMatch && jsonMatch[0]) {
-                            const suggestionsArray = JSON.parse(jsonMatch[0])
-                            if (
-                                Array.isArray(suggestionsArray) &&
-                                suggestionsArray.every(
-                                    (s) => typeof s === "string"
-                                )
-                            ) {
-                                console.log(
-                                    "Generated suggestions:",
-                                    suggestionsArray
-                                )
-                                const finalSuggestions = suggestionsArray
-                                    .slice(0, count)
-                                    .filter((s) => s.trim() !== "")
-                                setAiGeneratedSuggestions(finalSuggestions)
-
-                                // Broadcast suggestions to peers so everyone sees them
-                                if (dataConnectionsRef.current.size > 0) {
-                                    broadcastData({
-                                        type: "ai-suggestions",
-                                        payload: finalSuggestions,
-                                    })
-                                }
-                            } else {
-                                setAiGeneratedSuggestions([])
-                            }
-                        } else {
-                            setAiGeneratedSuggestions([])
-                        }
-                    } catch (e) {
-                        console.error("Failed to parse suggestions", e)
-                        setAiGeneratedSuggestions([])
-                    }
-                } else {
-                    setAiGeneratedSuggestions([])
-                }
-            } catch (e) {
-                console.error("Failed to generate suggestions", e)
-                setAiGeneratedSuggestions([])
-            }
-        },
-        [geminiApiKey]
-    )
+    // generateSuggestedReplies was removed — suggestions are now emitted by the
+    // main model inside a <curastem-suggestions> delimiter block and parsed by
+    // parseSuggestionsFrom() in the stream loop. No separate API call needed.
+    // fetchAiSuggestions (below) is kept for the Gemini Live (voice) path only.
 
     const generateAIResponse = React.useCallback(
         async (
@@ -18118,7 +18592,33 @@ Do not include markdown formatting or explanations.`
                     })
                 )
 
-                // Define Tools (per Gemini docs: name, description, parameters)
+                // ---------------------------------------------------------------------------
+                // Tool declarations — ONLY retrieve_resources and update_whiteboard are
+                // real API tool calls here. create_app and update_doc have been
+                // intentionally converted to delimiter-based text streaming (see the
+                // DELIMITER STREAMING section below and in getSystemPromptWithContext).
+                //
+                // WHY: The Gemini API does not stream function-call arguments
+                // incrementally. The entire JSON args blob is buffered server-side and
+                // delivered as one chunk, so the editor would stay blank for the full
+                // generation time (5–20 s for a complex app). This is a confirmed gap
+                // vs OpenAI / Anthropic / xAI — tracked publicly at:
+                //   https://github.com/googleapis/python-genai/issues/1940
+                //   (open, priority p3 as of early 2026)
+                //
+                // The fix mirrors exactly what Google's own Gemini Canvas product does:
+                // the model streams content as ordinary text inside special fenced code
+                // XML-style tags (<curastem-app> / <curastem-doc>). The stream parser below
+                // detects the opening tag and opens the editor immediately, then feeds
+                // each arriving token straight into the editor panel — real-time, no
+                // buffering, identical UX to Gemini Canvas.
+                //
+                // When GCP ships streaming tool-call arg support, revert by:
+                //   1. Re-add create_app and update_doc to this tool declarations array
+                //   2. Remove the delimiter instructions from getSystemPromptWithContext
+                //   3. Remove the DELIMITER STREAMING block in the stream loop below
+                //   4. No post-stream logic for create_app/update_doc (handled in stream loop)
+                // ---------------------------------------------------------------------------
                 const tools = [
                     {
                         functionDeclarations: [
@@ -18127,64 +18627,12 @@ Do not include markdown formatting or explanations.`
                                 description: [
                                     "Retrieves curated career and college resources: mentorship, financial aid, job search, scholarships, student offers.",
                                     "Use when the user asks for resources, scholarships, internships, FAFSA, networking, or similar.",
-                                    "When calling, include a brief personalized intro in the same response so the user sees your message immediately.",
+                                    "Do NOT write intro text before calling — a follow-up response is always generated after the resources are fetched.",
                                 ].join(" "),
                                 parameters: {
                                     type: "OBJECT",
                                     properties: {},
                                     required: [],
-                                },
-                            },
-                            {
-                                name: "create_app",
-                                description:
-                                    "Creates a mini app (HTML/CSS/JS) for the user. Use this when the user asks to build a game, portfolio, quiz, interactive demo, or any web application. The code should be a single HTML file with embedded CSS and JavaScript.",
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        code: {
-                                            type: "STRING",
-                                            description: `The complete HTML code for the app, including embedded CSS (<style>) and JavaScript (<script>). Must be a valid, self-contained HTML document.
-
-Every button must be fully interactive.
-
-DO NOT:
-- no shadows
-- no gradients
-- no blurs
-
-DO:
-- must add unique id="..." to EVERY interactive element (buttons, inputs, clickable divs, canvas)
-- must have mobile and desktop support
-- must have 48px top margin
-- must add a label in bottom right corner 12px font size, #0B87DA color saying Curastem.org 
-- must use #141414 background
-- must have links open in new tab
-- bright, huge neobrutalist OR modern 28px rounded corners
-
-PREFERENCES:
-- prefer to fill width of screen
-- prefer absolute-positioned, overlayed action buttons
-- prefer accessible hierarchy. important buttons placed in reachable places`,
-                                        },
-                                    },
-                                    required: ["code"],
-                                },
-                            },
-                            {
-                                name: "update_doc",
-                                description:
-                                    "Updates the document editor. Use this to write documents, resumes, and emails. You have full control over HTML formatting.",
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        content: {
-                                            type: "STRING",
-                                            description:
-                                                "The full HTML content. Use <h1>/<h2> for headings, <p> for body text, <ul>/<li> for lists, <b>/<strong> for bold, <i>/<em> for italics, and <a href='...'> for links.",
-                                        },
-                                    },
-                                    required: ["content"],
                                 },
                             },
                             {
@@ -18321,6 +18769,34 @@ PREFERENCES:
                 let accumulatedFunctionCall: any = null
                 let accumulatedThoughtSignature: string | undefined
 
+                // --- DELIMITER STREAMING STATE ---
+                // Tracks whether we are inside a <curastem-app>, <curastem-doc>, or
+                // <curastem-suggestions> block. When true, each new text chunk is routed
+                // to the appropriate editor in real time instead of only to the chat bubble.
+                //
+                // XML-style tags are used (not markdown code fences) because LLMs follow
+                // XML/HTML tag conventions precisely — code fences with custom language
+                // tags tend to get abbreviated (e.g. ```-doc instead of ```curastem-doc).
+                // See the getSystemPromptWithContext comment for the full explanation.
+                const DELIM_APP_OPEN   = "<curastem-app>"
+                const DELIM_APP_CLOSE  = "</curastem-app>"
+                const DELIM_DOC_OPEN   = "<curastem-doc>"
+                const DELIM_DOC_CLOSE  = "</curastem-doc>"
+                const DELIM_SUGG_OPEN  = "<curastem-suggestions>"
+                const DELIM_SUGG_CLOSE = "</curastem-suggestions>"
+                let inAppBlock  = false
+                let inDocBlock  = false
+                let inSuggBlock = false
+                let appBlockContentStart  = -1  // index in accumulatedText where app code begins
+                let docBlockContentStart  = -1  // index in accumulatedText where doc content begins
+                let suggBlockContentStart = -1  // index in accumulatedText where suggestions JSON begins
+                // Tracks whether a complete app/doc delimiter block was found in this turn.
+                // Used post-stream to stamp toolUsed on the message so the chat tag badge
+                // ("App" / "Docs") appears — mirrors what functionCall.name provided before
+                // we switched to delimiter streaming.
+                let hadAppBlock = false
+                let hadDocBlock = false
+
                 while (true) {
                     const { done, value } = await reader.read()
                     if (done) break
@@ -18352,39 +18828,197 @@ PREFERENCES:
                                         accumulatedThoughtSignature = sig
                                     if (part.text) {
                                         accumulatedText += part.text
+
+                                        // -------------------------------------------------
+                                        // DELIMITER STREAMING — create_app / update_doc
+                                        //
+                                        // Scans for ```curastem-app and ```curastem-doc
+                                        // opening fences on every new text chunk. Once
+                                        // found, the editor opens immediately and each
+                                        // subsequent token is streamed directly into it.
+                                        // The closing ``` finalizes the content.
+                                        //
+                                        // This is the workaround for Gemini's missing
+                                        // streaming tool-call arg support. Remove this
+                                        // block when GCP fixes the limitation and we
+                                        // restore create_app/update_doc as tool calls.
+                                        // -------------------------------------------------
+
+                                        // Detect opening tags (each block type is mutually exclusive)
+                                        if (!inAppBlock && !inDocBlock && !inSuggBlock) {
+                                            const appTagIdx = accumulatedText.indexOf(DELIM_APP_OPEN)
+                                            if (appTagIdx !== -1) {
+                                                inAppBlock = true
+                                                // Content starts immediately after the opening tag
+                                                appBlockContentStart = appTagIdx + DELIM_APP_OPEN.length
+                                                // Trim a single leading newline the model typically emits
+                                                if (accumulatedText[appBlockContentStart] === "\n") {
+                                                    appBlockContentStart++
+                                                }
+                                                // Open the mini app editor immediately
+                                                if (!isAppOpenRef.current) {
+                                                    setIsAppOpen(true)
+                                                    setIsDocOpen(false)
+                                                    setIsWhiteboardOpen(false)
+                                                    isAppOpenRef.current = true
+                                                }
+                                                if (appModeRef.current !== "editor") {
+                                                    setAppMode("editor")
+                                                    appModeRef.current = "editor"
+                                                }
+                                            }
+                                            const docTagIdx = accumulatedText.indexOf(DELIM_DOC_OPEN)
+                                            if (docTagIdx !== -1) {
+                                                inDocBlock = true
+                                                docBlockContentStart = docTagIdx + DELIM_DOC_OPEN.length
+                                                if (accumulatedText[docBlockContentStart] === "\n") {
+                                                    docBlockContentStart++
+                                                }
+                                                if (!isDocOpenRef.current) {
+                                                    setIsDocOpen(true)
+                                                    isDocOpenRef.current = true
+                                                }
+                                            }
+                                            // Suggestions tag — emitted at the tail of every response
+                                            const suggTagIdx = accumulatedText.indexOf(DELIM_SUGG_OPEN)
+                                            if (suggTagIdx !== -1) {
+                                                inSuggBlock = true
+                                                suggBlockContentStart = suggTagIdx + DELIM_SUGG_OPEN.length
+                                                if (accumulatedText[suggBlockContentStart] === "\n") {
+                                                    suggBlockContentStart++
+                                                }
+                                            }
+                                        }
+
+                                        // Stream app code token-by-token into the editor
+                                        if (inAppBlock && appBlockContentStart !== -1) {
+                                            const closeIdx = accumulatedText.indexOf(DELIM_APP_CLOSE, appBlockContentStart)
+                                            if (closeIdx !== -1) {
+                                                // Block complete — trim trailing newline the model typically emits before closing tag
+                                                const rawCode = accumulatedText.substring(appBlockContentStart, closeIdx)
+                                                const finalCode = rawCode.endsWith("\n") ? rawCode.slice(0, -1) : rawCode
+                                                setAppCode(finalCode)
+                                                // Only switch to player if the code has real content.
+                                                // If the model produced an empty/trivial block, stay in
+                                                // editor mode so the user can see and fix it rather than
+                                                // loading a broken blank iframe.
+                                                if (finalCode.trim().length > 20) {
+                                                    setAppMode("player")
+                                                    appModeRef.current = "player"
+                                                }
+                                                inAppBlock = false
+                                                // Mark that this turn produced an app so the "App" badge
+                                                // appears on the message after the stream finishes.
+                                                hadAppBlock = true
+                                                if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
+                                                    broadcastData({ type: "app-update", payload: finalCode })
+                                                    broadcastData({ type: "app-mode-change", payload: appModeRef.current })
+                                                    broadcastData({ type: "app-start" })
+                                                }
+                                            } else {
+                                                // Still streaming — push partial code into editor live
+                                                setAppCode(accumulatedText.substring(appBlockContentStart))
+                                            }
+                                        }
+
+                                        // Stream doc content token-by-token into the doc editor
+                                        if (inDocBlock && docBlockContentStart !== -1) {
+                                            const closeIdx = accumulatedText.indexOf(DELIM_DOC_CLOSE, docBlockContentStart)
+                                            if (closeIdx !== -1) {
+                                                const rawContent = accumulatedText.substring(docBlockContentStart, closeIdx)
+                                                const finalContent = rawContent.endsWith("\n") ? rawContent.slice(0, -1) : rawContent
+                                                setDocContent(finalContent)
+                                                inDocBlock = false
+                                                // Mark that this turn produced a doc so the "Docs" badge
+                                                // appears on the message after the stream finishes.
+                                                hadDocBlock = true
+                                                if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
+                                                    broadcastData({ type: "doc-update", payload: finalContent })
+                                                    broadcastData({ type: "doc-start" })
+                                                }
+                                            } else {
+                                                setDocContent(accumulatedText.substring(docBlockContentStart))
+                                            }
+                                        }
+
+                                        // Parse suggestions from <curastem-suggestions>.
+                                        // The model appends this at the end of every response,
+                                        // replacing the separate generateSuggestedReplies() API call.
+                                        if (inSuggBlock && suggBlockContentStart !== -1) {
+                                            const closeIdx = accumulatedText.indexOf(DELIM_SUGG_CLOSE, suggBlockContentStart)
+                                            if (closeIdx !== -1) {
+                                                const jsonStr = accumulatedText.substring(suggBlockContentStart, closeIdx).trim()
+                                                try {
+                                                    const parsed = JSON.parse(jsonStr)
+                                                    if (Array.isArray(parsed)) {
+                                                        const isAnyMobile =
+                                                            isMobileLayoutRef.current ||
+                                                            Array.from(peerMetadataRef.current.values()).some(
+                                                                (p: any) => p.isMobile
+                                                            )
+                                                        const maxCount = isAnyMobile ? 5 : 3
+                                                        const finalSuggs = (parsed as string[])
+                                                            .filter((s) => typeof s === "string" && s.trim())
+                                                            .slice(0, maxCount)
+                                                        setAiGeneratedSuggestions(finalSuggs)
+                                                        if (dataConnectionsRef.current.size > 0) {
+                                                            broadcastData({ type: "ai-suggestions", payload: finalSuggs })
+                                                        }
+                                                    }
+                                                } catch {
+                                                    // Malformed JSON — suggestions will just be empty this turn
+                                                }
+                                                inSuggBlock = false
+                                            }
+                                        }
+
+                                        // Compute what shows in the chat bubble: everything before
+                                        // the first delimiter tag. Raw HTML/JS/JSON is never shown.
+                                        const appTagPos  = accumulatedText.indexOf(DELIM_APP_OPEN)
+                                        const docTagPos  = accumulatedText.indexOf(DELIM_DOC_OPEN)
+                                        const suggTagPos = accumulatedText.indexOf(DELIM_SUGG_OPEN)
+                                        const firstTag = Math.min(
+                                            appTagPos  !== -1 ? appTagPos  : Infinity,
+                                            docTagPos  !== -1 ? docTagPos  : Infinity,
+                                            suggTagPos !== -1 ? suggTagPos : Infinity,
+                                        )
+                                        const chatDisplayText = firstTag !== Infinity
+                                            ? accumulatedText.substring(0, firstTag).trimEnd()
+                                            : accumulatedText
+
+                                        // Trim any partial delimiter opening tag from the
+                                        // end of the display text. When the model sends
+                                        // "<curastem-suggestions>" split across two SSE
+                                        // chunks, the first chunk ends with a bare "<" or
+                                        // "<curastem-" which would briefly appear in the
+                                        // bubble before the next chunk strips it. Removing
+                                        // any trailing "<…" suffix eliminates that flash.
+                                        const safeDisplayText = chatDisplayText
+                                            .replace(/<[a-z-]*$/, "")
+                                            .trimEnd()
+
                                         // Broadcast streaming text to peers
-                                        if (
-                                            dataConnectionsRef.current.size > 0
-                                        ) {
+                                        if (dataConnectionsRef.current.size > 0) {
                                             const now = Date.now()
-                                            if (
-                                                now -
-                                                    lastAISendTimeRef.current >
-                                                50
-                                            ) {
+                                            if (now - lastAISendTimeRef.current > 50) {
                                                 broadcastData({
                                                     type: "ai-stream",
-                                                    payload: {
-                                                        text: accumulatedText,
-                                                    },
+                                                    payload: { text: safeDisplayText },
                                                 })
                                                 lastAISendTimeRef.current = now
                                             }
                                         }
 
-                                        // Optimistic update
+                                        // Optimistic update — show only intro text in chat
                                         setMessages((prev) => {
                                             const newArr = [...prev]
                                             if (
                                                 newArr.length > 0 &&
-                                                newArr[newArr.length - 1]
-                                                    .role === "model"
+                                                newArr[newArr.length - 1].role === "model"
                                             ) {
                                                 newArr[newArr.length - 1] = {
-                                                    ...newArr[
-                                                        newArr.length - 1
-                                                    ],
-                                                    text: accumulatedText,
+                                                    ...newArr[newArr.length - 1],
+                                                    text: safeDisplayText,
                                                 }
                                             }
                                             return newArr
@@ -18423,80 +19057,11 @@ PREFERENCES:
                                                 newArgs
                                         }
 
-                                        // Streaming Tool Call Support:
-                                        // Check both accumulated and current chunk for the name to be safe
-                                        const toolName =
-                                            accumulatedFunctionCall.name ||
-                                            fnCall.name
-
-                                        // If it's the `create_app` tool, OPEN IDE IMMEDIATELY and stream code
-                                        if (toolName === "create_app") {
-                                            // Ensure name is set in accumulated object if we found it in chunk
-                                            if (
-                                                !accumulatedFunctionCall.name &&
-                                                fnCall.name
-                                            ) {
-                                                accumulatedFunctionCall.name =
-                                                    fnCall.name
-                                            }
-
-                                            // Force open IDE via ref to bypass closure staleness
-                                            if (!isAppOpenRef.current) {
-                                                if (debugMode)
-                                                    console.log(
-                                                        "Opening App Editor (Streaming)..."
-                                                    )
-                                                setIsAppOpen(true)
-                                                setIsDocOpen(false)
-                                                setIsWhiteboardOpen(false)
-                                                isAppOpenRef.current = true
-                                            }
-
-                                            // Force editor mode if not already
-                                            if (
-                                                appModeRef.current !== "editor"
-                                            ) {
-                                                setAppMode("editor")
-                                                appModeRef.current = "editor"
-                                            }
-
-                                            // Stream code updates in real-time
-                                            if (accumulatedFunctionCall.args) {
-                                                const args =
-                                                    accumulatedFunctionCall.args as any
-                                                const newCode = args.code || ""
-                                                if (newCode) setAppCode(newCode)
-                                            }
-                                        }
-
-                                        // If it's the `update_doc` tool, OPEN IMMEDIATELY.
-                                        if (
-                                            accumulatedFunctionCall.name ===
-                                            "update_doc"
-                                        ) {
-                                            // TODO: Fix real-time streaming of doc content.
-                                            // ISSUE: The Doc Editor is NOT opening immediately when the tool call starts, and text is NOT streaming.
-                                            // It appears the standard Gemini API (v1beta) buffers the entire function call and sends it only when complete,
-                                            // preventing real-time updates. 'partial_args' is likely only available in Vertex AI.
-                                            // We are aggressively checking for 'update_doc' to force the editor open, but if the API doesn't send the name early, we can't open it.
-
-                                            // Force open state via ref to bypass closure staleness if needed
-                                            if (!isDocOpenRef.current) {
-                                                setIsDocOpen(true)
-                                                // Optimistically update ref so we don't spam the setter
-                                                isDocOpenRef.current = true
-                                            }
-
-                                            // Update Content
-                                            if (accumulatedFunctionCall.args) {
-                                                const args =
-                                                    accumulatedFunctionCall.args as any
-                                                const newContent =
-                                                    args.content || ""
-                                                if (newContent)
-                                                    setDocContent(newContent)
-                                            }
-                                        }
+                                        // create_app and update_doc are no longer tool calls.
+                                        // Their content is delivered via delimiter streaming
+                                        // (see DELIMITER STREAMING block in the text handler
+                                        // above). Only update_whiteboard and retrieve_resources
+                                        // use real function calls now.
                                     }
                                 }
                             }
@@ -18506,176 +19071,200 @@ PREFERENCES:
                     }
                 }
 
+                // ---------------------------------------------------------------------------
+                // Finalize any delimiter blocks that were still open when the stream ended.
+                //
+                // If the model's output was cut short (network drop, token limit, etc.) and
+                // a closing tag never arrived, we commit whatever content was accumulated so
+                // the editor shows the partial result rather than staying in a frozen state.
+                // ---------------------------------------------------------------------------
+                if (inAppBlock && appBlockContentStart !== -1) {
+                    const partialCode = accumulatedText.substring(appBlockContentStart).trimEnd()
+                    if (partialCode) {
+                        setAppCode(partialCode)
+                        // Don't auto-switch to player for partial/truncated code — leave in
+                        // editor mode so the user can inspect and fix it.
+                    }
+                }
+                if (inDocBlock && docBlockContentStart !== -1) {
+                    const partialContent = accumulatedText.substring(docBlockContentStart).trimEnd()
+                    if (partialContent) {
+                        setDocContent(partialContent)
+                        // Truncated doc block still counts for the badge
+                        hadDocBlock = true
+                    }
+                }
+
+                // ---------------------------------------------------------------------------
+                // Stamp toolUsed on the message so the "App" / "Docs" tag badge appears in
+                // the chat bubble.  Previously this was set via functionCall.name, but
+                // delimiter streaming produces no functionCall — so we tag it explicitly.
+                // ---------------------------------------------------------------------------
+                if (hadAppBlock || hadDocBlock) {
+                    setMessages((prev) => {
+                        const arr = [...prev]
+                        const last = arr[arr.length - 1]
+                        if (last?.role === "model") {
+                            arr[arr.length - 1] = {
+                                ...last,
+                                toolUsed: hadAppBlock ? "app" : "doc",
+                            }
+                        }
+                        return arr
+                    })
+                }
+
+                // ---------------------------------------------------------------------------
+                // Post-stream helpers
+                //
+                // These run after the stream loop so they have the full accumulatedText.
+                // They are also called on any non-streaming follow-up response text so
+                // that delimiter tags never leak into the chat bubble.
+                //
+                // computeDisplayText: strips all <curastem-*> blocks from a text string,
+                //   returning only the human-readable intro portion for the chat bubble.
+                //
+                // parseSuggestionsFrom: extracts and applies the <curastem-suggestions>
+                //   JSON array from any text block (needed for non-streaming responses like
+                //   the retrieve_resources follow-up, which can't use the stream-loop parser).
+                // ---------------------------------------------------------------------------
+                const computeDisplayText = (text: string): string => {
+                    const firstTag = Math.min(
+                        text.indexOf(DELIM_APP_OPEN)  !== -1 ? text.indexOf(DELIM_APP_OPEN)  : Infinity,
+                        text.indexOf(DELIM_DOC_OPEN)  !== -1 ? text.indexOf(DELIM_DOC_OPEN)  : Infinity,
+                        text.indexOf(DELIM_SUGG_OPEN) !== -1 ? text.indexOf(DELIM_SUGG_OPEN) : Infinity,
+                    )
+                    return firstTag !== Infinity ? text.substring(0, firstTag).trimEnd() : text
+                }
+
+                const parseSuggestionsFrom = (text: string): void => {
+                    const open = text.indexOf(DELIM_SUGG_OPEN)
+                    if (open === -1) return
+                    const close = text.indexOf(DELIM_SUGG_CLOSE, open)
+                    if (close === -1) return
+                    const jsonStr = text.substring(open + DELIM_SUGG_OPEN.length, close).trim()
+                    try {
+                        const parsed = JSON.parse(jsonStr)
+                        if (Array.isArray(parsed)) {
+                            const isAnyMobile =
+                                isMobileLayoutRef.current ||
+                                Array.from(peerMetadataRef.current.values()).some((p: any) => p.isMobile)
+                            const maxCount = isAnyMobile ? 5 : 3
+                            const finalSuggs = (parsed as string[])
+                                .filter((s) => typeof s === "string" && s.trim())
+                                .slice(0, maxCount)
+                            setAiGeneratedSuggestions(finalSuggs)
+                            if (dataConnectionsRef.current.size > 0) {
+                                broadcastData({ type: "ai-suggestions", payload: finalSuggs })
+                            }
+                        }
+                    } catch {
+                        // Malformed JSON — suggestions stay empty for this turn
+                    }
+                }
+
+                // ---------------------------------------------------------------------------
                 // Handle Tool Call - Final Execution
+                // Only update_whiteboard and retrieve_resources reach here.
+                // create_app and update_doc are handled entirely by delimiter streaming
+                // in the text loop above — no post-stream work needed for them.
+                // ---------------------------------------------------------------------------
                 if (accumulatedFunctionCall) {
-                    if (accumulatedFunctionCall.name === "create_app") {
-                        const args = accumulatedFunctionCall.args as any
-                        const code = args.code || ""
-
-                        setAppCode(code)
-
-                        // Auto-open IDE if not already open
-                        if (!isAppOpen) {
-                            setIsAppOpen(true)
-                            setIsDocOpen(false)
-                            setIsWhiteboardOpen(false)
-                        }
-
-                        // Auto-switch to player mode when complete
-                        setAppMode("player")
-
-                        // BROADCAST APP UPDATE (desktop only)
-                        if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
-                            broadcastData({
-                                type: "app-update",
-                                payload: code,
-                            })
-                            broadcastData({
-                                type: "app-mode-change",
-                                payload: "player",
-                            })
-                            broadcastData({
-                                type: "app-start",
-                            })
-                        }
-
-                        if (!accumulatedText) {
-                            accumulatedText = "I've created an app for you:"
-                            setMessages((prev) => {
-                                const newArr = [...prev]
-                                if (
-                                    newArr.length > 0 &&
-                                    newArr[newArr.length - 1].role === "model"
-                                ) {
-                                    newArr[newArr.length - 1] = {
-                                        ...newArr[newArr.length - 1],
-                                        text: accumulatedText,
-                                        functionCall: accumulatedFunctionCall,
-                                        functionResponse: {
-                                            name: "create_app",
-                                            response: {
-                                                content:
-                                                    "App created successfully.",
-                                            },
-                                        },
-                                    }
-                                }
-                                return newArr
-                            })
-                        }
-                    } else if (accumulatedFunctionCall.name === "update_doc") {
-                        const args = accumulatedFunctionCall.args as any
-                        const newContent = args.content || ""
-                        setDocContent(newContent)
-                        if (!isDocOpen) setIsDocOpen(true) // Ensure open on completion too
-
-                        // BROADCAST DOC UPDATE - Only broadcast on final completion to avoid flooding peers (desktop only)
-                        if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
-                            broadcastData({
-                                type: "doc-update",
-                                payload: newContent,
-                            })
-                            // Ensure peer opens doc if not already open
-                            broadcastData({
-                                type: "doc-start",
-                            })
-                        }
-
-                        if (!accumulatedText) {
-                            accumulatedText = "This document might help:"
-                            setMessages((prev) => {
-                                const newArr = [...prev]
-                                if (
-                                    newArr.length > 0 &&
-                                    newArr[newArr.length - 1].role === "model"
-                                ) {
-                                    newArr[newArr.length - 1] = {
-                                        ...newArr[newArr.length - 1],
-                                        text: accumulatedText,
-                                        functionCall: accumulatedFunctionCall,
-                                        functionResponse: {
-                                            name: "update_doc",
-                                            response: {
-                                                content:
-                                                    "Document updated successfully.",
-                                            },
-                                        },
-                                    }
-                                }
-                                return newArr
-                            })
-                        }
-                    } else if (
+                    if (
                         accumulatedFunctionCall.name ===
                         RETRIEVE_RESOURCES_TOOL_NAME
                     ) {
-                        // If model didn't provide intro text, request curated response via follow-up API call
-                        if (!accumulatedText.trim()) {
-                            const modelPart = {
-                                functionCall: {
-                                    name: accumulatedFunctionCall.name,
-                                    args: accumulatedFunctionCall.args,
-                                },
-                                thoughtSignature:
-                                    accumulatedThoughtSignature ??
-                                    GEMINI_THOUGHT_SIGNATURE_SKIP,
-                            }
-                            const followUpPayload = {
-                                contents: [
-                                    ...history,
-                                    { role: "user" as const, parts: userContent },
-                                    { role: "model" as const, parts: [modelPart] },
-                                    {
-                                        role: "user" as const,
-                                        parts: [
-                                            {
-                                                functionResponse: {
-                                                    name: RETRIEVE_RESOURCES_TOOL_NAME,
-                                                    response: {
-                                                        content: CAREER_COLLEGE_RESOURCES_CONTENT,
-                                                    },
+                        // Always run a follow-up generateContent call so the model can
+                        // write a specific, link-rich response after seeing the actual
+                        // resources list. Writing intro text before the tool call was
+                        // removed from the tool description because the model can't
+                        // reference specific URLs until after the tool resolves.
+                        const modelPart = {
+                            functionCall: {
+                                name: accumulatedFunctionCall.name,
+                                args: accumulatedFunctionCall.args,
+                            },
+                            thoughtSignature:
+                                accumulatedThoughtSignature ??
+                                GEMINI_THOUGHT_SIGNATURE_SKIP,
+                        }
+                        // The function response content includes a formatting directive
+                        // so the model renders actual clickable markdown links
+                        // [Resource Name](https://url) for each resource it mentions.
+                        // Without this, the model describes resources by name only.
+                        const resourcesWithLinkDirective =
+                            "For every resource you mention, include a clickable markdown hyperlink formatted as [Resource Name](https://full-url). " +
+                            "Use the exact URLs provided below — do not shorten or omit them.\n\n" +
+                            CAREER_COLLEGE_RESOURCES_CONTENT
+
+                        const followUpPayload = {
+                            contents: [
+                                ...history,
+                                { role: "user" as const, parts: userContent },
+                                { role: "model" as const, parts: [modelPart] },
+                                {
+                                    role: "user" as const,
+                                    parts: [
+                                        {
+                                            functionResponse: {
+                                                name: RETRIEVE_RESOURCES_TOOL_NAME,
+                                                response: {
+                                                    content: resourcesWithLinkDirective,
                                                 },
                                             },
-                                        ],
-                                    },
-                                ],
-                                tools,
-                                generationConfig: payload.generationConfig,
-                                ...(getSystemPromptWithContext().trim() && {
-                                    systemInstruction: payload.systemInstruction,
-                                }),
-                            }
-                            try {
-                                const res = await fetch(
-                                    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
-                                    {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify(followUpPayload),
-                                        signal: controller.signal,
-                                    }
-                                )
-                                const data = await res.json().catch(() => ({}))
-                                const curatedText = res.ok
-                                    ? extractTextFromGeminiResponse(data)
-                                    : ""
-                                if (curatedText) {
-                                    accumulatedText = curatedText
-                                } else {
-                                    // Fallback if follow-up fails
-                                    accumulatedText = CAREER_COLLEGE_RESOURCES_CONTENT
-                                }
-                            } catch (err) {
-                                if ((err as Error).name !== "AbortError") {
-                                    console.error("Resources tool follow-up:", err)
-                                }
-                                // Fallback on error
-                                if (!accumulatedText) {
-                                    accumulatedText = CAREER_COLLEGE_RESOURCES_CONTENT
-                                }
-                            }
+                                        },
+                                    ],
+                                },
+                            ],
+                            tools,
+                            generationConfig: payload.generationConfig,
+                            ...(getSystemPromptWithContext().trim() && {
+                                systemInstruction: payload.systemInstruction,
+                            }),
                         }
-                        // If model provided intro + full response, use as-is
+                        // Capture any intro text the model streamed BEFORE triggering the
+                        // tool call. Without this, overwriting accumulatedText with the
+                        // follow-up response would silently delete the intro from the chat.
+                        const introText = computeDisplayText(accumulatedText)
+
+                        let followUpRaw = ""
+                        try {
+                            const res = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify(followUpPayload),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const data = await res.json().catch(() => ({}))
+                            followUpRaw = res.ok
+                                ? extractTextFromGeminiResponse(data)
+                                : ""
+                            if (!followUpRaw) {
+                                followUpRaw = CAREER_COLLEGE_RESOURCES_CONTENT
+                            }
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError") {
+                                console.error("Resources tool follow-up:", err)
+                            }
+                            followUpRaw = followUpRaw || CAREER_COLLEGE_RESOURCES_CONTENT
+                        }
+
+                        // Parse suggestions from the raw follow-up text (non-streaming,
+                        // so the stream-loop parser never ran on it).
+                        parseSuggestionsFrom(followUpRaw)
+
+                        // Combine: intro (if any) + follow-up resource list
+                        const followUpDisplay = computeDisplayText(followUpRaw)
+                        const fullText = introText
+                            ? `${introText}\n\n${followUpDisplay}`
+                            : followUpDisplay
+
+                        // Keep accumulatedText in sync so the final broadcastData call
+                        // below sends the complete combined text to peers.
+                        accumulatedText = fullText
 
                         const functionResponse = {
                             name: RETRIEVE_RESOURCES_TOOL_NAME,
@@ -18687,7 +19276,7 @@ PREFERENCES:
                             if (last?.role === "model") {
                                 arr[arr.length - 1] = {
                                     ...last,
-                                    text: accumulatedText,
+                                    text: fullText,
                                     functionCall: accumulatedFunctionCall,
                                     functionResponse,
                                 }
@@ -19049,7 +19638,7 @@ PREFERENCES:
                                 ) {
                                     newArr[newArr.length - 1] = {
                                         ...newArr[newArr.length - 1],
-                                        text: accumulatedText,
+                                        text: computeDisplayText(accumulatedText),
                                         functionCall: accumulatedFunctionCall,
                                         functionResponse: {
                                             name: "update_whiteboard",
@@ -19085,7 +19674,7 @@ PREFERENCES:
                     broadcastData({
                         type: "ai-response",
                         payload: {
-                            text: accumulatedText || "",
+                            text: computeDisplayText(accumulatedText) || "",
                             functionCall: accumulatedFunctionCall,
                             functionResponse: accumulatedFunctionCall
                                 ? {
@@ -19097,9 +19686,9 @@ PREFERENCES:
                     })
                 }
 
-                if (accumulatedText) {
-                    generateSuggestedReplies(accumulatedText)
-                }
+                // Suggested replies are now parsed inline from the model's own
+                // ```curastem-suggestions delimiter block (see stream loop above),
+                // eliminating the extra round-trip API call per turn.
             } catch (err: any) {
                 if (err.name === "AbortError") return
                 console.error("AI Error:", err)
@@ -19132,7 +19721,6 @@ PREFERENCES:
             geminiApiKey,
             isDocOpen,
             getSystemPromptWithContext,
-            generateSuggestedReplies,
         ]
     )
 
@@ -19437,6 +20025,7 @@ PREFERENCES:
             hasDragged.current = false // Reset drag status
             dragMode.current = mode
             dragStartY.current = e.clientY
+            hapticDragLastY.current = e.clientY // Reset haptic baseline for this drag
             dragStartX.current = e.clientX
             dragStartHeight.current = chatHeight
             dragStartWidth.current = chatWidth
@@ -19464,6 +20053,51 @@ PREFERENCES:
     )
 
     const rightContentPanelRef = React.useRef<HTMLDivElement>(null)
+
+    // Refs for swipe-haptic touchend listeners (see useEffect below).
+    // Raw addEventListener('touchend') is used instead of React onPointerUp /
+    // onTouchEnd because framer-motion captures pointer events before React's
+    // synthetic event system, so onPointerUp may never reach our handler.
+    // A raw touchend listener bypasses framer-motion's capture and fires
+    // synchronously within iOS's user-gesture window — the requirement for
+    // label.click() iOS haptics to work.
+    const hapticSidebarRef  = React.useRef<HTMLElement | null>(null)
+    const hapticOverlayRef  = React.useRef<HTMLElement | null>(null)
+    // Tracks the clientY at which the last drag-bar haptic fired.
+    // Reset on pointerdown so the first tick fires after the first 50px of drag.
+    const hapticDragLastY = React.useRef<number>(0)
+
+    React.useEffect(() => {
+        const sidebar = hapticSidebarRef.current
+        const overlay = hapticOverlayRef.current
+        const panel   = rightContentPanelRef.current
+
+        // Close swipe: sidebar dragged > 50px left from open position (x = 0)
+        const onSidebarTouchEnd = () => {
+            if (!isMobileLayoutRef.current) return
+            if (sidebarX.get() < -50) haptic.light()
+        }
+        const onOverlayTouchEnd = () => {
+            if (!isMobileLayoutRef.current) return
+            if (sidebarX.get() < -50) haptic.light()
+        }
+        // Open swipe: main content dragged > 50px right from closed position (x = -260)
+        const onPanelTouchEnd = () => {
+            if (!isMobileLayoutRef.current) return
+            if (sidebarX.get() > -210) haptic.light()
+        }
+
+        sidebar?.addEventListener("touchend", onSidebarTouchEnd)
+        overlay?.addEventListener("touchend", onOverlayTouchEnd)
+        panel?.addEventListener("touchend", onPanelTouchEnd)
+
+        return () => {
+            sidebar?.removeEventListener("touchend", onSidebarTouchEnd)
+            overlay?.removeEventListener("touchend", onOverlayTouchEnd)
+            panel?.removeEventListener("touchend", onPanelTouchEnd)
+        }
+    }, [sidebarX])
+
     const handlePointerMove = React.useCallback(
         (e: PointerEvent) => {
             if (!isDragging.current) return
@@ -19482,6 +20116,15 @@ PREFERENCES:
                 return
             }
             hasDragged.current = true
+
+            // Fire a selection haptic every 50px of drag movement.
+            // Called synchronously here (before entering RAF) so it stays
+            // inside the pointermove user-gesture window on iOS.
+            const draggedPx = Math.abs(e.clientY - hapticDragLastY.current)
+            if (draggedPx >= 50) {
+                hapticDragLastY.current = e.clientY
+                haptic.selection()
+            }
 
             // Track resize during sidebar open
             if (isSidebarOpen && !hasResizedWhileSidebarOpen.current) {
@@ -19646,6 +20289,7 @@ PREFERENCES:
 
         // Handle Click Toggle Logic
         if (!hasDragged.current && dragMode.current === "vertical") {
+            haptic.medium()
             let containerHeight =
                 containerRef.current?.clientHeight || window.innerHeight
             let containerWidth =
@@ -20520,6 +21164,7 @@ PREFERENCES:
                                                 html: inputHtmlRef.current,
                                                 skills: selectedSkillsRef.current,
                                                 seq: Date.now(),
+                                                cursorOffset: inputCursorRef.current,
                                             },
                                         })
                                         lastInputSendTimeRef.current = Date.now()
@@ -20533,6 +21178,7 @@ PREFERENCES:
                                 }
                             }}
                             onHtmlChange={(html) => { inputHtmlRef.current = html }}
+                            onCursorChange={(offset) => { inputCursorRef.current = offset }}
                             peerSync={peerSyncState}
                             onSend={handleSendMessage}
                             onConnectWithAI={handleConnectWithAI}
@@ -20588,6 +21234,7 @@ PREFERENCES:
                                 )
                             }
                             onHtmlChange={(html) => { inputHtmlRef.current = html }}
+                            onCursorChange={(offset) => { inputCursorRef.current = offset }}
                             peerSync={peerSyncState}
                             rootStyle={{ pointerEvents: "none" }}
                         />
@@ -20616,6 +21263,10 @@ PREFERENCES:
                     lastAppCallIdx = idx
                 }
             }
+            // Delimiter-streamed tools don't produce a functionCall, so we check
+            // the toolUsed field that is stamped on the message post-stream.
+            if (msg.toolUsed === "app") lastAppCallIdx = idx
+            if (msg.toolUsed === "doc") lastDocCallIdx = idx
         })
 
         // Use a memoized set of indices where ads should appear to ensure stability during renders
@@ -20833,6 +21484,7 @@ PREFERENCES:
                                             html: inputHtmlRef.current,
                                             skills: selectedSkillsRef.current,
                                             seq: Date.now(),
+                                            cursorOffset: inputCursorRef.current,
                                         },
                                     })
                                     lastInputSendTimeRef.current = Date.now()
@@ -20846,6 +21498,7 @@ PREFERENCES:
                             }
                         }}
                         onHtmlChange={(html) => { inputHtmlRef.current = html }}
+                        onCursorChange={(offset) => { inputCursorRef.current = offset }}
                         peerSync={peerSyncState}
                         onSend={handleSendMessage}
                         onConnectWithAI={handleConnectWithAI}
@@ -21358,6 +22011,10 @@ PREFERENCES:
                             bg = themeColors.surface
 
                         const onClick = () => {
+                            // No haptic here — all haptic/sound removed from this
+                            // path as part of iOS camera permission diagnostic.
+                            // getUserMedia must reach the gesture handler with nothing
+                            // else consuming the iOS gesture token first.
                             if (
                                 isLocal &&
                                 !role &&
@@ -21871,6 +22528,7 @@ PREFERENCES:
                 onMouseLeave={() => setIsSidebarBtnHovered(false)}
                 onClick={(e) => {
                     e.stopPropagation()
+                    haptic.light()
                     setIsSidebarOpen(true)
                 }}
             >
@@ -21923,8 +22581,10 @@ PREFERENCES:
                                 opacity: sidebarOverlayOpacity,
                                 pointerEvents: isSidebarOpen ? "auto" : "none",
                             }}
+                            ref={hapticOverlayRef}
                             onClick={(e) => {
                                 e.stopPropagation()
+                                haptic.light()
                                 setIsSidebarOpen(false)
                             }}
                             onPan={(event, info) => {
@@ -21977,7 +22637,7 @@ PREFERENCES:
                             x: sidebarX,
                             width: 260,
                             height: "100%",
-                            paddingTop: 224,
+                            paddingTop: 262,
                             position: "absolute",
                             top: 0,
                             left: 0,
@@ -21994,6 +22654,7 @@ PREFERENCES:
                             // Actually if it's offscreen (-260), we can't drag IT. We drag the main content.
                             // But we need to be able to drag IT to close it.
                         }}
+                        ref={hapticSidebarRef}
                         onPan={(event, info) => {
                             if (!isMobileLayout) return
                             // Dragging left to close
@@ -22067,14 +22728,24 @@ PREFERENCES:
                                         return
                                     }
 
-                                    if (chat.miniIdeLastEdited) {
+                                    // Only show apps that have actual code content
+                                    if (
+                                        chat.miniIdeLastEdited &&
+                                        chat.app?.code
+                                    ) {
                                         stuffItems.push({
                                             chat,
                                             type: "miniide",
                                             timestamp: chat.miniIdeLastEdited,
                                         })
                                     }
-                                    if (chat.docEditorLastEdited) {
+                                    // Only show docs that have non-blank, non-default content
+                                    const docNotes = chat.notes?.trim() ?? ""
+                                    if (
+                                        chat.docEditorLastEdited &&
+                                        docNotes &&
+                                        docNotes !== DEFAULT_DOC_CONTENT
+                                    ) {
                                         stuffItems.push({
                                             chat,
                                             type: "doceditor",
@@ -23001,6 +23672,7 @@ PREFERENCES:
                                     aria-label="Close navigation sidebar"
                                     onClick={(e) => {
                                         e.stopPropagation()
+                                        haptic.light()
                                         setIsSidebarOpen(false)
                                     }}
                                     onMouseEnter={(e) => {
@@ -23034,72 +23706,6 @@ PREFERENCES:
                                     >
                                         <path
                                             d="M10 14H26M10 22H20"
-                                            stroke={themeColors.text.primary}
-                                            strokeOpacity="0.95"
-                                            strokeWidth="1.2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    </svg>
-                                </div>
-                                <div
-                                    data-svg-wrapper
-                                    data-layer="open curastem.org in new tab"
-                                    className="OpenCurastemOrgInNewTab"
-                                    role="link"
-                                    tabIndex={isSidebarOpen ? 7 + suggestionCount : undefined}
-                                    aria-label="Learn more about Curastem (opens in new tab)"
-                                    onClick={(e) => {
-                                        e.stopPropagation()
-                                        if (typeof window !== "undefined") {
-                                            window.open(
-                                                "https://curastem.org/about",
-                                                "_blank"
-                                            )
-                                        }
-                                    }}
-                                    onMouseEnter={(e) => {
-                                        e.stopPropagation()
-                                        setIsOpenCurastemHovered(true)
-                                    }}
-                                    onMouseLeave={(e) => {
-                                        e.stopPropagation()
-                                        setIsOpenCurastemHovered(false)
-                                    }}
-                                    style={{
-                                        width: 36,
-                                        height: 36,
-                                        display: "flex",
-                                        justifyContent: "center",
-                                        alignItems: "center",
-                                        cursor: "pointer",
-                                        borderRadius: 28,
-                                        background: isOpenCurastemHovered
-                                            ? themeColors.hover.medium
-                                            : "transparent",
-                                        position: "relative",
-                                    }}
-                                >
-                                    {isOpenCurastemHovered && (
-                                        <Tooltip
-                                            style={{
-                                                left: "100%",
-                                                top: "50%",
-                                                transform: "translate(12px, -50%)",
-                                            }}
-                                        >
-                                            Learn more
-                                        </Tooltip>
-                                    )}
-                                    <svg
-                                        width="36"
-                                        height="36"
-                                        viewBox="0 0 36 36"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                    >
-                                        <path
-                                            d="M12.5625 23.4359L23.1691 12.8293M23.1691 12.8293L14.949 12.5641M23.1691 12.8293L23.4343 21.0494"
                                             stroke={themeColors.text.primary}
                                             strokeOpacity="0.95"
                                             strokeWidth="1.2"
@@ -23198,6 +23804,7 @@ PREFERENCES:
                                     aria-label="Start new chat"
                                     onClick={(e) => {
                                         e.stopPropagation()
+                                        haptic.medium()
                                         handleClearMessages()
                                         if (isMobileLayout)
                                             setIsSidebarOpen(false)
@@ -23473,6 +24080,85 @@ PREFERENCES:
                                         }}
                                     >
                                         You
+                                    </div>
+                                </div>
+                                {/* Curastem.org link button */}
+                                <div
+                                    data-layer="curastem.org button"
+                                    className="CurastemOrgButton"
+                                    role="link"
+                                    tabIndex={isSidebarOpen ? 12 + suggestionCount : undefined}
+                                    aria-label="Learn more about Curastem (opens in new tab)"
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        if (typeof window !== "undefined") {
+                                            window.open(
+                                                "https://curastem.org/about",
+                                                "_blank"
+                                            )
+                                        }
+                                    }}
+                                    onMouseEnter={() => setIsOpenCurastemHovered(true)}
+                                    onMouseLeave={() => setIsOpenCurastemHovered(false)}
+                                    style={{
+                                        alignSelf: "stretch",
+                                        height: 36,
+                                        paddingLeft: 10,
+                                        paddingRight: 10,
+                                        borderRadius: 28,
+                                        justifyContent: "flex-start",
+                                        alignItems: "center",
+                                        gap: 8,
+                                        display: "inline-flex",
+                                        cursor: "pointer",
+                                        background: isOpenCurastemHovered
+                                            ? themeColors.hover.strong
+                                            : "transparent",
+                                    }}
+                                >
+                                    {/* 16px icon container matching other sidebar buttons for consistent text alignment */}
+                                    <div
+                                        data-svg-wrapper
+                                        style={{
+                                            width: 16,
+                                            minWidth: 16,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                        }}
+                                    >
+                                        <svg
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 16 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M2.5 13.5L13.2317 2.76829M13.2317 2.76829L4.91463 2.5M13.2317 2.76829L13.5 11.0854"
+                                                stroke={themeColors.text.primary}
+                                                strokeOpacity="0.95"
+                                                strokeWidth="1.2"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                            />
+                                        </svg>
+                                    </div>
+                                    <div
+                                        style={{
+                                            flex: "1 1 0",
+                                            justifyContent: "center",
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            color: themeColors.text.primary,
+                                            fontSize: 14,
+                                            fontFamily: "Inter",
+                                            fontWeight: "400",
+                                            lineHeight: "19.32px",
+                                            wordWrap: "break-word",
+                                        }}
+                                    >
+                                        Curastem.org
                                     </div>
                                 </div>
                             </div>
@@ -24172,6 +24858,7 @@ PREFERENCES:
                                 }}
                                 onClick={(e) => {
                                     e.stopPropagation()
+                                    haptic.medium()
                                     handleClearMessages()
                                 }}
                             >
@@ -24758,8 +25445,8 @@ addPropertyControls(OmegleMentorshipUI, {
     model: {
         type: ControlType.String,
         title: "AI Model",
-        defaultValue: "gemini-3-flash-preview",
-        description: "Model ID (e.g., gemini-3-flash-preview)",
+        defaultValue: "gemini-3.1-flash-lite-preview",
+        description: "Model ID for main chat (e.g., gemini-3.1-flash-lite-preview). Moderation and Gemini Live use separate fixed models.",
     },
     systemPrompt: {
         type: ControlType.String,
