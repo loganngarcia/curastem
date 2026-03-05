@@ -31,37 +31,12 @@ import {
 } from "https://esm.sh/tldraw@2.1.0?external=react,react-dom"
 
 // -----------------------------------------------------------------------------
-// Haptics — dual-engine haptic feedback (mirrors the web-haptics npm package):
-//
-//   • Android / Chrome   → navigator.vibrate() with pulse-pattern arrays
-//   • iOS Safari 17.4+   → hidden <input type="checkbox" switch> click trick:
-//       WebKit fires its native UIImpactFeedbackGenerator whenever this
-//       switch-type checkbox is clicked, giving real iOS haptics on the web.
-//       Multiple clicks with timed delays simulate success/error patterns.
-//
-// WHY no npm package: this repo only allows react/react-dom/framer/framer-motion.
-// We replicate web-haptics' dual-engine approach inline with zero dependencies.
-//
-// Pattern guide (matches Apple HIG):
-//   light     — subtle tap, copy, minor action
-//   medium    — primary button press, send, new chat
-//   heavy     — major state change (reserved)
-//   success   — async op completed: P2P connected, call started  (double pulse)
-//   warning   — destructive / caution: end call
-//   error     — failure  (triple pulse)
-//   selection — discrete step: menu open
+// Haptics
 // -----------------------------------------------------------------------------
+// Dual-engine: Android via navigator.vibrate(), iOS 17.4+ via the
+// <input type="checkbox" switch> label.click() trick (WebKit fires its Taptic
+// Engine on label clicks). Must be called from a synchronous gesture handler.
 
-// Lazily create a hidden <input type="checkbox" switch> + label for iOS haptics.
-//
-// CRITICAL: iOS WebKit fires the Taptic Engine when the LABEL is clicked, NOT
-// when the input is clicked directly. Both web-haptics and use-haptic libraries
-// click the label element (label.click() / labelRef.current.click()), which
-// propagates to the switch input and triggers the native haptic feedback.
-// Clicking the input element directly is silently ignored by iOS.
-//
-// Both elements use display:none — confirmed working by the web-haptics demo.
-// Appended to document.body once and reused for the lifetime of the page.
 let _hapticLabel: HTMLLabelElement | null = null
 function _getHapticLabel(): HTMLLabelElement | null {
     if (typeof document === "undefined") return null
@@ -69,7 +44,7 @@ function _getHapticLabel(): HTMLLabelElement | null {
     const input = document.createElement("input")
     input.type = "checkbox"
     input.id = "curastem-haptic-switch"
-    input.setAttribute("switch", "") // Safari 18 / iOS 17.4+ switch control
+    input.setAttribute("switch", "")
     input.style.display = "none"
     document.body.appendChild(input)
     const label = document.createElement("label")
@@ -80,9 +55,6 @@ function _getHapticLabel(): HTMLLabelElement | null {
     return label
 }
 
-// Fire N haptic pulses on iOS, with `gapMs` milliseconds between each.
-// Must be called synchronously from a user-gesture handler (click / touchend)
-// so iOS recognises it as user-initiated and allows the haptic.
 function _iosHaptic(times: number, gapMs = 0): void {
     const label = _getHapticLabel()
     if (!label) return
@@ -93,172 +65,86 @@ function _iosHaptic(times: number, gapMs = 0): void {
 }
 
 const haptic = {
-    // Single light tick — copy, minor action
-    light: () => {
-        typeof navigator !== "undefined" && navigator.vibrate?.(10)
-        _iosHaptic(1)
-    },
-    // Single medium tap — send message, new chat, primary button
-    medium: () => {
-        typeof navigator !== "undefined" && navigator.vibrate?.(20)
-        _iosHaptic(1)
-    },
-    // Single heavy press — reserved for major state changes
-    heavy: () => {
-        typeof navigator !== "undefined" && navigator.vibrate?.(40)
-        _iosHaptic(1)
-    },
-    // Double pulse — P2P connected, call started (matches Apple success pattern)
-    success: () => {
-        typeof navigator !== "undefined" && navigator.vibrate?.([10, 50, 10])
-        _iosHaptic(2, 60)
-    },
-    // Single warning pulse — end call, destructive action
-    warning: () => {
-        typeof navigator !== "undefined" && navigator.vibrate?.(30)
-        _iosHaptic(1)
-    },
-    // Triple pulse — error / failure
-    error: () => {
-        typeof navigator !== "undefined" && navigator.vibrate?.([50, 30, 50])
-        _iosHaptic(3, 40)
-    },
-    // Very short tick — menu open, discrete selection
-    selection: () => {
-        typeof navigator !== "undefined" && navigator.vibrate?.(5)
-        _iosHaptic(1)
-    },
+    light:     () => { navigator.vibrate?.(10);           _iosHaptic(1) },
+    medium:    () => { navigator.vibrate?.(20);           _iosHaptic(1) },
+    heavy:     () => { navigator.vibrate?.(40);           _iosHaptic(1) },
+    success:   () => { navigator.vibrate?.([10, 50, 10]); _iosHaptic(2, 60) },
+    warning:   () => { navigator.vibrate?.(30);           _iosHaptic(1) },
+    error:     () => { navigator.vibrate?.([50, 30, 50]); _iosHaptic(3, 40) },
+    selection: () => { navigator.vibrate?.(5);            _iosHaptic(1) },
 }
 
 // -----------------------------------------------------------------------------
-// UI sounds — synthesized via Web Audio API (no imports, no files).
-//
-// playCallStartSound  — cute ascending sparkle chime (C maj arpeggio, ~0.7s)
-//   Plays when: "Get free help", "Volunteer", or "Start AI live call" clicked.
-//
-// playCallEndSound    — gentle descending farewell tones (~0.8s)
-//   Plays when: the end-call button is clicked.
-//
-// Both are called directly from onClick handlers so AudioContext creation
-// is inside the browser's user-interaction window (required on iOS/Safari).
-// Both silently no-op if Web Audio is unavailable (SSR, old browser, error).
+// UI Sounds
 // -----------------------------------------------------------------------------
+// Synthesised via Web Audio API — no imports, no asset files.
+// audioSession.type = "play-and-record" prevents a playback-only audio session
+// from blocking getUserMedia on iOS. AudioContext.resume() must be called
+// synchronously within the gesture handler.
 
-// Shared helper: create an AudioContext that works on iOS Safari.
-//
-// Two iOS-specific pitfalls we work around here:
-//
-// 1. Hardware mute switch — iOS Safari blocks Web Audio API (oscillators,
-//    buffer sources) when the ringer switch is muted, even with a valid user
-//    gesture. The `navigator.audioSession.type = 'playback'` API (Safari-only,
-//    shipped Nov 2025) overrides this and tells WebKit to treat audio like a
-//    music app, bypassing the mute switch.
-//    Safe no-op on Chrome/Firefox because of the `'audioSession' in navigator`
-//    guard. Spec: https://www.w3.org/TR/audio-session/
-//
-// 2. Suspended AudioContext — iOS Safari creates AudioContext in a suspended
-//    state. `resume()` MUST be called synchronously inside the user-gesture
-//    call stack (not inside a Promise/async) for WebKit to honour it.
-//
-// Call this function directly from an onClick/onTouchEnd handler, never from
-// a useEffect, setTimeout, or async chain.
 const _makeCtx = (): AudioContext | null => {
     if (typeof window === "undefined") return null
     try {
-        // Use "play-and-record" instead of "playback" so that sounds from this
-        // AudioContext do NOT block subsequent getUserMedia calls on iOS.
-        // "playback" sets an exclusive audio session that prevents microphone
-        // capture — "play-and-record" allows both simultaneously.
-        if ("audioSession" in navigator) {
-            ;(navigator as any).audioSession.type = "play-and-record"
-        }
+        if ("audioSession" in navigator)
+            (navigator as any).audioSession.type = "play-and-record"
         const AC = window.AudioContext ?? (window as any).webkitAudioContext
         if (!AC) return null
         const ctx = new AC() as AudioContext
-        // Synchronous resume — iOS requires this in the same call stack as
-        // the gesture; do NOT await or move into a Promise chain.
         ctx.resume()
         return ctx
     } catch (_) { return null }
 }
 
-// Shared signal chain tail: compressor → destination.
-// DynamicsCompressor makes oscillator tones noticeably louder and punchier
-// on phone speakers by bringing up the average level without hard clipping.
 const _withCompressor = (ctx: AudioContext) => {
     const comp = ctx.createDynamicsCompressor()
-    comp.threshold.value = -18
-    comp.knee.value      = 8
-    comp.ratio.value     = 6
-    comp.attack.value    = 0.003
-    comp.release.value   = 0.15
+    comp.threshold.value = -18; comp.knee.value = 8
+    comp.ratio.value = 6; comp.attack.value = 0.003; comp.release.value = 0.15
     comp.connect(ctx.destination)
     return comp
 }
 
+// Ascending C-major arpeggio (C5→E5→G5→C6), ~0.7s.
 const playCallStartSound = (): void => {
     const ctx = _makeCtx()
     if (!ctx) return
     try {
-        const now  = ctx.currentTime
-        const out  = _withCompressor(ctx)
-
-        // C-major arpeggio ascending: C5 → E5 → G5 → C6
-        // Cute, bright, musical — like a magical "ding ding ding ding"
-        const notes = [523, 659, 784, 1047]   // Hz
-        notes.forEach((freq, i) => {
-            const osc  = ctx.createOscillator()
-            const gain = ctx.createGain()
-            const t    = now + i * 0.10          // stagger each note 100ms apart
-
+        const now = ctx.currentTime
+        const out = _withCompressor(ctx)
+        ;[523, 659, 784, 1047].forEach((freq, i) => {
+            const osc = ctx.createOscillator(), gain = ctx.createGain()
+            const t = now + i * 0.10
             osc.type = "sine"
             osc.frequency.setValueAtTime(freq, t)
-            // Tiny upward pitch nudge gives each note a "sparkle" feel
             osc.frequency.linearRampToValueAtTime(freq * 1.04, t + 0.25)
-
             gain.gain.setValueAtTime(0.0001, t)
-            gain.gain.linearRampToValueAtTime(0.55, t + 0.04)   // fast attack
-            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.60) // gentle tail
-
-            osc.connect(gain)
-            gain.connect(out)
-            osc.start(t)
-            osc.stop(t + 0.65)
+            gain.gain.linearRampToValueAtTime(0.55, t + 0.04)
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.60)
+            osc.connect(gain); gain.connect(out)
+            osc.start(t); osc.stop(t + 0.65)
         })
-
         setTimeout(() => { try { ctx.close() } catch (_) {} }, 1400)
     } catch (_) {}
 }
 
+// Descending G4→E4→C4, ~0.8s.
 const playCallEndSound = (): void => {
     const ctx = _makeCtx()
     if (!ctx) return
     try {
-        const now  = ctx.currentTime
-        const out  = _withCompressor(ctx)
-
-        // Descending: G4 → E4 → C4 — soft, warm, non-jarring farewell
-        const notes = [392, 330, 262]          // Hz
-        notes.forEach((freq, i) => {
-            const osc  = ctx.createOscillator()
-            const gain = ctx.createGain()
-            const t    = now + i * 0.13
-
+        const now = ctx.currentTime
+        const out = _withCompressor(ctx)
+        ;[392, 330, 262].forEach((freq, i) => {
+            const osc = ctx.createOscillator(), gain = ctx.createGain()
+            const t = now + i * 0.13
             osc.type = "sine"
             osc.frequency.setValueAtTime(freq, t)
-            // Gentle downward drift for a melting-away feel
             osc.frequency.linearRampToValueAtTime(freq * 0.97, t + 0.45)
-
             gain.gain.setValueAtTime(0.0001, t)
             gain.gain.linearRampToValueAtTime(0.45, t + 0.05)
             gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.60)
-
-            osc.connect(gain)
-            gain.connect(out)
-            osc.start(t)
-            osc.stop(t + 0.60)
+            osc.connect(gain); gain.connect(out)
+            osc.start(t); osc.stop(t + 0.60)
         })
-
         setTimeout(() => { try { ctx.close() } catch (_) {} }, 1200)
     } catch (_) {}
 }
@@ -20025,7 +19911,6 @@ Do not include markdown formatting or explanations.`
             hasDragged.current = false // Reset drag status
             dragMode.current = mode
             dragStartY.current = e.clientY
-            hapticDragLastY.current = e.clientY // Reset haptic baseline for this drag
             dragStartX.current = e.clientX
             dragStartHeight.current = chatHeight
             dragStartWidth.current = chatWidth
@@ -20054,49 +19939,6 @@ Do not include markdown formatting or explanations.`
 
     const rightContentPanelRef = React.useRef<HTMLDivElement>(null)
 
-    // Refs for swipe-haptic touchend listeners (see useEffect below).
-    // Raw addEventListener('touchend') is used instead of React onPointerUp /
-    // onTouchEnd because framer-motion captures pointer events before React's
-    // synthetic event system, so onPointerUp may never reach our handler.
-    // A raw touchend listener bypasses framer-motion's capture and fires
-    // synchronously within iOS's user-gesture window — the requirement for
-    // label.click() iOS haptics to work.
-    const hapticSidebarRef  = React.useRef<HTMLElement | null>(null)
-    const hapticOverlayRef  = React.useRef<HTMLElement | null>(null)
-    // Tracks the clientY at which the last drag-bar haptic fired.
-    // Reset on pointerdown so the first tick fires after the first 50px of drag.
-    const hapticDragLastY = React.useRef<number>(0)
-
-    React.useEffect(() => {
-        const sidebar = hapticSidebarRef.current
-        const overlay = hapticOverlayRef.current
-        const panel   = rightContentPanelRef.current
-
-        // Close swipe: sidebar dragged > 50px left from open position (x = 0)
-        const onSidebarTouchEnd = () => {
-            if (!isMobileLayoutRef.current) return
-            if (sidebarX.get() < -50) haptic.light()
-        }
-        const onOverlayTouchEnd = () => {
-            if (!isMobileLayoutRef.current) return
-            if (sidebarX.get() < -50) haptic.light()
-        }
-        // Open swipe: main content dragged > 50px right from closed position (x = -260)
-        const onPanelTouchEnd = () => {
-            if (!isMobileLayoutRef.current) return
-            if (sidebarX.get() > -210) haptic.light()
-        }
-
-        sidebar?.addEventListener("touchend", onSidebarTouchEnd)
-        overlay?.addEventListener("touchend", onOverlayTouchEnd)
-        panel?.addEventListener("touchend", onPanelTouchEnd)
-
-        return () => {
-            sidebar?.removeEventListener("touchend", onSidebarTouchEnd)
-            overlay?.removeEventListener("touchend", onOverlayTouchEnd)
-            panel?.removeEventListener("touchend", onPanelTouchEnd)
-        }
-    }, [sidebarX])
 
     const handlePointerMove = React.useCallback(
         (e: PointerEvent) => {
@@ -20116,15 +19958,6 @@ Do not include markdown formatting or explanations.`
                 return
             }
             hasDragged.current = true
-
-            // Fire a selection haptic every 50px of drag movement.
-            // Called synchronously here (before entering RAF) so it stays
-            // inside the pointermove user-gesture window on iOS.
-            const draggedPx = Math.abs(e.clientY - hapticDragLastY.current)
-            if (draggedPx >= 50) {
-                hapticDragLastY.current = e.clientY
-                haptic.selection()
-            }
 
             // Track resize during sidebar open
             if (isSidebarOpen && !hasResizedWhileSidebarOpen.current) {
@@ -22581,7 +22414,6 @@ Do not include markdown formatting or explanations.`
                                 opacity: sidebarOverlayOpacity,
                                 pointerEvents: isSidebarOpen ? "auto" : "none",
                             }}
-                            ref={hapticOverlayRef}
                             onClick={(e) => {
                                 e.stopPropagation()
                                 haptic.light()
@@ -22607,17 +22439,9 @@ Do not include markdown formatting or explanations.`
                             onPanEnd={(event, info) => {
                                 if (!isMobileLayout) return
                                 const currentX = sidebarX.get()
-                                // If dragged left enough (more negative) or velocity is high to left
-                                // Current X is between -260 and 0.
-                                // 0 is open. -260 is closed.
-                                // If we are open (0) and drag left, X becomes negative (e.g. -50).
-                                // If we drag past -50 (towards closed), we should close.
                                 if (currentX < -50 || info.velocity.x < -100) {
                                     setIsSidebarOpen(false)
                                 } else {
-                                    // Snap back to open
-                                    // We need to manually animate back to 0 because setIsSidebarOpen(true)
-                                    // won't trigger a change if it was already true.
                                     animate(sidebarX, 0, {
                                         type: "spring",
                                         stiffness: 700,
@@ -22654,7 +22478,6 @@ Do not include markdown formatting or explanations.`
                             // Actually if it's offscreen (-260), we can't drag IT. We drag the main content.
                             // But we need to be able to drag IT to close it.
                         }}
-                        ref={hapticSidebarRef}
                         onPan={(event, info) => {
                             if (!isMobileLayout) return
                             // Dragging left to close
@@ -22672,17 +22495,9 @@ Do not include markdown formatting or explanations.`
                         onPanEnd={(event, info) => {
                             if (!isMobileLayout) return
                             const currentX = sidebarX.get()
-                            // If dragged left enough (more negative) or velocity is high to left
-                            // Current X is between -260 and 0.
-                            // 0 is open. -260 is closed.
-                            // If we are open (0) and drag left, X becomes negative (e.g. -50).
-                            // If we drag past -50 (towards closed), we should close.
                             if (currentX < -50 || info.velocity.x < -100) {
                                 setIsSidebarOpen(false)
                             } else {
-                                // Snap back to open
-                                // We need to manually animate back to 0 because setIsSidebarOpen(true)
-                                // won't trigger a change if it was already true.
                                 animate(sidebarX, 0, {
                                     type: "spring",
                                     stiffness: 350,
@@ -24776,17 +24591,9 @@ Do not include markdown formatting or explanations.`
                         if (!isMobileLayout || isSidebarOpen) return
 
                         const currentX = sidebarX.get()
-                        // If dragged right enough (closer to 0) or velocity is high to right
-                        // -260 is closed.
-                        // If we drag right, X increases (e.g. -200).
-                        // If we don't drag enough (e.g. only to -250), we should snap back to closed.
-                        // Threshold: If we passed -210 (dragged 50px), open.
                         if (currentX > -210 || info.velocity.x > 100) {
                             setIsSidebarOpen(true)
                         } else {
-                            // Snap back to closed
-                            // We need to manually animate back to -260 because setIsSidebarOpen(false)
-                            // won't trigger a change if it was already false.
                             animate(sidebarX, -260, {
                                 type: "spring",
                                 stiffness: 700,
