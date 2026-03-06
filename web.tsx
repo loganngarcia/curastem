@@ -12864,17 +12864,14 @@ export default function OmegleMentorshipUI(props: Props) {
     // ---------------------------------------------------------------------------
     // getSystemPromptWithContext(forVoice?)
     //
-    // forVoice=false (default) → text chat path. Includes XML delimiter instructions
-    //   so the model streams <curastem-app>, <curastem-doc>, and <curastem-suggestions>
-    //   blocks that the UI parses in real time (see the stream loop below).
+    // forVoice=false (default) → text chat path. Includes <curastem-suggestions>
+    //   delimiter instructions so the model appends suggestions JSON at the end of
+    //   every response (parsed in the stream loop below). App/doc creation uses real
+    //   API tool calls (create_app, update_doc).
     //
-    // forVoice=true → Gemini Live (audio) path. Delimiter tags are OMITTED entirely
-    //   because Gemini Live uses responseModalities: ["AUDIO"]. If the model received
-    //   delimiter instructions, it would literally SPEAK the XML tag names out loud
-    //   (e.g. "curastem-suggestions open bracket..."), which then appear verbatim in
-    //   the outputAudioTranscription and pollute the chat UI.
-    //   For voice: suggestions are generated via a separate fetchAiSuggestions() call;
-    //   app/doc creation tells the user to switch to text chat.
+    // forVoice=true → Gemini Live (audio) path. All delimiter tags are OMITTED
+    //   because Gemini Live uses responseModalities: ["AUDIO"] and would speak the
+    //   tag names verbatim. Suggestions are generated via fetchAiSuggestions() instead.
     // ---------------------------------------------------------------------------
     const getSystemPromptWithContext = React.useCallback(
         (forVoice = false) => {
@@ -12899,72 +12896,13 @@ This is a live voice call. Rules:
 - If the user asks you to build an app, create a document, or do anything that requires the app/doc editor, acknowledge warmly and let them know they can send a message in text chat to create it.
 - Keep responses concise and easy to follow by ear.`
             } else {
-                // ---------------------------------------------------------------------------
-                // DELIMITER STREAMING INSTRUCTIONS (text chat only)
-                //
-                // The Gemini API does not stream tool-call arguments incrementally — the full
-                // JSON blob for create_app / update_doc arrives in one chunk after the model
-                // finishes generating it, causing a blank editor for 5–20 s on complex apps.
-                // This is a confirmed API limitation (github.com/googleapis/python-genai #1940).
-                //
-                // Workaround (mirrors Google's own Gemini Canvas): the model streams content
-                // as ordinary text inside special XML-style tags. The UI opens the correct
-                // editor the moment it sees the opening tag and feeds each token directly into
-                // the editor panel — real-time streaming, no buffering.
-                //
-                // WHY XML tags instead of markdown code fences:
-                // Code fences (```language) are frequently abbreviated or reformatted by
-                // LLMs (e.g. the model outputs ```-doc instead of ```curastem-doc).
-                // XML-style tags (<curastem-app>, <curastem-doc> etc.) are followed precisely
-                // because models are trained extensively on XML/HTML structured formats.
-                //
-                // When GCP adds streaming tool-call arg support, remove these instructions
-                // and restore create_app / update_doc as proper tool declarations (see the
-                // tools array above, which has a full revert checklist in its comment block).
-                // ---------------------------------------------------------------------------
                 prompt += `
-
-[UI CAPABILITIES — OUTPUT FORMAT IS STRICT, FOLLOW EXACTLY]
-
-CREATING APPS — ONLY when the user explicitly asks to BUILD, MAKE, or CREATE an app, game, quiz, or interactive tool (e.g. "build me a game", "make a quiz", "create a portfolio"). Do NOT use for explanations, lists, or general answers.
-Write one sentence that includes intro and asks what other features they want, then output:
-<curastem-app>
-<!DOCTYPE html>...complete self-contained HTML/CSS/JS...
-</curastem-app>
-App requirements (non-negotiable):
-- Add many features and are highly useful to a diverse audience, even if it wasn't requested.
-- Every button fully interactive
-- Unique id="..." on EVERY interactive element (buttons, inputs, clickable divs, canvas)
-- Mobile + desktop support, 56px top margin always
-- Add automatic light and dark mode based on system preference
-- links open in new tab
-- Style: 36px rounded corners
-- NO gradients and NO strokes
-- use large, neobrutalist variable fonts. make trendy and Gen Z
-- edge-to-edge like every pixel was considered and used wisely
-- creative but always elegant. can use rotation, scaling, 3d effects, and vibrant but accessible colors. Code a ton of design details dont just do a few lines do a lot of lines of code
-- add microinteractions and beautiful smooth drop shadows and blurs
-
-CREATING DOCUMENTS — ONLY when the user explicitly asks you to WRITE, DRAFT, or CREATE a specific document they will use (e.g. "write my resume", "draft a cover letter", "write an email to my professor"). Do NOT use for general info, how-to answers, resource lists, or anything the user didn't ask to be saved as a document.
-Write one sentence that includes intro and asks how it can be improved, then output:
-<curastem-doc>
-<h1>Title</h1><p>Content...</p>
-</curastem-doc>
-Use HTML only: <h1>/<h2> headings, <p> body, <ul>/<li> lists, <b>/<strong> bold, <i>/<em> italic, <a href="..."> links.
 
 FOLLOW-UP SUGGESTIONS (required at the end of EVERY response, no exceptions):
 <curastem-suggestions>
 ["Short question 1?","Short question 2?","Short question 3?"]
 </curastem-suggestions>
-Rules: always 3–5 suggestions, each under 5 words, specific to what you just said, plain strings only.
-
-CRITICAL RULES:
-- Default to plain conversational text. Most responses do NOT need a doc or app.
-- Use <curastem-app> ONLY on explicit build/make/create requests for interactive tools.
-- Use <curastem-doc> ONLY on explicit write/draft requests for a specific document.
-- NEVER open a doc or app just because the answer is long, structured, or has bullet points.
-- Always end with <curastem-suggestions> — every single response without exception.
-- Do NOT wrap these tags in markdown code fences or add any extra formatting around them.`
+Rules: always 3–5 suggestions, each under 5 words, specific to what you just said, plain strings only. Do NOT wrap in markdown code fences.`
             }
 
             return prompt
@@ -14374,7 +14312,7 @@ Do not include markdown formatting or explanations.`
     ): Promise<string> => {
         if (!geminiApiKey || evidenceParts.length === 0) return "UNKNOWN"
 
-        const moderationModel = "gemini-2.5-flash-lite"
+        const moderationModel = "gemini-3.1-flash-lite-preview"
 
         try {
             log("Sending moderation request to Gemini...")
@@ -14708,7 +14646,7 @@ Do not include markdown formatting or explanations.`
                 const prompt = `Summarize this message into a short title (3-5 words). Just the title, no quotes: "${firstMessageText}"`
 
                 const response = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiApiKey}`,
+                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
                     {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -18478,33 +18416,6 @@ Do not include markdown formatting or explanations.`
                     })
                 )
 
-                // ---------------------------------------------------------------------------
-                // Tool declarations — ONLY retrieve_resources and update_whiteboard are
-                // real API tool calls here. create_app and update_doc have been
-                // intentionally converted to delimiter-based text streaming (see the
-                // DELIMITER STREAMING section below and in getSystemPromptWithContext).
-                //
-                // WHY: The Gemini API does not stream function-call arguments
-                // incrementally. The entire JSON args blob is buffered server-side and
-                // delivered as one chunk, so the editor would stay blank for the full
-                // generation time (5–20 s for a complex app). This is a confirmed gap
-                // vs OpenAI / Anthropic / xAI — tracked publicly at:
-                //   https://github.com/googleapis/python-genai/issues/1940
-                //   (open, priority p3 as of early 2026)
-                //
-                // The fix mirrors exactly what Google's own Gemini Canvas product does:
-                // the model streams content as ordinary text inside special fenced code
-                // XML-style tags (<curastem-app> / <curastem-doc>). The stream parser below
-                // detects the opening tag and opens the editor immediately, then feeds
-                // each arriving token straight into the editor panel — real-time, no
-                // buffering, identical UX to Gemini Canvas.
-                //
-                // When GCP ships streaming tool-call arg support, revert by:
-                //   1. Re-add create_app and update_doc to this tool declarations array
-                //   2. Remove the delimiter instructions from getSystemPromptWithContext
-                //   3. Remove the DELIMITER STREAMING block in the stream loop below
-                //   4. No post-stream logic for create_app/update_doc (handled in stream loop)
-                // ---------------------------------------------------------------------------
                 const tools = [
                     {
                         functionDeclarations: [
@@ -18522,72 +18433,265 @@ Do not include markdown formatting or explanations.`
                                 },
                             },
                             {
-                                name: "update_whiteboard",
+                                name: "create_app",
                                 description:
-                                    "Updates the tldraw whiteboard canvas. Use this to draw diagrams, flowcharts, mind maps, or complex visualizations. You can add, update, or remove shapes. Use valid tldraw JSON records: 'geo' type for shapes (props: { w, h, geo: 'rectangle'|'ellipse' }), 'text' for labels, 'arrow' for connections (props: { start, end }). Each record must have 'id', 'type', 'typeName'='shape', 'x', 'y', and 'props'. Ensure x, y coordinates are within 0-1000.",
+                                    "Creates a mini interactive app (HTML/CSS/JS). ONLY call this when the user explicitly uses words like 'build', 'make', 'create', or 'code' and is clearly requesting an interactive tool, game, quiz, or web app. Do NOT call for explanations, how-to answers, lists, summaries, or anything the user did not explicitly ask to be built as an app.",
                                 parameters: {
                                     type: "OBJECT",
                                     properties: {
-                                        added: {
-                                            type: "ARRAY",
-                                            description:
-                                                "Array of shape records to add. Each record must have 'id', 'type', 'typeName'='shape', 'x', 'y', and 'props'. Common types: 'geo', 'text', 'arrow', 'draw'.",
-                                            items: {
-                                                type: "OBJECT",
-                                            },
+                                        code: {
+                                            type: "STRING",
+                                            description: `Single self-contained HTML file with embedded CSS and JavaScript. Write EVERY line — never truncate or add placeholder comments. This app must look like it could win Awwwards Site of the Day.
+
+STYLE — match the design language to the app's soul:
+- Productivity/finance/data → flat modern: Space Grotesk or Inter, geometric grids, cool neutrals
+- Social/creative/portfolio → neobrutalist: fat borders, raw contrast, hard #000 box-shadows, heavy type
+- Health/wellness → soft neumorphism: pastel backgrounds, inset+outset shadows, gentle blurs
+- Games/entertainment → maximalist: neon glows, pixel/mono fonts, kinetic energy, saturated palettes
+- Fashion/luxury/editorial → Swiss editorial: extreme whitespace, serif hero (Playfair/Cormorant), quiet luxury
+- Kids/education → playful: bouncy spring animations, saturated primaries, rounded-everything
+- Tech/AI/dev → dark glassmorphism: frosted panels, backdrop-filter blur, colored glow halos, monospace accents
+- Food/lifestyle/travel → warm editorial: earthy tones, organic shapes, editorial serif
+
+TYPOGRAPHY: @import 1–2 Google Fonts matched to the style. Fluid type: clamp(14px,2vw,18px) body, clamp(32px,6vw,80px) hero. Tune letter-spacing and line-height. Animate font-weight via CSS custom properties when variable fonts allow.
+
+ICONS: inline 24×24 SVG with currentColor only. Animate on interaction: stroke-dashoffset draw-in, scale pulse, rotate on toggle.
+
+SHADOWS & DEPTH: far-reaching base shadow 0 40px 100px rgba(0,0,0,0.06); colored accent shadows that echo the element color; 2–3 layered depth levels.
+
+VISUAL FX (pick what fits the style):
+- Animated gradient mesh via CSS custom properties + @keyframes on hue-rotate or background-position
+- SVG feTurbulence noise texture overlay as data URI for grain
+- Glassmorphism: backdrop-filter blur(20px) saturate(180%) + rgba background
+- Canvas confetti/particle burst on success/achievement (rAF loop)
+- CSS sparkle ::before/::after stars with staggered animation-delay
+- Ambient shimmer: slow-moving radial gradient overlay at ~4% opacity
+
+MICRO-INTERACTIONS (every element needs at least one):
+- Buttons: translateY(-3px) + shadow lift on hover; scale(0.96) on :active
+- Inputs: border glow pulse + floating label transition on focus
+- Cards: JS mouse-tracking CSS perspective tilt (rotateX/Y ±6deg) on hover
+- Nav items: underline animates in from left via scaleX transform
+- List items: stagger in with animation-delay: calc(var(--i) * 60ms)
+- Loading: skeleton shimmer matching the palette
+
+ANIMATIONS: spring cubic-bezier(0.34,1.56,0.64,1); premium cubic-bezier(0.16,1,0.3,1); IntersectionObserver for scroll-triggered entry; rAF for canvas; never abrupt state jumps.
+
+DARK/LIGHT MODE: CSS custom properties for every color token (--bg, --surface, --text, --text-muted, --accent, --border). prefers-color-scheme sets :root variables. Smooth transition: background 0.3s ease, color 0.3s ease on :root *.
+
+FEATURES — always exceed what was asked:
+- Quiz/flashcards → score tracking, progress bar, categories, localStorage, animated feedback
+- Portfolio/resume → smooth scroll nav, project cards with hover FX, contact form, animated hero
+- Game → high score (localStorage), AudioContext SFX, difficulty levels, particle effects
+- Notes/journal → rich text, tags, search, mood tracker, export .txt
+- Finance/budget → canvas charts, categories, monthly summaries, localStorage persistence
+- Study tool → spaced repetition logic, streak tracking, progress rings, session history
+- Always add: keyboard shortcuts, ARIA labels, empty states with illustrations, error/success states, localStorage persistence
+
+CONSTRAINTS (non-negotiable):
+- Unique id="" on EVERY interactive element (buttons, inputs, clickable divs, canvas)
+- Mobile + desktop responsive; 56px top padding always for toolbar clearance
+- All links: target="_blank" rel="noopener noreferrer"
+- No external JS libraries; all assets inline SVG or data URIs
+- Write every line of code — a great app takes thousands of lines`,
                                         },
-                                        updated: {
-                                            type: "ARRAY",
+                                    },
+                                    required: ["code"],
+                                },
+                            },
+                            {
+                                name: "update_doc",
+                                description:
+                                    "Creates or updates a document in the doc editor. ONLY call this when the user explicitly asks to WRITE, DRAFT, or CREATE a specific document — e.g. 'write my resume', 'draft a cover letter', 'write an email to my professor'. Do NOT call for general answers, explanations, resource lists, bullet-point summaries, or anything the user did not explicitly ask to be saved as a document.",
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        content: {
+                                            type: "STRING",
                                             description:
-                                                "Array of shape records to update. Must include 'id' and the fields to change.",
-                                            items: {
-                                                type: "OBJECT",
-                                            },
+                                                "The full HTML content. Use <h1>/<h2> for headings, <p> for body text, <ul>/<li> for lists, <b>/<strong> for bold, <i>/<em> for italics, <a href='...'> for links. Write complete polished content — never truncate.",
                                         },
-                                        removed: {
+                                    },
+                                    required: ["content"],
+                                },
+                            },
+                            {
+                                name: "draw_whiteboard",
+                                description: `Adds NEW shapes to the tldraw 2.1 whiteboard. Use this for diagrams, flowcharts, or any new visual content. Only three shape types are supported — any other type crashes tldraw.
+
+STEP 1 — PLAN LAYOUT FIRST (mandatory):
+Assign every shape a variable: id, x, y, w, h. Compute all values before writing JSON.
+Min gap between shapes: 40px horizontal, 40px vertical.
+
+STEP 2 — BOX SIZING (critical — prevents ugly text wrapping):
+Set w wide enough to fit the text on 1–2 lines. Rules:
+- Short label (1–3 words): w=160, h=60
+- Medium label (4–8 words or a short sentence): w=200, h=80
+- Long label (multi-line bullet list): w=220, h=120, use \\n between bullets
+Never let tldraw wrap text by making boxes too narrow.
+
+STEP 3 — ARROW PLACEMENT (exact formula, always use this):
+Given source box at (sx, sy, sw, sh) and target box at (tx, ty, tw, th):
+  start = { type:"point", x: sx+sw,   y: sy+sh/2 }   ← right-edge midpoint of source
+  end   = { type:"point", x: tx,      y: ty+th/2 }   ← left-edge midpoint of target
+For vertical flow (source above target):
+  start = { type:"point", x: sx+sw/2, y: sy+sh  }    ← bottom-edge midpoint
+  end   = { type:"point", x: tx+tw/2, y: ty      }   ← top-edge midpoint
+Arrow x/y must be 0,0 — coordinates live inside start/end, not on the shape itself.
+
+GEO (box/circle/diamond):
+{"id":"shape:box1","typeName":"shape","type":"geo","x":100,"y":100,"rotation":0,"isLocked":false,"opacity":1,"parentId":"page:page","index":"a1","props":{"w":200,"h":80,"geo":"rectangle","color":"black","size":"m","fill":"none","dash":"draw","text":"Label text here","labelColor":"black","font":"draw","align":"middle","verticalAlign":"middle","growY":0,"url":""}}
+geo values: "rectangle"|"ellipse"|"diamond"|"triangle"|"star"
+
+TEXT (standalone label, auto-sizes):
+{"id":"shape:txt1","typeName":"shape","type":"text","x":100,"y":200,"rotation":0,"isLocked":false,"opacity":1,"parentId":"page:page","index":"a2","props":{"text":"Heading","color":"black","size":"m","font":"draw","align":"start","autoSize":true,"scale":1,"w":200}}
+
+ARROW:
+{"id":"shape:arr1","typeName":"shape","type":"arrow","x":0,"y":0,"rotation":0,"isLocked":false,"opacity":1,"parentId":"page:page","index":"a3","props":{"start":{"type":"point","x":300,"y":140},"end":{"type":"point","x":500,"y":140},"arrowheadStart":"none","arrowheadEnd":"arrow","color":"black","size":"m","fill":"none","dash":"draw","bend":0,"labelColor":"black","font":"draw"}}
+
+Hard rules: index unique per shape ("a1","a2"…); x/y/w/h finite numbers, w/h > 0; never add fields not in the examples above — unknown fields crash tldraw.`,
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        shapes: {
                                             type: "ARRAY",
-                                            description:
-                                                "Array of shape IDs to remove.",
-                                            items: {
-                                                type: "STRING",
-                                            },
+                                            description: "Array of new shape records to create.",
+                                            items: { type: "OBJECT" },
+                                        },
+                                    },
+                                    required: ["shapes"],
+                                },
+                            },
+                            {
+                                name: "edit_whiteboard",
+                                description: `Patches or removes EXISTING shapes on the tldraw whiteboard. Use this when the user asks to fix, move, resize, recolor, relabel, or delete specific shapes. Look up shape IDs from the canvas snapshot in the user message.
+
+PATCH — send only the id + fields to change (tldraw merges, untouched fields stay):
+Change label: {"id":"shape:box1","props":{"text":"New label"}}
+Resize:       {"id":"shape:box1","props":{"w":240,"h":120}}
+Move:         {"id":"shape:box1","x":400,"y":200}
+Recolor:      {"id":"shape:box1","props":{"color":"blue"}}
+color values: "black"|"grey"|"light-violet"|"violet"|"blue"|"light-blue"|"yellow"|"orange"|"green"|"light-green"|"light-red"|"red"
+
+DELETE — ids to remove: ["shape:box1","shape:arr1"]
+Never send fields not in the original shape schema — unknown fields crash tldraw.`,
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        patches: {
+                                            type: "ARRAY",
+                                            description: "Array of patch objects. Each must have 'id' plus only the fields to change.",
+                                            items: { type: "OBJECT" },
+                                        },
+                                        remove: {
+                                            type: "ARRAY",
+                                            description: "Array of shape ID strings to delete.",
+                                            items: { type: "STRING" },
                                         },
                                     },
                                     required: [],
+                                },
+                            },
+                            {
+                                name: "erase_whiteboard",
+                                description: `Deletes specific shapes from the whiteboard. You decide WHICH shapes to erase based on the canvas snapshot in the user message. Pass their exact IDs in the 'ids' array.
+
+When the user asks to "clear everything" or "start over", pass ALL shape IDs from the snapshot.
+When the user asks to remove specific content (e.g. "erase the arrows", "delete the left diagram"), pass only the IDs of those shapes.
+Look up IDs from the [CANVAS STATE] snapshot that is injected into the user message.
+Never guess IDs — only use IDs that appear in the snapshot.`,
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        ids: {
+                                            type: "ARRAY",
+                                            description: "Array of shape ID strings to delete (e.g. [\"shape:box1\", \"shape:arr1\"]). Must be IDs from the canvas snapshot.",
+                                            items: { type: "STRING" },
+                                        },
+                                    },
+                                    required: ["ids"],
                                 },
                             },
                         ],
                     },
                 ]
 
-                // Detect if user intends to use whiteboard
                 const userText = userContent?.[0]?.parts?.[0]?.text || ""
                 const isWhiteboardIntent =
-                    /draw|whiteboard|diagram|chart|mind map|flowchart/i.test(
-                        userText
-                    )
-                const useThinking = isWhiteboardOpen || isWhiteboardIntent
+                    /draw|whiteboard|diagram|chart|mind map|flowchart/i.test(userText)
+                // Use the ref (not state) — state can be stale inside async callbacks.
+                // Thinking is always on when the whiteboard is open or the user is asking
+                // for a diagram, so the model plans layout before generating coordinates.
+                const useThinking = isWhiteboardOpenRef.current || isWhiteboardIntent
+
+                // Inject a canvas snapshot into the user message so the model knows
+                // occupied regions, bounding boxes, and shape IDs before it picks a
+                // whiteboard tool and generates coordinates.
+                // Uses editorRef (not editor state) — state can be stale in async closures.
+                let augmentedUserContent = userContent
+                if ((isWhiteboardOpenRef.current || isWhiteboardIntent) && editorRef.current) {
+                    try {
+                        const shapeIds = editorRef.current.getCurrentPageShapeIds?.()
+                        const shapes = shapeIds
+                            ? [...shapeIds].map((id: string) => editorRef.current.getShape(id)).filter(Boolean)
+                            : []
+
+                        const snapshot = shapes.map((s: any) => {
+                            const x = Math.round(s.x)
+                            const y = Math.round(s.y)
+                            const w = Math.round(s.props?.w ?? 0)
+                            const h = Math.round(s.props?.h ?? 0)
+                            return {
+                                id: s.id,
+                                type: s.type,
+                                x, y, w, h,
+                                right: x + w,
+                                bottom: y + h,
+                                ...(s.props?.text !== undefined && { text: s.props.text }),
+                                ...(s.props?.geo !== undefined && { geo: s.props.geo }),
+                            }
+                        })
+
+                        let maxRight = 50, maxBottom = 50
+                        snapshot.forEach((s: any) => {
+                            if (s.right  > maxRight)  maxRight  = s.right
+                            if (s.bottom > maxBottom) maxBottom = s.bottom
+                        })
+                        const suggestedY = maxBottom + 80
+
+                        // Only raw canvas data is injected here — all layout rules and
+                        // constraints live inside the individual tool descriptions.
+                        // The AI needs shape IDs and positions to call edit/erase tools correctly.
+                        const snapshotText = shapes.length > 0
+                            ? `\n\n[CANVAS STATE — ${shapes.length} shape(s)]\n` +
+                              `Shapes (id, type, x, y, w, h, right, bottom, text):\n${JSON.stringify(snapshot, null, 2)}\n\n` +
+                              `Occupied region: x 0–${maxRight}, y 0–${maxBottom}`
+                            : `\n\n[CANVAS STATE — empty]`
+
+                        augmentedUserContent = [
+                            ...userContent,
+                            { text: snapshotText },
+                        ]
+                    } catch (e) {
+                        // Non-fatal — proceed without snapshot if tldraw API is unavailable
+                    }
+                }
 
                 const payload: any = {
                     contents: [
                         ...history,
-                        { role: "user", parts: userContent },
+                        { role: "user", parts: augmentedUserContent },
                     ],
                     tools: tools,
                     generationConfig: {
                         temperature: 1.0,
-                        maxOutputTokens: 2048,
+                        maxOutputTokens: 8192,
+                        // thinkingBudget: -1 = auto (model decides how much to think).
+                        // thinkingBudget: 0 = disabled (faster, cheaper for normal chat).
+                        // includeThoughts: false = don't stream thought tokens to the client.
                         ...(useThinking
-                            ? {
-                                  thinkingConfig: {
-                                      includeThoughts: false,
-                                  },
-                              }
-                            : {
-                                  thinkingConfig: {
-                                      thinkingBudget: 0,
-                                  },
-                              }),
+                            ? { thinkingConfig: { thinkingBudget: -1, includeThoughts: false } }
+                            : { thinkingConfig: { thinkingBudget: 0 } }),
                     },
                     toolConfig: {
                         functionCallingConfig: {
@@ -18656,32 +18760,11 @@ Do not include markdown formatting or explanations.`
                 let accumulatedThoughtSignature: string | undefined
 
                 // --- DELIMITER STREAMING STATE ---
-                // Tracks whether we are inside a <curastem-app>, <curastem-doc>, or
-                // <curastem-suggestions> block. When true, each new text chunk is routed
-                // to the appropriate editor in real time instead of only to the chat bubble.
-                //
-                // XML-style tags are used (not markdown code fences) because LLMs follow
-                // XML/HTML tag conventions precisely — code fences with custom language
-                // tags tend to get abbreviated (e.g. ```-doc instead of ```curastem-doc).
-                // See the getSystemPromptWithContext comment for the full explanation.
-                const DELIM_APP_OPEN   = "<curastem-app>"
-                const DELIM_APP_CLOSE  = "</curastem-app>"
-                const DELIM_DOC_OPEN   = "<curastem-doc>"
-                const DELIM_DOC_CLOSE  = "</curastem-doc>"
+                // Tracks whether we are inside a <curastem-suggestions> block.
                 const DELIM_SUGG_OPEN  = "<curastem-suggestions>"
                 const DELIM_SUGG_CLOSE = "</curastem-suggestions>"
-                let inAppBlock  = false
-                let inDocBlock  = false
                 let inSuggBlock = false
-                let appBlockContentStart  = -1  // index in accumulatedText where app code begins
-                let docBlockContentStart  = -1  // index in accumulatedText where doc content begins
-                let suggBlockContentStart = -1  // index in accumulatedText where suggestions JSON begins
-                // Tracks whether a complete app/doc delimiter block was found in this turn.
-                // Used post-stream to stamp toolUsed on the message so the chat tag badge
-                // ("App" / "Docs") appears — mirrors what functionCall.name provided before
-                // we switched to delimiter streaming.
-                let hadAppBlock = false
-                let hadDocBlock = false
+                let suggBlockContentStart = -1
 
                 while (true) {
                     const { done, value } = await reader.read()
@@ -18715,57 +18798,8 @@ Do not include markdown formatting or explanations.`
                                     if (part.text) {
                                         accumulatedText += part.text
 
-                                        // -------------------------------------------------
-                                        // DELIMITER STREAMING — create_app / update_doc
-                                        //
-                                        // Scans for ```curastem-app and ```curastem-doc
-                                        // opening fences on every new text chunk. Once
-                                        // found, the editor opens immediately and each
-                                        // subsequent token is streamed directly into it.
-                                        // The closing ``` finalizes the content.
-                                        //
-                                        // This is the workaround for Gemini's missing
-                                        // streaming tool-call arg support. Remove this
-                                        // block when GCP fixes the limitation and we
-                                        // restore create_app/update_doc as tool calls.
-                                        // -------------------------------------------------
-
-                                        // Detect opening tags (each block type is mutually exclusive)
-                                        if (!inAppBlock && !inDocBlock && !inSuggBlock) {
-                                            const appTagIdx = accumulatedText.indexOf(DELIM_APP_OPEN)
-                                            if (appTagIdx !== -1) {
-                                                inAppBlock = true
-                                                // Content starts immediately after the opening tag
-                                                appBlockContentStart = appTagIdx + DELIM_APP_OPEN.length
-                                                // Trim a single leading newline the model typically emits
-                                                if (accumulatedText[appBlockContentStart] === "\n") {
-                                                    appBlockContentStart++
-                                                }
-                                                // Open the mini app editor immediately
-                                                if (!isAppOpenRef.current) {
-                                                    setIsAppOpen(true)
-                                                    setIsDocOpen(false)
-                                                    setIsWhiteboardOpen(false)
-                                                    isAppOpenRef.current = true
-                                                }
-                                                if (appModeRef.current !== "editor") {
-                                                    setAppMode("editor")
-                                                    appModeRef.current = "editor"
-                                                }
-                                            }
-                                            const docTagIdx = accumulatedText.indexOf(DELIM_DOC_OPEN)
-                                            if (docTagIdx !== -1) {
-                                                inDocBlock = true
-                                                docBlockContentStart = docTagIdx + DELIM_DOC_OPEN.length
-                                                if (accumulatedText[docBlockContentStart] === "\n") {
-                                                    docBlockContentStart++
-                                                }
-                                                if (!isDocOpenRef.current) {
-                                                    setIsDocOpen(true)
-                                                    isDocOpenRef.current = true
-                                                }
-                                            }
-                                            // Suggestions tag — emitted at the tail of every response
+                                        // Detect <curastem-suggestions> opening tag
+                                        if (!inSuggBlock) {
                                             const suggTagIdx = accumulatedText.indexOf(DELIM_SUGG_OPEN)
                                             if (suggTagIdx !== -1) {
                                                 inSuggBlock = true
@@ -18776,60 +18810,7 @@ Do not include markdown formatting or explanations.`
                                             }
                                         }
 
-                                        // Stream app code token-by-token into the editor
-                                        if (inAppBlock && appBlockContentStart !== -1) {
-                                            const closeIdx = accumulatedText.indexOf(DELIM_APP_CLOSE, appBlockContentStart)
-                                            if (closeIdx !== -1) {
-                                                // Block complete — trim trailing newline the model typically emits before closing tag
-                                                const rawCode = accumulatedText.substring(appBlockContentStart, closeIdx)
-                                                const finalCode = rawCode.endsWith("\n") ? rawCode.slice(0, -1) : rawCode
-                                                setAppCode(finalCode)
-                                                // Only switch to player if the code has real content.
-                                                // If the model produced an empty/trivial block, stay in
-                                                // editor mode so the user can see and fix it rather than
-                                                // loading a broken blank iframe.
-                                                if (finalCode.trim().length > 20) {
-                                                    setAppMode("player")
-                                                    appModeRef.current = "player"
-                                                }
-                                                inAppBlock = false
-                                                // Mark that this turn produced an app so the "App" badge
-                                                // appears on the message after the stream finishes.
-                                                hadAppBlock = true
-                                                if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
-                                                    broadcastData({ type: "app-update", payload: finalCode })
-                                                    broadcastData({ type: "app-mode-change", payload: appModeRef.current })
-                                                    broadcastData({ type: "app-start" })
-                                                }
-                                            } else {
-                                                // Still streaming — push partial code into editor live
-                                                setAppCode(accumulatedText.substring(appBlockContentStart))
-                                            }
-                                        }
-
-                                        // Stream doc content token-by-token into the doc editor
-                                        if (inDocBlock && docBlockContentStart !== -1) {
-                                            const closeIdx = accumulatedText.indexOf(DELIM_DOC_CLOSE, docBlockContentStart)
-                                            if (closeIdx !== -1) {
-                                                const rawContent = accumulatedText.substring(docBlockContentStart, closeIdx)
-                                                const finalContent = rawContent.endsWith("\n") ? rawContent.slice(0, -1) : rawContent
-                                                setDocContent(finalContent)
-                                                inDocBlock = false
-                                                // Mark that this turn produced a doc so the "Docs" badge
-                                                // appears on the message after the stream finishes.
-                                                hadDocBlock = true
-                                                if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
-                                                    broadcastData({ type: "doc-update", payload: finalContent })
-                                                    broadcastData({ type: "doc-start" })
-                                                }
-                                            } else {
-                                                setDocContent(accumulatedText.substring(docBlockContentStart))
-                                            }
-                                        }
-
                                         // Parse suggestions from <curastem-suggestions>.
-                                        // The model appends this at the end of every response,
-                                        // replacing the separate generateSuggestedReplies() API call.
                                         if (inSuggBlock && suggBlockContentStart !== -1) {
                                             const closeIdx = accumulatedText.indexOf(DELIM_SUGG_CLOSE, suggBlockContentStart)
                                             if (closeIdx !== -1) {
@@ -18858,18 +18839,10 @@ Do not include markdown formatting or explanations.`
                                             }
                                         }
 
-                                        // Compute what shows in the chat bubble: everything before
-                                        // the first delimiter tag. Raw HTML/JS/JSON is never shown.
-                                        const appTagPos  = accumulatedText.indexOf(DELIM_APP_OPEN)
-                                        const docTagPos  = accumulatedText.indexOf(DELIM_DOC_OPEN)
+                                        // Strip <curastem-suggestions> block from chat bubble display text.
                                         const suggTagPos = accumulatedText.indexOf(DELIM_SUGG_OPEN)
-                                        const firstTag = Math.min(
-                                            appTagPos  !== -1 ? appTagPos  : Infinity,
-                                            docTagPos  !== -1 ? docTagPos  : Infinity,
-                                            suggTagPos !== -1 ? suggTagPos : Infinity,
-                                        )
-                                        const chatDisplayText = firstTag !== Infinity
-                                            ? accumulatedText.substring(0, firstTag).trimEnd()
+                                        const chatDisplayText = suggTagPos !== -1
+                                            ? accumulatedText.substring(0, suggTagPos).trimEnd()
                                             : accumulatedText
 
                                         // Trim any partial delimiter opening tag from the
@@ -18943,11 +18916,49 @@ Do not include markdown formatting or explanations.`
                                                 newArgs
                                         }
 
-                                        // create_app and update_doc are no longer tool calls.
-                                        // Their content is delivered via delimiter streaming
-                                        // (see DELIMITER STREAMING block in the text handler
-                                        // above). Only update_whiteboard and retrieve_resources
-                                        // use real function calls now.
+                                        const toolName = accumulatedFunctionCall.name || fnCall.name
+
+                                        // Open the app editor immediately when create_app starts arriving.
+                                        if (toolName === "create_app") {
+                                            if (!isAppOpenRef.current) {
+                                                setIsAppOpen(true)
+                                                setIsDocOpen(false)
+                                                setIsWhiteboardOpen(false)
+                                                isAppOpenRef.current = true
+                                            }
+                                            if (appModeRef.current !== "editor") {
+                                                setAppMode("editor")
+                                                appModeRef.current = "editor"
+                                            }
+                                            const newCode = (accumulatedFunctionCall.args as any)?.code || ""
+                                            if (newCode) setAppCode(newCode)
+                                        }
+
+                                        // Open the doc editor immediately when update_doc starts arriving.
+                                        if (toolName === "update_doc") {
+                                            if (!isDocOpenRef.current) {
+                                                setIsDocOpen(true)
+                                                isDocOpenRef.current = true
+                                            }
+                                            const newContent = (accumulatedFunctionCall.args as any)?.content || ""
+                                            if (newContent) setDocContent(newContent)
+                                        }
+
+                                        // Open the whiteboard immediately when any whiteboard tool starts.
+                                        if (
+                                            toolName === "draw_whiteboard" ||
+                                            toolName === "edit_whiteboard" ||
+                                            toolName === "erase_whiteboard"
+                                        ) {
+                                            if (!isWhiteboardOpenRef.current) {
+                                                setIsWhiteboardOpen(true)
+                                                isWhiteboardOpenRef.current = true
+                                                setIsDocOpen(false)
+                                                setIsAppOpen(false)
+                                                isDocOpenRef.current = false
+                                                isAppOpenRef.current = false
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -18955,49 +18966,6 @@ Do not include markdown formatting or explanations.`
                             console.error("Error parsing stream chunk", e)
                         }
                     }
-                }
-
-                // ---------------------------------------------------------------------------
-                // Finalize any delimiter blocks that were still open when the stream ended.
-                //
-                // If the model's output was cut short (network drop, token limit, etc.) and
-                // a closing tag never arrived, we commit whatever content was accumulated so
-                // the editor shows the partial result rather than staying in a frozen state.
-                // ---------------------------------------------------------------------------
-                if (inAppBlock && appBlockContentStart !== -1) {
-                    const partialCode = accumulatedText.substring(appBlockContentStart).trimEnd()
-                    if (partialCode) {
-                        setAppCode(partialCode)
-                        // Don't auto-switch to player for partial/truncated code — leave in
-                        // editor mode so the user can inspect and fix it.
-                    }
-                }
-                if (inDocBlock && docBlockContentStart !== -1) {
-                    const partialContent = accumulatedText.substring(docBlockContentStart).trimEnd()
-                    if (partialContent) {
-                        setDocContent(partialContent)
-                        // Truncated doc block still counts for the badge
-                        hadDocBlock = true
-                    }
-                }
-
-                // ---------------------------------------------------------------------------
-                // Stamp toolUsed on the message so the "App" / "Docs" tag badge appears in
-                // the chat bubble.  Previously this was set via functionCall.name, but
-                // delimiter streaming produces no functionCall — so we tag it explicitly.
-                // ---------------------------------------------------------------------------
-                if (hadAppBlock || hadDocBlock) {
-                    setMessages((prev) => {
-                        const arr = [...prev]
-                        const last = arr[arr.length - 1]
-                        if (last?.role === "model") {
-                            arr[arr.length - 1] = {
-                                ...last,
-                                toolUsed: hadAppBlock ? "app" : "doc",
-                            }
-                        }
-                        return arr
-                    })
                 }
 
                 // ---------------------------------------------------------------------------
@@ -19015,12 +18983,8 @@ Do not include markdown formatting or explanations.`
                 //   the retrieve_resources follow-up, which can't use the stream-loop parser).
                 // ---------------------------------------------------------------------------
                 const computeDisplayText = (text: string): string => {
-                    const firstTag = Math.min(
-                        text.indexOf(DELIM_APP_OPEN)  !== -1 ? text.indexOf(DELIM_APP_OPEN)  : Infinity,
-                        text.indexOf(DELIM_DOC_OPEN)  !== -1 ? text.indexOf(DELIM_DOC_OPEN)  : Infinity,
-                        text.indexOf(DELIM_SUGG_OPEN) !== -1 ? text.indexOf(DELIM_SUGG_OPEN) : Infinity,
-                    )
-                    return firstTag !== Infinity ? text.substring(0, firstTag).trimEnd() : text
+                    const suggPos = text.indexOf(DELIM_SUGG_OPEN)
+                    return suggPos !== -1 ? text.substring(0, suggPos).trimEnd() : text
                 }
 
                 const parseSuggestionsFrom = (text: string): void => {
@@ -19051,12 +19015,104 @@ Do not include markdown formatting or explanations.`
 
                 // ---------------------------------------------------------------------------
                 // Handle Tool Call - Final Execution
-                // Only update_whiteboard and retrieve_resources reach here.
-                // create_app and update_doc are handled entirely by delimiter streaming
-                // in the text loop above — no post-stream work needed for them.
                 // ---------------------------------------------------------------------------
                 if (accumulatedFunctionCall) {
-                    if (
+                    if (accumulatedFunctionCall.name === "create_app") {
+                        const code = (accumulatedFunctionCall.args as any)?.code || ""
+                        setAppCode(code)
+                        if (!isAppOpen) {
+                            setIsAppOpen(true)
+                            setIsDocOpen(false)
+                            setIsWhiteboardOpen(false)
+                        }
+                        if (code.trim().length > 20) {
+                            setAppMode("player")
+                            appModeRef.current = "player"
+                        }
+                        if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
+                            broadcastData({ type: "app-update", payload: code })
+                            broadcastData({ type: "app-mode-change", payload: appModeRef.current })
+                            broadcastData({ type: "app-start" })
+                        }
+                        // Follow up with a short contextual message describing what was built.
+                        // We send only the user's original request — not the app code — to avoid
+                        // token limits and keep the call fast.
+                        try {
+                            const followUpRes = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                        contents: [{ role: "user", parts: [{ text: `The user asked you to build a personal use app: "${userText}". You just built a very simple version of it. In 1–2 sentences, describe what you created and ask one specific question about features or improvements. Be friendly and enthusiastic. Max 40 words.` }] }],
+                                        generationConfig: { temperature: 1.0, maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } },
+                                    }),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const followUpData = await followUpRes.json().catch(() => ({}))
+                            const followUpText = followUpRes.ok ? extractTextFromGeminiResponse(followUpData) : ""
+                            accumulatedText = computeDisplayText(followUpText) || accumulatedText || "Here's your app!"
+                            parseSuggestionsFrom(followUpText)
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError") console.error("create_app follow-up:", err)
+                            accumulatedText = accumulatedText || "Here's your app!"
+                        }
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (newArr.length > 0 && newArr[newArr.length - 1].role === "model") {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: { name: "create_app", response: { content: "App created successfully." } },
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (accumulatedFunctionCall.name === "update_doc") {
+                        const newContent = (accumulatedFunctionCall.args as any)?.content || ""
+                        setDocContent(newContent)
+                        if (!isDocOpen) setIsDocOpen(true)
+                        if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
+                            broadcastData({ type: "doc-update", payload: newContent })
+                            broadcastData({ type: "doc-start" })
+                        }
+                        // Follow up with a short contextual message describing what was written.
+                        try {
+                            const followUpRes = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                        contents: [{ role: "user", parts: [{ text: `The user asked you to write a document: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.` }] }],
+                                        generationConfig: { temperature: 1.0, maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } },
+                                    }),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const followUpData = await followUpRes.json().catch(() => ({}))
+                            const followUpText = followUpRes.ok ? extractTextFromGeminiResponse(followUpData) : ""
+                            accumulatedText = computeDisplayText(followUpText) || accumulatedText || "Here's your document!"
+                            parseSuggestionsFrom(followUpText)
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError") console.error("update_doc follow-up:", err)
+                            accumulatedText = accumulatedText || "Here's your document!"
+                        }
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (newArr.length > 0 && newArr[newArr.length - 1].role === "model") {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: { name: "update_doc", response: { content: "Document created successfully." } },
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (
                         accumulatedFunctionCall.name ===
                         RETRIEVE_RESOURCES_TOOL_NAME
                     ) {
@@ -19170,373 +19226,98 @@ Do not include markdown formatting or explanations.`
                             return arr
                         })
                     } else if (
-                        accumulatedFunctionCall.name === "update_whiteboard"
+                        accumulatedFunctionCall.name === "draw_whiteboard" ||
+                        accumulatedFunctionCall.name === "edit_whiteboard" ||
+                        accumulatedFunctionCall.name === "erase_whiteboard"
                     ) {
+                        const toolName = accumulatedFunctionCall.name
                         const args = accumulatedFunctionCall.args as any
-                        if (debugMode)
-                            console.log("AI Whiteboard Update:", args) // Debug logging
-
-                        const added = args.added || []
-                        const updated = args.updated || []
-                        const removed = args.removed || []
 
                         // Auto-open whiteboard
-                        if (!isWhiteboardOpen && !hasWhiteboardStarted) {
+                        if (!isWhiteboardOpenRef.current && !hasWhiteboardStarted) {
                             setHasWhiteboardStarted(true)
                             setIsWhiteboardOpen(true)
                             setIsDocOpen(false)
-                            // Broadcast open event (desktop only)
                             if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
                                 broadcastData({ type: "tldraw-start" })
                             }
                         }
 
-                        // Helper to ensure valid shape IDs
-                        const sanitizeId = (id: string) =>
-                            id.startsWith("shape:") ? id : `shape:${id}`
-
-                        // Validate shape record
-                        const validateShape = (s: any) => {
-                            try {
-                                if (!s || typeof s !== "object") return null
-
-                                // Ensure required base fields
-                                const sanitized = {
-                                    ...s,
-                                    id: s.id
-                                        ? sanitizeId(s.id)
-                                        : `shape:${Math.random().toString(36).substr(2, 9)}`,
-                                    x: Number(s.x) || 0,
-                                    y: Number(s.y) || 0,
-                                    rotation: Number(s.rotation) || 0,
-                                    isLocked: Boolean(s.isLocked),
-                                    opacity: Number(s.opacity) || 1,
-                                    typeName: "shape", // Tldraw v2 requirement
-                                    parentId: "page:page", // Default to current page
-                                    index: s.index || "a1", // Tldraw index string
-                                }
-
-                                // If type is missing, infer or drop
-                                if (!sanitized.type) {
-                                    if (s.geo) sanitized.type = "geo"
-                                    else if (s.text) sanitized.type = "text"
-                                    else return null // Can't determine type
-                                }
-
-                                // Ensure props object exists
-                                if (
-                                    !sanitized.props ||
-                                    typeof sanitized.props !== "object"
-                                ) {
-                                    sanitized.props = {}
-                                }
-
-                                // Type-specific defaults AND strict whitelisting to prevent crashes
-                                if (sanitized.type === "geo") {
-                                    const validGeoProps = [
-                                        "w",
-                                        "h",
-                                        "geo",
-                                        "color",
-                                        "size",
-                                        "fill",
-                                        "dash",
-                                        "labelColor",
-                                        "font",
-                                        "align",
-                                        "verticalAlign",
-                                        "growY",
-                                        "url",
-                                    ]
-                                    sanitized.props = {
-                                        w: 100,
-                                        h: 100,
-                                        geo: "rectangle",
-                                        color: "black",
-                                        size: "m",
-                                        fill: "none",
-                                        dash: "draw",
-                                        ...sanitized.props,
-                                    }
-                                    // Remove unknown properties
-                                    Object.keys(sanitized.props).forEach(
-                                        (key) => {
-                                            if (!validGeoProps.includes(key))
-                                                delete sanitized.props[key]
-                                        }
-                                    )
-                                } else if (sanitized.type === "text") {
-                                    const validTextProps = [
-                                        "text",
-                                        "color",
-                                        "size",
-                                        "font",
-                                        "align",
-                                        "autoSize",
-                                        "scale",
-                                        "w",
-                                        "h",
-                                    ]
-                                    sanitized.props = {
-                                        text: "Text",
-                                        color: "black",
-                                        size: "m",
-                                        font: "draw",
-                                        align: "start",
-                                        autoSize: true,
-                                        scale: 1,
-                                        ...sanitized.props,
-                                    }
-                                    if (sanitized.props.textAlign) {
-                                        sanitized.props.align =
-                                            sanitized.props.textAlign === "left"
-                                                ? "start"
-                                                : sanitized.props.textAlign ===
-                                                    "right"
-                                                  ? "end"
-                                                  : sanitized.props
-                                                          .textAlign ===
-                                                      "center"
-                                                    ? "middle"
-                                                    : "start"
-                                    }
-                                    Object.keys(sanitized.props).forEach(
-                                        (key) => {
-                                            if (!validTextProps.includes(key))
-                                                delete sanitized.props[key]
-                                        }
-                                    )
-                                } else if (sanitized.type === "arrow") {
-                                    const validArrowProps = [
-                                        "arrowheadStart",
-                                        "arrowheadEnd",
-                                        "color",
-                                        "size",
-                                        "fill",
-                                        "dash",
-                                        "labelColor",
-                                        "font",
-                                        "start",
-                                        "end",
-                                        "bend",
-                                        "isPrecise",
-                                    ]
-                                    sanitized.props = {
-                                        arrowheadStart: "none",
-                                        arrowheadEnd: "arrow",
-                                        color: "black",
-                                        size: "m",
-                                        ...sanitized.props,
-                                    }
-                                    if (
-                                        sanitized.props.start &&
-                                        !sanitized.props.start.type
-                                    )
-                                        sanitized.props.start = {
-                                            type: "point",
-                                            x: 0,
-                                            y: 0,
-                                        }
-                                    if (
-                                        sanitized.props.end &&
-                                        !sanitized.props.end.type
-                                    )
-                                        sanitized.props.end = {
-                                            type: "point",
-                                            x: 100,
-                                            y: 100,
-                                        }
-
-                                    Object.keys(sanitized.props).forEach(
-                                        (key) => {
-                                            if (!validArrowProps.includes(key))
-                                                delete sanitized.props[key]
-                                        }
-                                    )
-                                }
-
-                                return sanitized
-                            } catch (e) {
-                                console.error(
-                                    "Invalid shape record from AI",
-                                    s,
-                                    e
-                                )
-                                return null
-                            }
-                        }
-
-                        // Sanitize inputs
-                        const sanitizedAdded = added
-                            .map(validateShape)
-                            .filter(Boolean)
-                        const sanitizedUpdated = updated.map((s: any) => ({
-                            id: sanitizeId(s.id),
-                            ...s,
-                            // Only include valid updates props if present
-                            ...(s.props ? { props: s.props } : {}),
-                            ...(s.x !== undefined ? { x: Number(s.x) } : {}),
-                            ...(s.y !== undefined ? { y: Number(s.y) } : {}),
-                        }))
-                        const sanitizedRemoved = removed.map((id: string) =>
-                            sanitizeId(id)
-                        )
-
-                        if (debugMode) {
-                            console.log("[Gemini Whiteboard] Raw:", {
-                                added,
-                                updated,
-                                removed,
-                            })
-                            console.log("[Gemini Whiteboard] Sanitized:", {
-                                sanitizedAdded,
-                                sanitizedUpdated,
-                                sanitizedRemoved,
-                            })
-                        }
-
-                        const changes = {
-                            added: sanitizedAdded,
-                            updated: sanitizedUpdated,
-                            removed: sanitizedRemoved,
-                        }
-
-                        // Apply changes locally using high-level editor APIs
                         if (editorRef.current) {
-                            if (debugMode)
-                                console.log(
-                                    "Applying changes to editor",
-                                    changes
-                                )
-                            try {
-                                editorRef.current.batch(() => {
-                                    // Handle Added shapes
-                                    if (sanitizedAdded.length > 0) {
-                                        const shapesToCreate: any[] = []
-                                        const shapesToUpdate: any[] = []
+                            editorRef.current.batch(() => {
+                                if (toolName === "erase_whiteboard") {
+                                    ;(args.ids || []).forEach((id: string) => {
+                                        try {
+                                            const sid = wbSanitizeId(id)
+                                            if (editorRef.current.getShape(sid)) editorRef.current.deleteShapes([sid])
+                                        } catch (e) { console.error("[Whiteboard] erase failed:", id, e) }
+                                    })
+                                } else if (toolName === "draw_whiteboard") {
+                                    ;(args.shapes || []).map(wbValidateShape).filter(Boolean).forEach((s: any) => {
+                                        try {
+                                            if (editorRef.current.getShape(s.id)) editorRef.current.updateShapes([s])
+                                            else editorRef.current.createShapes([s])
+                                        } catch (e) { console.error("[Whiteboard] draw failed:", s.id, e) }
+                                    })
+                                } else if (toolName === "edit_whiteboard") {
+                                    ;(args.patches || []).filter((s: any) => s?.id).map(wbApplyToPatch).forEach((s: any) => {
+                                        try {
+                                            if (editorRef.current.getShape(s.id)) editorRef.current.updateShapes([s])
+                                        } catch (e) { console.error("[Whiteboard] patch failed:", s.id, e) }
+                                    })
+                                    ;(args.remove || []).forEach((id: string) => {
+                                        try {
+                                            const sid = wbSanitizeId(id)
+                                            if (editorRef.current.getShape(sid)) editorRef.current.deleteShapes([sid])
+                                        } catch (e) { console.error("[Whiteboard] remove failed:", id, e) }
+                                    })
+                                }
+                            })
+                        } else {
+                            pendingWhiteboardUpdates.current.push({ toolName, args })
+                        }
 
-                                        sanitizedAdded.forEach((s) => {
-                                            // Check if shape already exists
-                                            if (
-                                                editorRef.current.getShape(s.id)
-                                            ) {
-                                                // If exists, treat as update
-                                                shapesToUpdate.push(s)
-                                            } else {
-                                                shapesToCreate.push(s)
-                                            }
-                                        })
-
-                                        if (shapesToCreate.length > 0)
-                                            editorRef.current.createShapes(
-                                                shapesToCreate
-                                            )
-                                        if (shapesToUpdate.length > 0)
-                                            editorRef.current.updateShapes(
-                                                shapesToUpdate
-                                            )
-                                    }
-
-                                    // Handle Updated shapes
-                                    if (sanitizedUpdated.length > 0) {
-                                        // Only update existing shapes
-                                        const validUpdates =
-                                            sanitizedUpdated.filter(
-                                                (s) =>
-                                                    !!editorRef.current.getShape(
-                                                        s.id
-                                                    )
-                                            )
-                                        if (validUpdates.length > 0)
-                                            editorRef.current.updateShapes(
-                                                validUpdates
-                                            )
-                                    }
-
-                                    // Handle Removed shapes
-                                    if (sanitizedRemoved.length > 0) {
-                                        // Only remove existing shapes
-                                        const validRemovals =
-                                            sanitizedRemoved.filter(
-                                                (id) =>
-                                                    !!editorRef.current.getShape(
-                                                        id
-                                                    )
-                                            )
-                                        if (validRemovals.length > 0)
-                                            editorRef.current.deleteShapes(
-                                                validRemovals
-                                            )
-                                    }
-                                })
-                            } catch (e) {
-                                console.error(
-                                    "Error applying AI whiteboard updates",
-                                    e
-                                )
-                                // Fallback: Try one by one if batch fails
-                                try {
-                                    if (sanitizedAdded.length > 0)
-                                        sanitizedAdded.forEach((s) => {
-                                            try {
-                                                if (
-                                                    editorRef.current.getShape(
-                                                        s.id
-                                                    )
-                                                ) {
-                                                    editorRef.current.updateShapes(
-                                                        [s]
-                                                    )
-                                                } else {
-                                                    editorRef.current.createShapes(
-                                                        [s]
-                                                    )
-                                                }
-                                            } catch (err) {
-                                                console.error(
-                                                    "Failed to process shape",
-                                                    s,
-                                                    err
-                                                )
-                                            }
-                                        })
-                                } catch (retryErr) {
-                                    console.error("Retry failed", retryErr)
+                        // Follow up with a short contextual message so the chat doesn't
+                        // just say "Look at the whiteboard." for every whiteboard action.
+                        const whiteboardFollowUpPrompt =
+                            toolName === "erase_whiteboard"
+                                ? `The user asked you to erase something on the whiteboard: "${userText}". You just removed those shapes. In 1 sentence confirm what you erased and offer a helpful next step. Be concise. Max 30 words.`
+                                : toolName === "edit_whiteboard"
+                                ? `The user asked you to edit the whiteboard: "${userText}". You just updated those shapes. In 1 sentence confirm what you changed and invite a follow-up. Be concise. Max 30 words.`
+                                : `The user asked you to draw on the whiteboard: "${userText}". You just added the diagram. In 1–2 sentences describe what you drew and ask one question to refine it. Be friendly. Max 40 words.`
+                        try {
+                            const wbRes = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                        contents: [{ role: "user", parts: [{ text: whiteboardFollowUpPrompt }] }],
+                                        generationConfig: { temperature: 1.0, maxOutputTokens: 80, thinkingConfig: { thinkingBudget: 0 } },
+                                    }),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const wbData = await wbRes.json().catch(() => ({}))
+                            const wbText = wbRes.ok ? extractTextFromGeminiResponse(wbData) : ""
+                            accumulatedText = computeDisplayText(wbText) || accumulatedText || "Check out the whiteboard!"
+                            parseSuggestionsFrom(wbText)
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError") console.error("whiteboard follow-up:", err)
+                            accumulatedText = accumulatedText || "Check out the whiteboard!"
+                        }
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (newArr.length > 0 && newArr[newArr.length - 1].role === "model") {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: { name: toolName, response: { result: "ok" } },
                                 }
                             }
-                        } else {
-                            if (debugMode)
-                                console.log(
-                                    "Queueing changes (editor not ready)",
-                                    changes
-                                )
-                            // Queue updates if editor not ready
-                            pendingWhiteboardUpdates.current.push(changes)
-                        }
-
-                        if (!accumulatedText) {
-                            accumulatedText = "Look at the whiteboard."
-                            setMessages((prev) => {
-                                const newArr = [...prev]
-                                if (
-                                    newArr.length > 0 &&
-                                    newArr[newArr.length - 1].role === "model"
-                                ) {
-                                    newArr[newArr.length - 1] = {
-                                        ...newArr[newArr.length - 1],
-                                        text: computeDisplayText(accumulatedText),
-                                        functionCall: accumulatedFunctionCall,
-                                        functionResponse: {
-                                            name: "update_whiteboard",
-                                            response: {
-                                                result: "Whiteboard updated successfully",
-                                            },
-                                        },
-                                    }
-                                }
-                                return newArr
-                            })
-                        }
+                            return newArr
+                        })
                     }
                 }
 
@@ -19627,6 +19408,138 @@ Do not include markdown formatting or explanations.`
         // generateAIResponse(peerMsg.text, [], "peer")
     }, [])
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Whiteboard Helpers
+    //
+    // Defined once at component level — these run on every tool call response,
+    // so allocating them per-call would create unnecessary GC pressure.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Ensures a shape ID has the required "shape:" prefix. */
+    const wbSanitizeId = React.useCallback(
+        (id: string) => (id.startsWith("shape:") ? id : `shape:${id}`),
+        []
+    )
+
+    /** Converts literal `\n` strings (common in AI output) to real newlines. */
+    const wbUnescapeText = React.useCallback(
+        (v: unknown): string =>
+            typeof v === "string" ? v.replace(/\\n/g, "\n") : "",
+        []
+    )
+
+    const WB_VALID_GEO = React.useMemo(
+        () => new Set(["rectangle", "ellipse", "diamond", "triangle", "star"]),
+        []
+    )
+    const WB_SAFE_PATCH_TOP = ["x", "y", "rotation", "opacity", "isLocked", "index"]
+    const WB_SAFE_PATCH_GEO   = ["w","h","geo","color","size","fill","dash","text","labelColor","font","align","verticalAlign","growY","url"]
+    const WB_SAFE_PATCH_TEXT  = ["text","color","size","font","align","autoSize","scale","w"]
+    const WB_SAFE_PATCH_ARROW = ["start","end","arrowheadStart","arrowheadEnd","color","size","fill","dash","bend","labelColor","font"]
+
+    /**
+     * Normalises an AI-generated shape object into a tldraw-safe record.
+     * Whitelists every field — unknown properties crash tldraw's validator.
+     * Returns null for unsupported or malformed shapes so callers can filter.
+     */
+    const wbValidateShape = React.useCallback(
+        (s: any): any | null => {
+            try {
+                if (!s || typeof s !== "object") return null
+                let type = s.type
+                if (!type) {
+                    if (s.geo || s.props?.geo) type = "geo"
+                    else if (s.text || s.props?.text) type = "text"
+                    else return null
+                }
+                if (!["geo", "text", "arrow"].includes(type)) return null
+
+                const base: any = {
+                    id: s.id ? wbSanitizeId(s.id) : `shape:${Math.random().toString(36).slice(2, 11)}`,
+                    type,
+                    typeName: "shape",
+                    x: isFinite(Number(s.x)) ? Number(s.x) : 0,
+                    y: isFinite(Number(s.y)) ? Number(s.y) : 0,
+                    rotation: 0,
+                    isLocked: false,
+                    opacity: 1,
+                    parentId: "page:page",
+                    index: typeof s.index === "string" && s.index ? s.index : "a1",
+                    props: {},
+                }
+
+                const p = s.props && typeof s.props === "object" ? s.props : s
+
+                if (type === "geo") {
+                    base.props = {
+                        w: Math.max(20, isFinite(Number(p.w)) ? Number(p.w) : 160),
+                        h: Math.max(20, isFinite(Number(p.h)) ? Number(p.h) : 60),
+                        geo: WB_VALID_GEO.has(p.geo) ? p.geo : "rectangle",
+                        color: "black", size: "m", fill: "none", dash: "draw",
+                        text: wbUnescapeText(p.text),
+                        labelColor: "black", font: "draw",
+                        align: "middle", verticalAlign: "middle", growY: 0, url: "",
+                    }
+                } else if (type === "text") {
+                    base.props = {
+                        text: wbUnescapeText(p.text ?? s.text) || "Text",
+                        color: "black", size: "m", font: "draw",
+                        align: "start", autoSize: true, scale: 1,
+                        w: isFinite(Number(p.w)) ? Number(p.w) : 200,
+                    }
+                } else {
+                    const mkPoint = (pt: any, dx: number, dy: number) =>
+                        pt && isFinite(Number(pt.x)) && isFinite(Number(pt.y))
+                            ? { type: "point", x: Number(pt.x), y: Number(pt.y) }
+                            : { type: "point", x: dx, y: dy }
+                    base.props = {
+                        start: mkPoint(p.start, 0, 0),
+                        end:   mkPoint(p.end,   200, 0),
+                        arrowheadStart: "none", arrowheadEnd: "arrow",
+                        color: "black", size: "m", fill: "none", dash: "draw",
+                        bend: isFinite(Number(p.bend)) ? Number(p.bend) : 0,
+                        labelColor: "black", font: "draw",
+                    }
+                }
+
+                return base
+            } catch (e) {
+                console.error("[Whiteboard] Invalid shape from AI:", s, e)
+                return null
+            }
+        },
+        [WB_VALID_GEO, wbSanitizeId, wbUnescapeText]
+    )
+
+    /**
+     * Builds a tldraw-safe partial update from an AI patch object.
+     * Only forwards fields the model explicitly changed; leaves the rest intact.
+     */
+    const wbApplyToPatch = React.useCallback(
+        (s: any) => {
+            const patch: any = { id: wbSanitizeId(s.id) }
+            WB_SAFE_PATCH_TOP.forEach((k) => {
+                if (s[k] !== undefined)
+                    patch[k] = isFinite(Number(s[k])) ? Number(s[k]) : s[k]
+            })
+            if (s.props && typeof s.props === "object") {
+                const existing = editorRef.current?.getShape(wbSanitizeId(s.id)) as any
+                const safeKeys =
+                    existing?.type === "text"  ? WB_SAFE_PATCH_TEXT  :
+                    existing?.type === "arrow" ? WB_SAFE_PATCH_ARROW :
+                                                 WB_SAFE_PATCH_GEO
+                const filtered: any = {}
+                safeKeys.forEach((k) => {
+                    if (s.props[k] !== undefined)
+                        filtered[k] = k === "text" ? wbUnescapeText(s.props[k]) : s.props[k]
+                })
+                if (Object.keys(filtered).length > 0) patch.props = filtered
+            }
+            return patch
+        },
+        [wbSanitizeId, wbUnescapeText]
+    )
+
     /**
      * Handles message delivery to the Google Gemini API.
      */
@@ -19643,6 +19556,30 @@ Do not include markdown formatting or explanations.`
                     localStorage.removeItem("curastem_ban_expiry")
                 }
                 setInputText("")
+                return
+            }
+
+            // Clear whiteboard shortcut — intercept before hitting the AI.
+            // Uses editorRef (not editor state) since this runs inside a useCallback
+            // closure where the editor state value can be stale.
+            if (
+                isWhiteboardOpenRef.current &&
+                editorRef.current &&
+                /^(clear|delete|erase|wipe|remove)\s*(all|everything|the\s+whiteboard|whiteboard)?[\s!.]*$/i.test(textToCheck.trim())
+            ) {
+                try {
+                    const shapeIds = editorRef.current.getCurrentPageShapeIds?.()
+                    if (shapeIds && shapeIds.size > 0) {
+                        editorRef.current.deleteShapes([...shapeIds])
+                    }
+                } catch (e) {
+                    console.error("Clear whiteboard failed:", e)
+                }
+                setInputText("")
+                setMessages((prev) => [...prev,
+                    { role: "user", text: textToCheck.trim() },
+                    { role: "model", text: "Whiteboard cleared." },
+                ])
                 return
             }
 
@@ -20856,6 +20793,9 @@ Do not include markdown formatting or explanations.`
                                             if (editor) return
                                             log("Tldraw editor mounted")
                                             setEditor(e)
+                                            // Rename the default "Page 1" to "Whiteboard"
+                                            const currentPage = e.getCurrentPage?.()
+                                            if (currentPage) e.renamePage(currentPage.id, "Whiteboard")
                                             e.setCurrentTool("draw")
                                             const defaultColor =
                                                 role === "volunteer"
@@ -20870,54 +20810,43 @@ Do not include markdown formatting or explanations.`
                                                 "l"
                                             )
 
-                                            // Process pending AI updates
-                                            if (
-                                                pendingWhiteboardUpdates.current
-                                                    .length > 0
-                                            ) {
+                                            // Drain tool calls that arrived before the editor mounted
+                                            if (pendingWhiteboardUpdates.current.length > 0) {
                                                 try {
                                                     e.batch(() => {
-                                                        while (
-                                                            pendingWhiteboardUpdates
-                                                                .current
-                                                                .length > 0
-                                                        ) {
-                                                            const {
-                                                                added,
-                                                                updated,
-                                                                removed,
-                                                            } =
-                                                                pendingWhiteboardUpdates.current.shift()
-                                                            if (
-                                                                added &&
-                                                                added.length > 0
-                                                            )
-                                                                e.createShapes(
-                                                                    added
-                                                                )
-                                                            if (
-                                                                updated &&
-                                                                updated.length >
-                                                                    0
-                                                            )
-                                                                e.updateShapes(
-                                                                    updated
-                                                                )
-                                                            if (
-                                                                removed &&
-                                                                removed.length >
-                                                                    0
-                                                            )
-                                                                e.deleteShapes(
-                                                                    removed
-                                                                )
+                                                        while (pendingWhiteboardUpdates.current.length > 0) {
+                                                            const { toolName: tn, args } = pendingWhiteboardUpdates.current.shift()
+                                                            if (tn === "erase_whiteboard") {
+                                                                ;(args.ids || []).forEach((id: string) => {
+                                                                    try {
+                                                                        const sid = wbSanitizeId(id)
+                                                                        if (e.getShape(sid)) e.deleteShapes([sid])
+                                                                    } catch (err) { console.error("[Whiteboard] pending erase failed:", id, err) }
+                                                                })
+                                                            } else if (tn === "draw_whiteboard") {
+                                                                ;(args.shapes || []).map(wbValidateShape).filter(Boolean).forEach((s: any) => {
+                                                                    try {
+                                                                        if (e.getShape(s.id)) e.updateShapes([s])
+                                                                        else e.createShapes([s])
+                                                                    } catch (err) { console.error("[Whiteboard] pending draw failed:", s.id, err) }
+                                                                })
+                                                            } else if (tn === "edit_whiteboard") {
+                                                                ;(args.patches || []).filter((s: any) => s?.id).map(wbApplyToPatch).forEach((s: any) => {
+                                                                    try {
+                                                                        if (e.getShape(s.id)) e.updateShapes([s])
+                                                                    } catch (err) { console.error("[Whiteboard] pending patch failed:", s.id, err) }
+                                                                })
+                                                                ;(args.remove || []).forEach((id: string) => {
+                                                                    try {
+                                                                        const sid = wbSanitizeId(id)
+                                                                        if (e.getShape(sid)) e.deleteShapes([sid])
+                                                                    } catch (err) { console.error("[Whiteboard] pending remove failed:", id, err) }
+                                                                })
+                                                            }
                                                         }
                                                     })
                                                 } catch (err) {
-                                                    console.error(
-                                                        "Error applying pending whiteboard updates",
-                                                        err
-                                                    )
+                                                    console.error("[Whiteboard] Failed to drain pending updates", err)
                                                 }
                                             }
 
@@ -21089,7 +21018,11 @@ Do not include markdown formatting or explanations.`
                 if (msg.functionCall.name === "update_doc") {
                     lastDocCallIdx = idx
                 }
-                if (msg.functionCall.name === "update_whiteboard") {
+                if (
+                    msg.functionCall.name === "draw_whiteboard" ||
+                    msg.functionCall.name === "edit_whiteboard" ||
+                    msg.functionCall.name === "erase_whiteboard"
+                ) {
                     lastWhiteboardCallIdx = idx
                 }
                 if (msg.functionCall.name === "create_app") {
