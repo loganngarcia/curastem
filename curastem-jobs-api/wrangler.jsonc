@@ -1,0 +1,56 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "curastem-jobs-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Cloudflare D1 database binding — stores jobs, companies, sources, api_keys
+  "d1_databases": [
+    {
+      "binding": "JOBS_DB",
+      "database_name": "curastem-jobs",
+      "database_id": "d2461924-d1f9-47e6-a62b-6d795161433d"
+    }
+  ],
+
+  // KV namespace for rate-limiting sliding window counters
+  "kv_namespaces": [
+    {
+      "binding": "RATE_LIMIT_KV",
+      "id": "66c52b65031d4f2c9756ffd8fc1d6bca",
+      "preview_id": "8c1ee95097ff44bab6ab2bee9a39330a"
+    }
+  ],
+
+  // Secrets (set via `wrangler secret put`):
+  //   GEMINI_API_KEY        — Google Gemini API key for AI extraction + embeddings
+  //   BRANDFETCH_CLIENT_ID  — Brandfetch API key for company logo/social enrichment
+  //                           Free tier: 500 req/day — get one at brandfetch.com/developers
+  "vars": {},
+
+  // Vectorize index for semantic job search (768-dimensional cosine similarity)
+  "vectorize": [
+    {
+      "binding": "JOBS_VECTORS",
+      "index_name": "curastem-jobs-vectors"
+    }
+  ],
+
+  // Custom domain — served at api.curastem.org
+  "routes": [
+    { "pattern": "api.curastem.org", "custom_domain": true }
+  ],
+
+  // Cloudflare Browser Rendering binding — used by the "browser" source type
+  // to scrape company career pages that use client-side-only job widgets.
+  // Free tier: 10 hrs/month on Workers Paid (plenty for ~30 companies/day).
+  "browser": {
+    "binding": "BROWSER"
+  },
+
+  // Hourly ingestion cron — runs every hour at :00
+  "triggers": {
+    "crons": ["0 * * * *"]
+  }
+}

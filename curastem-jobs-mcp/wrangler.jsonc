@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "curastem-jobs-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Custom domain — served at mcp.curastem.org
+  "routes": [
+    { "pattern": "mcp.curastem.org", "custom_domain": true }
+  ],
+
+  // Secrets (set via `wrangler secret put`):
+  //   JOBS_API_BASE_URL — base URL of the curastem-jobs-api (https://api.curastem.org)
+  //   JOBS_API_KEY      — service account API key to authenticate with the jobs API
+  "vars": {}
+}

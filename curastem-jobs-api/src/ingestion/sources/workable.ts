@@ -1,0 +1,103 @@
+/**
+ * Workable public widget API fetcher.
+ *
+ * Workable exposes an unauthenticated public widget endpoint for every company
+ * that has enabled the careers page. No API key required.
+ *
+ * API format: https://apply.workable.com/api/v1/widget/accounts/{handle}
+ *
+ * ⚠️ Description note: The public v1 widget endpoint does NOT return full job
+ * descriptions. That requires the employer-authenticated v3 API. Jobs ingested
+ * here will have `description_raw: null`. When the job detail is first fetched
+ * via GET /jobs/:id, the AI enrichment step will gracefully skip extraction and
+ * fall back to generating a summary from title and company name only.
+ *
+ * Workable is strong in SaaS companies, agencies, and mid-market businesses
+ * globally, with a meaningful presence in Europe, MENA, and Latin America.
+ */
+
+import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
+import {
+  normalizeEmploymentType,
+  normalizeLocation,
+  normalizeWorkplaceType,
+  parseEpochSeconds,
+} from "../../utils/normalize.ts";
+
+interface WorkableJob {
+  id: string;           // Workable shortcode / slug
+  title: string;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  location_str: string | null;   // pre-formatted location string (may not exist)
+  type_of_employment: string | null;  // "Full-time" | "Part-time" etc.
+  workplace: string | null;      // "remote" | "hybrid" | "onsite"
+  published_on: string | null;   // "YYYY-MM-DD"
+  url: string;                   // canonical application URL
+}
+
+interface WorkableResponse {
+  jobs: WorkableJob[];
+  company: {
+    name: string;
+    url: string;
+  };
+}
+
+/**
+ * Build a human-readable location string from Workable's split city/state/country fields.
+ */
+function buildLocation(job: WorkableJob): string | null {
+  if (job.location_str) return job.location_str;
+  const parts = [job.city, job.state, job.country].filter(Boolean);
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+export const workableFetcher: JobSource = {
+  sourceType: "workable",
+
+  async fetch(source: SourceRow): Promise<NormalizedJob[]> {
+    const res = await fetch(source.base_url, {
+      headers: {
+        "User-Agent": "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)",
+        Accept: "application/json",
+      },
+    });
+
+    if (!res.ok) {
+      throw new Error(`Workable API error ${res.status} for ${source.company_handle}`);
+    }
+
+    const data = (await res.json()) as WorkableResponse;
+    const jobs: NormalizedJob[] = [];
+
+    for (const job of data.jobs ?? []) {
+      try {
+        const locationStr = buildLocation(job);
+
+        jobs.push({
+          external_id: job.id,
+          title: job.title,
+          location: normalizeLocation(locationStr),
+          employment_type: normalizeEmploymentType(job.type_of_employment),
+          workplace_type: normalizeWorkplaceType(job.workplace, locationStr),
+          apply_url: job.url,
+          source_url: job.url,
+          // Public v1 widget does not expose description — AI extraction will skip gracefully
+          description_raw: null,
+          salary_min: null,
+          salary_max: null,
+          salary_currency: null,
+          salary_period: null,
+          posted_at: parseEpochSeconds(job.published_on),
+          company_name: source.name.replace(/\s*\(Workable\)\s*/i, "").trim(),
+        });
+      } catch {
+        continue;
+      }
+    }
+
+    return jobs;
+  },
+};

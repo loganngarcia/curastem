@@ -1,0 +1,22 @@
+{
+  "name": "curastem-jobs-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Curastem Jobs API — normalized job data platform with ingestion, D1 database, AI enrichment, and REST API",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 execute curastem-jobs --local --file=schema.sql",
+    "db:migrate:remote": "wrangler d1 execute curastem-jobs --remote --file=schema.sql",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241224.0",
+    "typescript": "^5.7.2",
+    "wrangler": "^4.71.0"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^1.0.6",
+    "@google/genai": "^1.0.0"
+  }
+}
