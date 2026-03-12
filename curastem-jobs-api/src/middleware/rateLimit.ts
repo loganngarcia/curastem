@@ -45,19 +45,26 @@ export async function checkRateLimit(
   kv: KVNamespace,
   key: ApiKeyRow
 ): Promise<RateLimitResult> {
-  const bucket = minuteBucket();
-  const kvKey = `ratelimit:${key.key_hash}:${bucket}`;
-  const limit = key.rate_limit_per_minute;
+  try {
+    const bucket = minuteBucket();
+    const kvKey = `ratelimit:${key.key_hash}:${bucket}`;
+    const limit = key.rate_limit_per_minute;
 
-  const currentStr = await kv.get(kvKey);
-  const current = currentStr ? parseInt(currentStr, 10) : 0;
+    const currentStr = await kv.get(kvKey);
+    const current = currentStr ? parseInt(currentStr, 10) : 0;
 
-  if (current >= limit) {
-    return { allowed: false, response: Errors.rateLimited(60) };
+    if (current >= limit) {
+      return { allowed: false, response: Errors.rateLimited(60) };
+    }
+
+    // Fire-and-forget the counter increment — a failed write must not block
+    // the request. If KV is temporarily over its daily write limit or
+    // unavailable, the API stays up and rate limiting is simply skipped.
+    kv.put(kvKey, String(current + 1), { expirationTtl: 90 }).catch(() => {});
+
+    return { allowed: true, remaining: limit - current - 1 };
+  } catch {
+    // KV unavailable — allow the request through rather than rejecting all traffic
+    return { allowed: true, remaining: -1 };
   }
-
-  // Increment; TTL of 90s ensures cleanup without a cron job
-  await kv.put(kvKey, String(current + 1), { expirationTtl: 90 });
-
-  return { allowed: true, remaining: limit - current - 1 };
 }

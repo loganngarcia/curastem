@@ -1,0 +1,14 @@
+{
+  "name": "curastem-jobs-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "secret:key": "wrangler secret put JOBS_API_KEY"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0",
+    "@cloudflare/workers-types": "^4.0.0"
+  }
+}

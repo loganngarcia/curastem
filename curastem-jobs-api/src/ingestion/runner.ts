@@ -323,22 +323,15 @@ export async function runIngestion(env: Env): Promise<void> {
   const overallStart = Date.now();
   logger.info("ingestion_started");
 
-  const sources = await listEnabledSources(env.JOBS_DB);
+  // Process 25 sources per cron run (oldest-first rotation via last_fetched_at ASC).
+  // Cloudflare Workers cap subrequests at 1,000 per invocation; each source
+  // can make dozens of subrequests, so 25 keeps us safely under that limit.
+  // A full rotation through all sources takes ~8 hourly runs (~8 hours).
+  const sources = await listEnabledSources(env.JOBS_DB, 25);
   logger.info("ingestion_sources_loaded", { count: sources.length });
 
   const results: IngestionResult[] = [];
 
-  // Sequential processing — not a performance oversight.
-  //
-  // D1 has write throughput limits per-database. Concurrent upserts across
-  // many sources would hit those limits and cause retries, making the overall
-  // run slower than sequential processing at this scale.
-  //
-  // The entire ingestion pass (all sources) typically completes in under 2 minutes
-  // at current scale — well within the 15-minute cron execution limit.
-  //
-  // If ingestion grows to hundreds of sources, reconsider batching with
-  // small concurrent groups (e.g. 3 sources in parallel with Promise.all).
   for (const source of sources) {
     logger.info("ingestion_source_started", { source_id: source.id, source_name: source.name });
     // Always skip inline embeddings during the main ingestion pass — each Gemini

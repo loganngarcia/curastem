@@ -19,6 +19,9 @@ High-level context for AI agents. Use this for orientation and principles; disco
 
 ## General Principles
 
+**Open-source**
+- What's most important is open-source maintainability. This is a large-scale open-source project that thousands of developers need to understand clearly and rely on to be stable and rapidly ship new features for production-ready workflows. 
+
 **Jobs API**
 - Use Cloudflare MCP for any Cloudflare operations, when available
 - Some ATS create empty company listings; before adding any company, make sure it returns job listings. 

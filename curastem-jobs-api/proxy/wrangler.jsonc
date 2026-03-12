@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "curastem-jobs-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Custom domain — served at jobs-proxy.curastem.org
+  // (or update to your preferred subdomain)
+  "routes": [
+    { "pattern": "jobs-proxy.curastem.org", "custom_domain": true }
+  ],
+
+  // Secrets (set via `wrangler secret put`):
+  //   JOBS_API_KEY  — Bearer token for the upstream curastem-jobs-api
+  //                   Never put this in code or wrangler.jsonc.
+  "vars": {}
+}

@@ -157,66 +157,77 @@ export async function handleListJobs(
   const workplace_type = params.get("workplace_type") ?? undefined;
   const company = params.get("company") ?? undefined;
   const cursor = params.get("cursor") ?? undefined;
+  const sinceRaw = params.get("since");
+  const posted_since = sinceRaw ? parseInt(sinceRaw, 10) || undefined : undefined;
 
   // ── Vector search path ─────────────────────────────────────────────────────
   // Use Vectorize when a query is provided and the binding is configured.
-  // Falls back to SQL LIKE transparently if Vectorize is unavailable.
+  // Wrapped in try-catch so any Gemini/Vectorize failure falls through to SQL.
   if (q && env.JOBS_VECTORS && env.GEMINI_API_KEY) {
-    // Determine offset for paginated vector results
-    const vectorOffset = cursor ? (decodeVectorCursor(cursor) ?? 0) : 0;
+    try {
+      // Determine offset for paginated vector results
+      const vectorOffset = cursor ? (decodeVectorCursor(cursor) ?? 0) : 0;
 
-    // Embed the search query — check KV cache first to avoid a Gemini round-trip
-    // (~200ms) for repeated or popular queries. The embedding itself is stable
-    // for a given query string, so a 5-minute TTL is safe and meaningful.
-    let queryVector: number[];
-    const embedCacheKey = `qembed:${q.toLowerCase().trim()}`;
-    const cachedEmbed = await env.RATE_LIMIT_KV.get(embedCacheKey);
-    if (cachedEmbed) {
-      queryVector = JSON.parse(cachedEmbed) as number[];
-    } else {
-      queryVector = await embedQuery(env.GEMINI_API_KEY, q);
-      ctx.waitUntil(
-        env.RATE_LIMIT_KV.put(embedCacheKey, JSON.stringify(queryVector), {
-          expirationTtl: EMBED_CACHE_TTL_SECONDS,
-        })
-      );
-    }
+      // Embed the search query — check KV cache first to avoid a Gemini round-trip
+      // (~200ms) for repeated or popular queries. The embedding itself is stable
+      // for a given query string, so a 5-minute TTL is safe and meaningful.
+      let queryVector: number[];
+      const embedCacheKey = `qembed:${q.toLowerCase().trim()}`;
+      const cachedEmbed = await env.RATE_LIMIT_KV.get(embedCacheKey);
+      if (cachedEmbed) {
+        queryVector = JSON.parse(cachedEmbed) as number[];
+      } else {
+        queryVector = await embedQuery(env.GEMINI_API_KEY, q);
+        ctx.waitUntil(
+          env.RATE_LIMIT_KV.put(embedCacheKey, JSON.stringify(queryVector), {
+            expirationTtl: EMBED_CACHE_TTL_SECONDS,
+          })
+        );
+      }
 
-    const vectorResults = await env.JOBS_VECTORS.query(queryVector, {
-      topK: VECTOR_CANDIDATES,
-      returnMetadata: "none",
-    });
-
-    // Extract job IDs in descending similarity order
-    const rankedIds = vectorResults.matches.map((m) => m.id);
-
-    // If Vectorize returned no candidates the index is likely empty (no embeddings
-    // generated yet). Fall through to the SQL LIKE search below rather than
-    // returning an empty result set, which would be confusing to callers.
-    if (rankedIds.length > 0) {
-
-    // Hydrate from D1, applying secondary filters (location, type, company)
-    const filteredRows = await listJobsByIds(env.JOBS_DB, rankedIds, {
-      location,
-      employment_type,
-      workplace_type,
-      company,
-    });
-
-      // Paginate within the filtered similarity-ranked result set
-      const page = filteredRows.slice(vectorOffset, vectorOffset + limit);
-      const nextCursor = buildVectorCursor(vectorOffset, page.length, filteredRows.length);
-
-      return jsonOk({
-        data: page.map(rowToPublicJob),
-        meta: {
-          total: filteredRows.length,
-          limit,
-          next_cursor: nextCursor,
-        },
+      const vectorResults = await env.JOBS_VECTORS.query(queryVector, {
+        topK: VECTOR_CANDIDATES,
+        returnMetadata: "none",
       });
+
+      // Extract job IDs in descending similarity order
+      const rankedIds = vectorResults.matches.map((m) => m.id);
+
+      // If Vectorize returned no candidates the index is likely empty (no embeddings
+      // generated yet). Fall through to the SQL LIKE search below rather than
+      // returning an empty result set, which would be confusing to callers.
+      if (rankedIds.length > 0) {
+        // Hydrate from D1, applying secondary filters (location, type, company, recency)
+        const filteredRows = await listJobsByIds(env.JOBS_DB, rankedIds, {
+          location,
+          employment_type,
+          workplace_type,
+          company,
+          posted_since,
+        });
+
+        // If posted_since filtered out ALL vector results, fall through to the SQL
+        // LIKE path which can find recent jobs by title text match.
+        if (!(filteredRows.length === 0 && vectorOffset === 0 && posted_since)) {
+          // Paginate within the filtered similarity-ranked result set
+          const page = filteredRows.slice(vectorOffset, vectorOffset + limit);
+          const nextCursor = buildVectorCursor(vectorOffset, page.length, filteredRows.length);
+
+          return jsonOk({
+            data: page.map(rowToPublicJob),
+            meta: {
+              total: filteredRows.length,
+              limit,
+              next_cursor: nextCursor,
+            },
+          });
+        }
+      }
+      // else: Vectorize index is empty OR all vector results were filtered by recency
+      // — fall through to SQL LIKE below
+    } catch {
+      // Gemini or Vectorize unavailable — degrade gracefully to SQL LIKE search
     }
-    // else: Vectorize index is empty — fall through to SQL LIKE below
   }
 
   // ── SQL fallback path ──────────────────────────────────────────────────────
@@ -227,6 +238,7 @@ export async function handleListJobs(
     employment_type,
     workplace_type,
     company,
+    posted_since,
     limit,
     cursor,
   });

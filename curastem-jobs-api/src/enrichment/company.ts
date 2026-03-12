@@ -5,8 +5,8 @@
  * Enrichment strategy (in priority order):
  *   1. Brandfetch API — returns logo + social links (LinkedIn, X, Glassdoor) for
  *      most known companies. Free tier: 500 req/day. Requires BRANDFETCH_CLIENT_ID.
- *   2. Clearbit Logo API — free CDN fallback if Brandfetch is not configured or
- *      returns no logo. Uses the company's actual website domain, not a slug guess.
+ *   2. Google Favicon CDN — free, no auth, always returns an image for any domain.
+ *      Used when Brandfetch is not configured or returns no logo.
  *   3. Slug-based inference — last resort for LinkedIn/X when APIs return nothing.
  *
  * Runs after every ingestion cron pass. Non-blocking — failures are logged and
@@ -99,17 +99,13 @@ async function fetchBrandfetchData(domain: string, clientId: string): Promise<Br
   }
 }
 
-// ─── Clearbit fallback ────────────────────────────────────────────────────────
+// ─── Google Favicon fallback ──────────────────────────────────────────────────
 
-async function fetchClearbitLogoUrl(domain: string): Promise<string | null> {
-  // ?size=64 returns a 64px PNG — avoids downloading full-resolution images
-  const url = `https://logo.clearbit.com/${domain}?size=${LOGO_MAX_PX}`;
-  try {
-    const res = await fetch(url, { method: "HEAD" });
-    return res.ok ? url : null;
-  } catch {
-    return null;
-  }
+// Returns a Google-hosted favicon URL for the domain. No HTTP call needed —
+// Google always serves an image (falls back to a generic icon for unknown domains),
+// making this a zero-latency, always-available fallback.
+function getGoogleFaviconUrl(domain: string): string {
+  return `https://www.google.com/s2/favicons?domain=${domain}&sz=${LOGO_MAX_PX}`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -163,7 +159,7 @@ async function enrichCompany(
     if (!company.logo_url) {
       fields.logo_url =
         brandfetch?.logo_url ??
-        (domain ? await fetchClearbitLogoUrl(domain) : null);
+        (domain ? getGoogleFaviconUrl(domain) : null);
     }
 
     if (!company.linkedin_url) {

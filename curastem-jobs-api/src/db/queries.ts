@@ -593,7 +593,7 @@ const D1_IN_CHUNK = 90;
 export async function listJobsByIds(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "employment_type" | "workplace_type" | "company">
+  filter: Pick<ListJobsFilter, "location" | "employment_type" | "workplace_type" | "company" | "posted_since">
 ): Promise<ListJobsRow[]> {
   if (ids.length === 0) return [];
 
@@ -617,7 +617,7 @@ export async function listJobsByIds(
 async function listJobsByIdsChunk(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "employment_type" | "workplace_type" | "company">
+  filter: Pick<ListJobsFilter, "location" | "employment_type" | "workplace_type" | "company" | "posted_since">
 ): Promise<ListJobsRow[]> {
   const placeholders = ids.map(() => "?").join(", ");
   const conditions: string[] = [`j.id IN (${placeholders})`];
@@ -638,6 +638,10 @@ async function listJobsByIdsChunk(
   if (filter.company) {
     conditions.push("c.slug = ?");
     bindings.push(filter.company);
+  }
+  if (filter.posted_since) {
+    conditions.push("COALESCE(j.posted_at, j.first_seen_at) >= ?");
+    bindings.push(filter.posted_since);
   }
 
   const where = conditions.join(" AND ");
@@ -672,6 +676,7 @@ export interface ListJobsFilter {
   employment_type?: string;
   workplace_type?: string;
   company?: string;
+  posted_since?: number; // unix timestamp — only return jobs posted/seen at or after this time
   limit: number;
   cursor?: string; // opaque cursor = base64(last posted_at:id)
 }
@@ -748,6 +753,10 @@ export async function listJobs(
   if (filter.company) {
     conditions.push("c.slug = ?");
     bindings.push(filter.company);
+  }
+  if (filter.posted_since) {
+    conditions.push("COALESCE(j.posted_at, j.first_seen_at) >= ?");
+    bindings.push(filter.posted_since);
   }
 
   // Cursor decoding: cursor encodes the last row's sort key so we can do

@@ -1769,6 +1769,7 @@ function AdCarousel({
 interface Props {
     geminiApiKey: string
     skillsApiUrl?: string
+    jobsApiUrl?: string
     systemPrompt: string
     accentColor: string
     model: string
@@ -2705,6 +2706,9 @@ const ChatInputBarAiIcon = () => {
     )
 }
 
+const ORB_BASE_WIDTH = 100
+const ORB_BASE_HEIGHT = 102
+
 const GeminiLiveCharacter = ({
     isThinking,
     isSpeaking,
@@ -2715,6 +2719,26 @@ const GeminiLiveCharacter = ({
     const [currentState, setCurrentState] = React.useState(
         GEMINI_EYE_STATES.LOOKING
     )
+    const containerRef = React.useRef<HTMLDivElement>(null)
+    const [scale, setScale] = React.useState(1.28)
+
+    React.useEffect(() => {
+        const el = containerRef.current
+        if (!el) return
+        const updateScale = () => {
+            const { width, height } = el.getBoundingClientRect()
+            const padding = 24
+            const availW = Math.max(0, width - padding)
+            const availH = Math.max(0, height - padding)
+            const scaleW = availW / ORB_BASE_WIDTH
+            const scaleH = availH / ORB_BASE_HEIGHT
+            setScale(Math.min(scaleW, scaleH, 2))
+        }
+        updateScale()
+        const observer = new ResizeObserver(updateScale)
+        observer.observe(el)
+        return () => observer.disconnect()
+    }, [])
 
     React.useEffect(() => {
         let timeoutId: any
@@ -2759,13 +2783,28 @@ const GeminiLiveCharacter = ({
 
     return (
         <div
+            ref={containerRef}
             style={{
-                transform: "scale(1.28)",
-                position: "relative",
-                width: 100,
-                height: 102,
+                width: "100%",
+                height: "100%",
+                minHeight: 0,
+                alignSelf: "stretch",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 12,
+                boxSizing: "border-box",
             }}
         >
+            <div
+                style={{
+                    transform: `scale(${scale})`,
+                    transformOrigin: "center center",
+                    position: "relative",
+                    width: ORB_BASE_WIDTH,
+                    height: ORB_BASE_HEIGHT,
+                }}
+            >
             <div
                 style={{
                     width: 100,
@@ -2809,6 +2848,7 @@ const GeminiLiveCharacter = ({
                 {/* Layer: Eyes */}
                 <GeminiEye config={currentState.eye1} id="eye1" />
                 <GeminiEye config={currentState.eye2} id="eye2" />
+            </div>
             </div>
         </div>
     )
@@ -5294,6 +5334,25 @@ const ChatInput = React.memo(function ChatInput({
         propSetShowAddPeopleOverlay ?? setLocalShowAddPeopleOverlay
     const [hasCopiedLink, setHasCopiedLink] = React.useState(false)
     const [isCopyLinkHovered, setIsCopyLinkHovered] = React.useState(false)
+    const [shareDisplayUrl, setShareDisplayUrl] = React.useState("")
+
+    const updateShareDisplayUrl = React.useCallback(() => {
+        if (typeof window === "undefined") return
+        const h = window.location.hash
+        const base =
+            window.location.hostname +
+            (window.location.pathname !== "/" ? window.location.pathname : "/") +
+            (h || "")
+        setShareDisplayUrl(base || "Copy link")
+    }, [])
+
+    React.useLayoutEffect(() => {
+        if (!showAddPeopleOverlay) return
+        updateShareDisplayUrl()
+        const onHashChange = () => updateShareDisplayUrl()
+        window.addEventListener("hashchange", onHashChange)
+        return () => window.removeEventListener("hashchange", onHashChange)
+    }, [showAddPeopleOverlay, updateShareDisplayUrl])
     const [selectedMenuIndex, setSelectedMenuIndex] = React.useState(-1)
     const menuRef = React.useRef<HTMLDivElement>(null)
     const [canShareScreen, setCanShareScreen] = React.useState(false)
@@ -6050,6 +6109,10 @@ const ChatInput = React.memo(function ChatInput({
             hasSeparator?: boolean
         }[] = []
 
+        const showShareScreen =
+            canShareScreen &&
+            (status !== "idle" || isLiveMode)
+
         if (showReport) {
             items.push({
                 id: "report",
@@ -6082,6 +6145,25 @@ const ChatInput = React.memo(function ChatInput({
             })
         }
 
+        if (showShareScreen) {
+            items.push({
+                id: "share",
+                label: isScreenSharing ? "Stop sharing" : "Share screen",
+                icon: isScreenSharing ? (
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M14 2L2 14M2 2L14 14" stroke={themeColors.destructive.light} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                ) : (
+                    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M0.75 10.6674V11.5078C0.75 12.1791 1.01668 12.823 1.49139 13.2977C1.96609 13.7724 2.60992 14.0391 3.28125 14.0391H11.7188C12.3901 14.0391 13.0339 13.7724 13.5086 13.2977C13.9833 12.823 14.25 12.1791 14.25 11.5078V10.6641M7.5 10.2422V0.960938M7.5 0.960938L10.4531 3.91406M7.5 0.960938L4.54688 3.91406" stroke={themeColors.text.primary} strokeWidth="1.26562" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                ),
+                onClick: () => { if (onScreenShare) onScreenShare(); setShowMenu(false) },
+                className: "ShareScreen",
+                isDestructive: isScreenSharing,
+            })
+        }
+
         items.push({
             id: "files",
             label: "Add files & photos",
@@ -6110,52 +6192,6 @@ const ChatInput = React.memo(function ChatInput({
             isDestructive: false,
             hasSeparator: false,
         })
-
-        if (canShareScreen) {
-            items.push({
-                id: "share",
-                label: isScreenSharing ? "Stop sharing" : "Share screen",
-                icon: isScreenSharing ? (
-                    <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                    >
-                        <path
-                            d="M14 2L2 14M2 2L14 14"
-                            stroke={themeColors.destructive.light}
-                            strokeWidth="1.2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                        />
-                    </svg>
-                ) : (
-                    <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 15 15"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                    >
-                        <path
-                            d="M0.75 10.6674V11.5078C0.75 12.1791 1.01668 12.823 1.49139 13.2977C1.96609 13.7724 2.60992 14.0391 3.28125 14.0391H11.7188C12.3901 14.0391 13.0339 13.7724 13.5086 13.2977C13.9833 12.823 14.25 12.1791 14.25 11.5078V10.6641M7.5 10.2422V0.960938M7.5 0.960938L10.4531 3.91406M7.5 0.960938L4.54688 3.91406"
-                            stroke={themeColors.text.primary}
-                            strokeWidth="1.26562"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                        />
-                    </svg>
-                ),
-                onClick: () => {
-                    if (onScreenShare) onScreenShare()
-                    setShowMenu(false)
-                },
-                className: "ShareScreen",
-                isDestructive: isScreenSharing,
-            })
-        }
 
         items.push({
             id: "create_app",
@@ -6298,6 +6334,8 @@ const ChatInput = React.memo(function ChatInput({
         return items
     }, [
         canShareScreen,
+        status,
+        isLiveMode,
         isScreenSharing,
         isWhiteboardOpen,
         isDocOpen,
@@ -6479,7 +6517,9 @@ const ChatInput = React.memo(function ChatInput({
                         }}
                         style={{
                             height: 44,
-                            width: 144,
+                            width: "fit-content",
+                            minWidth: 80,
+                            maxWidth: 280,
                             paddingLeft: 20,
                             paddingRight: 20,
                             borderRadius: 28,
@@ -6522,10 +6562,23 @@ const ChatInput = React.memo(function ChatInput({
                         >
                             {hasCopiedLink
                                 ? "Copied link"
-                                : typeof window !== "undefined" &&
-                                    window.location.hash
-                                  ? window.location.hash.replace("#", "")
-                                  : "tom-cat-fin"}
+                                : showAddPeopleOverlay
+                                  ? shareDisplayUrl ||
+                                    (typeof window !== "undefined"
+                                        ? (() => {
+                                              const h =
+                                                  window.location.hash
+                                              const base =
+                                                  window.location.hostname +
+                                                  (window.location.pathname !==
+                                                  "/"
+                                                      ? window.location.pathname
+                                                      : "/") +
+                                                  (h || "")
+                                              return base || "Copy link"
+                                          })()
+                                        : "Copy link")
+                                  : "Copy link"}
                         </div>
                         <div
                             data-svg-wrapper
@@ -8375,6 +8428,833 @@ function ReportModal({
     )
 }
 
+// --- HOMEPAGE JOBS COMPONENT ---
+
+interface HomepageJob {
+    id: string
+    title: string
+    company: {
+        name: string
+        logo_url: string | null
+        description: string | null
+        website_url: string | null
+        linkedin_url: string | null
+        x_url: string | null
+        glassdoor_url?: string | null
+    }
+    posted_at: string | null
+    apply_url: string
+    location: string | null
+    employment_type: string | null
+    workplace_type: string | null
+    salary: { display: string } | null
+    job_summary: string | null
+}
+
+interface JobDescriptionDetail {
+    responsibilities: string[]
+    minimum_qualifications: string[]
+    preferred_qualifications: string[]
+}
+
+const FALLBACK_QUERIES = [
+    "software engineer", "sales associate", "product designer",
+    "operations manager", "marketing specialist", "data analyst",
+    "customer success", "retail associate", "warehouse associate",
+    "teacher", "nurse", "driver", "cook", "mechanic", "accountant",
+]
+
+function jobTimeAgo(iso: string | null): string {
+    if (!iso) return ""
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+    if (s < 60) return "just now"
+    const m = Math.floor(s / 60)
+    if (m < 60) return `${m}m ago`
+    const h = Math.floor(m / 60)
+    if (h < 24) return `${h}h ago`
+    const d = Math.floor(h / 24)
+    return `${d}d ago`
+}
+
+const JobSkeleton = ({ style, themeColors }: { style?: React.CSSProperties; themeColors: typeof darkColors }) => (
+    <div style={{
+        background: themeColors.hover.default,
+        borderRadius: 10,
+        animation: "homepageSkeleton 1.4s ease-in-out infinite",
+        ...style,
+    }} />
+)
+
+// Large card: featured card in sections 1 and 2
+const BigJobCard = ({ job, borderRadius = 36, style, onClick, themeColors, isMobile = false }: {
+    job: HomepageJob | null
+    borderRadius?: number
+    style?: React.CSSProperties
+    onClick?: () => void
+    themeColors: typeof darkColors
+    isMobile?: boolean
+}) => {
+    const pad = isMobile ? 20 : 24
+    const logoSz = isMobile ? 20 : 32
+    const companyFs = isMobile ? 12 : 14
+    const titleFs = isMobile ? 17 : 24
+    const timeFs = isMobile ? 12 : 14
+    return (
+        <div
+            onClick={onClick}
+            style={{
+                padding: pad,
+                background: themeColors.surfaceHighlight,
+                borderRadius,
+                flexDirection: "column",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                display: "flex",
+                cursor: job ? "pointer" : "default",
+                ...style,
+            }}
+        >
+            <div style={{ alignSelf: "stretch", flexDirection: "column", gap: isMobile ? 16 : 24, display: "flex" }}>
+                <div style={{ alignSelf: "stretch", justifyContent: "flex-start", alignItems: "center", gap: isMobile ? 8 : 12, display: "flex" }}>
+                    <div style={{ width: logoSz, height: logoSz, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        {job?.company.logo_url
+                            ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                            : <JobSkeleton themeColors={themeColors} style={{ width: logoSz, height: logoSz, borderRadius: "50%" }} />
+                        }
+                    </div>
+                    {job
+                        ? <span style={{ color: themeColors.text.primary, fontSize: companyFs, fontFamily: "Inter", fontWeight: 400 }}>{job.company.name}</span>
+                        : <JobSkeleton themeColors={themeColors} style={{ width: 72, height: companyFs }} />
+                    }
+                </div>
+                {job
+                    ? <div style={{ alignSelf: "stretch", color: themeColors.text.primary, fontSize: titleFs, fontFamily: "Inter", fontWeight: 500, lineHeight: "1.2", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{job.title}</div>
+                    : <div style={{ display: "flex", flexDirection: "column", gap: 8, alignSelf: "stretch" }}>
+                        <JobSkeleton themeColors={themeColors} style={{ height: titleFs - 2, borderRadius: 6 }} />
+                        <JobSkeleton themeColors={themeColors} style={{ height: titleFs - 2, width: "60%", borderRadius: 6 }} />
+                    </div>
+                }
+            </div>
+            {job
+                ? <span style={{ color: themeColors.text.secondary, fontSize: timeFs, fontFamily: "Inter", fontWeight: 400 }}>{jobTimeAgo(job.posted_at)}</span>
+                : <JobSkeleton themeColors={themeColors} style={{ width: 60, height: timeFs }} />
+            }
+        </div>
+    )
+}
+
+// Stacked card: title + company row
+const StackedJobCard = ({ job, onClick, themeColors, isMobile = false }: {
+    job: HomepageJob | null; onClick?: () => void; themeColors: typeof darkColors; isMobile?: boolean
+}) => {
+    const px = isMobile ? 20 : 24
+    const py = isMobile ? 16 : 20
+    const titleFs = isMobile ? 15 : 17
+    const metaFs = isMobile ? 12 : 14
+    return (
+        <div
+            onClick={onClick}
+            style={{
+                alignSelf: "stretch",
+                paddingLeft: px, paddingRight: px, paddingTop: py, paddingBottom: py,
+                background: themeColors.surfaceHighlight,
+                borderRadius: 28,
+                flexDirection: "column",
+                justifyContent: "flex-start",
+                alignItems: "flex-start",
+                gap: 12,
+                display: "flex",
+                cursor: job ? "pointer" : "default",
+            }}
+        >
+            {job
+                ? <div style={{ color: themeColors.text.primary, fontSize: titleFs, fontFamily: "Inter", fontWeight: 500, lineHeight: "1.2" }}>{job.title}</div>
+                : <JobSkeleton themeColors={themeColors} style={{ width: "70%", height: titleFs }} />
+            }
+            <div style={{ justifyContent: "flex-start", alignItems: "center", gap: 6, display: "flex", flexWrap: "wrap" }}>
+                <div style={{ width: 16, height: 16, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {job?.company.logo_url
+                        ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                        : <JobSkeleton themeColors={themeColors} style={{ width: 16, height: 16, borderRadius: "50%" }} />
+                    }
+                </div>
+                {job
+                    ? <>
+                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs, fontFamily: "Inter", fontWeight: 400 }}>{job.company.name}</span>
+                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs }}>•</span>
+                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs, fontFamily: "Inter", fontWeight: 400 }}>{jobTimeAgo(job.posted_at)}</span>
+                    </>
+                    : <JobSkeleton themeColors={themeColors} style={{ width: 120, height: metaFs }} />
+                }
+            </div>
+        </div>
+    )
+}
+
+// Row card: title left, company+time right
+const RowJobCard = ({ job, onClick, themeColors, isMobile = false }: {
+    job: HomepageJob | null; onClick?: () => void; themeColors: typeof darkColors; isMobile?: boolean
+}) => {
+    const titleFs = isMobile ? 15 : 17
+    const metaFs = isMobile ? 12 : 14
+    return (
+        <div
+            onClick={onClick}
+            style={{
+                alignSelf: "stretch",
+                minWidth: 0,
+                paddingLeft: 24, paddingRight: 24, paddingTop: 20, paddingBottom: 20,
+                background: themeColors.surfaceHighlight,
+                borderRadius: 48,
+                justifyContent: "flex-start",
+                alignItems: "center",
+                gap: 16,
+                display: "flex",
+                overflow: "hidden",
+                cursor: job ? "pointer" : "default",
+            }}
+        >
+            {job
+                ? <div style={{ flex: "1 1 0", color: themeColors.text.primary, fontSize: titleFs, fontFamily: "Inter", fontWeight: 500, lineHeight: "1.2", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{job.title}</div>
+                : <JobSkeleton themeColors={themeColors} style={{ flex: "1 1 0", height: titleFs }} />
+            }
+            <div style={{ justifyContent: "flex-start", alignItems: "center", gap: 6, display: "flex", flexWrap: "nowrap", flexShrink: 0 }}>
+            <div style={{ width: 16, height: 16, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {job?.company.logo_url && <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+            </div>
+                {job
+                    ? <>
+                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs, fontFamily: "Inter", fontWeight: 400, whiteSpace: "nowrap" }}>{job.company.name}</span>
+                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs }}>•</span>
+                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs, fontFamily: "Inter", fontWeight: 400, whiteSpace: "nowrap" }}>{jobTimeAgo(job.posted_at)}</span>
+                    </>
+                    : <JobSkeleton themeColors={themeColors} style={{ width: 100, height: metaFs }} />
+                }
+            </div>
+        </div>
+    )
+}
+
+const JobDetailPanel = React.memo(function JobDetailPanel({
+    job,
+    jobsApiUrl,
+    onClose,
+    themeColors,
+    isMobile = false,
+}: {
+    job: HomepageJob
+    jobsApiUrl: string
+    onClose: () => void
+    themeColors: typeof darkColors
+    isMobile?: boolean
+}) {
+    const [desc, setDesc] = React.useState<JobDescriptionDetail | null>(null)
+    const [detailSummary, setDetailSummary] = React.useState<string | null>(null)
+    const [detailCompanyDesc, setDetailCompanyDesc] = React.useState<string | null>(null)
+    const [loadingDesc, setLoadingDesc] = React.useState(true)
+
+    React.useEffect(() => {
+        let cancelled = false
+        setDesc(null)
+        setDetailSummary(null)
+        setDetailCompanyDesc(null)
+        setLoadingDesc(true)
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), 8000)
+        fetch(`${jobsApiUrl}/jobs/${job.id}`, { signal: ctrl.signal })
+            .then(r => r.ok ? r.json() : null)
+            .then((d: { job_description?: JobDescriptionDetail | null; job_summary?: string | null; company?: { description?: string | null } } | null) => {
+                if (!cancelled) {
+                    setDesc(d?.job_description ?? null)
+                    setDetailSummary(d?.job_summary ?? null)
+                    setDetailCompanyDesc(d?.company?.description ?? null)
+                    setLoadingDesc(false)
+                }
+            })
+            .catch(() => { if (!cancelled) setLoadingDesc(false) })
+            .finally(() => clearTimeout(timer))
+        return () => { cancelled = true; ctrl.abort() }
+    }, [job.id, jobsApiUrl])
+
+    const effectiveSummary = job.job_summary || detailSummary
+    const effectiveCompanyDesc = job.company.description || detailCompanyDesc
+
+    const openUrl = (url: string | null | undefined) => {
+        if (url && typeof window !== "undefined") window.open(url, "_blank")
+    }
+
+    const formatEmploymentType = (t: string | null) => {
+        if (!t) return null
+        return t.replace(/_/g, "-").replace(/\b\w/g, c => c.toUpperCase())
+    }
+    const formatWorkplace = (t: string | null) => {
+        if (!t) return null
+        return t === "on_site" ? "On-site" : t.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+    }
+
+    const metaItems = [
+        jobTimeAgo(job.posted_at),
+        job.location,
+        formatEmploymentType(job.employment_type),
+        formatWorkplace(job.workplace_type),
+        job.salary?.display,
+    ].filter(Boolean)
+
+    const sectionSkeleton = (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {[80, 95, 70, 88].map((w, i) => (
+                <div key={i} style={{ height: 14, width: `${w}%`, background: themeColors.hover.default, borderRadius: 6, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
+            ))}
+        </div>
+    )
+
+    const SectionBlock = ({ title, items }: { title: string; items: string[] }) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 500, lineHeight: "21px" }}>{title}</div>
+            <div style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
+                {items.map((item, i) => (
+                    <div key={i} style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}>• {item}</div>
+                ))}
+            </div>
+        </div>
+    )
+
+    return (
+        <div style={{
+            width: "100%",
+            height: "100%",
+            background: themeColors.backgroundDark,
+            borderRadius: isMobile ? "28px 28px 0 0" : "28px 0 0 28px",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            position: "relative",
+            boxShadow: isMobile ? "none" : "2px 0 24px 2px rgba(0,0,0,0.04)",
+        }}>
+            {/* Toolbar */}
+            <div style={{
+                position: "absolute",
+                top: 16,
+                left: 0,
+                right: 0,
+                paddingLeft: 16,
+                paddingRight: 16,
+                display: "flex",
+                justifyContent: "flex-end",
+                alignItems: "center",
+                gap: 8,
+                zIndex: 10,
+                pointerEvents: "none",
+            }}>
+                <div style={{
+                    paddingLeft: 4,
+                    paddingRight: 4,
+                    background: themeColors.surface,
+                    borderRadius: 31,
+                    display: "flex",
+                    alignItems: "center",
+                    pointerEvents: "auto",
+                }}>
+                    {/* Share — native share sheet if available, else copy link to clipboard */}
+                    <div
+                        onClick={async () => {
+                            const shareUrl = job.apply_url || job.url || ""
+                            const shareText = `${job.title} at ${job.company.name}`
+                            if (typeof navigator !== "undefined" && navigator.share) {
+                                try {
+                                    await navigator.share({
+                                        title: shareText,
+                                        url: shareUrl,
+                                        text: shareText,
+                                    })
+                                } catch (e) {
+                                    if ((e as Error).name !== "AbortError") {
+                                        if (navigator.clipboard?.writeText) {
+                                            navigator.clipboard.writeText(shareUrl || shareText)
+                                        }
+                                    }
+                                }
+                            } else if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+                                navigator.clipboard.writeText(shareUrl || shareText)
+                            }
+                        }}
+                        style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                        title="Share"
+                    >
+                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                    </div>
+                    {/* Close */}
+                    <div
+                        onClick={onClose}
+                        style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                        title="Close"
+                    >
+                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+
+            {/* Scrollable content */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 48px 24px", paddingTop: 72, display: "flex", flexDirection: "column", gap: 32 }}>
+
+                {/* Header: company + title + meta + apply */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                    {/* Company name + logo */}
+                    <div
+                        onClick={() => openUrl(job.apply_url)}
+                        style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: job.apply_url ? "pointer" : "default" }}
+                    >
+                        <div style={{ width: 32, height: 32, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            {job.company.logo_url
+                                ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                                : <div style={{ width: 32, height: 32, background: themeColors.surfaceHighlight, borderRadius: "50%" }} />
+                            }
+                        </div>
+                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{job.company.name}</span>
+                    </div>
+
+                    {/* Title + meta + apply */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                        <div style={{ color: themeColors.text.primary, fontSize: 24, fontFamily: "Inter", fontWeight: 600, lineHeight: "1.2" }}>{job.title}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            {metaItems.map((item, i) => (
+                                <React.Fragment key={i}>
+                                    {i > 0 && <span style={{ color: themeColors.text.primary, fontSize: 14 }}>•</span>}
+                                    <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{item}</span>
+                                </React.Fragment>
+                            ))}
+                        </div>
+                        <div>
+                            <motion.div
+                                onClick={() => openUrl(job.apply_url)}
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.97 }}
+                                transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                                style={{ height: 40, paddingLeft: 20, paddingRight: 20, background: "#0099FF", borderRadius: 31, display: "inline-flex", alignItems: "center", cursor: "pointer" }}
+                            >
+                                <span style={{ color: "rgba(255,255,255,0.95)", fontSize: 15, fontFamily: "Inter", fontWeight: 500, lineHeight: "22.5px" }}>Apply</span>
+                            </motion.div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Job summary — shown once detail load completes (detail endpoint triggers lazy AI enrichment) */}
+                {!loadingDesc && effectiveSummary && (
+                    <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
+                        {effectiveSummary}
+                    </div>
+                )}
+
+                {/* About the job */}
+                {loadingDesc ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+                        {sectionSkeleton}
+                        {sectionSkeleton}
+                        {sectionSkeleton}
+                    </div>
+                ) : <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+                    <div style={{ color: themeColors.text.primary, fontSize: 17, fontFamily: "Inter", fontWeight: 600, lineHeight: "17px" }}>About the job</div>
+                    {desc ? (
+                        <>
+                            {desc.responsibilities.length > 0 && <SectionBlock title="Responsibilities" items={desc.responsibilities} />}
+                            {desc.minimum_qualifications.length > 0 && <SectionBlock title="Minimum Qualifications" items={desc.minimum_qualifications} />}
+                            {desc.preferred_qualifications.length > 0 && <SectionBlock title="Preferred Qualifications" items={desc.preferred_qualifications} />}
+                        </>
+                    ) : (
+                        <div style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>
+                            Full description available on the job posting.
+                        </div>
+                    )}
+                </div>}
+
+                {/* About the company — shown only after detail loads so enriched company description is available */}
+                {!loadingDesc && <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+                    <div style={{ color: themeColors.text.primary, fontSize: 17, fontFamily: "Inter", fontWeight: 600, lineHeight: "17px" }}>About the company</div>
+
+                    <div
+                        onClick={() => openUrl(job.company.website_url)}
+                        style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: job.company.website_url ? "pointer" : "default" }}
+                    >
+                        <div style={{ width: 40, height: 40, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            {job.company.logo_url
+                                ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                                : <div style={{ width: 40, height: 40, background: themeColors.surfaceHighlight, borderRadius: "50%" }} />
+                            }
+                        </div>
+                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{job.company.name}</span>
+                    </div>
+
+                    {/* Social links — only rendered when at least one link exists to avoid empty gap */}
+                    {(job.company.website_url || job.company.linkedin_url || job.company.x_url) && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            {job.company.website_url && (
+                                <div onClick={() => openUrl(job.company.website_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", cursor: "pointer" }}>
+                                    <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Website</span>
+                                </div>
+                            )}
+                            {job.company.linkedin_url && (
+                                <div onClick={() => openUrl(job.company.linkedin_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287-0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603-0.00831011 14.8147 0.000101367" fill={themeColors.text.primary}/></svg>
+                                    <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>LinkedIn</span>
+                                </div>
+                            )}
+                            {job.company.x_url && (
+                                <div onClick={() => openUrl(job.company.x_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                    <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>X/Twitter</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {effectiveCompanyDesc && (
+                        <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
+                            {effectiveCompanyDesc}
+                        </div>
+                    )}
+                </div>}
+            </div>
+        </div>
+    )
+})
+
+const HomepageJobs = React.memo(function HomepageJobs({
+    jobsApiUrl,
+    userQuery,
+    isMobileLayout,
+    themeColors,
+    onOpenSettings,
+    onJobClick,
+}: {
+    jobsApiUrl: string
+    userQuery: string
+    isMobileLayout: boolean
+    themeColors: typeof darkColors
+    onOpenSettings: () => void
+    onJobClick?: (job: HomepageJob) => void
+}) {
+    const [nextJobs, setNextJobs] = React.useState<HomepageJob[]>([])
+    const [nearJobs, setNearJobs] = React.useState<HomepageJob[]>([])
+    const [topJobs, setTopJobs] = React.useState<HomepageJob[]>([])
+    const [loadingPicks, setLoadingPicks] = React.useState(true)
+    const [loadingNear, setLoadingNear] = React.useState(true)
+    React.useEffect(() => {
+        if (!jobsApiUrl) {
+            setLoadingPicks(false)
+            setLoadingNear(false)
+            return
+        }
+        setLoadingPicks(true)
+        setLoadingNear(true)
+        let cancelled = false
+
+        const fetchJ = (url: string) => {
+            const ctrl = new AbortController()
+            const id = setTimeout(() => ctrl.abort(), 10000)
+            return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
+        }
+
+        const api = (params: string): Promise<HomepageJob[]> => {
+            const url = `${jobsApiUrl}/jobs?${params}&limit=6`
+            return fetchJ(url)
+                .then(r => r.ok ? r.json() : { data: [] })
+                .then(({ data }) => (Array.isArray(data) ? data : []) as HomepageJob[])
+                .catch(() => [] as HomepageJob[])
+        }
+
+        const baseQuery = userQuery.trim() || FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
+        const altQuery  = FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
+
+        const picksPromise = api(`q=${encodeURIComponent(baseQuery)}`)
+        const altPromise   = api(`q=${encodeURIComponent(altQuery)}`)
+
+        const ipCtrl  = new AbortController()
+        const ipTimer = setTimeout(() => ipCtrl.abort(), 3000)
+        const nearPromise = fetch("https://ipwho.is/", { signal: ipCtrl.signal })
+            .finally(() => clearTimeout(ipTimer))
+            .then(r => r.ok ? r.json() : {})
+            .then(({ city }: { city?: string }) => city || "")
+            .catch(() => "")
+            .then((city: string) => api(city ? `location=${encodeURIComponent(city)}&limit=5` : `q=${encodeURIComponent(altQuery)}&limit=5`))
+
+        const safetyTimer = setTimeout(() => {
+            if (!cancelled) {
+                setLoadingPicks(false)
+                setLoadingNear(false)
+            }
+        }, 12000)
+
+        picksPromise.then(picks => {
+            if (cancelled) return
+            setNextJobs(picks.slice(0, 3))
+            const top3 = picks.slice(3, 6)
+            if (top3.length >= 3) {
+                setTopJobs(top3)
+                setLoadingPicks(false)
+            } else {
+                altPromise.then(alt => {
+                    if (cancelled) return
+                    if (picks.length === 0) setNextJobs(alt.slice(0, 3))
+                    setTopJobs(alt.slice(0, 3))
+                    setLoadingPicks(false)
+                }).catch(() => { if (!cancelled) setLoadingPicks(false) })
+            }
+        }).catch(() => { if (!cancelled) setLoadingPicks(false) })
+
+        nearPromise.then(near => {
+            if (!cancelled) {
+                setNearJobs(near.slice(0, 5))
+                setLoadingNear(false)
+            }
+        }).catch(() => { if (!cancelled) setLoadingNear(false) })
+
+        return () => {
+            cancelled = true
+            clearTimeout(safetyTimer)
+            clearTimeout(ipTimer)
+        }
+    }, [jobsApiUrl, userQuery])
+
+    const openJob = (job: HomepageJob) => {
+        if (onJobClick) { onJobClick(job); return }
+        if (typeof window !== "undefined") window.open(job.apply_url, "_blank")
+    }
+
+    const pad = (arr: HomepageJob[], n: number, isLoading: boolean): (HomepageJob | null)[] =>
+        isLoading
+            ? Array(n).fill(null)
+            : [...arr, ...Array(Math.max(0, n - arr.length)).fill(null)].slice(0, n)
+
+    const nextList = pad(nextJobs, 3, loadingPicks)
+    const nearList = pad(nearJobs, 5, loadingNear)
+    const topList  = pad(topJobs,  3, loadingPicks)
+
+    // Measure the actual rendered container width so layout adapts when the
+    // sidebar is resized on desktop, not just when the window hits 768px.
+    const containerRef = React.useRef<HTMLDivElement>(null)
+    const [containerWidth, setContainerWidth] = React.useState<number>(9999)
+    React.useEffect(() => {
+        const el = containerRef.current
+        if (!el) return
+        const ro = new ResizeObserver(entries => {
+            setContainerWidth(entries[0]?.contentRect.width ?? 9999)
+        })
+        ro.observe(el)
+        return () => ro.disconnect()
+    }, [])
+
+    // Switch to mobile card layout when the container is narrower than 600px,
+    // regardless of whether we're on a small device or just a narrow sidebar.
+    const m = isMobileLayout || containerWidth < 600
+    const sectionTitleStyle: React.CSSProperties = {
+        alignSelf: "stretch",
+        textAlign: "center",
+        color: themeColors.text.primary,
+        fontSize: m ? 21 : 24,
+        fontFamily: "Inter",
+        fontWeight: 500,
+        lineHeight: 1,
+    }
+
+    return (
+        <>
+            <style>{`
+                @keyframes homepageSkeleton {
+                    0%, 100% { opacity: 0.5; }
+                    50% { opacity: 1; }
+                }
+            `}</style>
+
+            <div
+                ref={containerRef}
+                data-layer="homepage"
+                className="Homepage"
+                style={{
+                    width: m ? "calc(100% + 48px)" : "100%",
+                    marginLeft: m ? -24 : "auto",
+                    marginRight: m ? -24 : "auto",
+                    paddingLeft: m ? 24 : 0,
+                    paddingRight: m ? 24 : 0,
+                    alignSelf: "stretch",
+                    maxWidth: m ? "none" : 816,
+                    paddingTop: 0,
+                    paddingBottom: 148,
+                    flexDirection: "column",
+                    justifyContent: "flex-start",
+                    alignItems: "flex-start",
+                    gap: m ? 48 : 64,
+                    display: "flex",
+                }}
+            >
+                {/* ── SECTION 1: WHAT'S YOUR NEXT JOB ── */}
+                <div style={{ alignSelf: "stretch", flexDirection: "column", gap: m ? 24 : 48, display: "flex" }}>
+                    <div style={{ alignSelf: "stretch", textAlign: "center", color: themeColors.text.primary, fontSize: m ? 21 : 28, fontFamily: "Inter", fontWeight: 600, lineHeight: 1 }}>
+                        What's your next job?
+                    </div>
+                    {m ? (
+                        // Mobile: big card on top, 2 stacked cards below
+                        <div style={{ alignSelf: "stretch", flexDirection: "column", gap: 12, display: "flex" }}>
+                            <BigJobCard job={nextList[0] ?? null} borderRadius={32} style={{ height: 164 }} onClick={nextList[0] ? () => openJob(nextList[0]) : undefined} themeColors={themeColors} isMobile />
+                            <StackedJobCard job={nextList[1] ?? null} onClick={nextList[1] ? () => openJob(nextList[1]) : undefined} themeColors={themeColors} isMobile />
+                            <StackedJobCard job={nextList[2] ?? null} onClick={nextList[2] ? () => openJob(nextList[2]) : undefined} themeColors={themeColors} isMobile />
+                        </div>
+                    ) : (
+                        // Desktop: big card left, 2 stacked cards right
+                        <div style={{ alignSelf: "stretch", justifyContent: "center", alignItems: "stretch", gap: 12, display: "inline-flex" }}>
+                            <BigJobCard job={nextList[0] ?? null} borderRadius={36} style={{ flex: "1 1 0" }} onClick={nextList[0] ? () => openJob(nextList[0]) : undefined} themeColors={themeColors} />
+                            <div style={{ flex: "1 1 0", flexDirection: "column", gap: 12, display: "flex" }}>
+                                <StackedJobCard job={nextList[1] ?? null} onClick={nextList[1] ? () => openJob(nextList[1]) : undefined} themeColors={themeColors} />
+                                <StackedJobCard job={nextList[2] ?? null} onClick={nextList[2] ? () => openJob(nextList[2]) : undefined} themeColors={themeColors} />
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* ── SECTION 2: JOBS NEAR YOU ── */}
+                <div style={{ alignSelf: "stretch", flexDirection: "column", gap: m ? 24 : 48, display: "flex" }}>
+                    <div style={sectionTitleStyle}>Jobs near you</div>
+                    {m ? (
+                        // Mobile: 4 row cards on top, big card at bottom
+                        <div style={{ alignSelf: "stretch", flexDirection: "column", gap: 12, display: "flex" }}>
+                            {nearList.slice(1, 5).map((job, i) => (
+                                <RowJobCard key={job?.id ?? i} job={job} onClick={job ? () => openJob(job) : undefined} themeColors={themeColors} isMobile />
+                            ))}
+                            <BigJobCard job={nearList[0] ?? null} borderRadius={36} style={{ height: 164 }} onClick={nearList[0] ? () => openJob(nearList[0]) : undefined} themeColors={themeColors} isMobile />
+                        </div>
+                    ) : (
+                        // Desktop: big card left (square by default, grows taller if content needs it), 4 row cards right
+                        <div style={{ alignSelf: "stretch", justifyContent: "center", alignItems: "stretch", gap: 12, display: "flex" }}>
+                            <BigJobCard job={nearList[0] ?? null} borderRadius={48} style={{ width: 272, minWidth: 272, maxWidth: 272, minHeight: 272 }} onClick={nearList[0] ? () => openJob(nearList[0]) : undefined} themeColors={themeColors} />
+                            <div style={{ flex: "1 1 0", minWidth: 0, flexDirection: "column", gap: 12, display: "flex" }}>
+                                {nearList.slice(1, 5).map((job, i) => (
+                                    <RowJobCard key={job?.id ?? i} job={job} onClick={job ? () => openJob(job) : undefined} themeColors={themeColors} />
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* ── SECTION 3: TOP PICKS FOR YOU ── */}
+                <div style={{ alignSelf: "stretch", flexDirection: "column", gap: m ? 24 : 48, display: "flex" }}>
+                    <div style={sectionTitleStyle}>Top picks for you</div>
+                    {m ? (
+                        // Mobile: 3 stacked cards vertically
+                        <div style={{ alignSelf: "stretch", flexDirection: "column", gap: 12, display: "flex" }}>
+                            {topList.map((job, i) => (
+                                <StackedJobCard key={job?.id ?? i} job={job} onClick={job ? () => openJob(job) : undefined} themeColors={themeColors} isMobile />
+                            ))}
+                        </div>
+                    ) : (
+                        // Desktop: 3 big cards side by side
+                        <div style={{ alignSelf: "stretch", justifyContent: "center", alignItems: "stretch", gap: 12, display: "flex" }}>
+                            {topList.map((job, i) => (
+                                <BigJobCard key={job?.id ?? i} job={job} borderRadius={48} style={{ flex: "1 1 0", minHeight: 234 }} onClick={job ? () => openJob(job) : undefined} themeColors={themeColors} />
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* ── SECTION 4: CUSTOMIZE ── */}
+                <div
+                    onClick={onOpenSettings}
+                    style={{
+                        alignSelf: "stretch",
+                        paddingLeft: 24, paddingRight: 24, paddingTop: 19, paddingBottom: 19,
+                        borderRadius: 48,
+                        border: themeColors.background === lightColors.background
+                            ? `0.33px solid ${themeColors.border.subtle}`
+                            : `1px solid ${themeColors.border.subtle}`,
+                        justifyContent: "flex-start",
+                        alignItems: "center",
+                        gap: 4,
+                        display: "inline-flex",
+                        cursor: "pointer",
+                    }}
+                >
+                    <div style={{ flex: "1 1 0", color: themeColors.text.primary, fontSize: 15, fontFamily: "Inter", fontWeight: 400, lineHeight: 1.2 }}>
+                        Customize
+                    </div>
+                    {/* Magic pencil icon */}
+                    <div data-svg-wrapper data-layer="magic pencil icon" style={{ flexShrink: 0, opacity: 0.95, display: "flex" }}>
+                        <svg width="17" height="16" viewBox="0 0 17 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z" fill={themeColors.text.primary}/>
+                            <path d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z" fill={themeColors.text.primary}/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </>
+    )
+})
+
+// --- SHARED MODAL OVERLAY BASE ---
+// Handles the backdrop, sheet animation, and image header shared by all full-screen overlays.
+const BaseModalOverlay = ({
+    isMobile,
+    onClose,
+    themeColors,
+    imageSrc,
+    children,
+}: {
+    isMobile: boolean
+    onClose: () => void
+    themeColors: typeof darkColors
+    imageSrc: string
+    children: React.ReactNode
+}) => (
+    <div
+        style={{
+            width: "100%",
+            height: "100%",
+            left: 0,
+            top: 0,
+            position: "fixed",
+            background: themeColors.overlay.black,
+            overflow: "hidden",
+            justifyContent: "center",
+            alignItems: isMobile ? "flex-end" : "center",
+            gap: 10,
+            display: "inline-flex",
+            zIndex: 99999,
+        }}
+        onClick={onClose}
+    >
+        <motion.div
+            initial={isMobile ? { y: "100%", scale: 0, opacity: 0 } : { scale: 0.95, opacity: 0 }}
+            animate={isMobile ? { y: "0%", scale: 1, opacity: 1 } : { scale: 1, opacity: 1 }}
+            exit={isMobile ? { y: "100%", scale: 0, opacity: 0 } : { scale: 0.95, opacity: 0 }}
+            transition={isMobile ? { duration: 0.25, ease: "easeInOut" } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+                flex: isMobile ? "none" : "1 1 0",
+                width: isMobile ? "100%" : "auto",
+                maxWidth: isMobile ? "100%" : 400,
+                maxHeight: 600,
+                background: themeColors.background,
+                boxShadow: "0px 4px 24px rgba(0, 0, 0, 0.04)",
+                overflow: "hidden",
+                borderRadius: isMobile ? "48px 48px 0px 0px" : 48,
+                flexDirection: "column",
+                justifyContent: "flex-start",
+                alignItems: "flex-start",
+                display: "inline-flex",
+                marginBottom: isMobile ? 0 : "auto",
+                marginTop: "auto",
+                transformOrigin: isMobile ? "bottom center" : "center",
+            }}
+        >
+            <div style={{ alignSelf: "stretch", height: 224, overflow: "hidden", flexShrink: 0, position: "relative" }}>
+                <img style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} src={imageSrc} />
+            </div>
+            {children}
+        </motion.div>
+    </div>
+)
+
 // --- WELCOME OVERLAY COMPONENT ---
 const WelcomeOverlay = ({
     isMobile,
@@ -8384,178 +9264,88 @@ const WelcomeOverlay = ({
     isMobile: boolean
     onClose: () => void
     themeColors: typeof darkColors
-}) => {
-    return (
-        <div
-            data-layer="welcome-overlay-container"
-            className="WelcomeOverlayContainer"
-            style={{
-                width: "100%",
-                height: "100%",
-                left: 0,
-                top: 0,
-                position: "fixed",
-                background: themeColors.overlay.black,
-                overflow: "hidden",
-                justifyContent: "center",
-                alignItems: isMobile ? "flex-end" : "center",
-                gap: 10,
-                display: "inline-flex",
-                zIndex: 99999,
-            }}
-            onClick={onClose}
-        >
-            <motion.div
-                data-layer="welcome-modal"
-                className="WelcomeModal"
-                initial={
-                    isMobile
-                        ? { y: "100%", scale: 0, opacity: 0 }
-                        : { scale: 0.95, opacity: 0 }
-                }
-                animate={
-                    isMobile
-                        ? { y: "0%", scale: 1, opacity: 1 }
-                        : { scale: 1, opacity: 1 }
-                }
-                exit={
-                    isMobile
-                        ? { y: "100%", scale: 0, opacity: 0 }
-                        : { scale: 0.95, opacity: 0 }
-                }
-                transition={
-                    isMobile
-                        ? { duration: 0.25, ease: "easeInOut" }
-                        : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }
-                }
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                    flex: isMobile ? "none" : "1 1 0",
-                    width: isMobile ? "100%" : "auto",
-                    maxWidth: isMobile ? "100%" : 400,
-                    maxHeight: 600,
-                    background: themeColors.background,
-                    boxShadow: "0px 4px 24px rgba(0, 0, 0, 0.04)",
-                    overflow: "hidden",
-                    borderRadius: isMobile ? "48px 48px 0px 0px" : 48,
-                    flexDirection: "column",
-                    justifyContent: "flex-start",
-                    alignItems: "flex-start",
-                    display: "inline-flex",
-                    marginBottom: isMobile ? 0 : "auto",
-                    marginTop: isMobile ? "auto" : "auto",
-                    transformOrigin: isMobile ? "bottom center" : "center",
-                }}
-            >
-                <div
-                    data-layer="welcome-image-container"
-                    className="WelcomeImageContainer"
-                    style={{
-                        alignSelf: "stretch",
-                        height: 224,
-                        background: "#E9E9EA",
-                        overflow: "hidden",
-                        flexDirection: "column",
-                        justifyContent: "flex-start",
-                        alignItems: "center",
-                        gap: 10,
-                        display: "flex",
-                    }}
+}) => (
+    <BaseModalOverlay
+        isMobile={isMobile}
+        onClose={onClose}
+        themeColors={themeColors}
+        imageSrc="https://framerusercontent.com/images/iDGXsLUjWFYougkKQaiObRc6vng.jpg?scale-down-to=2048&width=2720&height=1568"
+    >
+        <div style={{ alignSelf: "stretch", paddingTop: 28, paddingBottom: 36, paddingLeft: 28, paddingRight: 28, flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 8, display: "flex" }}>
+            <h1 style={{ alignSelf: "stretch", color: themeColors.text.primary, fontSize: 16, fontFamily: "Inter", fontWeight: "400", lineHeight: "21px", wordWrap: "break-word", margin: 0, padding: 0 }}>
+                Curastem is the #1 way to get a job
+            </h1>
+            <div style={{ alignSelf: "stretch" }}>
+                <span style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.60px", wordWrap: "break-word" }}>
+                    Video call with mentors or chat with AI to create resumes, make apps, and practice for interviews.{" "}
+                </span>
+                <span
+                    onClick={() => window.open("https://curastem.org/about", "_blank")}
+                    style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", textDecoration: "underline", lineHeight: "19.60px", wordWrap: "break-word", cursor: "pointer" }}
                 >
-                    <img
-                        data-layer="welcome-image"
-                        className="WelcomeImage"
-                        style={{
-                            alignSelf: "center",
-                            flex: "1 1 0",
-                            position: "relative",
-                            width: "100%",
-                            maxWidth: 400,
-                            height: "100%",
-                            objectFit: "cover",
-                        }}
-                        src="https://framerusercontent.com/images/iDGXsLUjWFYougkKQaiObRc6vng.jpg?scale-down-to=2048&width=2720&height=1568"
-                    />
-                </div>
-                <div
-                    data-layer="welcome-content"
-                    className="WelcomeContent"
-                    style={{
-                        alignSelf: "stretch",
-                        paddingTop: 28,
-                        paddingBottom: 36,
-                        paddingLeft: 28,
-                        paddingRight: 28,
-                        flexDirection: "column",
-                        justifyContent: "flex-start",
-                        alignItems: "flex-start",
-                        gap: 8,
-                        display: "flex",
-                    }}
-                >
-                    <h1
-                        data-layer="welcome-title"
-                        className="WelcomeTitle"
-                        style={{
-                            alignSelf: "stretch",
-                            color: themeColors.text.primary,
-                            fontSize: 16,
-                            fontFamily: "Inter",
-                            fontWeight: "400",
-                            lineHeight: "21px",
-                            wordWrap: "break-word",
-                            margin: 0,
-                            padding: 0,
-                        }}
-                    >
-                        Curastem is the #1 way to get a job
-                    </h1>
-                    <div
-                        data-layer="welcome-description"
-                        className="WelcomeDescription"
-                        style={{
-                            alignSelf: "stretch",
-                        }}
-                    >
-                        <span
-                            style={{
-                                color: themeColors.text.secondary,
-                                fontSize: 14,
-                                fontFamily: "Inter",
-                                fontWeight: "400",
-                                lineHeight: "19.60px",
-                                wordWrap: "break-word",
-                            }}
-                        >
-                            Video call with mentors or chat with AI to create
-                            resumes, make apps, and practice for interviews.{" "}
-                        </span>
-                        <span
-                            onClick={() =>
-                                window.open(
-                                    "https://curastem.org/about",
-                                    "_blank"
-                                )
-                            }
-                            style={{
-                                color: themeColors.text.secondary,
-                                fontSize: 14,
-                                fontFamily: "Inter",
-                                fontWeight: "400",
-                                textDecoration: "underline",
-                                lineHeight: "19.60px",
-                                wordWrap: "break-word",
-                                cursor: "pointer",
-                            }}
-                        >
-                            Learn more
-                        </span>
-                    </div>
-                </div>
-            </motion.div>
+                    Learn more
+                </span>
+            </div>
         </div>
-    )
-}
+    </BaseModalOverlay>
+)
+
+// --- JOIN VIDEO CALL OVERLAY COMPONENT ---
+const JoinVideoCallOverlay = ({
+    isMobile,
+    onVolunteer,
+    onStudent,
+    onClose,
+    themeColors,
+}: {
+    isMobile: boolean
+    onVolunteer: () => void
+    onStudent: () => void
+    onClose: () => void
+    themeColors: typeof darkColors
+}) => (
+    <BaseModalOverlay
+        isMobile={isMobile}
+        onClose={onClose}
+        themeColors={themeColors}
+        imageSrc="https://framerusercontent.com/images/NhsCrNqyU1mwQ6dy5tnRQCWctP0.png?width=1560&height=896"
+    >
+        <div style={{ alignSelf: "stretch", paddingTop: 28, paddingBottom: 36, paddingLeft: 28, paddingRight: 28, flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 24, display: "flex" }}>
+            <div style={{ alignSelf: "stretch", flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 12, display: "flex" }}>
+                <div style={{ alignSelf: "stretch", color: themeColors.text.primary, fontSize: 16, fontFamily: "Inter", fontWeight: "500", lineHeight: "16px", wordWrap: "break-word" }}>
+                    Join a video call
+                </div>
+                <div style={{ alignSelf: "stretch", color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.60px", wordWrap: "break-word" }}>
+                    Connect with a mentor to get free help, or volunteer to offer free college and career advice.{" "}
+                    <span
+                        onClick={() => window.open("https://curastem.org/about", "_blank")}
+                        style={{ color: "inherit", textDecoration: "underline", cursor: "pointer" }}
+                    >
+                        Learn more
+                    </span>
+                </div>
+            </div>
+            <div style={{ alignSelf: "stretch", flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 12, display: "flex" }}>
+                <button
+                    onClick={onVolunteer}
+                    style={{ alignSelf: "stretch", height: 48, paddingLeft: 4, paddingRight: 4, paddingTop: 12, paddingBottom: 12, background: themeColors.hover.default, overflow: "hidden", borderRadius: 28, justifyContent: "center", alignItems: "center", gap: 10, display: "inline-flex", border: "none", cursor: "pointer", width: "100%" }}
+                >
+                    <span style={{ flex: "1 1 0", textAlign: "center", color: themeColors.text.primary, fontSize: 15, fontFamily: "Inter", fontWeight: "400", lineHeight: "21px", wordWrap: "break-word" }}>
+                        Volunteer
+                    </span>
+                </button>
+                <button
+                    onClick={onStudent}
+                    style={{ alignSelf: "stretch", height: 48, paddingLeft: 4, paddingRight: 4, paddingTop: 12, paddingBottom: 12, background: themeColors.semantic.accent, overflow: "hidden", borderRadius: 28, justifyContent: "center", alignItems: "center", gap: 10, display: "inline-flex", border: "none", cursor: "pointer", width: "100%" }}
+                >
+                    <span style={{ flex: "1 1 0", textAlign: "center", color: "hsla(0, 0%, 100%, 0.95)", fontSize: 15, fontFamily: "Inter", fontWeight: "500", lineHeight: "21px", wordWrap: "break-word" }}>
+                        Call a mentor
+                    </span>
+                </button>
+            </div>
+        </div>
+    </BaseModalOverlay>
+)
 
 // --- HELPER: PII & SAFETY FILTER ---
 function sanitizeMessage(text: string): string {
@@ -12336,6 +13126,7 @@ export default function OmegleMentorshipUI(props: Props) {
     const {
         geminiApiKey,
         skillsApiUrl,
+        jobsApiUrl = "https://jobs-proxy.curastem.org",
         systemPrompt,
         accentColor,
         model = "gemini-3.1-flash-lite-preview",
@@ -12354,6 +13145,7 @@ export default function OmegleMentorshipUI(props: Props) {
 
     // Welcome Overlay State
     const [showWelcome, setShowWelcome] = React.useState(false)
+    const [showJoinCallOverlay, setShowJoinCallOverlay] = React.useState(false)
     const hasInteractedRef = React.useRef(false)
     const interactionTimeoutRef = React.useRef<any>(null)
 
@@ -12724,6 +13516,22 @@ export default function OmegleMentorshipUI(props: Props) {
     React.useEffect(() => {
         isAppOpenRef.current = isAppOpen
     }, [isAppOpen])
+
+    // --- STATE: JOB DETAIL ---
+    const [isJobOpen, setIsJobOpen] = React.useState(false)
+    const [selectedJob, setSelectedJob] = React.useState<HomepageJob | null>(null)
+
+    const openJobDetail = React.useCallback((job: HomepageJob) => {
+        setSelectedJob(job)
+        setIsJobOpen(true)
+        setIsDocOpen(false)
+        setIsWhiteboardOpen(false)
+        setIsAppOpen(false)
+    }, [])
+
+    const closeJobDetail = React.useCallback(() => {
+        setIsJobOpen(false)
+    }, [])
 
     // Track pending connections (black tiles)
     const [pendingPeerIds, setPendingPeerIds] = React.useState<Set<string>>(
@@ -14463,13 +15271,9 @@ Do not include markdown formatting or explanations.`
         }
     }, [editingChatId])
 
-    const [currentChatId, setCurrentChatId] = React.useState<string>(() => {
-        if (typeof window !== "undefined") {
-            const savedId = localStorage.getItem("current_chat_id")
-            if (savedId) return savedId
-        }
-        return Date.now().toString()
-    })
+    // Always start a fresh chat on load — a new ID won't match any savedChats entry,
+    // so the restore effect falls through to the "new chat" branch automatically.
+    const [currentChatId, setCurrentChatId] = React.useState<string>(() => Date.now().toString())
 
     React.useEffect(() => {
         if (typeof window !== "undefined") {
@@ -14536,11 +15340,10 @@ Do not include markdown formatting or explanations.`
 
     const [isSidebarOpen, setIsSidebarOpen] = React.useState(() => {
         if (typeof window !== "undefined") {
+            // Mobile always opens with sidebar closed
+            if (window.innerWidth < 768) return false
             const saved = localStorage.getItem("is_sidebar_open")
-            // If saved value exists, use it. Otherwise default to false (collapsed).
-            if (saved !== null) {
-                return saved === "true"
-            }
+            if (saved !== null) return saved === "true"
         }
         return false
     })
@@ -14570,7 +15373,7 @@ Do not include markdown formatting or explanations.`
     const wasSidebarOpenBeforeTool = React.useRef<boolean | null>(null)
 
     React.useEffect(() => {
-        const isAnyToolOpen = isDocOpen || isWhiteboardOpen || isAppOpen
+        const isAnyToolOpen = isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen
 
         if (isAnyToolOpen) {
             // Tool(s) just opened or switched
@@ -14596,6 +15399,8 @@ Do not include markdown formatting or explanations.`
     }, [isDocOpen, isWhiteboardOpen, isAppOpen])
 
     const [isSidebarBtnHovered, setIsSidebarBtnHovered] = React.useState(false)
+    const [isVideoCallIconHovered, setIsVideoCallIconHovered] =
+        React.useState(false)
     const [hoveredChatId, setHoveredChatId] = React.useState<string | null>(
         null
     )
@@ -14605,6 +15410,8 @@ Do not include markdown formatting or explanations.`
     const [isOpenCurastemHovered, setIsOpenCurastemHovered] =
         React.useState(false)
     const [isTopNewChatHovered, setIsTopNewChatHovered] = React.useState(false)
+    const [isNewChatTopRightHovered, setIsNewChatTopRightHovered] =
+        React.useState(false)
     const [isAddPeopleHovered, setIsAddPeopleHovered] = React.useState(false)
     const [isYouHovered, setIsYouHovered] = React.useState(false)
     const [searchQuery, setSearchQuery] = React.useState("")
@@ -16177,6 +16984,7 @@ Do not include markdown formatting or explanations.`
                         broadcastData({ type: "app-stop" })
                     }
                 }
+                setIsJobOpen(false)
                 // Allow screenshare to remain open
                 // if (isScreenSharing) stopLocalScreenShare()
             }
@@ -16207,6 +17015,7 @@ Do not include markdown formatting or explanations.`
                     broadcastData({ type: "app-stop" })
                 }
             }
+            setIsJobOpen(false)
             // Allow screenshare to remain open
             // if (isScreenSharing) stopLocalScreenShare()
 
@@ -16282,6 +17091,7 @@ Do not include markdown formatting or explanations.`
                     broadcastData({ type: "tldraw-stop" })
                 }
             }
+            setIsJobOpen(false)
 
             // Broadcast start (desktop only)
             if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
@@ -19933,7 +20743,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 }
 
                 const isToolOpen =
-                    isWhiteboardOpen || isDocOpen || isAppOpen || isAppOpen
+                    isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen
                 const isSidebarMode = !isMobileLayout && isToolOpen
                 let effectiveIsMobile = isMobileLayout
 
@@ -20065,7 +20875,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             let containerWidth =
                 containerRef.current?.clientWidth || window.innerWidth
 
-            const isToolOpen = isWhiteboardOpen || isDocOpen || isAppOpen
+            const isToolOpen = isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen
             const isSidebarMode = !isMobileLayout && isToolOpen
             let effectiveIsMobile = isMobileLayout
 
@@ -20264,7 +21074,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
     ])
 
     // Sidebar Logic Definition (Hoist for layout calc)
-    const isToolOpen = isWhiteboardOpen || isDocOpen || isAppOpen
+    const isToolOpen = isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen
     const isSidebarMode = !isMobileLayout && isToolOpen
     const isMobileToolMode = isMobileLayout && isToolOpen
 
@@ -20516,6 +21326,17 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
 
     // 1. Tool Renderer (Whiteboard / Doc)
     const renderActiveTool = (isOverlay: boolean) => {
+        if (isJobOpen && selectedJob) {
+            return (
+                <JobDetailPanel
+                    job={selectedJob}
+                    jobsApiUrl={jobsApiUrl}
+                    onClose={closeJobDetail}
+                    themeColors={themeColors}
+                    isMobile={isMobileLayout}
+                />
+            )
+        }
         return (
             <div
                 style={{
@@ -21079,7 +21900,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     style={{
                         flex: 1,
                         width: "100%",
-                        padding: "0 24px",
+                        padding: "80px 24px",
                         paddingBottom: 140,
                         overflowY: "auto",
                         overflowX: "visible",
@@ -21092,6 +21913,18 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         position: "relative",
                     }}
                 >
+                    {/* Homepage — shown when no messages and not in/waiting for a call or Gemini Live session.
+                        Visible regardless of which right sidebar is open (jobs, docs, whiteboard, apps). */}
+                    {!hasMessages && status === "idle" && !isLiveMode && !role && jobsApiUrl && (
+                        <HomepageJobs
+                            jobsApiUrl={jobsApiUrl}
+                            userQuery={youWork}
+                            isMobileLayout={isMobileLayout}
+                            themeColors={themeColors}
+                            onOpenSettings={() => setShowYouSettings(true)}
+                            onJobClick={openJobDetail}
+                        />
+                    )}
                     {messages.map((msg, idx) => {
                         const isModelMessage = msg.role === "model"
                         const shouldShowAd =
@@ -21225,7 +22058,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         setShowAddPeopleOverlay={setShowAddPeopleOverlay}
                         hideGradient={
                             aiGeneratedSuggestions.length > 0 ||
-                            ((isDocOpen || isWhiteboardOpen || isAppOpen) &&
+                            ((isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) &&
                                 isMobileLayout)
                         }
                         value={inputText}
@@ -21574,7 +22407,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             !!remoteScreenStream ||
             isWhiteboardOpen ||
             isDocOpen ||
-            isAppOpen
+            isAppOpen ||
+            isJobOpen
         const targetRatio =
             isMultiParty || (isContentOpen && isMultiParty) ? 1.0 : 1.55
 
@@ -22042,6 +22876,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             isDocOpen ||
             isAppOpen
 
+        // Hide tiles and drag bar when idle with no role — user will use the "Join video call" button instead
+        const isIdleNoRole = status === "idle" && !role && !isLiveMode
+
         // In sidebar context, we force the container to act like a mobile container
         // But we rely on the parent container (400px width) to constrain it.
         // The renderTilesSection and renderChatSection helpers already accept isSidebarContext to adjust their internal logic.
@@ -22063,126 +22900,151 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     overflow: "hidden",
                 }}
             >
-                {/* 1. Tiles & Main Content Area */}
-                {(isContentActive || !isBanned) && (
-                    <div
-                        data-layer="tiles-main-content-area"
-                        className="TilesMainContentArea"
-                        style={{
-                            flex: "1 1 0",
-                            width: "100%",
-                            display: "flex",
-                            // Sidebar context: Always column (vertical stack). Standard context: Adaptive.
-                            flexDirection: isSidebarContext
-                                ? "column"
-                                : isContentActive
-                                  ? "column"
-                                  : shouldUseHorizontalLayout
-                                    ? "row"
-                                    : "column",
-                            gap: 8,
-                            paddingTop: 16,
-                            paddingLeft: 16,
-                            paddingRight: 16,
-                            paddingBottom: 0,
-                            alignItems: isSidebarContext
-                                ? "center"
-                                : isContentActive
-                                  ? "center"
-                                  : !isMobileLayout
-                                    ? "center"
-                                    : "center",
-                            justifyContent: isSidebarContext
-                                ? "flex-start"
-                                : isContentActive
-                                  ? "flex-start"
-                                  : "center",
-                            boxSizing: "border-box",
-                            minHeight: 0,
-                            position: "relative",
-                            overflow: "hidden",
-                        }}
-                    >
-                        {/* Tiles */}
-                        {renderTilesSection(isSidebarContext)}
-
-                        {/* Main Content (ScreenShare Only in this view - Tool is overlaid or not shown here if mobile tool mode) */}
-                        {(isScreenSharing || !!remoteScreenStream) && (
-                            <div
-                                data-layer="screen-share-section"
-                                className="ScreenShareSection"
+                {/* 1. Tiles & Main Content Area + 2. Drag Handle — animate in from bottom */}
+                <AnimatePresence>
+                    {(isContentActive || !isBanned) &&
+                        !isIdleNoRole && (
+                            <motion.div
+                                key="tiles-and-drag"
+                                data-layer="video-tiles-and-dragbar"
+                                className="VideoTilesAndDragbar"
+                                initial={{ y: 248, opacity: 0 }}
+                                animate={{ y: 0, opacity: 1 }}
+                                exit={{ opacity: 0, transition: { duration: 0 } }}
+                                transition={{
+                                    duration: 0.3,
+                                    ease: [0.4, 0, 0.2, 1],
+                                }}
                                 style={{
-                                    flex: 1,
+                                    flex: "1 1 0",
+                                    minHeight: 0,
                                     width: "100%",
-                                    overflow: "hidden",
-                                    background: "transparent",
-                                    position: "relative",
                                     display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
+                                    flexDirection: "column",
+                                    position: "relative",
                                 }}
                             >
-                                {renderScreenShareSection()}
-                            </div>
+                                <div
+                                    data-layer="tiles-main-content-area"
+                                    className="TilesMainContentArea"
+                                    style={{
+                                        flex: "1 1 0",
+                                        width: "100%",
+                                        display: "flex",
+                                        flexDirection: isSidebarContext
+                                            ? "column"
+                                            : isContentActive
+                                              ? "column"
+                                              : shouldUseHorizontalLayout
+                                                ? "row"
+                                                : "column",
+                                        gap: 8,
+                                        paddingTop: 16,
+                                        paddingLeft: 16,
+                                        paddingRight: 16,
+                                        paddingBottom: 0,
+                                        alignItems: isSidebarContext
+                                            ? "center"
+                                            : isContentActive
+                                              ? "center"
+                                              : !isMobileLayout
+                                                ? "center"
+                                                : "center",
+                                        justifyContent: isSidebarContext
+                                            ? "flex-start"
+                                            : isContentActive
+                                              ? "flex-start"
+                                              : "center",
+                                        boxSizing: "border-box",
+                                        minHeight: 0,
+                                        position: "relative",
+                                        overflow: "hidden",
+                                    }}
+                                >
+                                    {renderTilesSection(isSidebarContext)}
+                                    {(isScreenSharing ||
+                                        !!remoteScreenStream) && (
+                                        <div
+                                            data-layer="screen-share-section"
+                                            className="ScreenShareSection"
+                                            style={{
+                                                flex: 1,
+                                                width: "100%",
+                                                overflow: "hidden",
+                                                background: "transparent",
+                                                position: "relative",
+                                                display: "flex",
+                                                alignItems: "center",
+                                                justifyContent: "center",
+                                            }}
+                                        >
+                                            {renderScreenShareSection()}
+                                        </div>
+                                    )}
+                                </div>
+                                <motion.div
+                                        data-layer="drag-handle-container"
+                                        className="DragHandleContainer"
+                                        onPointerDown={handlePointerDown}
+                                        onPointerEnter={() => {
+                                            hoverTimeoutRef.current =
+                                                window.setTimeout(() => {
+                                                    setIsDragBarHovered(true)
+                                                }, 50)
+                                        }}
+                                        onPointerLeave={() => {
+                                            if (hoverTimeoutRef.current) {
+                                                clearTimeout(
+                                                    hoverTimeoutRef.current
+                                                )
+                                                hoverTimeoutRef.current = null
+                                            }
+                                            setIsDragBarHovered(false)
+                                        }}
+                                        style={{
+                                            height: 24,
+                                            width: "100%",
+                                            background: "transparent",
+                                            ...styles.flexCenter,
+                                            cursor: "ns-resize",
+                                            flexShrink: 0,
+                                            touchAction: "none",
+                                            zIndex: 20,
+                                            position: "relative",
+                                        }}
+                                    >
+                                        <div
+                                            data-layer="drag-indicator"
+                                            style={{
+                                                width: 48,
+                                                height: 5,
+                                                borderRadius: 4,
+                                                background:
+                                                    themeColors.misc.graySolid,
+                                            }}
+                                        />
+                                        {isDragBarHovered &&
+                                            !isDragging.current && (
+                                                <Tooltip
+                                                    style={{
+                                                        top: "100%",
+                                                        left: "50%",
+                                                        transform:
+                                                            "translate(-50%, 4px)",
+                                                        whiteSpace: "nowrap",
+                                                    }}
+                                                >
+                                                    {chatHeight <
+                                                    currentConstraints
+                                                        .maxHeight - 5
+                                                        ? "Click to expand chat"
+                                                        : "Click to minimize chat"}
+                                                </Tooltip>
+                                            )}
+                                </motion.div>
+                            </motion.div>
                         )}
-                    </div>
-                )}
-
-                {/* 2. Drag Handle (Present in both Standard and Sidebar) */}
-                {(!isBanned || isContentActive) && (
-                    <motion.div
-                        data-layer="drag-handle-container"
-                        className="DragHandleContainer"
-                        onPointerDown={handlePointerDown}
-                        onPointerEnter={() => {
-                            hoverTimeoutRef.current = window.setTimeout(() => {
-                                setIsDragBarHovered(true)
-                            }, 50)
-                        }}
-                        onPointerLeave={() => {
-                            if (hoverTimeoutRef.current) {
-                                clearTimeout(hoverTimeoutRef.current)
-                                hoverTimeoutRef.current = null
-                            }
-                            setIsDragBarHovered(false)
-                        }}
-                        style={{
-                            height: 24,
-                            width: "100%",
-                            background: "transparent",
-                            ...styles.flexCenter,
-                            cursor: "ns-resize",
-                            flexShrink: 0,
-                            touchAction: "none",
-                            zIndex: 20,
-                            position: "relative",
-                        }}
-                    >
-                        <div
-                            data-layer="drag-indicator"
-                            style={{
-                                width: 48,
-                                height: 5,
-                                borderRadius: 4,
-                                background: themeColors.misc.graySolid,
-                            }}
-                        />
-                        {isDragBarHovered && !isDragging.current && (
-                            <Tooltip
-                                style={{
-                                    top: "100%",
-                                    left: "50%",
-                                    transform: "translate(-50%, 4px)",
-                                    whiteSpace: "nowrap",
-                                }}
-                            >
-                                {chatHeight < currentConstraints.maxHeight - 5
-                                    ? "Click to expand chat"
-                                    : "Click to minimize chat"}
-                            </Tooltip>
-                        )}
-                    </motion.div>
-                )}
+                </AnimatePresence>
 
                 {/* 3. Chat History (Drawer) */}
                 <div
@@ -22190,7 +23052,14 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     className="ChatHistoryDrawer"
                     style={{
                         width: "100%",
-                        height: isBanned && !isContentActive ? "100%" : "auto",
+                        flex: isIdleNoRole ? "1 1 0" : "none",
+                        height:
+                            isBanned && !isContentActive
+                                ? "100%"
+                                : isIdleNoRole
+                                  ? undefined
+                                  : "auto",
+                        minHeight: isIdleNoRole ? 0 : undefined,
                         background: "transparent",
                         display: "flex",
                         justifyContent: "center",
@@ -22204,10 +23073,13 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             height:
                                 isBanned && !isContentActive
                                     ? "100%"
-                                    : chatHeight,
+                                    : isIdleNoRole
+                                      ? "100%"
+                                      : chatHeight,
                         }}
                         transition={{
-                            duration: isDragging.current ? 0 : 0.25,
+                            duration:
+                                isDragging.current || isIdleNoRole ? 0 : 0.25,
                             ease: "easeInOut",
                         }}
                         style={{
@@ -23630,9 +24502,88 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     </div>
                                 </div>
                                 <div
+                                    data-layer="you"
+                                    className="You"
+                                    tabIndex={isSidebarOpen ? 10 + suggestionCount : undefined}
+                                    aria-label="Open your profile settings"
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        setYouButtonOrigin({
+                                            x: e.clientX,
+                                            y: e.clientY,
+                                        })
+                                        setShowYouSettings(true)
+                                    }}
+                                    onMouseEnter={() => setIsYouHovered(true)}
+                                    onMouseLeave={() => setIsYouHovered(false)}
+                                    style={{
+                                        alignSelf: "stretch",
+                                        height: 36,
+                                        paddingLeft: 10,
+                                        paddingRight: 10,
+                                        borderRadius: 28,
+                                        justifyContent: "flex-start",
+                                        alignItems: "center",
+                                        gap: 8,
+                                        display: "inline-flex",
+                                        cursor: "pointer",
+                                        background: isYouHovered
+                                            ? themeColors.hover.strong
+                                            : "transparent",
+                                    }}
+                                >
+                                    <div
+                                        data-svg-wrapper
+                                        data-layer="you icon"
+                                        className="YouIcon"
+                                        style={{
+                                            width: 16,
+                                            minWidth: 16,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                        }}
+                                    >
+                                        <svg
+                                            width="16"
+                                            height="18"
+                                            viewBox="0 0 16 18"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M0.820312 16.6C1.07206 11.6536 5.31492 9.45122 9.12084 9.99276M6.88031 9.99276C10.6862 9.45122 14.9291 11.6536 15.1808 16.6M11.4487 4.0622C11.4487 2.17646 9.8722 0.600006 7.98646 0.600006C6.10072 0.600006 4.52427 2.17646 4.52427 4.0622C4.52427 5.94794 6.10072 7.52439 7.98646 7.52439C9.8722 7.52439 11.4487 5.94794 11.4487 4.0622Z"
+                                                stroke={themeColors.text.primary}
+                                                strokeOpacity="0.95"
+                                                strokeWidth="1.2"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                            />
+                                        </svg>
+                                    </div>
+                                    <div
+                                        data-layer="you label"
+                                        className="YouLabel"
+                                        style={{
+                                            flex: "1 1 0",
+                                            justifyContent: "center",
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            color: themeColors.text.primary,
+                                            fontSize: 14,
+                                            fontFamily: "Inter",
+                                            fontWeight: "400",
+                                            lineHeight: "19.32px",
+                                            wordWrap: "break-word",
+                                        }}
+                                    >
+                                        You
+                                    </div>
+                                </div>
+                                <div
                                     data-layer="group call"
                                     className="GroupCall"
-                                    tabIndex={isSidebarOpen ? 10 + suggestionCount : undefined}
+                                    tabIndex={isSidebarOpen ? 11 + suggestionCount : undefined}
                                     aria-label={
                                         isMobileLayout
                                             ? "Share call link"
@@ -23749,85 +24700,6 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         }}
                                     >
                                         Group call
-                                    </div>
-                                </div>
-                                <div
-                                    data-layer="you"
-                                    className="You"
-                                    tabIndex={isSidebarOpen ? 11 + suggestionCount : undefined}
-                                    aria-label="Open your profile settings"
-                                    onClick={(e) => {
-                                        e.stopPropagation()
-                                        setYouButtonOrigin({
-                                            x: e.clientX,
-                                            y: e.clientY,
-                                        })
-                                        setShowYouSettings(true)
-                                    }}
-                                    onMouseEnter={() => setIsYouHovered(true)}
-                                    onMouseLeave={() => setIsYouHovered(false)}
-                                    style={{
-                                        alignSelf: "stretch",
-                                        height: 36,
-                                        paddingLeft: 10,
-                                        paddingRight: 10,
-                                        borderRadius: 28,
-                                        justifyContent: "flex-start",
-                                        alignItems: "center",
-                                        gap: 8,
-                                        display: "inline-flex",
-                                        cursor: "pointer",
-                                        background: isYouHovered
-                                            ? themeColors.hover.strong
-                                            : "transparent",
-                                    }}
-                                >
-                                    <div
-                                        data-svg-wrapper
-                                        data-layer="you icon"
-                                        className="YouIcon"
-                                        style={{
-                                            width: 16,
-                                            minWidth: 16,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                        }}
-                                    >
-                                        <svg
-                                            width="16"
-                                            height="18"
-                                            viewBox="0 0 16 18"
-                                            fill="none"
-                                            xmlns="http://www.w3.org/2000/svg"
-                                        >
-                                            <path
-                                                d="M0.820312 16.6C1.07206 11.6536 5.31492 9.45122 9.12084 9.99276M6.88031 9.99276C10.6862 9.45122 14.9291 11.6536 15.1808 16.6M11.4487 4.0622C11.4487 2.17646 9.8722 0.600006 7.98646 0.600006C6.10072 0.600006 4.52427 2.17646 4.52427 4.0622C4.52427 5.94794 6.10072 7.52439 7.98646 7.52439C9.8722 7.52439 11.4487 5.94794 11.4487 4.0622Z"
-                                                stroke={themeColors.text.primary}
-                                                strokeOpacity="0.95"
-                                                strokeWidth="1.2"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                            />
-                                        </svg>
-                                    </div>
-                                    <div
-                                        data-layer="you label"
-                                        className="YouLabel"
-                                        style={{
-                                            flex: "1 1 0",
-                                            justifyContent: "center",
-                                            display: "flex",
-                                            flexDirection: "column",
-                                            color: themeColors.text.primary,
-                                            fontSize: 14,
-                                            fontFamily: "Inter",
-                                            fontWeight: "400",
-                                            lineHeight: "19.32px",
-                                            wordWrap: "break-word",
-                                        }}
-                                    >
-                                        You
                                     </div>
                                 </div>
                                 {/* Curastem.org link button */}
@@ -23964,20 +24836,20 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             pointerEvents: "auto",
                         }}
                     >
-                        {/* Background Dimmer */}
+                        {/* Background Dimmer — matches video call overlay timing */}
                         <motion.div
                             initial={{ opacity: 0 }}
                             animate={{
                                 opacity: 1,
                                 transition: isMobileLayout
                                     ? { duration: 0.2 }
-                                    : { duration: 0.1, delay: 0.1 },
+                                    : { duration: 0.2 },
                             }}
                             exit={{
                                 opacity: 0,
                                 transition: isMobileLayout
                                     ? { duration: 0.2 }
-                                    : { duration: 0, delay: 0 },
+                                    : { duration: 0.2 },
                             }}
                             style={{
                                 position: "absolute",
@@ -23987,7 +24859,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             onClick={() => setShowYouSettings(false)}
                         />
 
-                        {/* Content Card */}
+                        {/* Content Card — desktop animation matches video call overlay (BaseModalOverlay) */}
                         <motion.div
                             data-layer="settings overlay"
                             className="SettingsOverlay"
@@ -23995,7 +24867,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             initial={
                                 isMobileLayout
                                     ? { y: "100%", scale: 0, opacity: 0 }
-                                    : { opacity: 0 }
+                                    : { scale: 0.95, opacity: 0 }
                             }
                             animate={
                                 isMobileLayout
@@ -24009,10 +24881,11 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                           },
                                       }
                                     : {
+                                          scale: 1,
                                           opacity: 1,
                                           transition: {
-                                              duration: 0,
-                                              delay: 0.1,
+                                              duration: 0.2,
+                                              ease: [0.4, 0, 0.2, 1],
                                           },
                                       }
                             }
@@ -24028,8 +24901,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                           },
                                       }
                                     : {
+                                          scale: 0.95,
                                           opacity: 0,
-                                          transition: { duration: 0, delay: 0 },
+                                          transition: {
+                                              duration: 0.2,
+                                              ease: [0.4, 0, 0.2, 1],
+                                          },
                                       }
                             }
                             style={{
@@ -24060,12 +24937,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 display: "inline-flex",
                                 position: "relative",
                                 zIndex: 1,
-                                transformOrigin:
-                                    !isMobileLayout &&
-                                    youButtonOrigin &&
-                                    typeof window !== "undefined"
-                                        ? `calc(50% + ${youButtonOrigin.x - window.innerWidth / 2}px) calc(50% + ${youButtonOrigin.y - window.innerHeight / 2}px)`
-                                        : "center",
+                                transformOrigin: "center",
                             }}
                             onClick={(e) => e.stopPropagation()}
                         >
@@ -24119,7 +24991,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 >
                                     Make chats more relevant and personal. This
                                     information may be shared with people you
-                                    connect with.
+                                    video call.
                                 </div>
                                 <div
                                     data-svg-wrapper
@@ -24250,6 +25122,69 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 </div>
                             </div>
 
+                            {/* Job title */}
+                            <div
+                                className="Flexbox"
+                                style={{
+                                    alignSelf: "stretch",
+                                    flexDirection: "column",
+                                    gap: 8,
+                                    display: "flex",
+                                }}
+                            >
+                                <div
+                                    className="Work"
+                                    style={{
+                                        color: "${themeColors.text.primary}",
+                                        fontSize: 14,
+                                        fontFamily: "Inter",
+                                        fontWeight: "400",
+                                    }}
+                                >
+                                    Job title
+                                </div>
+                                <div
+                                    style={{
+                                        alignSelf: "stretch",
+                                        height: 44,
+                                        padding: "0 16px",
+                                        background:
+                                            themeColors.background ===
+                                            lightColors.background
+                                                ? themeColors.background
+                                                : themeColors.surface,
+                                        border:
+                                            themeColors.background ===
+                                            lightColors.background
+                                                ? `0.33px solid ${themeColors.border.subtle}`
+                                                : "none",
+                                        borderRadius: 28,
+                                        display: "flex",
+                                        alignItems: "center",
+                                    }}
+                                >
+                                    <input
+                                        className="SettingsInput"
+                                        type="text"
+                                        aria-label="Your job title"
+                                        placeholder="Add your dream job"
+                                        value={youWork}
+                                        onChange={(e) =>
+                                            setYouWork(e.target.value)
+                                        }
+                                        style={{
+                                            width: "100%",
+                                            background: "transparent",
+                                            border: "none",
+                                            color: themeColors.text.primary,
+                                            fontSize: 14,
+                                            outline: "none",
+                                            fontFamily: "Inter",
+                                        }}
+                                    />
+                                </div>
+                            </div>
+
                             {/* School */}
                             <div
                                 className="Flexbox"
@@ -24295,73 +25230,10 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         className="SettingsInput"
                                         type="text"
                                         aria-label="Your school or college"
-                                        placeholder="Add your college"
+                                        placeholder="Add your school"
                                         value={youSchool}
                                         onChange={(e) =>
                                             setYouSchool(e.target.value)
-                                        }
-                                        style={{
-                                            width: "100%",
-                                            background: "transparent",
-                                            border: "none",
-                                            color: themeColors.text.primary,
-                                            fontSize: 14,
-                                            outline: "none",
-                                            fontFamily: "Inter",
-                                        }}
-                                    />
-                                </div>
-                            </div>
-
-                            {/* Work */}
-                            <div
-                                className="Flexbox"
-                                style={{
-                                    alignSelf: "stretch",
-                                    flexDirection: "column",
-                                    gap: 8,
-                                    display: "flex",
-                                }}
-                            >
-                                <div
-                                    className="Work"
-                                    style={{
-                                        color: "${themeColors.text.primary}",
-                                        fontSize: 14,
-                                        fontFamily: "Inter",
-                                        fontWeight: "400",
-                                    }}
-                                >
-                                    Work
-                                </div>
-                                <div
-                                    style={{
-                                        alignSelf: "stretch",
-                                        height: 44,
-                                        padding: "0 16px",
-                                        background:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? themeColors.background
-                                                : themeColors.surface,
-                                        border:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? `0.33px solid ${themeColors.border.subtle}`
-                                                : "none",
-                                        borderRadius: 28,
-                                        display: "flex",
-                                        alignItems: "center",
-                                    }}
-                                >
-                                    <input
-                                        className="SettingsInput"
-                                        type="text"
-                                        aria-label="Your job or work"
-                                        placeholder="Add your job"
-                                        value={youWork}
-                                        onChange={(e) =>
-                                            setYouWork(e.target.value)
                                         }
                                         style={{
                                             width: "100%",
@@ -24539,12 +25411,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     animate={{
                         width:
                             !isMobileLayout &&
-                            (isDocOpen || isWhiteboardOpen || isAppOpen)
+                            (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen)
                                 ? chatWidth
                                 : "100%",
                         flexGrow:
                             !isMobileLayout &&
-                            (isDocOpen || isWhiteboardOpen || isAppOpen)
+                            (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen)
                                 ? 0
                                 : 1,
                     }}
@@ -24565,7 +25437,76 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 >
                     {renderStandardLayout(
                         !isMobileLayout &&
-                            (isDocOpen || isWhiteboardOpen || isAppOpen)
+                            (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen)
+                    )}
+
+                    {/* Video Call Icon — same position as new chat button, shown when idle with no messages */}
+                    {status === "idle" && !role && !isLiveMode && messages.length === 0 && (
+                        <>
+                            <style>{`
+                                [data-layer="video-call-icon"] {
+                                    background: transparent;
+                                }
+                                [data-layer="video-call-icon"]:hover {
+                                    background: ${themeColors.hover.medium};
+                                }
+                            `}</style>
+                            <div
+                                data-svg-wrapper
+                                data-layer="video-call-icon"
+                                aria-label="Join video call"
+                                onMouseEnter={() => setIsVideoCallIconHovered(true)}
+                                onMouseLeave={() => setIsVideoCallIconHovered(false)}
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    haptic.light()
+                                    setShowJoinCallOverlay(true)
+                                }}
+                                style={{
+                                    position: "absolute",
+                                    right: 8,
+                                    top: 8,
+                                    zIndex: 100,
+                                    width: 36,
+                                    height: 36,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    cursor: "pointer",
+                                    borderRadius: "50%",
+                                }}
+                            >
+                                {isVideoCallIconHovered && (
+                                    <Tooltip
+                                        style={{
+                                            right: "100%",
+                                            top: "50%",
+                                            transform: "translate(-8px, -50%)",
+                                            whiteSpace: "nowrap",
+                                        }}
+                                    >
+                                        Video call
+                                    </Tooltip>
+                                )}
+                                <svg
+                                    width="20"
+                                    height="13"
+                                    viewBox="0 0 20 13"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    style={{ pointerEvents: "none" }}
+                                >
+                                    <path
+                                        d="M0.601562 10.1V2.6C0.601562 2.06957 0.812276 1.56086 1.18735 1.18579C1.56242 0.810714 2.07113 0.6 2.60156 0.6H11.1016C11.632 0.6 12.1407 0.810714 12.5158 1.18579C12.8908 1.56086 13.1016 2.06957 13.1016 2.6V10.1C13.1016 10.6304 12.8908 11.1391 12.5158 11.5142C12.1407 11.8893 11.632 12.1 11.1016 12.1H2.60156C2.07113 12.1 1.56242 11.8893 1.18735 11.5142C0.812276 11.1391 0.601562 10.6304 0.601562 10.1ZM17.7696 1.341L13.7696 4.904C13.7168 4.95081 13.6746 5.00825 13.6457 5.07253C13.6167 5.13682 13.6017 5.2065 13.6016 5.277V7.055C13.6017 7.1255 13.6167 7.19518 13.6457 7.25947C13.6746 7.32375 13.7168 7.38119 13.7696 7.428L17.7696 10.991C17.8416 11.055 17.9307 11.0968 18.0259 11.1114C18.1212 11.126 18.2187 11.1127 18.3066 11.0732C18.3945 11.0337 18.4691 10.9696 18.5214 10.8886C18.5738 10.8077 18.6016 10.7134 18.6016 10.617V1.715C18.6016 1.61862 18.5738 1.52429 18.5214 1.44335C18.4691 1.36242 18.3945 1.29834 18.3066 1.25882C18.2187 1.21931 18.1212 1.20604 18.0259 1.22062C17.9307 1.2352 17.8416 1.277 17.7696 1.341Z"
+                                        stroke={themeColors.text.primary}
+                                        strokeOpacity="0.95"
+                                        strokeWidth="1.2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                            </div>
+                        </>
                     )}
 
                     {/* New Chat Button (Top Right of RightContentPanel) */}
@@ -24583,6 +25524,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 data-svg-wrapper
                                 data-layer="new chat"
                                 aria-label="Start new chat"
+                                onMouseEnter={() => setIsNewChatTopRightHovered(true)}
+                                onMouseLeave={() => setIsNewChatTopRightHovered(false)}
                                 style={{
                                     right: 8,
                                     top: 8,
@@ -24602,6 +25545,18 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     handleClearMessages()
                                 }}
                             >
+                                {isNewChatTopRightHovered && (
+                                    <Tooltip
+                                        style={{
+                                            right: "100%",
+                                            top: "50%",
+                                            transform: "translate(-8px, -50%)",
+                                            whiteSpace: "nowrap",
+                                        }}
+                                    >
+                                        New chat
+                                    </Tooltip>
+                                )}
                                 <svg
                                     width="36"
                                     height="36"
@@ -24626,7 +25581,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
 
                 {/* Resize Handle */}
                 {!isMobileLayout &&
-                    (isDocOpen || isWhiteboardOpen || isAppOpen) && (
+                    (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) && (
                         <div
                             onPointerDown={(e) =>
                                 handlePointerDown(e, "horizontal-sidebar")
@@ -24645,7 +25600,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 {/* Left: Tool (Desktop only) */}
                 <AnimatePresence>
                     {!isMobileLayout &&
-                        (isDocOpen || isWhiteboardOpen || isAppOpen) && (
+                        (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) && (
                             <motion.div
                                 data-layer="desktop-tool-panel"
                                 className="DesktopToolPanel"
@@ -24796,6 +25751,37 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         <WelcomeOverlay
                             isMobile={isMobileLayout}
                             onClose={handleCloseWelcome}
+                            themeColors={themeColors}
+                        />
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* JOIN VIDEO CALL OVERLAY */}
+            <AnimatePresence>
+                {showJoinCallOverlay && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        style={{
+                            position: "fixed",
+                            zIndex: 100000,
+                            inset: 0,
+                        }}
+                    >
+                        <JoinVideoCallOverlay
+                            isMobile={isMobileLayout}
+                            onClose={() => setShowJoinCallOverlay(false)}
+                            onVolunteer={() => {
+                                setShowJoinCallOverlay(false)
+                                handleRoleSelect("volunteer")
+                            }}
+                            onStudent={() => {
+                                setShowJoinCallOverlay(false)
+                                handleRoleSelect("student")
+                            }}
                             themeColors={themeColors}
                         />
                     </motion.div>
@@ -25181,6 +26167,12 @@ addPropertyControls(OmegleMentorshipUI, {
             "URL of the Agent Skills API (Cloudflare Worker). Returns a catalog of mentorship skills for the slash-command menu. See agent-skills-api/README.md.",
         defaultValue:
             "https://agent-skills-api.logangarcia102.workers.dev",
+    },
+    jobsApiUrl: {
+        type: ControlType.String,
+        title: "Jobs Proxy URL",
+        description: "URL of the Curastem Jobs proxy Worker. No API key needed — the key is stored server-side.",
+        defaultValue: "https://jobs-proxy.curastem.org",
     },
     model: {
         type: ControlType.String,
