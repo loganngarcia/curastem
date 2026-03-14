@@ -8910,9 +8910,16 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         "forms",
         "intelligence",
         "speed",
+        "stock",
+        "commercial",
+        "distributors",
+        "budgets",
+        "forecasting",
+        "data",
+        "trends",
+        "forecasts",
+        "CRM",
     ]
-    const isLight = themeColors.backgroundDark === lightColors.backgroundDark
-    const highlightBg = isLight ? "rgba(255, 193, 7, 0.4)" : "rgba(255, 235, 59, 0.22)"
     const highlightedPhrases = React.useRef(new Set<string>())
     React.useEffect(() => {
         highlightedPhrases.current.clear()
@@ -8929,7 +8936,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                 const key = matched.toLowerCase()
                 if (highlightedPhrases.current.has(key)) return part
                 highlightedPhrases.current.add(key)
-                return <span key={i} style={{ backgroundColor: highlightBg, borderRadius: 3, padding: "0 2px", boxDecorationBreak: "clone" as const }}>{part}</span>
+                return <span key={i} style={{ fontWeight: 600 }}>{part}</span>
             }
             return part
         })
@@ -8967,11 +8974,11 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     const SectionBlock = ({ title, items }: { title: string; items: string[] }) => (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 500, lineHeight: "21px" }}>{title}</div>
-            <div style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
+            <ul style={{ listStyleType: "disc", listStylePosition: "outside", paddingLeft: 20, margin: 0, color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
                 {items.map((item, i) => (
-                    <div key={i} style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}>• {highlightText(item)}</div>
+                    <li key={i} style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}>{highlightText(item)}</li>
                 ))}
-            </div>
+            </ul>
         </div>
     )
 
@@ -9055,7 +9062,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
             </div>
 
             {/* Scrollable content */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 48px 24px", paddingTop: 72, display: "flex", flexDirection: "column", gap: 32 }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 48px 24px", paddingTop: 24, display: "flex", flexDirection: "column", gap: 32 }}>
 
                 {/* Header: company + title + meta + apply */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
