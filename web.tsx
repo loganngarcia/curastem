@@ -1571,51 +1571,60 @@ const RETRIEVE_RESOURCES_TOOL_NAME = "retrieve_career_and_college_resources"
 const GEMINI_THOUGHT_SIGNATURE_SKIP = "skip_thought_signature_validator"
 
 // -----------------------------------------------------------------------------
-// On-device memory & resume storage (localStorage)
+// On-device favorite-things (memories) & resume storage (localStorage)
+// Memories are stored as the "you_interests" textarea value — one bullet per line.
+// Each line is prefixed with "- ". The AI uses 0-based line indexes as IDs.
 // -----------------------------------------------------------------------------
-interface UserMemory {
-    id: string
-    text: string
-    createdAt: number
-}
 
-const getMemories = (): UserMemory[] => {
+/** Returns all non-empty bullet lines from you_interests. */
+const getMemories = (): string[] => {
     try {
         if (typeof window === "undefined") return []
-        const raw = localStorage.getItem("curastem_memories")
-        return raw ? JSON.parse(raw) : []
+        const raw = localStorage.getItem("you_interests") || ""
+        return raw.split("\n").map(l => l.trim()).filter(Boolean)
     } catch {
         return []
     }
 }
 
-const saveMemory = (text: string): UserMemory => {
-    const entry: UserMemory = {
-        id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        text,
-        createdAt: Date.now(),
-    }
+/**
+ * Appends a new bullet line to you_interests (deduplicates case-insensitively).
+ * Returns the full updated string.
+ */
+const saveMemory = (text: string): string => {
+    const line = text.startsWith("- ") ? text : `- ${text}`
     try {
         const existing = getMemories()
-        localStorage.setItem(
-            "curastem_memories",
-            JSON.stringify([...existing, entry])
-        )
-    } catch {}
-    return entry
+        const lower = line.toLowerCase()
+        if (existing.some(l => l.toLowerCase() === lower)) return existing.join("\n")
+        const updated = [...existing, line]
+        localStorage.setItem("you_interests", updated.join("\n"))
+        return updated.join("\n")
+    } catch {
+        return line
+    }
 }
 
-const updateMemory = (id: string, newText: string | null): void => {
+/**
+ * Edits or deletes a bullet line by its 0-based index.
+ * Pass newText=null to delete. Returns the full updated string.
+ */
+const updateMemory = (index: number, newText: string | null): string => {
     try {
         const existing = getMemories()
-        const updated =
-            newText === null
-                ? existing.filter((m) => m.id !== id)
-                : existing.map((m) =>
-                      m.id === id ? { ...m, text: newText } : m
-                  )
-        localStorage.setItem("curastem_memories", JSON.stringify(updated))
-    } catch {}
+        let updated: string[]
+        if (newText === null) {
+            updated = existing.filter((_, i) => i !== index)
+        } else {
+            const line = newText.startsWith("- ") ? newText : `- ${newText}`
+            updated = existing.map((l, i) => i === index ? line : l)
+        }
+        const joined = updated.join("\n")
+        localStorage.setItem("you_interests", joined)
+        return joined
+    } catch {
+        return ""
+    }
 }
 
 const getResume = (): string | null => {
@@ -6531,6 +6540,31 @@ const ChatInput = React.memo(function ChatInput({
     const savedEditableContentRef = React.useRef<string>("")
     // Track whether content came from peer sync or local typing (so we apply peer updates when content is from peer)
     const contentOriginRef = React.useRef<"peer" | "local" | "empty">("empty")
+
+    // Custom undo/redo — browser native stack is broken by in-place sanitization
+    // DOM mutations and innerHTML peer-sync writes, so we maintain our own.
+    type InputSnapshot = { text: string; html: string }
+    const chatUndoStack = React.useRef<InputSnapshot[]>([])
+    const chatRedoStack = React.useRef<InputSnapshot[]>([])
+    const getSnapshot = (): InputSnapshot => ({
+        text: editableRef.current ? getEditableText(editableRef.current) : "",
+        html: savedEditableContentRef.current,
+    })
+    const applySnapshot = (snap: InputSnapshot) => {
+        if (!editableRef.current) return
+        editableRef.current.innerHTML = snap.html
+        savedEditableContentRef.current = snap.html
+        onChange({ target: { value: snap.text } } as React.ChangeEvent<HTMLTextAreaElement>)
+        // Place caret at end
+        requestAnimationFrame(() => {
+            if (!editableRef.current) return
+            const range = document.createRange()
+            range.selectNodeContents(editableRef.current)
+            range.collapse(false)
+            const sel = typeof window !== "undefined" ? window.getSelection() : null
+            if (sel) { sel.removeAllRanges(); sel.addRange(range) }
+        })
+    }
     const isApplyingPeerSyncRef = React.useRef(false)
     // True when the user has explicitly repositioned their caret (click or arrow key).
     // While true, incoming peer cursorOffset is NOT applied — the user is independently editing.
@@ -6924,6 +6958,9 @@ const ChatInput = React.memo(function ChatInput({
     const handleEditableInput = () => {
         if (!editableRef.current) return
         if (isApplyingPeerSyncRef.current) return
+        // Snapshot before any sanitization mutation so undo can restore the pre-edit state
+        chatUndoStack.current.push(getSnapshot())
+        chatRedoStack.current = []
         contentOriginRef.current = "local"
         savedEditableContentRef.current = editableRef.current.innerHTML
 
@@ -7127,6 +7164,25 @@ const ChatInput = React.memo(function ChatInput({
 
     // Combined keydown handler for the contenteditable
     const handleEditableKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        const meta = e.metaKey || e.ctrlKey
+        const isUndo = meta && !e.shiftKey && e.key === "z"
+        const isRedo = (meta && e.shiftKey && e.key === "z") || (e.ctrlKey && e.key === "y")
+        if (isUndo) {
+            e.preventDefault()
+            if (chatUndoStack.current.length > 0) {
+                chatRedoStack.current.push(getSnapshot())
+                applySnapshot(chatUndoStack.current.pop()!)
+            }
+            return
+        }
+        if (isRedo) {
+            e.preventDefault()
+            if (chatRedoStack.current.length > 0) {
+                chatUndoStack.current.push(getSnapshot())
+                applySnapshot(chatRedoStack.current.pop()!)
+            }
+            return
+        }
         if (showSkillsMenu) {
             if (e.key === "ArrowUp") {
                 e.preventDefault()
@@ -7284,6 +7340,7 @@ const ChatInput = React.memo(function ChatInput({
                 wordBreak: "break-word",
                 whiteSpace: "pre-wrap",
                 caretColor: "#0099FF", // so cute I want to eat it
+                caretWidth: "2px",
             }}
         />
     )
@@ -7359,7 +7416,10 @@ const ChatInput = React.memo(function ChatInput({
             editableRef.current.innerHTML = ""
             savedEditableContentRef.current = ""
             contentOriginRef.current = "empty"
-            // Message was sent — cursor is free to follow the peer again
+            // Message was sent — clear history so undo doesn't restore sent content
+            chatUndoStack.current = []
+            chatRedoStack.current = []
+            // Cursor is free to follow the peer again
             manualCursorRef.current = false
         }
         prevValueRef.current = value
@@ -7370,6 +7430,8 @@ const ChatInput = React.memo(function ChatInput({
     React.useEffect(() => {
         if (!peerSync || !editableRef.current) return
         if (contentOriginRef.current === "local") return
+        // Peer writes overwrite freely — we don't pollute the local undo stack with
+        // the partner's keystrokes (same convention as Google Docs).
         isApplyingPeerSyncRef.current = true
         editableRef.current.innerHTML = peerSync.html
         savedEditableContentRef.current = peerSync.html
@@ -11813,7 +11875,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                                     fontWeight: 400,
                                 }}
                             >
-                                Apply to see the full job description.
+                                Apply to learn more about this role.
                             </div>
                         )}
                     </div>
@@ -12809,7 +12871,7 @@ const WelcomeOverlay = ({
                     padding: 0,
                 }}
             >
-                Curastem is the #1 way to get a job
+                Curastem is the best way to get a job
             </h1>
             <div style={{ alignSelf: "stretch" }}>
                 <span
@@ -12822,8 +12884,8 @@ const WelcomeOverlay = ({
                         wordWrap: "break-word",
                     }}
                 >
-                    Video call with mentors or chat with AI to create resumes,
-                    make apps, and practice for interviews.{" "}
+                    Chat with AI or video call with mentors to create resumes, 
+                    practice for interviews, and make apps.{" "}
                 </span>
                 <span
                     onClick={() =>
@@ -17152,21 +17214,216 @@ export default function OmegleMentorshipUI(props: Props) {
         }
         return ""
     })
+    const [dismissedInterestChips, setDismissedInterestChips] = React.useState<string[]>(() => {
+        if (typeof window !== "undefined") {
+            try {
+                return JSON.parse(localStorage.getItem("dismissed_interest_chips") || "[]")
+            } catch {
+                return []
+            }
+        }
+        return []
+    })
+    const [resumeFile, setResumeFile] = React.useState<{
+        name: string
+        base64: string    // full data URL ("data:application/pdf;base64,...")
+        mimeType: string
+        savedAt: number   // Date.now()
+    } | null>(() => {
+        if (typeof window !== "undefined") {
+            try {
+                const raw = localStorage.getItem("curastem_resume_file")
+                return raw ? JSON.parse(raw) : null
+            } catch { return null }
+        }
+        return null
+    })
+    const [resumeMenuOpen, setResumeMenuOpen] = React.useState(false)
+    const [hoveredResumeMenuItem, setHoveredResumeMenuItem] = React.useState<"download" | "delete" | null>(null)
+    const [isProcessingResume, setIsProcessingResume] = React.useState(false)
+    const resumeFileInputRef = React.useRef<HTMLInputElement>(null)
+    const interestsTextareaRef = React.useRef<HTMLTextAreaElement>(null)
+    const interestsUndoStack = React.useRef<string[]>([])
+    const interestsRedoStack = React.useRef<string[]>([])
+    const nameUndoStack = React.useRef<string[]>([])
+    const nameRedoStack = React.useRef<string[]>([])
+    const workUndoStack = React.useRef<string[]>([])
+    const workRedoStack = React.useRef<string[]>([])
+    const schoolUndoStack = React.useRef<string[]>([])
+    const schoolRedoStack = React.useRef<string[]>([])
+
+    // Returns onKeyDown + onChange handlers that give any controlled input undo/redo.
+    // React breaks the native undo stack on every setState, so we maintain our own.
+    const makeUndoHandlers = (
+        getValue: () => string,
+        setValue: (v: string) => void,
+        undoStack: React.MutableRefObject<string[]>,
+        redoStack: React.MutableRefObject<string[]>
+    ) => ({
+        onKeyDown: (e: React.KeyboardEvent) => {
+            const meta = e.metaKey || e.ctrlKey
+            const isUndo = meta && !e.shiftKey && e.key === "z"
+            const isRedo = (meta && e.shiftKey && e.key === "z") || (e.ctrlKey && e.key === "y")
+            if (isUndo && undoStack.current.length > 0) {
+                e.preventDefault()
+                redoStack.current.push(getValue())
+                setValue(undoStack.current.pop()!)
+            } else if (isRedo && redoStack.current.length > 0) {
+                e.preventDefault()
+                undoStack.current.push(getValue())
+                setValue(redoStack.current.pop()!)
+            }
+        },
+        onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>, transformed?: string) => {
+            undoStack.current.push(getValue())
+            redoStack.current = []
+            setValue(transformed ?? e.target.value)
+        },
+    })
     const [isSettingsCloseHovered, setIsSettingsCloseHovered] =
         React.useState(false)
 
-    // Persist "You" settings
+    // Persist "You" settings; reset dismissed chips when interests are cleared
     React.useEffect(() => {
         if (typeof window !== "undefined") {
             localStorage.setItem("you_name", youName)
             localStorage.setItem("you_school", youSchool)
             localStorage.setItem("you_work", youWork)
             localStorage.setItem("you_interests", youInterests)
+            if (youInterests.trim() === "" && dismissedInterestChips.length > 0) {
+                setDismissedInterestChips([])
+            } else {
+                localStorage.setItem("dismissed_interest_chips", JSON.stringify(dismissedInterestChips))
+            }
+            if (resumeFile) {
+                localStorage.setItem("curastem_resume_file", JSON.stringify(resumeFile))
+            } else {
+                localStorage.removeItem("curastem_resume_file")
+            }
         }
-    }, [youName, youSchool, youWork, youInterests])
+    }, [youName, youSchool, youWork, youInterests, dismissedInterestChips, resumeFile])
 
     // No longer need hasSentYouInfo flag as we will inject dynamically
     // const [hasSentYouInfo, setHasSentYouInfo] = React.useState(false)
+
+    // --- Resume upload handlers ---
+
+    const handleResumeUpload = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0]
+        if (!file) return
+        if (resumeFileInputRef.current) resumeFileInputRef.current.value = ""
+
+        setIsProcessingResume(true)
+        try {
+            // Read file as base64 data URL
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader()
+                reader.onload = () => resolve(reader.result as string)
+                reader.onerror = reject
+                reader.readAsDataURL(file)
+            })
+            const base64 = dataUrl.substring(dataUrl.indexOf(",") + 1)
+
+            // Ask Gemini to extract profile info + full resume text
+            const extractionPrompt = `You are parsing a resume. Return ONLY valid JSON, no markdown, no explanation.
+Extract this structure:
+{
+  "fullName": "First Last or empty string",
+  "school": "most recent school/university or empty string",
+  "work": "current or most recent job title or empty string",
+  "interests": ["array of skills, hobbies, interests found — max 10 concise phrases"],
+  "resumeText": "the full plain-text content of the resume"
+}`
+
+            const extractRes = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { text: extractionPrompt },
+                                { inlineData: { mimeType: file.type || "application/pdf", data: base64 } },
+                            ],
+                        }],
+                        generationConfig: { temperature: 0, maxOutputTokens: 2048 },
+                        safetySettings: [
+                            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+                        ],
+                    }),
+                }
+            )
+
+            let extracted: {
+                fullName?: string
+                school?: string
+                work?: string
+                interests?: string[]
+                resumeText?: string
+            } = {}
+
+            if (extractRes.ok) {
+                const extractData = await extractRes.json()
+                const rawText: string =
+                    extractData?.candidates?.[0]?.content?.parts
+                        ?.map((p: any) => p.text || "")
+                        .join("") || ""
+                // Strip any markdown fences before parsing
+                const jsonStr = rawText.replace(/^```[a-z]*\n?/i, "").replace(/```$/i, "").trim()
+                try { extracted = JSON.parse(jsonStr) } catch { /* use empty fallback */ }
+            }
+
+            // Use the original filename, strip any extension, force .pdf
+            const savedFileName = file.name.replace(/\.[^.]+$/, "") + ".pdf"
+
+            // Persist the file itself (always as PDF label even if uploaded as docx)
+            setResumeFile({ name: savedFileName, base64: dataUrl, mimeType: file.type, savedAt: Date.now() })
+
+            // Save plain resume text for AI tool calls
+            if (extracted.resumeText) saveResume(extracted.resumeText)
+
+            // Auto-fill only empty profile fields
+            if (extracted.fullName && !youName.trim()) setYouName(extracted.fullName.trim())
+            if (extracted.school && !youSchool.trim()) setYouSchool(extracted.school.trim())
+            if (extracted.work && !youWork.trim()) setYouWork(extracted.work.trim())
+
+            // Append interests that aren't already in the textarea (case-insensitive dedup)
+            if (extracted.interests?.length) {
+                // Use saveMemory for each interest — same dedup logic as the save_memories tool call
+                let updated = localStorage.getItem("you_interests") || ""
+                for (const interest of extracted.interests) {
+                    updated = saveMemory(interest)
+                }
+                setYouInterests(updated)
+            }
+        } catch {
+            // Silently fail — file input resets, no state changes
+        } finally {
+            setIsProcessingResume(false)
+        }
+    }, [geminiApiKey, youName, youSchool, youWork])
+
+    const handleResumeDownload = React.useCallback(() => {
+        if (!resumeFile) return
+        const link = document.createElement("a")
+        link.href = resumeFile.base64
+        link.download = resumeFile.name
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        setResumeMenuOpen(false)
+    }, [resumeFile])
+
+    const handleResumeDelete = React.useCallback(() => {
+        setResumeFile(null)
+        // Also wipe the plain-text resume so AI tools no longer see stale data
+        if (typeof window !== "undefined") localStorage.removeItem("curastem_resume")
+        setResumeMenuOpen(false)
+    }, [])
 
     // Clear saved role on mount to ensure fresh selection
     React.useEffect(() => {
@@ -17557,10 +17814,10 @@ export default function OmegleMentorshipUI(props: Props) {
                 prompt += `\nLocation: ${locationInfo.city}, ${locationInfo.region}, ${locationInfo.country}`
             }
 
-            // Inject saved memories so AI can personalise without calling retrieve_memories every turn
-            const memories = getMemories()
-            if (memories.length > 0) {
-                prompt += `\n\n[What You Know About This User]\n${memories.map((m) => `- ${m.text}`).join("\n")}`
+            // Inject favorite things so AI can personalise without calling retrieve_memories every turn
+            const favorites = getMemories()
+            if (favorites.length > 0) {
+                prompt += `\n\n[User's Favorite Things & Personal Facts]\n${favorites.join("\n")}`
             }
 
             // Inject saved resume so AI can use it for job matching, resume creation, etc.
@@ -23697,9 +23954,10 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                             {
                                 name: "retrieve_memories",
                                 description: [
-                                    "Retrieves facts previously saved about this user to personalise your response.",
-                                    "Call ONLY when the user's request would genuinely benefit from knowing their personal background (e.g. career goals, school, interests, life context).",
-                                    "Do NOT call on every message — only when the stored memories would meaningfully improve the answer.",
+                                    "Retrieves the user's 'favorite things' — personal facts, interests, and hobbies they've shared — to personalise your response.",
+                                    "Call ONLY when the user's request would genuinely benefit from knowing their personal background (e.g. career goals, interests, hobbies, life context).",
+                                    "Do NOT call on every message — only when these details would meaningfully improve the answer.",
+                                    "Each item is returned with a numeric index [0], [1], etc. used for editing.",
                                 ].join(" "),
                                 parameters: {
                                     type: "OBJECT",
@@ -23710,11 +23968,11 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                             {
                                 name: "save_memories",
                                 description: [
-                                    "Saves a rare, durable, personally meaningful fact about the user for future chats.",
-                                    "ONLY call for things the user reveals that are unlikely to change soon and would meaningfully personalise future responses — e.g. their major, career goal, school, city, a specific challenge they mentioned.",
+                                    "Adds a new item to the user's 'Your favorite things' list — personal facts, interests, hobbies, or goals they share during conversation.",
+                                    "ONLY call for things the user reveals that are meaningful and durable — e.g. a hobby, career goal, favourite subject, challenge they mentioned.",
                                     "ALWAYS call retrieve_memories first (in a prior turn or the same session) to avoid saving duplicates.",
-                                    "NEVER save: temporary preferences, things already in system context (name, school, work, resume), one-off questions, or trivial details.",
-                                    "One memory per call. Keep the memory text concise (1 sentence max).",
+                                    "NEVER save: things already in system context (name, school, work, resume), temporary preferences, one-off questions, or trivial details.",
+                                    "One item per call. Keep it concise (1 sentence, written as a fact).",
                                 ].join(" "),
                                 parameters: {
                                     type: "OBJECT",
@@ -23722,7 +23980,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         memory: {
                                             type: "STRING",
                                             description:
-                                                "A concise factual statement about the user (1–2 sentences).",
+                                                "A concise factual statement to add to the user's favorite things (1 sentence, no leading dash — that is added automatically).",
                                         },
                                     },
                                     required: ["memory"],
@@ -23731,10 +23989,10 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                             {
                                 name: "edit_memories",
                                 description: [
-                                    "Edits or deletes a previously saved memory by its ID.",
-                                    "Use to update outdated information (e.g. user changed schools, updated their goal) or remove a memory the user wants deleted.",
-                                    "Omit new_text to delete the memory entirely.",
-                                    "Always retrieve_memories first so you know the correct IDs.",
+                                    "Edits or deletes an item in the user's 'Your favorite things' list by its numeric index.",
+                                    "Use to update outdated information or remove something the user wants deleted.",
+                                    "Omit new_text to delete the item entirely.",
+                                    "Always call retrieve_memories first so you know the correct indexes.",
                                 ].join(" "),
                                 parameters: {
                                     type: "OBJECT",
@@ -23742,12 +24000,12 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         id: {
                                             type: "STRING",
                                             description:
-                                                "The ID of the memory to edit or delete.",
+                                                "The numeric index (as a string, e.g. '0', '2') of the item to edit or delete.",
                                         },
                                         new_text: {
                                             type: "STRING",
                                             description:
-                                                "Replacement text for the memory. Omit or leave empty to delete the memory.",
+                                                "Replacement text for the item (no leading dash). Omit or leave empty to delete it.",
                                         },
                                     },
                                     required: ["id"],
@@ -24822,13 +25080,12 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     } else if (
                         accumulatedFunctionCall.name === "retrieve_memories"
                     ) {
-                        const memories = getMemories()
+                        // Read directly from localStorage so we always get the latest value
+                        const lines = getMemories()
                         const memoriesContent =
-                            memories.length > 0
-                                ? memories
-                                      .map((m) => `[${m.id}] ${m.text}`)
-                                      .join("\n")
-                                : "No memories saved yet."
+                            lines.length > 0
+                                ? lines.map((l, i) => `[${i}] ${l}`).join("\n")
+                                : "No favorite things saved yet."
                         const modelPart = {
                             functionCall: {
                                 name: "retrieve_memories",
@@ -24850,7 +25107,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                             functionResponse: {
                                                 name: "retrieve_memories",
                                                 response: {
-                                                    memories: memoriesContent,
+                                                    favorites: memoriesContent,
                                                 },
                                             },
                                         },
@@ -24903,7 +25160,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                     functionCall: accumulatedFunctionCall,
                                     functionResponse: {
                                         name: "retrieve_memories",
-                                        response: { memories: memoriesContent },
+                                        response: { favorites: memoriesContent },
                                     },
                                 }
                             }
@@ -24914,9 +25171,11 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     ) {
                         const memoryText =
                             (accumulatedFunctionCall.args as any)?.memory || ""
-                        if (memoryText) saveMemory(memoryText)
-                        // Silent — don't interrupt the conversation with a confirmation message.
-                        // Keep any text the model streamed before the tool call.
+                        if (memoryText) {
+                            const updated = saveMemory(memoryText)
+                            // Sync React state so settings textarea updates live
+                            setYouInterests(updated)
+                        }
                         accumulatedText =
                             computeDisplayText(accumulatedText) || ""
                         setMessages((prev) => {
@@ -24942,8 +25201,13 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     ) {
                         const { id, new_text } =
                             (accumulatedFunctionCall.args as any) || {}
-                        if (id) updateMemory(id, new_text || null)
-                        // Silent — no confirmation needed
+                        if (id !== undefined && id !== "") {
+                            const idx = parseInt(id, 10)
+                            if (!isNaN(idx)) {
+                                const updated = updateMemory(idx, new_text || null)
+                                setYouInterests(updated)
+                            }
+                        }
                         accumulatedText =
                             computeDisplayText(accumulatedText) || ""
                         setMessages((prev) => {
@@ -26854,7 +27118,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
             // Fresh generation — pre-load all context client-side so the
             // model only needs to call create_resume in a single hop.
             const savedResume = getResume()
-            const memories = getMemories()
+            const favorites = getMemories()
 
             const contextParts: string[] = [
                 `Role: "${job.title}" at ${job.company.name}`,
@@ -26869,9 +27133,9 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     `Candidate background (their saved resume):\n${savedResume.substring(0, 2000)}`
                 )
             }
-            if (memories.length > 0) {
+            if (favorites.length > 0) {
                 contextParts.push(
-                    `Additional info about the candidate:\n${memories.map((m) => m.text).join("\n")}`
+                    `Candidate's favorite things & personal facts:\n${favorites.join("\n")}`
                 )
             }
 
@@ -30354,6 +30618,12 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                             color: ${themeColors.text.secondary};
                                             opacity: 1;
                                         }
+                                        .Search::-webkit-search-cancel-button,
+                                        .Search::-webkit-search-decoration {
+                                            -webkit-appearance: none;
+                                            appearance: none;
+                                            display: none;
+                                        }
                                     `}</style>
                                 <input
                                     value={searchQuery}
@@ -30362,7 +30632,8 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                     }
                                     placeholder="Search"
                                     className="Search"
-                                    type="search"
+                                    type="text"
+                                    autoComplete="off"
                                     aria-label="Search chats and content"
                                     role="searchbox"
                                     tabIndex={
@@ -30795,10 +31066,6 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                     : "100%",
                                 maxWidth: isMobileLayout ? "none" : 400,
                                 maxHeight: isMobileLayout ? "none" : 600,
-                                paddingTop: 24,
-                                paddingBottom: 28,
-                                paddingLeft: isMobileLayout ? 16 : 28,
-                                paddingRight: isMobileLayout ? 16 : 28,
                                 background: themeColors.background,
                                 boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.04)",
                                 overflow: "hidden",
@@ -30811,32 +31078,39 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                 flexDirection: "column",
                                 justifyContent: "flex-start",
                                 alignItems: "flex-start",
-                                gap: 24,
-                                display: "inline-flex",
+                                gap: 0,
+                                display: "flex",
                                 position: "relative",
                                 zIndex: 1,
                                 transformOrigin: "center",
                             }}
                             onClick={(e) => e.stopPropagation()}
                         >
+                            {/* Floating gradient header — position:absolute over the scroll body */}
                             <div
                                 data-layer="settings header"
                                 className="SettingsHeader"
                                 style={{
-                                    alignSelf: "stretch",
-                                    height: "auto",
-                                    position: "relative",
+                                    position: "absolute",
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    padding: isMobileLayout ? 16 : 28,
+                                    paddingBottom: 32,
+                                    background: `linear-gradient(180deg, ${themeColors.background} 72%, transparent 100%)`,
                                     flexDirection: "column",
                                     justifyContent: "center",
                                     alignItems: "flex-start",
                                     gap: 8,
                                     display: "flex",
+                                    zIndex: 2,
+                                    pointerEvents: "none",
                                 }}
                             >
                                 <h2
                                     id="settings-title"
-                                    data-layer="You"
-                                    className="You"
+                                    data-layer="Your profile"
+                                    className="YourProfile"
                                     style={{
                                         margin: 0,
                                         padding: 0,
@@ -30845,15 +31119,15 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         fontSize: 16,
                                         fontFamily: "Inter",
                                         fontWeight: "400",
-                                        lineHeight: "18px",
+                                        lineHeight: "16px",
                                         wordWrap: "break-word",
                                     }}
                                 >
                                     Your profile
                                 </h2>
                                 <div
-                                    data-layer="Make conversations more relevant and personal"
-                                    className="MakeConversationsMoreRelevantAndPersonal"
+                                    data-layer="Share information about yourself to make jobs more relevant and personal."
+                                    className="ShareInformationAboutYourselfToMakeJobsMoreRelevantAndPersonal"
                                     style={{
                                         alignSelf: "stretch",
                                         justifyContent: "center",
@@ -30863,23 +31137,22 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         fontSize: 12,
                                         fontFamily: "Inter",
                                         fontWeight: "400",
-                                        lineHeight: "17px",
+                                        lineHeight: "16.8px",
                                         wordWrap: "break-word",
                                     }}
                                 >
-                                    Make chats more relevant and personal. This
-                                    information may be shared with people you
-                                    video call.
+                                    Share information about yourself to make jobs more relevant and personal.
                                 </div>
+                                {/* Close button — re-enable pointer events since parent is none */}
                                 <div
                                     data-svg-wrapper
-                                    data-layer="close settings button"
+                                    data-layer="close settings button (has a fill hover effect)"
                                     className="CloseSettingsButtonHasAFillHoverEffect"
                                     aria-label="Close settings"
                                     style={{
-                                        right: isMobileLayout ? 0 : -12,
-                                        top: -12,
                                         position: "absolute",
+                                        top: 14,
+                                        right: isMobileLayout ? 8 : 16,
                                         cursor: "pointer",
                                         width: 36,
                                         height: 36,
@@ -30891,6 +31164,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                             : "transparent",
                                         borderRadius: "50%",
                                         transition: "background 0.2s",
+                                        pointerEvents: "auto",
                                     }}
                                     onClick={() => setShowYouSettings(false)}
                                     onMouseEnter={() =>
@@ -30921,6 +31195,25 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                 </div>
                             </div>
 
+                            {/* Vertically scrollable inner wrapper — paddingTop accounts for floating header */}
+                            <div
+                                className="SettingsScrollBody"
+                                style={{
+                                    width: "100%",
+                                    flex: "1 1 0",
+                                    overflowY: "auto",
+                                    overflowX: "hidden",
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 24,
+                                    paddingTop: 112,
+                                    paddingBottom: 28,
+                                    paddingLeft: isMobileLayout ? 16 : 28,
+                                    paddingRight: isMobileLayout ? 16 : 28,
+                                    boxSizing: "border-box",
+                                }}
+                            >
+
                             {/* Inputs */}
                             <style>{`
                                 .SettingsInput::placeholder {
@@ -30935,7 +31228,237 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                 .SettingsInput:-ms-input-placeholder {
                                     color: ${themeColors.text.secondary};
                                 }
+                                .SettingsScrollBody::-webkit-scrollbar {
+                                    display: none;
+                                }
+                                .InterestChipsScrollOuter::-webkit-scrollbar {
+                                    display: none;
+                                }
                             `}</style>
+
+                            {/* Resume */}
+                            <div
+                                className="SettingsResumeSection"
+                                style={{
+                                    alignSelf: "stretch",
+                                    flexDirection: "column",
+                                    gap: 8,
+                                    display: "flex",
+                                }}
+                            >
+                                <div
+                                    className="SettingsSectionLabel"
+                                    style={{
+                                        color: themeColors.text.primary,
+                                        fontSize: 14,
+                                        fontFamily: "Inter",
+                                        fontWeight: "400",
+                                    }}
+                                >
+                                    Resume
+                                </div>
+                                {resumeFile ? (
+                                    // File saved — filename row with 3-dot menu
+                                    <div
+                                        className="SettingsResumeRow"
+                                        style={{
+                                            alignSelf: "stretch",
+                                            height: 44,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.background === lightColors.background ? themeColors.background : themeColors.surface,
+                                            border: themeColors.background === lightColors.background ? `0.33px solid ${themeColors.border.subtle}` : "none",
+                                            overflow: "visible",
+                                            borderRadius: 28,
+                                            alignItems: "center",
+                                            gap: 16,
+                                            display: "flex",
+                                            position: "relative",
+                                        }}
+                                    >
+                                        <span
+                                            className="SettingsResumeFileName"
+                                            style={{
+                                                flex: "1 1 0",
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: "400",
+                                                lineHeight: "21px",
+                                                overflow: "hidden",
+                                                textOverflow: "ellipsis",
+                                                whiteSpace: "nowrap",
+                                            }}
+                                        >
+                                            {resumeFile.name}
+                                        </span>
+                                        {/* 3-dot menu trigger — matches sidebar OpenActionsMenuButton */}
+                                        <div
+                                            data-svg-wrapper
+                                            data-layer="open actions menu button"
+                                            className="OpenActionsMenuButton"
+                                            aria-label="Resume actions"
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                setResumeMenuOpen(v => !v)
+                                                setHoveredResumeMenuItem(null)
+                                            }}
+                                            style={{
+                                                cursor: "pointer",
+                                                display: "flex",
+                                                alignItems: "center",
+                                                flexShrink: 0,
+                                                padding: 4,
+                                                borderRadius: 8,
+                                            }}
+                                        >
+                                            <svg width="16" height="24" viewBox="0 0 16 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M13.498 10.5016C14.3254 10.5016 14.9959 11.1723 14.9961 11.9996C14.9961 12.8271 14.3256 13.4987 13.498 13.4987C12.6705 13.4987 12 12.8271 12 11.9996C12.0002 11.1723 12.6706 10.5016 13.498 10.5016Z" fill={themeColors.text.primary} fillOpacity="0.95"/>
+                                                <path d="M2.49805 10.5016C3.32544 10.5016 3.99689 11.1723 3.99707 11.9996C3.99707 12.8271 3.32555 13.4987 2.49805 13.4987C1.67069 13.4985 1 12.827 1 11.9996C1.00018 11.1724 1.6708 10.5018 2.49805 10.5016Z" fill={themeColors.text.primary} fillOpacity="0.95"/>
+                                                <path d="M8.0003 10.5016C8.8276 10.5018 9.4982 11.1724 9.4984 11.9996C9.4984 12.827 8.8277 13.4985 8.0003 13.4987C7.17283 13.4987 6.50131 12.8271 6.50131 11.9996C6.50149 11.1723 7.17294 10.5016 8.0003 10.5016Z" fill={themeColors.text.primary} fillOpacity="0.95"/>
+                                            </svg>
+                                        </div>
+                                        {/* Dropdown menu */}
+                                        {resumeMenuOpen && (
+                                            <>
+                                                {/* Fixed backdrop — same zIndex pattern as ChatActionsMenu */}
+                                                <div
+                                                    style={{
+                                                        position: "fixed",
+                                                        inset: 0,
+                                                        zIndex: 30001,
+                                                    }}
+                                                    onClick={() => {
+                                                        setResumeMenuOpen(false)
+                                                        setHoveredResumeMenuItem(null)
+                                                    }}
+                                                />
+                                                <div
+                                                    data-layer="chat actions"
+                                                    className="SettingsResumeMenu"
+                                                    onMouseLeave={() => setHoveredResumeMenuItem(null)}
+                                                    style={{
+                                                        position: "absolute",
+                                                        top: "calc(100% + 6px)",
+                                                        right: 0,
+                                                        zIndex: 30002,
+                                                        width: 196,
+                                                        padding: 10,
+                                                        background: themeColors.surfaceMenu,
+                                                        boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                        borderRadius: 28,
+                                                        outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                        outlineOffset: -0.1,
+                                                        display: "flex",
+                                                        flexDirection: "column",
+                                                        gap: 4,
+                                                    }}
+                                                >
+                                                    {/* Upload date — matches "Save as" label in doc editor download menu */}
+                                                    <div
+                                                        style={{
+                                                            padding: "4px 12px",
+                                                            color: themeColors.text.secondary,
+                                                            fontSize: 12,
+                                                            fontFamily: "Inter",
+                                                            fontWeight: "500",
+                                                            lineHeight: "16px",
+                                                        }}
+                                                    >
+                                                        {new Date(resumeFile.savedAt).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}
+                                                    </div>
+                                                    {/* Download */}
+                                                    <div
+                                                        onClick={handleResumeDownload}
+                                                        onMouseEnter={() => setHoveredResumeMenuItem("download")}
+                                                        style={{
+                                                            ...styles.menuItem,
+                                                            ...(hoveredResumeMenuItem === "download" ? styles.menuItemHover : {}),
+                                                        }}
+                                                    >
+                                                        <div style={{ width: 15, display: "flex", justifyContent: "center" }}>
+                                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                                <path d="M0.796875 11.3786V12.275C0.796875 12.9911 1.08134 13.6778 1.58769 14.1842C2.09403 14.6905 2.78079 14.975 3.49687 14.975H12.4969C13.213 14.975 13.8997 14.6905 14.4061 14.1842C14.9124 13.6778 15.1969 12.9911 15.1969 12.275V11.375M7.99687 1.02499V10.925M7.99687 10.925L11.1469 7.77499M7.99687 10.925L4.84687 7.77499" stroke={themeColors.text.primary} strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                                            </svg>
+                                                        </div>
+                                                        <div style={{ flex: "1 1 0", justifyContent: "center", display: "flex", flexDirection: "column", color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.32px", wordWrap: "break-word" }}>Download</div>
+                                                    </div>
+                                                    {/* Delete */}
+                                                    <div
+                                                        onClick={handleResumeDelete}
+                                                        onMouseEnter={() => setHoveredResumeMenuItem("delete")}
+                                                        style={{
+                                                            ...styles.menuItem,
+                                                            ...(hoveredResumeMenuItem === "delete" ? styles.menuItemDestructiveHover : {}),
+                                                        }}
+                                                    >
+                                                        <div style={{ width: 15, display: "flex", justifyContent: "center" }}>
+                                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                                <path d="M13.3359 4.33333L12.5893 11.7982C12.4764 12.9298 12.4204 13.4951 12.1626 13.9227C11.9365 14.299 11.604 14.6 11.207 14.7876C10.7564 15 10.1893 15 9.05149 15H6.95371C5.81683 15 5.24883 15 4.79816 14.7867C4.40087 14.5992 4.06804 14.2983 3.84172 13.9218C3.58572 13.4951 3.52883 12.9298 3.41505 11.7982L2.66927 4.33333M9.33594 11.3111V6.86667M6.66927 11.3111V6.86667M1.33594 4.11111H5.43816M5.43816 4.11111L5.78127 1.736C5.88083 1.304 6.23994 1 6.65238 1H9.35283C9.76527 1 10.1235 1.304 10.2239 1.736L10.567 4.11111M5.43816 4.11111H10.567M10.567 4.11111H14.6693" stroke={themeColors.destructive.light} strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                                            </svg>
+                                                        </div>
+                                                        <div style={{ flex: "1 1 0", justifyContent: "center", display: "flex", flexDirection: "column", color: themeColors.destructive.light, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.32px", wordWrap: "break-word" }}>Delete</div>
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                ) : isProcessingResume ? (
+                                    // Processing state
+                                    <div
+                                        style={{
+                                            alignSelf: "stretch",
+                                            height: 44,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.background === lightColors.background ? themeColors.background : themeColors.surface,
+                                            border: themeColors.background === lightColors.background ? `0.33px solid ${themeColors.border.subtle}` : "none",
+                                            borderRadius: 28,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            opacity: 0.6,
+                                        }}
+                                    >
+                                        <span style={{ flex: "1 1 0", color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "21px" }}>Analyzing resume…</span>
+                                        <style>{`
+                                            @keyframes resumeSpinnerPulse {
+                                                0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+                                                40% { opacity: 1; transform: scale(1); }
+                                            }
+                                            .ResumeSpinnerDot { animation: resumeSpinnerPulse 1.2s infinite ease-in-out; border-radius: 50%; width: 5px; height: 5px; background: ${themeColors.text.secondary}; }
+                                            .ResumeSpinnerDot:nth-child(2) { animation-delay: 0.2s; }
+                                            .ResumeSpinnerDot:nth-child(3) { animation-delay: 0.4s; }
+                                        `}</style>
+                                        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                            <div className="ResumeSpinnerDot" />
+                                            <div className="ResumeSpinnerDot" />
+                                            <div className="ResumeSpinnerDot" />
+                                        </div>
+                                    </div>
+                                ) : (
+                                    // Upload button
+                                    <div
+                                        className="SettingsResumeUploadBtn"
+                                        onClick={() => resumeFileInputRef.current?.click()}
+                                        style={{
+                                            ...styles.menuItem,
+                                            height: 44,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.background === lightColors.background ? themeColors.background : themeColors.surface,
+                                            border: themeColors.background === lightColors.background ? `0.33px solid ${themeColors.border.subtle}` : "none",
+                                            borderRadius: 28,
+                                            gap: 8,
+                                        }}
+                                    >
+                                        <span style={{ flex: "1 1 0", color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "21px" }}>Upload resume</span>
+                                        <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                            <path d="M0.601562 10.2485V11.0839C0.601562 11.7512 0.866654 12.3912 1.33852 12.863C1.81039 13.3349 2.45037 13.6 3.11769 13.6H11.5048C12.1721 13.6 12.8121 13.3349 13.284 12.863C13.7558 12.3912 14.0209 11.7512 14.0209 11.0839V10.2452M7.31705 9.82581L7.30542 0.60001M7.30542 0.60001L4.37364 3.53919M7.30542 0.60001L10.2446 3.53179" stroke={themeColors.text.primary} strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                    </div>
+                                )}
+                            </div>
 
                             {/* Name */}
                             <div
@@ -30984,9 +31507,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         aria-label="Your name or nickname"
                                         placeholder="Add a nickname"
                                         value={youName}
-                                        onChange={(e) =>
-                                            setYouName(e.target.value)
-                                        }
+                                        {...makeUndoHandlers(() => youName, setYouName, nameUndoStack, nameRedoStack)}
                                         style={{
                                             width: "100%",
                                             background: "transparent",
@@ -31047,9 +31568,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         aria-label="Your job title"
                                         placeholder="Add your dream job"
                                         value={youWork}
-                                        onChange={(e) =>
-                                            setYouWork(e.target.value)
-                                        }
+                                        {...makeUndoHandlers(() => youWork, setYouWork, workUndoStack, workRedoStack)}
                                         style={{
                                             width: "100%",
                                             background: "transparent",
@@ -31110,9 +31629,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         aria-label="Your school or college"
                                         placeholder="Add your school"
                                         value={youSchool}
-                                        onChange={(e) =>
-                                            setYouSchool(e.target.value)
-                                        }
+                                        {...makeUndoHandlers(() => youSchool, setYouSchool, schoolUndoStack, schoolRedoStack)}
                                         style={{
                                             width: "100%",
                                             background: "transparent",
@@ -31128,32 +31645,31 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
 
                             {/* Interests */}
                             <div
-                                className="Flexbox"
+                                className="SettingsInterestsSection"
                                 style={{
                                     alignSelf: "stretch",
                                     flexDirection: "column",
                                     gap: 8,
                                     display: "flex",
-                                    flex: "1 1 auto",
                                 }}
                             >
                                 <div
-                                    className="InterestsAndPreferences"
+                                    className="SettingsSectionLabel"
                                     style={{
-                                        color: "${themeColors.text.primary}",
+                                        color: themeColors.text.primary,
                                         fontSize: 14,
                                         fontFamily: "Inter",
                                         fontWeight: "400",
                                     }}
                                 >
-                                    Skills and interests
+                                    Your favorite things
                                 </div>
                                 <div
+                                    className="SettingsInterestsInputWrap"
                                     style={{
                                         alignSelf: "stretch",
                                         minHeight: 128,
                                         maxHeight: 172,
-                                        padding: "12px 16px",
                                         background:
                                             themeColors.background ===
                                             lightColors.background
@@ -31171,16 +31687,40 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                     }}
                                 >
                                     <textarea
+                                        ref={interestsTextareaRef}
                                         className="SettingsInput"
                                         aria-label="Your skills and interests"
-                                        placeholder="Add things you enjoy"
+                                        placeholder="Add skills, interests, and hobbies"
                                         value={youInterests}
-                                        onChange={(e) =>
-                                            setYouInterests(e.target.value)
-                                        }
+                                        onKeyDown={makeUndoHandlers(() => youInterests, setYouInterests, interestsUndoStack, interestsRedoStack).onKeyDown}
+                                        onChange={(e) => {
+                                            interestsUndoStack.current.push(youInterests)
+                                            interestsRedoStack.current = []
+                                            const raw = e.target.value
+                                            if (raw === "") { setYouInterests(""); return }
+                                            const cursor = e.target.selectionStart ?? raw.length
+                                            let charPos = 0, added = 0
+                                            const fixed = raw.split("\n").map(line => {
+                                                const needs = line !== "-" && line !== "- " && !line.startsWith("- ")
+                                                const result = needs ? `- ${line.replace(/^-\s*/, "")}` : line
+                                                if (needs && cursor >= charPos) added += 2
+                                                charPos += line.length + 1
+                                                return result
+                                            })
+                                            setYouInterests(fixed.join("\n"))
+                                            if (added > 0) requestAnimationFrame(() => {
+                                                if (interestsTextareaRef.current) {
+                                                    const p = cursor + added
+                                                    interestsTextareaRef.current.selectionStart = p
+                                                    interestsTextareaRef.current.selectionEnd = p
+                                                }
+                                            })
+                                        }}
                                         style={{
                                             width: "100%",
                                             height: "100%",
+                                            padding: "12px 16px",
+                                            boxSizing: "border-box",
                                             background: "transparent",
                                             border: "none",
                                             color: themeColors.text.primary,
@@ -31191,13 +31731,99 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         }}
                                     />
                                 </div>
+                                {/* Suggestion chips below textarea — full-bleed horizontal scroll, dismissed forever on click */}
+                                {(() => {
+                                    const INTEREST_CHIPS: { id: string; label: string; template: string }[] = [
+                                        { id: "dream_job", label: "Dream job", template: "- My dream job is " },
+                                        { id: "best_skill", label: "Best skill", template: "- My best skill is " },
+                                        { id: "favorite_hobby", label: "Favorite hobby", template: "- My favorite hobby is " },
+                                    ]
+                                    const visible = INTEREST_CHIPS.filter(c => !dismissedInterestChips.includes(c.id))
+                                    if (visible.length === 0) return null
+                                    const sidePad = isMobileLayout ? 16 : 28
+                                    return (
+                                        // Negative margin breaks out of SettingsScrollBody padding so scroll goes full-width
+                                        <div
+                                            className="InterestChipsScrollOuter"
+                                            style={{
+                                                marginLeft: -sidePad,
+                                                marginRight: -sidePad,
+                                                overflowX: "auto",
+                                                overflowY: "visible",
+                                                // Hide scrollbar while keeping it functional
+                                                msOverflowStyle: "none",
+                                                scrollbarWidth: "none",
+                                            }}
+                                        >
+                                            <div
+                                                className="InterestChipsRow"
+                                                style={{
+                                                    display: "flex",
+                                                    flexWrap: "nowrap",
+                                                    gap: 8,
+                                                    // Inner padding restores visual alignment and gives scroll breathing room
+                                                    paddingLeft: sidePad,
+                                                    paddingRight: sidePad,
+                                                    width: "max-content",
+                                                }}
+                                            >
+                                                {visible.map(chip => (
+                                                    <button
+                                                        key={chip.id}
+                                                        className="InterestChip"
+                                                        onClick={() => {
+                                                            setYouInterests(prev => {
+                                                                const base = prev.trim()
+                                                                return base ? `${base}\n${chip.template}` : chip.template
+                                                            })
+                                                            setDismissedInterestChips(prev => [...prev, chip.id])
+                                                        }}
+                                                        style={{
+                                                            height: 36,
+                                                            paddingLeft: 14,
+                                                            paddingRight: 14,
+                                                            paddingTop: 7.5,
+                                                            paddingBottom: 7.5,
+                                                            borderRadius: 28,
+                                                            border: `0.33px solid ${themeColors.border.subtle}`,
+                                                            background: "transparent",
+                                                            cursor: "pointer",
+                                                            flexShrink: 0,
+                                                            display: "inline-flex",
+                                                            alignItems: "center",
+                                                            gap: 6,
+                                                        }}
+                                                    >
+                                                        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                            <path d="M5.8967 12.3967V7.1033H0.603314C0.270133 7.1033 0 6.83323 0 6.50002C0 6.16684 0.270133 5.8967 0.603314 5.8967H5.8967V0.603314C5.8967 0.270133 6.16684 0 6.50002 0C6.83323 0 7.1033 0.270133 7.1033 0.603314V5.8967H12.3967L12.5181 5.9091C12.7931 5.9653 13 6.20842 13 6.50002C13 6.79159 12.7931 7.03471 12.5181 7.09096L12.3967 7.1033H7.1033V12.3967C7.1033 12.7299 6.83323 13 6.50002 13C6.16684 13 5.8967 12.7299 5.8967 12.3967Z" fill={themeColors.text.secondary}/>
+                                                        </svg>
+                                                        <span
+                                                            className="InterestChipLabel"
+                                                            style={{
+                                                                color: themeColors.text.secondary,
+                                                                fontSize: 14,
+                                                                fontFamily: "Inter",
+                                                                fontWeight: "400",
+                                                                lineHeight: "21px",
+                                                                whiteSpace: "nowrap",
+                                                            }}
+                                                        >
+                                                            {chip.label}
+                                                        </span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )
+                                })()}
                             </div>
+                            </div>{/* end SettingsScrollBody */}
                         </motion.div>
                     </div>
                 )}
             </AnimatePresence>
 
-            {/* Hidden file input */}
+            {/* Hidden file input — chat attachments */}
             <input
                 ref={fileInputRef}
                 type="file"
@@ -31205,6 +31831,14 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 accept="image/*,video/*,audio/*,.pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
                 style={{ display: "none" }}
                 onChange={handleFileChange}
+            />
+            {/* Hidden file input — resume upload (settings panel) */}
+            <input
+                ref={resumeFileInputRef}
+                type="file"
+                accept=".pdf,.doc,.docx"
+                style={{ display: "none" }}
+                onChange={handleResumeUpload}
             />
 
             {/* DEBUG CONSOLE */}
