@@ -7299,7 +7299,7 @@ const ChatInput = React.memo(function ChatInput({
         if (text) document.execCommand("insertText", false, text)
     }
 
-    // On mobile, suppress keyboard when a tool overlay (jobs/whiteboard/docs/apps) is covering the UI
+    // On mobile, suppress keyboard when the agent sidebar (jobs/whiteboard/docs/apps) is covering the UI
     const mobileToolOpen = isMobileLayout && (isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen)
 
     // The contenteditable element shared between both layout branches
@@ -17459,24 +17459,40 @@ Extract this structure:
         // No longer persisting role to localStorage as per requirement
     }, [role])
 
+    // chatWidth = width of the CHAT panel (left side). Agents panel = availableWidth - chatWidth.
+    // Persisted so chat area stays the same width when viewport changes; agents absorb the delta.
     const [chatWidth, setChatWidth] = React.useState(() => {
         if (typeof window !== "undefined") {
-            const saved = localStorage.getItem("omeg_chat_width")
-            if (saved) {
-                const parsed = parseInt(saved, 10)
-                if (!isNaN(parsed)) return parsed
+            // Migrate from old key if present
+            const legacy = localStorage.getItem("omeg_chat_width")
+            const current = localStorage.getItem("curastem_chat_width")
+            const raw = current ?? legacy
+            if (raw) {
+                const parsed = parseInt(raw, 10)
+                // Legacy stored agents width (~940); derive chat width from it
+                // by assuming a 1400px viewport. If it looks like an agents width
+                // (>600) migrate it; otherwise use directly.
+                if (!isNaN(parsed)) {
+                    if (legacy && !current) {
+                        // Stored value was agents width — convert to chat width default
+                        localStorage.removeItem("omeg_chat_width")
+                        return 872
+                    }
+                    return parsed
+                }
             }
         }
-        return 940 // set width of doceditor/whiteboard/miniide as 940px when opened as default width
+        return 872 // default chat width when agents first open
     })
 
     React.useEffect(() => {
         if (typeof window !== "undefined") {
-            localStorage.setItem("omeg_chat_width", String(chatWidth))
+            localStorage.setItem("curastem_chat_width", String(chatWidth))
         }
     }, [chatWidth])
 
-    const dragStartWidth = React.useRef(940) // set width of doceditor/whiteboard/miniide as 940px when opened as default width
+    const dragStartWidth = React.useRef(872)
+    const liveChatWidthRef = React.useRef(872) // tracks clamped value during drag; committed to state on pointer-up
     const [isResizing, setIsResizing] = React.useState(false)
 
     const [remoteAppMutation, setRemoteAppMutation] = React.useState<any>(null)
@@ -17532,7 +17548,7 @@ Extract this structure:
     // Helper ref to track manual hangups to prevent auto-reconnect loops
     const isManualHangupRef = React.useRef(false)
 
-    // --- STATE: DOC EDITOR ---
+    // --- STATE: AGENT SIDEBAR — DOC EDITOR ---
     const [isDocOpen, setIsDocOpen] = React.useState(false)
     const isDocOpenRef = React.useRef(false)
 
@@ -17541,7 +17557,7 @@ Extract this structure:
         isDocOpenRef.current = isDocOpen
     }, [isDocOpen])
 
-    // --- STATE: APP BUILDER ---
+    // --- STATE: AGENT SIDEBAR — APP BUILDER ---
     const [isAppOpen, setIsAppOpen] = React.useState(false)
     const isAppOpenRef = React.useRef(false)
     const [appCode, setAppCode] = React.useState(
@@ -17554,7 +17570,7 @@ Extract this structure:
         isAppOpenRef.current = isAppOpen
     }, [isAppOpen])
 
-    // --- STATE: JOB DETAIL ---
+    // --- STATE: AGENT SIDEBAR — JOB DETAIL ---
     const [isJobOpen, setIsJobOpen] = React.useState(false)
     const [selectedJob, setSelectedJob] = React.useState<HomepageJob | null>(
         null
@@ -17584,7 +17600,8 @@ Extract this structure:
         return () => clearTimeout(t)
     }, [isJobOpen, isDocOpen, isAppOpen])
 
-    const isToolOpen =
+    // True when any agent sidebar panel is open (docs, whiteboard, apps, jobs)
+    const isAgentOpen =
         isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen
 
     // --- STATE: RESUME KEYWORD ANIMATION ---
@@ -19621,8 +19638,9 @@ Do not include markdown formatting or explanations.`
     const [menuOpenChatId, setMenuOpenChatId] = React.useState<string | null>(
         null
     )
+    // Which agent sidebar panel's context menu is open in the sidebar chat history
     const [menuOpenToolType, setMenuOpenToolType] = React.useState<
-        "miniide" | "doceditor" | "whiteboard" | null
+        "miniide" | "doceditor" | "whiteboard" | "jobs" | null
     >(null)
     const [menuPosition, setMenuPosition] = React.useState<{
         top: number
@@ -19745,7 +19763,7 @@ Do not include markdown formatting or explanations.`
     }, [isSidebarOpen])
 
     useSaveRestoreOnToggle(
-        isToolOpen,
+        isAgentOpen,
         () => isSidebarOpen,
         setIsSidebarOpen,
         (saved) => {
@@ -20520,8 +20538,10 @@ Do not include markdown formatting or explanations.`
     // --- CONSTANTS ---
     const MIN_CHAT_HEIGHT = 204
     const LEFT_SIDEBAR_WIDTH = 260
-    const MIN_CHAT_WIDTH = 400
-    const SIDEBAR_MODE_WIDTH = 400
+    const MIN_CHAT_WIDTH = 400          // chat panel hard floor
+    const CHAT_MAX_WIDTH = 872          // chat panel max when agent sidebar is open
+    const AGENTS_MIN_WIDTH = 400        // agent sidebar minimum — viewport too narrow: chat shrinks to cover
+    const AGENT_SIDEBAR_CHAT_WIDTH = 400 // effective chat width used for tile/height math in agent sidebar mode
 
     // --- STATE: LAYOUT & DIMENSIONS ---
     const [containerSize, setContainerSize] = React.useState(() => {
@@ -20544,32 +20564,27 @@ Do not include markdown formatting or explanations.`
         return () => window.removeEventListener("resize", handleResize)
     }, [])
 
-    // Enforce layout constraints (min 400px for tool)
+    // Enforce layout constraints on viewport/sidebar change.
+    // Strategy: chat width is the persisted value and stays fixed; agents = availableWidth - chatWidth.
+    // If agents would be smaller than AGENTS_MIN_WIDTH, shrink chat to give agents their minimum.
+    // Chat is always clamped between MIN_CHAT_WIDTH and CHAT_MAX_WIDTH.
     React.useEffect(() => {
         if (typeof window === "undefined") return
+        if (containerSize.width < 768) return // mobile handles layout differently
 
-        // Only enforce on desktop
-        if (containerSize.width >= 768) {
-            const _leftSidebarWidth = isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
-            const availableWidth = containerSize.width - _leftSidebarWidth
+        const _leftSidebarWidth = isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
+        const availableWidth = containerSize.width - _leftSidebarWidth
 
-            // Tool needs at least MIN_CHAT_WIDTH
-            const maxChatWidth = Math.max(0, availableWidth - MIN_CHAT_WIDTH)
-
-            setChatWidth((prev) => {
-                // If current chat width violates the tool's space, shrink it
-                // We also respect the chat's own min width if possible,
-                // but Tool Min Width is the hard constraint.
-                const target = Math.min(
-                    Math.max(prev, MIN_CHAT_WIDTH),
-                    maxChatWidth
-                )
-
-                // Only update if different to avoid loops
-                if (prev !== target) return target
-                return prev
-            })
-        }
+        setChatWidth((prev) => {
+            // Only enforce agents minimum — chat width itself has no upper cap here
+            // (CHAT_MAX_WIDTH only applies as a default, not a hard clamp on restore)
+            const floored = Math.max(prev, MIN_CHAT_WIDTH)
+            const agentsWidth = availableWidth - floored
+            if (agentsWidth < AGENTS_MIN_WIDTH) {
+                return Math.max(MIN_CHAT_WIDTH, availableWidth - AGENTS_MIN_WIDTH)
+            }
+            return floored
+        })
     }, [containerSize.width, isSidebarOpen])
     // Track previous container size to handle virtual keyboard resizing logic
     const prevContainerSize = React.useRef({ width: 0, height: 0 })
@@ -21041,16 +21056,16 @@ Do not include markdown formatting or explanations.`
             const containerWidth =
                 containerRef.current?.clientWidth || window.innerWidth
 
-            const isSidebarMode = !isMobileLayout && isToolOpen
-            const effectiveWidth = isSidebarMode
-                ? SIDEBAR_MODE_WIDTH
+            const isAgentSidebarMode = !isMobileLayout && isAgentOpen
+            const effectiveWidth = isAgentSidebarMode
+                ? AGENT_SIDEBAR_CHAT_WIDTH
                 : containerWidth
 
             // Adjust effective width if sidebar is open on desktop standard mode
             const widthReduction = leftSidebarWidth
             const finalWidth = effectiveWidth - widthReduction
 
-            const effectiveMobile = isSidebarMode || isMobileLayout
+            const effectiveMobile = isAgentSidebarMode || isMobileLayout
 
             const { maxHeight } = calculateHeightConstraints(
                 finalWidth,
@@ -26331,6 +26346,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
             dragStartX.current = e.clientX
             dragStartHeight.current = chatHeight
             dragStartWidth.current = chatWidth
+            liveChatWidthRef.current = chatWidth
 
             if (mode === "horizontal-sidebar") {
                 setIsResizing(true)
@@ -26390,29 +26406,29 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     containerRef.current?.clientWidth || window.innerWidth
 
                 if (dragMode.current === "horizontal-sidebar") {
+                    // dragStartWidth is the chat panel width at drag start.
+                    // Dragging right = chat grows; dragging left = chat shrinks (agents grow).
                     const deltaX = e.clientX - dragStartX.current
-                    const newWidth = dragStartWidth.current + deltaX
+                    const newChatWidth = dragStartWidth.current + deltaX
 
-                    // Constraints
                     const availableWidth = containerWidth - leftSidebarWidth
-                    const maxChatWidth = availableWidth - MIN_CHAT_WIDTH
+                    // Chat can grow until agents hit their minimum (400px); no upper cap during manual drag
+                    const chatMax = availableWidth - AGENTS_MIN_WIDTH
+                    const clampedChatWidth = Math.max(MIN_CHAT_WIDTH, Math.min(newChatWidth, chatMax))
 
-                    const clampedWidth = Math.max(
-                        MIN_CHAT_WIDTH,
-                        Math.min(newWidth, maxChatWidth)
-                    )
-
+                    // Track in ref so pointer-up can commit the correct value regardless of Framer overrides
+                    liveChatWidthRef.current = clampedChatWidth
                     if (rightContentPanelRef.current) {
-                        rightContentPanelRef.current.style.width = `${clampedWidth}px`
+                        rightContentPanelRef.current.style.width = `${clampedChatWidth}px`
                     }
                     return
                 }
 
-                const isSidebarMode = !isMobileLayout && isToolOpen
+                const isAgentSidebarMode = !isMobileLayout && isAgentOpen
                 let effectiveIsMobile = isMobileLayout
 
-                if (isSidebarMode) {
-                    containerWidth = SIDEBAR_MODE_WIDTH
+                if (isAgentSidebarMode) {
+                    containerWidth = AGENT_SIDEBAR_CHAT_WIDTH
                     effectiveIsMobile = true
                 }
 
@@ -26496,7 +26512,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
             isMobileLayout,
             isScreenSharing,
             remoteScreenStream,
-            isToolOpen,
+            isAgentOpen,
             isWhiteboardOpen,
             isDocOpen,
             isAppOpen,
@@ -26516,15 +26532,9 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
         window.removeEventListener("pointerup", handlePointerUp)
 
         if (dragMode.current === "horizontal-sidebar") {
-            if (rightContentPanelRef.current) {
-                // Read the final width from the DOM and commit to state
-                const finalWidth = parseInt(
-                    rightContentPanelRef.current.style.width,
-                    10
-                )
-                if (!isNaN(finalWidth)) {
-                    setChatWidth(finalWidth)
-                }
+            // Commit from ref — avoids reading DOM value that Framer Motion may have overridden
+            if (liveChatWidthRef.current > 0) {
+                setChatWidth(liveChatWidthRef.current)
             }
             setTimeout(() => setIsResizing(false), 50)
             return
@@ -26538,11 +26548,11 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
             let containerWidth =
                 containerRef.current?.clientWidth || window.innerWidth
 
-            const isSidebarMode = !isMobileLayout && isToolOpen
+            const isAgentSidebarMode = !isMobileLayout && isAgentOpen
             let effectiveIsMobile = isMobileLayout
 
-            if (isSidebarMode) {
-                containerWidth = SIDEBAR_MODE_WIDTH
+            if (isAgentSidebarMode) {
+                containerWidth = AGENT_SIDEBAR_CHAT_WIDTH
                 effectiveIsMobile = true
             }
 
@@ -26587,7 +26597,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
         chatHeight,
         calculateHeightConstraints,
         isMobileLayout,
-        isToolOpen,
+        isAgentOpen,
         isScreenSharing,
         remoteScreenStream,
         isWhiteboardOpen,
@@ -26749,18 +26759,18 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
     ])
 
     // Sidebar Logic Definition (Hoist for layout calc)
-    const isSidebarMode = !isMobileLayout && isToolOpen
-    const isMobileToolMode = isMobileLayout && isToolOpen
+    const isAgentSidebarMode = !isMobileLayout && isAgentOpen
+    const isMobileAgentMode = isMobileLayout && isAgentOpen
 
     let finalWidth = 0
     let finalHeight = 0
-    let shouldUseHorizontalLayout = !isMobileLayout && !isSidebarMode
+    let shouldUseHorizontalLayout = !isMobileLayout && !isAgentSidebarMode
 
-    if (isMobileLayout || isSidebarMode) {
+    if (isMobileLayout || isAgentSidebarMode) {
         // MOBILE / SIDEBAR LOGIC
         // "if 3 tiles then side-by-side horizontal. if 4 tiles, its a 2x2 grid."
         const availableWidth =
-            (isSidebarMode ? SIDEBAR_MODE_WIDTH : containerSize.width) - 32
+            (isAgentSidebarMode ? AGENT_SIDEBAR_CHAT_WIDTH : containerSize.width) - 32
 
         if (numTiles === 4) {
             // 2x2 Grid
@@ -26850,14 +26860,14 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 // OR the sidebar is wide enough to support horizontal tiles comfortably (> 500px).
 
                 // TODO: ugly because vertical tiles exist when chat is wide and whiteboard/doceditor is thin.
-                const isWideSidebar = isSidebarMode && availableWidth > 500
+                const isWideSidebar = isAgentSidebarMode && availableWidth > 500
 
                 if (isWideSidebar) {
                     // If sidebar is wide, force horizontal layout for better use of space
                     shouldUseHorizontalLayout = true
                     finalWidth = h_finalWidth
                     finalHeight = h_finalHeight
-                } else if (isSidebarMode && numTiles <= 2) {
+                } else if (isAgentSidebarMode && numTiles <= 2) {
                     // In narrow sidebar mode, prefer vertical unless vertical tiles are tiny (< 120px height?)
                     // v_finalHeight is the height of a single tile in vertical stack.
                     if (v_finalHeight < 120 && h_finalHeight > v_finalHeight) {
@@ -27205,7 +27215,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 <ChatInput
                     showAddPeopleOverlay={
                         showAddPeopleOverlay &&
-                        !(isMobileLayout && isToolOpen)
+                        !(isMobileLayout && isAgentOpen)
                     }
                     setShowAddPeopleOverlay={setShowAddPeopleOverlay}
                     hideGradient={false}
@@ -27868,7 +27878,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                         <ChatInput
                             showAddPeopleOverlay={
                                 showAddPeopleOverlay &&
-                                !(isMobileLayout && isToolOpen)
+                                !(isMobileLayout && isAgentOpen)
                             }
                             setShowAddPeopleOverlay={setShowAddPeopleOverlay}
                             hideGradient={true}
@@ -28255,7 +28265,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     <ChatInput
                         showAddPeopleOverlay={
                             showAddPeopleOverlay &&
-                            !(isMobileLayout && isToolOpen)
+                            !(isMobileLayout && isAgentOpen)
                         }
                         setShowAddPeopleOverlay={setShowAddPeopleOverlay}
                         hideGradient={
@@ -28575,7 +28585,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
         const isContentCompact =
             isScreenSharing ||
             !!remoteScreenStream ||
-            (isToolOpen && !isSidebar)
+            (isAgentOpen && !isSidebar)
 
         // Use calculateHeightConstraints to get the 'ideal' dimensions based on the *current* layout context
         // If isSidebar, we pass the sidebar width (chatWidth) instead of full container width
@@ -31875,19 +31885,15 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     x: isMobileLayout ? contentX : 0,
                 }}
             >
-                {/* Right: Sidebar / Standard View */}
-                {/* 
-                   When tool is OPEN: 
-                     - Width is fixed 400px (Sidebar mode)
-                     - Flex-shrink 0
-                   When tool is CLOSED:
-                     - Width is 100% (Standard mode)
-                     - Flex 1
+                {/* Chat panel — full width normally; fixed width when agent sidebar is open */}
+                {/*
+                   Agent sidebar OPEN:  fixed chatWidth px, flex-shrink 0
+                   Agent sidebar CLOSED: width 100%, flex 1
                 */}
                 <motion.div
                     ref={rightContentPanelRef}
-                    data-layer="right-content-panel"
-                    className="RightContentPanel"
+                    data-layer="chat-panel"
+                    className="ChatPanel"
                     onPan={(event, info) => {
                         if (!isMobileLayout || isSidebarOpen) return
                         // Only allow dragging if we are mostly horizontal
@@ -32167,7 +32173,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
 
             {/* MOBILE OVERLAY (For Tools) */}
             <AnimatePresence>
-                {isMobileToolMode && (
+                {isMobileAgentMode && (
                     <motion.div
                         data-layer="mobile-tool-overlay"
                         className="MobileToolOverlay"
