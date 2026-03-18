@@ -31,23 +31,22 @@ import {
 } from "../../utils/normalize.ts";
 
 interface AmazonJobHit {
-  id_icims: string;       // Amazon's internal job ID
+  id_icims: string;
   title: string;
   city: string | null;
   state: string | null;
   country_code: string | null;
-  location: string | null;        // pre-formatted location string
-  job_category: string | null;    // e.g. "Software Development", "Operations"
-  schedule_type: string | null;   // "Full-Time" | "Part-Time"
-  is_remote: boolean | null;
-  posted_date: string | null;     // "Month Day, Year" e.g. "January 15, 2026"
-  job_path: string;               // relative URL path like "/en/jobs/12345/..."
-  description_short: string | null;  // brief summary text (not full description)
+  location: string | null;
+  normalized_location: string | null;
+  job_schedule_type: string | null;  // "full-time" | "part-time"
+  posted_date: string | null;        // "Month Day, Year" e.g. "January 15, 2026"
+  job_path: string;
+  description_short: string | null;
 }
 
 interface AmazonSearchResponse {
-  hits: AmazonJobHit[];
-  hits_count: number;
+  jobs: AmazonJobHit[];  // API returns jobs array; hits is total count (number)
+  hits: number;
 }
 
 const BASE_URL = "https://www.amazon.jobs/en/search.json";
@@ -88,22 +87,27 @@ export const amazonFetcher: JobSource = {
       }
 
       const data = (await res.json()) as AmazonSearchResponse;
-      const hits = data.hits ?? [];
+      // API returns jobs[]; legacy/alternate format used hits[] — support both
+      const raw = data as unknown;
+      const jobList = Array.isArray(data.jobs)
+        ? data.jobs
+        : Array.isArray((raw as { hits?: unknown[] }).hits)
+          ? ((raw as { hits: AmazonJobHit[] }).hits)
+          : [];
 
-      if (hits.length === 0) break;
+      if (jobList.length === 0) break;
 
-      for (const hit of hits) {
+      for (const hit of jobList) {
         try {
-          const locationStr = buildLocation(hit);
-          const workplaceHint = hit.is_remote ? "remote" : locationStr;
+          const locationStr = buildLocation(hit) ?? hit.normalized_location;
           const applyUrl = `https://www.amazon.jobs${hit.job_path}`;
 
           jobs.push({
             external_id: hit.id_icims,
             title: hit.title,
             location: normalizeLocation(locationStr),
-            employment_type: normalizeEmploymentType(hit.schedule_type),
-            workplace_type: normalizeWorkplaceType(workplaceHint, locationStr),
+            employment_type: normalizeEmploymentType(hit.job_schedule_type),
+            workplace_type: normalizeWorkplaceType(null, locationStr),
             apply_url: applyUrl,
             source_url: applyUrl,
             // Amazon's public search does not include full descriptions —
@@ -121,7 +125,7 @@ export const amazonFetcher: JobSource = {
         }
       }
 
-      if (hits.length < PAGE_SIZE) break;
+      if (jobList.length < PAGE_SIZE) break;
       offset += PAGE_SIZE;
       page++;
     }

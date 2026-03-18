@@ -19,6 +19,7 @@
 
 import { getJobById, updateJobAiFields, updateCompanyEnrichment, updateJobDescriptionRaw, getSourceById, type FullJobRow } from "../db/queries.ts";
 import { extractJobFields, formatSalaryDisplay } from "../enrichment/ai.ts";
+import { extractKeywords } from "../enrichment/keywords.ts";
 import { fetchSmartRecruitersDescription } from "../ingestion/sources/smartrecruiters.ts";
 import type { Env, JobDescriptionExtracted, PublicJob, PublicSalary } from "../types.ts";
 import { Errors, jsonOk } from "../utils/errors.ts";
@@ -50,6 +51,10 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
     }
   }
 
+  // Keywords are derived on-the-fly — no DB column, no AI call.
+  // Uses the canonical phrase list from enrichment/keywords.ts.
+  const keywords = extractKeywords(row.description_raw, row.job_description);
+
   return {
     id: row.id,
     title: row.title,
@@ -63,6 +68,7 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
     salary,
     job_summary: row.job_summary,
     job_description: jobDescription,
+    keywords,
     company: {
       name: row.company_name,
       logo_url: row.company_logo_url,

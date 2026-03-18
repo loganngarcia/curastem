@@ -85,12 +85,20 @@ export const workdayFetcher: JobSource = {
         searchText: "",
       };
 
+      // Workday CXS API requires Referer and Accept-Language; omitting them can cause 400
+      const url = new URL(source.base_url);
+      const pathParts = url.pathname.split("/").filter(Boolean);
+      const tenant = pathParts[pathParts.length - 2] ?? "jobs";
+      const referer = `${url.origin}/en-US/${tenant}`;
+
       const res = await fetch(source.base_url, {
         method: "POST",
         headers: {
-          "User-Agent": "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)",
+          "User-Agent": "Mozilla/5.0 (compatible; Curastem-Jobs-Ingestion/1.0; developers@curastem.org)",
           "Content-Type": "application/json",
           Accept: "application/json",
+          "Accept-Language": "en-US",
+          Referer: referer,
         },
         body: JSON.stringify(body),
       });
@@ -104,7 +112,11 @@ export const workdayFetcher: JobSource = {
 
       for (const posting of data.jobPostings ?? []) {
         try {
-          const titleText = posting.title?.instances?.[0]?.text ?? "";
+          // Workday returns title as string (Walmart) or object with instances (Comcast)
+          const titleText =
+            typeof posting.title === "string"
+              ? posting.title
+              : posting.title?.instances?.[0]?.text ?? "";
           if (!titleText) continue;
 
           const locationRaw = posting.locationsText ?? null;
@@ -112,13 +124,16 @@ export const workdayFetcher: JobSource = {
           const jobType = posting.jobType?.[0]?.descriptor ?? null;
           const employmentHint = timeType ?? jobType;
 
-          // Use a partial job URL — Workday full apply URLs require their frontend
-          const applyUrl = posting.jobPostingURL.startsWith("http")
+          // Use jobPostingURL when full; otherwise build from base_url host (e.g. walmart.wd5.myworkdayjobs.com)
+          const applyUrl = posting.jobPostingURL?.startsWith("http")
             ? posting.jobPostingURL
-            : `https://${source.company_handle}.myworkdayjobs.com${posting.externalPath ?? ""}`;
+            : `${url.origin}${posting.externalPath ?? ""}`;
+
+          // Some tenants (e.g. Walmart) return id: null; use externalPath as fallback for dedup
+          const externalId = posting.id ?? posting.externalPath ?? titleText;
 
           jobs.push({
-            external_id: posting.id,
+            external_id: String(externalId),
             title: titleText,
             location: normalizeLocation(locationRaw),
             employment_type: normalizeEmploymentType(employmentHint),

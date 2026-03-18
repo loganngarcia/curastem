@@ -58,20 +58,47 @@ function _getHapticLabel(): HTMLLabelElement | null {
 function _iosHaptic(times: number, gapMs = 0): void {
     const label = _getHapticLabel()
     if (!label) return
-    if (times === 1) { label.click(); return }
+    if (times === 1) {
+        label.click()
+        return
+    }
     let n = 0
-    const fire = () => { label.click(); if (++n < times) setTimeout(fire, gapMs) }
+    const fire = () => {
+        label.click()
+        if (++n < times) setTimeout(fire, gapMs)
+    }
     fire()
 }
 
 const haptic = {
-    light:     () => { navigator.vibrate?.(10);           _iosHaptic(1) },
-    medium:    () => { navigator.vibrate?.(20);           _iosHaptic(1) },
-    heavy:     () => { navigator.vibrate?.(40);           _iosHaptic(1) },
-    success:   () => { navigator.vibrate?.([10, 50, 10]); _iosHaptic(2, 60) },
-    warning:   () => { navigator.vibrate?.(30);           _iosHaptic(1) },
-    error:     () => { navigator.vibrate?.([50, 30, 50]); _iosHaptic(3, 40) },
-    selection: () => { navigator.vibrate?.(5);            _iosHaptic(1) },
+    light: () => {
+        navigator.vibrate?.(10)
+        _iosHaptic(1)
+    },
+    medium: () => {
+        navigator.vibrate?.(20)
+        _iosHaptic(1)
+    },
+    heavy: () => {
+        navigator.vibrate?.(40)
+        _iosHaptic(1)
+    },
+    success: () => {
+        navigator.vibrate?.([10, 50, 10])
+        _iosHaptic(2, 60)
+    },
+    warning: () => {
+        navigator.vibrate?.(30)
+        _iosHaptic(1)
+    },
+    error: () => {
+        navigator.vibrate?.([50, 30, 50])
+        _iosHaptic(3, 40)
+    },
+    selection: () => {
+        navigator.vibrate?.(5)
+        _iosHaptic(1)
+    },
 }
 
 // -----------------------------------------------------------------------------
@@ -92,13 +119,18 @@ const _makeCtx = (): AudioContext | null => {
         const ctx = new AC() as AudioContext
         ctx.resume()
         return ctx
-    } catch (_) { return null }
+    } catch (_) {
+        return null
+    }
 }
 
 const _withCompressor = (ctx: AudioContext) => {
     const comp = ctx.createDynamicsCompressor()
-    comp.threshold.value = -18; comp.knee.value = 8
-    comp.ratio.value = 6; comp.attack.value = 0.003; comp.release.value = 0.15
+    comp.threshold.value = -18
+    comp.knee.value = 8
+    comp.ratio.value = 6
+    comp.attack.value = 0.003
+    comp.release.value = 0.15
     comp.connect(ctx.destination)
     return comp
 }
@@ -111,18 +143,25 @@ const playCallStartSound = (): void => {
         const now = ctx.currentTime
         const out = _withCompressor(ctx)
         ;[523, 659, 784, 1047].forEach((freq, i) => {
-            const osc = ctx.createOscillator(), gain = ctx.createGain()
-            const t = now + i * 0.10
+            const osc = ctx.createOscillator(),
+                gain = ctx.createGain()
+            const t = now + i * 0.1
             osc.type = "sine"
             osc.frequency.setValueAtTime(freq, t)
             osc.frequency.linearRampToValueAtTime(freq * 1.04, t + 0.25)
             gain.gain.setValueAtTime(0.0001, t)
             gain.gain.linearRampToValueAtTime(0.55, t + 0.04)
-            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.60)
-            osc.connect(gain); gain.connect(out)
-            osc.start(t); osc.stop(t + 0.65)
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.6)
+            osc.connect(gain)
+            gain.connect(out)
+            osc.start(t)
+            osc.stop(t + 0.65)
         })
-        setTimeout(() => { try { ctx.close() } catch (_) {} }, 1400)
+        setTimeout(() => {
+            try {
+                ctx.close()
+            } catch (_) {}
+        }, 1400)
     } catch (_) {}
 }
 
@@ -134,18 +173,25 @@ const playCallEndSound = (): void => {
         const now = ctx.currentTime
         const out = _withCompressor(ctx)
         ;[392, 330, 262].forEach((freq, i) => {
-            const osc = ctx.createOscillator(), gain = ctx.createGain()
+            const osc = ctx.createOscillator(),
+                gain = ctx.createGain()
             const t = now + i * 0.13
             osc.type = "sine"
             osc.frequency.setValueAtTime(freq, t)
             osc.frequency.linearRampToValueAtTime(freq * 0.97, t + 0.45)
             gain.gain.setValueAtTime(0.0001, t)
             gain.gain.linearRampToValueAtTime(0.45, t + 0.05)
-            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.60)
-            osc.connect(gain); gain.connect(out)
-            osc.start(t); osc.stop(t + 0.60)
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.6)
+            osc.connect(gain)
+            gain.connect(out)
+            osc.start(t)
+            osc.stop(t + 0.6)
         })
-        setTimeout(() => { try { ctx.close() } catch (_) {} }, 1200)
+        setTimeout(() => {
+            try {
+                ctx.close()
+            } catch (_) {}
+        }, 1200)
     } catch (_) {}
 }
 
@@ -155,6 +201,67 @@ const playCallEndSound = (): void => {
 const SUGGESTION_MODEL_ID = "gemini-3-flash-preview"
 const MODEL_OUTPUT_SAMPLE_RATE = 24000
 const INPUT_TARGET_SAMPLE_RATE = 16000
+
+function getContentDimensions(
+    isWhiteboard: boolean,
+    isDoc: boolean,
+    isApp: boolean,
+    isMobile: boolean
+): { width: number; height: number } | null {
+    if (isWhiteboard)
+        return isMobile ? { width: 1080, height: 1350 } : { width: 1920, height: 1080 }
+    if (isDoc) return { width: 1240, height: 1754 }
+    if (isApp)
+        return isMobile ? { width: 1080, height: 1350 } : { width: 1920, height: 1080 }
+    return null
+}
+
+function hasVideoContent(
+    isScreenSharing: boolean,
+    remoteScreenStream: MediaStream | null,
+    isWhiteboardOpen: boolean,
+    isDocOpen: boolean,
+    isAppOpen: boolean
+): boolean {
+    return (
+        isScreenSharing ||
+        !!remoteScreenStream ||
+        isWhiteboardOpen ||
+        isDocOpen ||
+        isAppOpen
+    )
+}
+
+function getTargetRatioForTiles(
+    numTiles: number,
+    isContentOpen: boolean
+): number {
+    const isMultiParty = numTiles > 2
+    return isMultiParty || (isContentOpen && isMultiParty) ? 1.0 : 1.55
+}
+
+/** Save a value when `isOpen` becomes true, run onEnter, then restore when `isOpen` becomes false. */
+function useSaveRestoreOnToggle<T>(
+    isOpen: boolean,
+    getValue: () => T,
+    setValue: (v: T) => void,
+    onEnter: (saved: T) => void
+) {
+    const savedRef = React.useRef<T | null>(null)
+    React.useEffect(() => {
+        if (isOpen) {
+            if (savedRef.current === null) {
+                savedRef.current = getValue()
+                onEnter(savedRef.current)
+            }
+        } else {
+            if (savedRef.current !== null) {
+                setValue(savedRef.current)
+                savedRef.current = null
+            }
+        }
+    }, [isOpen, getValue, setValue, onEnter])
+}
 
 // -----------------------------------------------------------------------------
 // Agent Skills API — Documentation for developers and LLMs
@@ -380,7 +487,7 @@ const Tooltip = ({ children, style }: TooltipProps) => {
         }
 
         // Check if this is a side-positioned tooltip (left: "100%" or right: "100%")
-        const isSidePositioned = 
+        const isSidePositioned =
             (style?.left === "100%" || style?.right === "100%") &&
             style?.transform?.includes("translate")
 
@@ -1463,6 +1570,69 @@ const RETRIEVE_RESOURCES_TOOL_NAME = "retrieve_career_and_college_resources"
 /** Fallback when stream omits thoughtSignature (Gemini 3 requires it for follow-up). */
 const GEMINI_THOUGHT_SIGNATURE_SKIP = "skip_thought_signature_validator"
 
+// -----------------------------------------------------------------------------
+// On-device memory & resume storage (localStorage)
+// -----------------------------------------------------------------------------
+interface UserMemory {
+    id: string
+    text: string
+    createdAt: number
+}
+
+const getMemories = (): UserMemory[] => {
+    try {
+        if (typeof window === "undefined") return []
+        const raw = localStorage.getItem("curastem_memories")
+        return raw ? JSON.parse(raw) : []
+    } catch {
+        return []
+    }
+}
+
+const saveMemory = (text: string): UserMemory => {
+    const entry: UserMemory = {
+        id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        text,
+        createdAt: Date.now(),
+    }
+    try {
+        const existing = getMemories()
+        localStorage.setItem(
+            "curastem_memories",
+            JSON.stringify([...existing, entry])
+        )
+    } catch {}
+    return entry
+}
+
+const updateMemory = (id: string, newText: string | null): void => {
+    try {
+        const existing = getMemories()
+        const updated =
+            newText === null
+                ? existing.filter((m) => m.id !== id)
+                : existing.map((m) =>
+                      m.id === id ? { ...m, text: newText } : m
+                  )
+        localStorage.setItem("curastem_memories", JSON.stringify(updated))
+    } catch {}
+}
+
+const getResume = (): string | null => {
+    try {
+        if (typeof window === "undefined") return null
+        return localStorage.getItem("curastem_resume")
+    } catch {
+        return null
+    }
+}
+
+const saveResume = (content: string): void => {
+    try {
+        localStorage.setItem("curastem_resume", content)
+    } catch {}
+}
+
 const CAREER_COLLEGE_RESOURCES_CONTENT = `--- MENTORSHIP & CAREER ---
 • ADPList (adplist.org) – 1:1 long-term mentorship from people at top companies
 • LinkedIn (linkedin.com) – Networking and job search
@@ -1523,7 +1693,67 @@ const CAREER_COLLEGE_RESOURCES_CONTENT = `--- MENTORSHIP & CAREER ---
 /** Extracts concatenated text from a Gemini generateContent response. */
 function extractTextFromGeminiResponse(data: unknown): string {
     const parts = (data as any)?.candidates?.[0]?.content?.parts ?? []
-    return parts.map((p: { text?: string }) => p.text ?? "").join("").trim()
+    return parts
+        .map((p: { text?: string }) => p.text ?? "")
+        .join("")
+        .trim()
+}
+
+// Inject `data-keyword-land` marker spans into resume HTML so the landing
+// animation can locate each keyword's exact DOM position via a direct query
+// instead of fragile TreeWalker + Range offset arithmetic.
+// Only the FIRST occurrence of each keyword is marked so there's a single
+// unambiguous target. Keywords inside existing HTML tags are never touched.
+function markKeywordsInHtml(html: string, keywords: string[]): string {
+    if (!html || keywords.length === 0) return html
+    if (typeof document === "undefined") return html
+    const tmp = document.createElement("div")
+    tmp.innerHTML = html
+
+    const claimed = new Set<string>()
+
+    const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT)
+    const hits: Array<{
+        node: Text
+        start: number
+        end: number
+        kw: string
+    }> = []
+
+    let node: Node | null
+    while ((node = walker.nextNode())) {
+        const textNode = node as Text
+        const txt = textNode.textContent ?? ""
+        for (const kw of keywords) {
+            if (claimed.has(kw)) continue
+            // Exact case match — only mark if the resume uses the same casing
+            const idx = txt.indexOf(kw)
+            if (idx !== -1) {
+                hits.push({ node: textNode, start: idx, end: idx + kw.length, kw })
+                claimed.add(kw)
+            }
+        }
+    }
+
+    // Process hits in reverse document order so earlier replacements don't
+    // shift the offsets of later ones. Sort by node position is complex, so
+    // instead we replace each node once (only one hit per node is needed).
+    for (const { node: textNode, start, end, kw } of hits) {
+        const parent = textNode.parentNode
+        if (!parent) continue
+        const txt = textNode.textContent ?? ""
+        const before = document.createTextNode(txt.slice(0, start))
+        const span = document.createElement("span")
+        span.setAttribute("data-keyword-land", kw)
+        span.textContent = txt.slice(start, end)
+        const after = document.createTextNode(txt.slice(end))
+        parent.insertBefore(before, textNode)
+        parent.insertBefore(span, textNode)
+        parent.insertBefore(after, textNode)
+        parent.removeChild(textNode)
+    }
+
+    return tmp.innerHTML
 }
 
 // --- INTERFACES ---
@@ -1802,6 +2032,21 @@ interface Attachment {
     mimeType: string
 }
 
+/** Minimal job snippet stored on a message after a search_jobs tool call. */
+interface JobSnippet {
+    id: string
+    title: string
+    company: string
+    company_logo?: string | null
+    location?: string | null
+    employment_type?: string | null
+    workplace_type?: string | null
+    posted_at?: string | null
+    apply_url?: string | null
+    summary?: string | null
+    salary?: string | null
+}
+
 interface Message {
     role: string
     text: string
@@ -1825,7 +2070,9 @@ interface Message {
      * ("app" or "doc"). Mirrors what functionCall.name provided for real tool
      * calls so renderChatSection can show the correct tag badge in both cases.
      */
-    toolUsed?: "app" | "doc"
+    toolUsed?: "app" | "doc" | "resume" | "cover_letter"
+    /** Jobs list from a search_jobs tool call, rendered as cards in chat. */
+    jobs?: JobSnippet[]
 }
 
 interface FileAttachmentProps {
@@ -1880,7 +2127,9 @@ const FileAttachment = React.memo(function FileAttachment({
                 flexShrink: 0,
                 padding: 8,
                 position: "relative",
-                background: onRemove ? themeColors.background : themeColors.surface,
+                background: onRemove
+                    ? themeColors.background
+                    : themeColors.surface,
                 border:
                     themeColors.background === lightColors.background
                         ? `0.33px solid ${themeColors.border.subtle}`
@@ -2424,7 +2673,7 @@ const AnimatedEye = ({
                         filter={`url(#filter_${filterPrefix}_open_${id})`}
                         transform={
                             flipHorizontal
-                                ? `translate(${cx}, ${cy}) scaleX(-1) translate(${-cx}, ${-cy})`
+                                ? `translate(${cx}, ${cy}) scale(-1, 1) translate(${-cx}, ${-cy})`
                                 : undefined
                         }
                     >
@@ -2805,50 +3054,51 @@ const GeminiLiveCharacter = ({
                     height: ORB_BASE_HEIGHT,
                 }}
             >
-            <div
-                style={{
-                    width: 100,
-                    height: 102,
-                    position: "relative",
-                    cursor: "pointer",
-                    transition: "transform 0.3s",
-                    boxShadow: "0px 4px 12px hsla(0, 0%, 0%, 0.08)", // Hardcoded shadow for animated character
-                    borderRadius: 9999,
-                }}
-            >
-                {/* Layer: White Body */}
                 <div
                     style={{
-                        position: "absolute",
-                        left: 0,
-                        top: 0,
                         width: 100,
                         height: 102,
-                        background: "#FFFFFF", // Hardcoded white for animated character
+                        position: "relative",
+                        cursor: "pointer",
+                        transition: "transform 0.3s",
+                        boxShadow: "0px 4px 12px hsla(0, 0%, 0%, 0.08)", // Hardcoded shadow for animated character
                         borderRadius: 9999,
                     }}
-                />
+                >
+                    {/* Layer: White Body */}
+                    <div
+                        style={{
+                            position: "absolute",
+                            left: 0,
+                            top: 0,
+                            width: 100,
+                            height: 102,
+                            background: "#FFFFFF", // Hardcoded white for animated character
+                            borderRadius: 9999,
+                        }}
+                    />
 
-                {/* Layer: Blue Blur */}
-                <div
-                    style={{
-                        position: "absolute",
-                        width: 76.66,
-                        height: 80,
-                        left: 11.66,
-                        top: 10.31,
-                        background:
-                            "linear-gradient(180deg, hsl(200, 100%, 50%) 0%, hsla(0, 0%, 100%, 0) 100%)", // Hardcoded colors for animated character
-                        boxShadow: "0px 16px 24px hsla(200, 100%, 50%, 0.25)", // Hardcoded shadow for animated character
-                        borderRadius: 9999,
-                        filter: "blur(8px)",
-                    }}
-                />
+                    {/* Layer: Blue Blur */}
+                    <div
+                        style={{
+                            position: "absolute",
+                            width: 76.66,
+                            height: 80,
+                            left: 11.66,
+                            top: 10.31,
+                            background:
+                                "linear-gradient(180deg, hsl(200, 100%, 50%) 0%, hsla(0, 0%, 100%, 0) 100%)", // Hardcoded colors for animated character
+                            boxShadow:
+                                "0px 16px 24px hsla(200, 100%, 50%, 0.25)", // Hardcoded shadow for animated character
+                            borderRadius: 9999,
+                            filter: "blur(8px)",
+                        }}
+                    />
 
-                {/* Layer: Eyes */}
-                <GeminiEye config={currentState.eye1} id="eye1" />
-                <GeminiEye config={currentState.eye2} id="eye2" />
-            </div>
+                    {/* Layer: Eyes */}
+                    <GeminiEye config={currentState.eye1} id="eye1" />
+                    <GeminiEye config={currentState.eye2} id="eye2" />
+                </div>
             </div>
         </div>
     )
@@ -2982,7 +3232,11 @@ interface DocEditorProps {
     isMobileLayout?: boolean
     remoteCursors?: Map<string, { x: number; y: number; color: string }>
     onCursorMove?: (x: number, y: number) => void
+    docType?: "doc" | "resume" | "cover_letter"
     onClose?: () => void
+    hideLeftToolbar?: boolean
+    hideContent?: boolean
+    docCompany?: string
 }
 
 const ToolbarButton = React.memo(
@@ -3009,7 +3263,10 @@ const ToolbarButton = React.memo(
             className={id}
             onMouseDown={(e) => e.preventDefault()}
             onPointerDown={(e) => e.preventDefault()}
-            onClick={onClick}
+            onClick={(e) => {
+                onHoverChange(false)
+                onClick(e)
+            }}
             onMouseEnter={() => onHoverChange(true)}
             onMouseLeave={() => onHoverChange(false)}
             style={{
@@ -3161,7 +3418,10 @@ const HeaderActions = React.memo(
                     data-layer="download button"
                     className="DownloadButton"
                     ref={downloadRef}
-                    onClick={onDownloadClick}
+                    onClick={(e) => {
+                        onDownloadHoverChange(false)
+                        onDownloadClick(e)
+                    }}
                     onPointerDown={(e) => e.stopPropagation()}
                     onMouseEnter={() => onDownloadHoverChange(true)}
                     onMouseLeave={() => onDownloadHoverChange(false)}
@@ -3210,7 +3470,10 @@ const HeaderActions = React.memo(
                     data-svg-wrapper
                     data-layer="close button"
                     className="CloseButton"
-                    onClick={onCloseClick}
+                    onClick={() => {
+                        onCloseHoverChange(false)
+                        onCloseClick()
+                    }}
                     onPointerDown={(e) => e.stopPropagation()}
                     onMouseEnter={() => onCloseHoverChange(true)}
                     onMouseLeave={() => onCloseHoverChange(false)}
@@ -3270,6 +3533,10 @@ const DocEditor = React.memo(function DocEditor({
     remoteCursors,
     onCursorMove,
     onClose,
+    docType = "doc",
+    hideLeftToolbar = false,
+    hideContent = false,
+    docCompany = "",
 }: DocEditorProps) {
     const editorRef = React.useRef<HTMLDivElement>(null)
     const containerRef = React.useRef<HTMLDivElement>(null)
@@ -4013,34 +4280,707 @@ const DocEditor = React.memo(function DocEditor({
     const handleDownload = React.useCallback(
         async (format: "pdf" | "docx") => {
             if (format === "pdf") {
-                const iframe = document.createElement("iframe")
-                iframe.style.position = "fixed"
-                iframe.style.right = "0"
-                iframe.style.bottom = "0"
-                iframe.style.width = "0"
-                iframe.style.height = "0"
-                iframe.style.border = "0"
-                document.body.appendChild(iframe)
+                const isOnePage =
+                    docType === "resume" || docType === "cover_letter"
+                const fontFamily =
+                    settings.fontStyle === "serif"
+                        ? '"Times New Roman", serif'
+                        : "Inter, sans-serif"
 
-                const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Document</title><style>@page{size:8.5in 11in;margin:0.5in;}body{margin:0;padding:0;font-family:${settings.fontStyle === "serif" ? '"Times New Roman", serif' : "Inter, sans-serif"};font-size:${Math.max(1, settings.pSize - 5)}pt;line-height:1.6;}h1{font-size:${Math.max(1, settings.h1Size - 5)}px;font-weight:700;}h2{font-size:${Math.max(1, settings.h2Size - 5)}px;font-weight:700;border-bottom:1px solid ${themeColors.surfaceBlack};}a{color:${themeColors.semantic.accent};text-decoration:underline;}</style></head><body>`
-                const footer = "</body></html>"
-                const sourceHTML = header + content + footer
+                if (isOnePage) {
+                    try {
+                        console.log(
+                            "[PDF] Starting pdf-lib generation, docType:",
+                            docType
+                        )
+                        // --- ATS-safe text-based PDF via pdf-lib ---
+                        // Real selectable/searchable text; no image rasterization.
+                        // Uses Standard Type 1 fonts (Helvetica + Times) which are built into every PDF reader —
+                        // no font embedding needed, zero extra bytes, perfect ATS parsing.
 
-                const doc = iframe.contentWindow?.document
-                if (doc) {
-                    doc.open()
-                    doc.write(sourceHTML)
-                    doc.close()
+                        // pdf-lib pt dimensions: letter page = 612 x 792 pt
+                        const PAGE_W_PT = 612
+                        const PAGE_H_PT = 792
+                        const MARGIN_PT = 36 // 0.5in
+                        const CONTENT_W_PT = PAGE_W_PT - MARGIN_PT * 2
+                        const CONTENT_H_PT = PAGE_H_PT - MARGIN_PT * 2
 
-                    // Print after content is loaded
-                    setTimeout(() => {
-                        iframe.contentWindow?.focus()
-                        iframe.contentWindow?.print()
-                        // Cleanup after print dialog closes (approximate)
+                        // Snapshot settings so repeated downloads always use latest values
+                        const useSerif = settings.fontStyle === "serif"
+
+                        // Parse HTML into a flat list of styled blocks for layout
+                        type Block =
+                            | { kind: "h1"; text: string }
+                            | { kind: "h2"; text: string }
+                            | {
+                                  kind: "p"
+                                  runs: {
+                                      text: string
+                                      bold: boolean
+                                      italic: boolean
+                                  }[]
+                              }
+                            | {
+                                  kind: "li"
+                                  runs: {
+                                      text: string
+                                      bold: boolean
+                                      italic: boolean
+                                  }[]
+                                  indent: number
+                              }
+                            | { kind: "rule" }
+
+                        const parseHTML = (): Block[] => {
+                            const tmp = document.createElement("div")
+                            tmp.innerHTML = content
+                            const blocks: Block[] = []
+
+                            type Run = {
+                                text: string
+                                bold: boolean
+                                italic: boolean
+                            }
+
+                            // Extract only the direct inline text runs of an element — stops at nested block/list children
+                            const extractInlineRuns = (
+                                el: Element,
+                                bold = false,
+                                italic = false
+                            ): Run[] => {
+                                const runs: Run[] = []
+                                const walk = (
+                                    node: Node,
+                                    b: boolean,
+                                    i: boolean
+                                ) => {
+                                    if (node.nodeType === Node.TEXT_NODE) {
+                                        const t = node.textContent || ""
+                                        if (t)
+                                            runs.push({
+                                                text: t,
+                                                bold: b,
+                                                italic: i,
+                                            })
+                                    } else if (
+                                        node.nodeType === Node.ELEMENT_NODE
+                                    ) {
+                                        const tag = (
+                                            node as Element
+                                        ).tagName.toLowerCase()
+                                        // Stop at nested lists — those get processed as their own blocks
+                                        if (tag === "ul" || tag === "ol") return
+                                        const nb =
+                                            b || tag === "b" || tag === "strong"
+                                        const ni =
+                                            i || tag === "i" || tag === "em"
+                                        node.childNodes.forEach((c) =>
+                                            walk(c, nb, ni)
+                                        )
+                                    }
+                                }
+                                walk(el, bold, italic)
+                                return runs
+                            }
+
+                            const processNode = (
+                                node: Node,
+                                listIndent = 0
+                            ) => {
+                                if (node.nodeType !== Node.ELEMENT_NODE) return
+                                const el = node as Element
+                                const tag = el.tagName.toLowerCase()
+
+                                if (tag === "h1") {
+                                    blocks.push({
+                                        kind: "h1",
+                                        text: el.textContent?.trim() || "",
+                                    })
+                                } else if (tag === "h2") {
+                                    blocks.push({ kind: "rule" })
+                                    blocks.push({
+                                        kind: "h2",
+                                        text: el.textContent?.trim() || "",
+                                    })
+                                } else if (tag === "p") {
+                                    const runs = extractInlineRuns(el)
+                                    if (runs.some((r) => r.text.trim()))
+                                        blocks.push({ kind: "p", runs })
+                                } else if (tag === "ul" || tag === "ol") {
+                                    // Process each direct <li> child
+                                    el.childNodes.forEach((child) => {
+                                        if (
+                                            (
+                                                child as Element
+                                            ).tagName?.toLowerCase() === "li"
+                                        ) {
+                                            processLi(
+                                                child as Element,
+                                                listIndent
+                                            )
+                                        }
+                                    })
+                                } else if (tag === "li") {
+                                    processLi(el, listIndent)
+                                } else if (tag === "br") {
+                                    // skip
+                                } else {
+                                    el.childNodes.forEach((c) =>
+                                        processNode(c, listIndent)
+                                    )
+                                }
+                            }
+
+                            const processLi = (
+                                liEl: Element,
+                                indent: number
+                            ) => {
+                                // Emit the inline text of this <li> (excluding nested list children)
+                                const runs = extractInlineRuns(liEl)
+                                if (runs.some((r) => r.text.trim())) {
+                                    blocks.push({ kind: "li", runs, indent })
+                                }
+                                // Then recurse into any nested <ul>/<ol> children with increased indent
+                                liEl.childNodes.forEach((child) => {
+                                    if (child.nodeType === Node.ELEMENT_NODE) {
+                                        const ctag = (
+                                            child as Element
+                                        ).tagName.toLowerCase()
+                                        if (ctag === "ul" || ctag === "ol") {
+                                            processNode(child, indent + 1)
+                                        }
+                                    }
+                                })
+                            }
+
+                            tmp.childNodes.forEach((c) => processNode(c))
+                            return blocks
+                        }
+
+                        const blocks = parseHTML()
+
+                        // Load pdf-lib
+                        const pdfLibModule = await import(
+                            "https://esm.sh/pdf-lib@1.17.1"
+                        )
+                        const { PDFDocument, rgb, StandardFonts } = pdfLibModule
+                        console.log(
+                            "[PDF] pdf-lib loaded, PDFDocument:",
+                            typeof PDFDocument
+                        )
+
+                        // Sanitize text to only WinAnsi-safe characters (Latin-1 supplement + basic ASCII).
+                        // Replaces common Unicode punctuation with ASCII equivalents, strips the rest.
+                        const sanitize = (s: string) =>
+                            s
+                                .replace(/[\u2018\u2019]/g, "'") // curly single quotes
+                                .replace(/[\u201C\u201D]/g, '"') // curly double quotes
+                                .replace(/[\u2013\u2014]/g, "-") // en/em dash
+                                .replace(/\u2022/g, "*") // bullet • -> *
+                                .replace(/\u25E6/g, "-") // open circle bullet -> -
+                                .replace(/\u2026/g, "...") // ellipsis
+                                .replace(/[^\x20-\x7E\xA0-\xFF]/g, "") // strip anything outside Latin-1
+
+                        // Compute total layout height for a given base font size (in pt)
+                        // Pure math — no DOM needed. Uses per-character width estimates per style.
+                        const computeHeight = (basePt: number): number => {
+                            const h1Pt = basePt * 1.55
+                            const h2Pt = basePt * 1.15
+                            const lineH = basePt * 1.45
+                            const h1LineH = h1Pt * 1.3
+                            const h2LineH = h2Pt * 1.35
+                            // Helvetica/Times glyph width estimates (conservative — errs toward more lines)
+                            const charW = (
+                                pt: number,
+                                bold: boolean,
+                                italic: boolean
+                            ) =>
+                                pt *
+                                (bold && italic
+                                    ? 0.6
+                                    : bold
+                                      ? 0.6
+                                      : italic
+                                        ? 0.54
+                                        : 0.54)
+                            const spaceW = (pt: number) => pt * 0.28
+
+                            // Word-wrap a list of styled runs, counting wrapped lines
+                            const countLines = (
+                                runs: {
+                                    text: string
+                                    bold: boolean
+                                    italic: boolean
+                                }[],
+                                maxW: number,
+                                pt: number
+                            ): number => {
+                                if (runs.length === 0) return 1
+                                let lines = 1
+                                let curW = 0
+                                let firstWordOnLine = true
+                                for (const run of runs) {
+                                    const words = run.text
+                                        .split(/\s+/)
+                                        .filter(Boolean)
+                                    for (const word of words) {
+                                        const ww =
+                                            word.length *
+                                            charW(pt, run.bold, run.italic)
+                                        const gap = firstWordOnLine
+                                            ? 0
+                                            : spaceW(pt)
+                                        if (
+                                            !firstWordOnLine &&
+                                            curW + gap + ww > maxW
+                                        ) {
+                                            lines++
+                                            curW = ww
+                                        } else {
+                                            curW += gap + ww
+                                        }
+                                        firstWordOnLine = false
+                                    }
+                                }
+                                return lines
+                            }
+
+                            let totalH = 0
+
+                            for (const block of blocks) {
+                                if (block.kind === "h1") {
+                                    const n = countLines(
+                                        [
+                                            {
+                                                text: block.text,
+                                                bold: true,
+                                                italic: false,
+                                            },
+                                        ],
+                                        CONTENT_W_PT,
+                                        h1Pt
+                                    )
+                                    totalH += n * h1LineH + basePt * 0.4
+                                } else if (block.kind === "h2") {
+                                    const n = countLines(
+                                        [
+                                            {
+                                                text: block.text,
+                                                bold: true,
+                                                italic: false,
+                                            },
+                                        ],
+                                        CONTENT_W_PT,
+                                        h2Pt
+                                    )
+                                    totalH += n * h2LineH + basePt * 0.8
+                                } else if (block.kind === "rule") {
+                                    totalH += basePt * 0.5
+                                } else if (block.kind === "p") {
+                                    const n = countLines(
+                                        block.runs,
+                                        CONTENT_W_PT,
+                                        basePt
+                                    )
+                                    totalH += n * lineH + basePt * 0.2
+                                } else if (block.kind === "li") {
+                                    const bulletW =
+                                        basePt * 1.4 * (block.indent + 1)
+                                    const n = countLines(
+                                        block.runs,
+                                        CONTENT_W_PT - bulletW,
+                                        basePt
+                                    )
+                                    totalH += n * lineH + basePt * 0.15
+                                }
+                            }
+
+                            return totalH
+                        }
+
+                        // Binary search: find largest basePt where content fits in CONTENT_H_PT
+                        let lo = 6,
+                            hi = 14,
+                            bestPt = 10
+                        for (let i = 0; i < 10; i++) {
+                            const mid = (lo + hi) / 2
+                            if (computeHeight(mid) <= CONTENT_H_PT) {
+                                bestPt = mid
+                                lo = mid
+                            } else {
+                                hi = mid
+                            }
+                        }
+
+                        // Build the actual PDF with pdf-lib using the calculated font size
+                        const pdfDoc = await PDFDocument.create()
+                        const page = pdfDoc.addPage([PAGE_W_PT, PAGE_H_PT])
+
+                        const regularFont = await pdfDoc.embedFont(
+                            useSerif
+                                ? StandardFonts.TimesRoman
+                                : StandardFonts.Helvetica
+                        )
+                        const boldFont = await pdfDoc.embedFont(
+                            useSerif
+                                ? StandardFonts.TimesRomanBold
+                                : StandardFonts.HelveticaBold
+                        )
+                        const italicFont = await pdfDoc.embedFont(
+                            useSerif
+                                ? StandardFonts.TimesRomanItalic
+                                : StandardFonts.HelveticaOblique
+                        )
+                        const boldItalicFont = await pdfDoc.embedFont(
+                            useSerif
+                                ? StandardFonts.TimesRomanBoldItalic
+                                : StandardFonts.HelveticaBoldOblique
+                        )
+
+                        const h1Pt = bestPt * 1.55
+                        const h2Pt = bestPt * 1.15
+                        const lineH = bestPt * 1.45
+                        const h1LineH = h1Pt * 1.3
+                        const h2LineH = h2Pt * 1.35
+                        const black = rgb(0.07, 0.07, 0.07)
+                        const gray = rgb(0.2, 0.2, 0.2)
+
+                        // Word-wrap using actual font metrics from pdf-lib
+                        const wrapRuns = (
+                            runs: {
+                                text: string
+                                bold: boolean
+                                italic: boolean
+                            }[],
+                            maxW: number,
+                            fontSize: number
+                        ): {
+                            text: string
+                            bold: boolean
+                            italic: boolean
+                        }[][] => {
+                            // Flatten all runs into words, each tagged with style
+                            type Word = {
+                                text: string
+                                bold: boolean
+                                italic: boolean
+                                space: boolean
+                            }
+                            const words: Word[] = []
+                            for (const run of runs) {
+                                const parts = sanitize(run.text).split(/(\s+)/)
+                                for (let i = 0; i < parts.length; i++) {
+                                    const p = parts[i]
+                                    if (!p) continue
+                                    if (/^\s+$/.test(p)) {
+                                        if (words.length)
+                                            words[words.length - 1].space = true
+                                    } else {
+                                        words.push({
+                                            text: p,
+                                            bold: run.bold,
+                                            italic: run.italic,
+                                            space: false,
+                                        })
+                                    }
+                                }
+                            }
+
+                            const getFont = (bold: boolean, italic: boolean) =>
+                                bold && italic
+                                    ? boldItalicFont
+                                    : bold
+                                      ? boldFont
+                                      : italic
+                                        ? italicFont
+                                        : regularFont
+
+                            const lines: {
+                                text: string
+                                bold: boolean
+                                italic: boolean
+                            }[][] = []
+                            let curLine: Word[] = []
+                            let curW = 0
+
+                            const flushLine = () => {
+                                if (curLine.length === 0) return
+                                // Merge adjacent same-style words into runs, inserting spaces between words
+                                const lineRuns: {
+                                    text: string
+                                    bold: boolean
+                                    italic: boolean
+                                }[] = []
+                                for (let wi = 0; wi < curLine.length; wi++) {
+                                    const w = curLine[wi]
+                                    const needSpace = wi > 0
+                                    const last = lineRuns[lineRuns.length - 1]
+                                    if (
+                                        last &&
+                                        last.bold === w.bold &&
+                                        last.italic === w.italic
+                                    ) {
+                                        last.text +=
+                                            (needSpace ? " " : "") + w.text
+                                    } else {
+                                        lineRuns.push({
+                                            text:
+                                                (needSpace && last ? " " : "") +
+                                                w.text,
+                                            bold: w.bold,
+                                            italic: w.italic,
+                                        })
+                                    }
+                                }
+                                lines.push(lineRuns)
+                            }
+
+                            for (const word of words) {
+                                const f = getFont(word.bold, word.italic)
+                                const spaceW = f.widthOfTextAtSize(
+                                    " ",
+                                    fontSize
+                                )
+                                const wordW = f.widthOfTextAtSize(
+                                    word.text,
+                                    fontSize
+                                )
+                                const addW =
+                                    curLine.length > 0 ? spaceW + wordW : wordW
+
+                                if (curLine.length > 0 && curW + addW > maxW) {
+                                    flushLine()
+                                    curLine = [word]
+                                    curW = wordW
+                                } else {
+                                    curLine.push(word)
+                                    curW += addW
+                                }
+                            }
+                            flushLine()
+                            return lines.length
+                                ? lines
+                                : [[{ text: "", bold: false, italic: false }]]
+                        }
+
+                        // Draw text with mixed bold/italic runs on a single line, returning x after last char
+                        const drawRuns = (
+                            runs: {
+                                text: string
+                                bold: boolean
+                                italic: boolean
+                            }[],
+                            x: number,
+                            y: number,
+                            fontSize: number,
+                            color: typeof black
+                        ) => {
+                            let cx = x
+                            for (const run of runs) {
+                                const t = sanitize(run.text)
+                                if (!t) continue
+                                const f =
+                                    run.bold && run.italic
+                                        ? boldItalicFont
+                                        : run.bold
+                                          ? boldFont
+                                          : run.italic
+                                            ? italicFont
+                                            : regularFont
+                                page.drawText(t, {
+                                    x: cx,
+                                    y,
+                                    font: f,
+                                    size: fontSize,
+                                    color,
+                                })
+                                cx += f.widthOfTextAtSize(t, fontSize)
+                            }
+                            return cx
+                        }
+
+                        let y = PAGE_H_PT - MARGIN_PT
+
+                        for (const block of blocks) {
+                            if (block.kind === "h1") {
+                                const wrappedLines = wrapRuns(
+                                    [
+                                        {
+                                            text: sanitize(block.text),
+                                            bold: true,
+                                            italic: false,
+                                        },
+                                    ],
+                                    CONTENT_W_PT,
+                                    h1Pt
+                                )
+                                for (const line of wrappedLines) {
+                                    y -= h1LineH
+                                    drawRuns(line, MARGIN_PT, y, h1Pt, black)
+                                }
+                                y -= bestPt * 0.4
+                            } else if (block.kind === "rule") {
+                                y -= bestPt * 0.5
+                            } else if (block.kind === "h2") {
+                                const wrappedLines = wrapRuns(
+                                    [
+                                        {
+                                            text: sanitize(block.text),
+                                            bold: true,
+                                            italic: false,
+                                        },
+                                    ],
+                                    CONTENT_W_PT,
+                                    h2Pt
+                                )
+                                // Draw underline rule
+                                page.drawLine({
+                                    start: {
+                                        x: MARGIN_PT,
+                                        y: y - bestPt * 0.2,
+                                    },
+                                    end: {
+                                        x: PAGE_W_PT - MARGIN_PT,
+                                        y: y - bestPt * 0.2,
+                                    },
+                                    thickness: 0.5,
+                                    color: gray,
+                                })
+                                for (const line of wrappedLines) {
+                                    y -= h2LineH
+                                    drawRuns(line, MARGIN_PT, y, h2Pt, black)
+                                }
+                                y -= bestPt * 0.5
+                            } else if (block.kind === "p") {
+                                const wrappedLines = wrapRuns(
+                                    block.runs,
+                                    CONTENT_W_PT,
+                                    bestPt
+                                )
+                                for (const line of wrappedLines) {
+                                    y -= lineH
+                                    drawRuns(line, MARGIN_PT, y, bestPt, black)
+                                }
+                                y -= bestPt * 0.2
+                            } else if (block.kind === "li") {
+                                // Match the indent sizing used in computeHeight exactly
+                                const bulletIndent =
+                                    bestPt * 1.4 * (block.indent + 1)
+                                const textW = CONTENT_W_PT - bulletIndent
+                                const wrappedLines = wrapRuns(
+                                    block.runs,
+                                    textW,
+                                    bestPt
+                                )
+                                // Use ASCII-safe bullets (Standard fonts only support WinAnsi/Latin-1)
+                                const bulletChar =
+                                    block.indent === 0 ? "*" : "-"
+                                let firstLine = true
+                                for (const line of wrappedLines) {
+                                    y -= lineH
+                                    if (firstLine) {
+                                        page.drawText(bulletChar, {
+                                            x:
+                                                MARGIN_PT +
+                                                bulletIndent -
+                                                bestPt * 1.0,
+                                            y,
+                                            font: regularFont,
+                                            size: bestPt * 0.85,
+                                            color: black,
+                                        })
+                                        firstLine = false
+                                    }
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT + bulletIndent,
+                                        y,
+                                        bestPt,
+                                        black
+                                    )
+                                }
+                                y -= bestPt * 0.15
+                            }
+                        }
+
+                        const pdfBytes = await pdfDoc.save()
+                        const blob = new Blob([pdfBytes], {
+                            type: "application/pdf",
+                        })
+                        const blobUrl = URL.createObjectURL(blob)
+                        const link = document.createElement("a")
+                        link.href = blobUrl
+
+                        const tmpDiv = document.createElement("div")
+                        tmpDiv.innerHTML = content
+                        const firstText = (tmpDiv.textContent || "")
+                            .trim()
+                            .split("\n")[0]
+                            .trim()
+                        const baseName = firstText
+                            ? firstText.replace(/\s+/g, "_").slice(0, 40)
+                            : "document"
+                        const companySuffix =
+                            docCompany &&
+                            (docType === "resume" ||
+                                docType === "cover_letter")
+                                ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}`
+                                : ""
+                        link.download = `${baseName}${companySuffix}.pdf`
+                        link.click()
+                        setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+                    } catch (pdfErr) {
+                        console.error(
+                            "pdf-lib generation failed, falling back to print dialog:",
+                            pdfErr
+                        )
+                        // Fallback: print dialog with tight CSS (not silent, but always works)
+                        const fbIframe = document.createElement("iframe")
+                        fbIframe.style.cssText =
+                            "position:fixed;left:-9999px;top:0;width:816px;height:1056px;border:0;"
+                        document.body.appendChild(fbIframe)
+                        const fbDoc = fbIframe.contentWindow?.document
+                        if (fbDoc) {
+                            const fbCSS = `@page{size:8.5in 11in;margin:0.45in 0.5in;}*{box-sizing:border-box;}body{margin:0;font-family:${fontFamily};font-size:10pt;line-height:1.4;color:#111;}h1{font-size:16px;font-weight:700;margin:0 0 3px;}h2{font-size:12px;font-weight:700;border-bottom:1px solid #333;margin:10px 0 3px;}p{margin:2px 0;}ul{margin:2px 0;padding-left:16px;}li{margin:1px 0;}`
+                            fbDoc.open()
+                            fbDoc.write(
+                                `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${fbCSS}</style></head><body>${content}</body></html>`
+                            )
+                            fbDoc.close()
+                            setTimeout(() => {
+                                fbIframe.contentWindow?.print()
+                                setTimeout(() => {
+                                    try {
+                                        document.body.removeChild(fbIframe)
+                                    } catch {}
+                                }, 2000)
+                            }, 400)
+                        }
+                    }
+                } else {
+                    // Standard doc: print dialog (no one-page constraint)
+                    const iframe = document.createElement("iframe")
+                    iframe.style.cssText =
+                        "position:fixed;left:-9999px;top:0;width:0;height:0;border:0;"
+                    document.body.appendChild(iframe)
+                    const baseCSS = `@page{size:8.5in 11in;margin:0.5in;}body{margin:0;padding:0;font-family:${fontFamily};font-size:${Math.max(1, settings.pSize - 5)}pt;line-height:1.6;}h1{font-size:${Math.max(1, settings.h1Size - 5)}px;font-weight:700;}h2{font-size:${Math.max(1, settings.h2Size - 5)}px;font-weight:700;border-bottom:1px solid #333;}a{color:#0077cc;text-decoration:underline;}`
+                    const iDoc = iframe.contentWindow?.document
+                    if (iDoc) {
+                        iDoc.open()
+                        iDoc.write(
+                            `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${baseCSS}</style></head><body>${content}</body></html>`
+                        )
+                        iDoc.close()
                         setTimeout(() => {
-                            document.body.removeChild(iframe)
-                        }, 1000)
-                    }, 250)
+                            iframe.contentWindow?.focus()
+                            iframe.contentWindow?.print()
+                            setTimeout(() => {
+                                try {
+                                    document.body.removeChild(iframe)
+                                } catch {}
+                            }, 2000)
+                        }, 250)
+                    }
                 }
 
                 setShowDownloadMenu(false)
@@ -4052,7 +4992,13 @@ const DocEditor = React.memo(function DocEditor({
                 const text = editorRef.current.innerText.trim()
                 const firstLine = text.split("\n")[0].trim()
                 if (firstLine) {
-                    filename = `${firstLine.replace(/\s+/g, "_")}.docx`
+                    const base = firstLine.replace(/\s+/g, "_").slice(0, 40)
+                    const companySuffix =
+                        docCompany &&
+                        (docType === "resume" || docType === "cover_letter")
+                            ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}`
+                            : ""
+                    filename = `${base}${companySuffix}.docx`
                 }
             }
 
@@ -4325,16 +5271,20 @@ const DocEditor = React.memo(function DocEditor({
                 // Process all root nodes
                 tempDiv.childNodes.forEach((node) => processBlockNode(node))
 
+                // Resumes/cover letters use tighter margins to fit on one page
+                const isOnePage =
+                    docType === "resume" || docType === "cover_letter"
+                const pageMargin = isOnePage ? 576 : 720 // 0.4in vs 0.5in (1440 twips = 1 inch)
                 const doc = new Document({
                     sections: [
                         {
                             properties: {
                                 page: {
                                     margin: {
-                                        top: 720, // 0.5 inches (1440 twips = 1 inch)
-                                        right: 720,
-                                        bottom: 720,
-                                        left: 720,
+                                        top: pageMargin,
+                                        right: pageMargin,
+                                        bottom: pageMargin,
+                                        left: pageMargin,
                                     },
                                 },
                             },
@@ -4357,7 +5307,16 @@ const DocEditor = React.memo(function DocEditor({
 
             setShowDownloadMenu(false)
         },
-        [content, settings.fontStyle, settings.pSize]
+        // Include all settings so re-download always recalculates with the latest content and font sizes
+        [
+            content,
+            docType,
+            settings.fontStyle,
+            settings.fontSize,
+            settings.h1Size,
+            settings.h2Size,
+            settings.pSize,
+        ]
     )
 
     const downloadMenuItems = React.useMemo(
@@ -4438,6 +5397,9 @@ const DocEditor = React.memo(function DocEditor({
                         display: "flex",
                         flexWrap: "wrap",
                         alignContent: "center",
+                        opacity: hideLeftToolbar ? 0 : 1,
+                        pointerEvents: hideLeftToolbar ? "none" : "auto",
+                        transition: "opacity 0.5s ease",
                     }}
                 >
                     {/* Font Size Control */}
@@ -5064,6 +6026,7 @@ const DocEditor = React.memo(function DocEditor({
 
             {/* Content Area */}
             <div
+                data-doc-scroll="true"
                 style={{
                     flex: 1,
                     overflowY: "auto",
@@ -5071,6 +6034,9 @@ const DocEditor = React.memo(function DocEditor({
                     display: "flex",
                     justifyContent: "center",
                     position: "relative",
+                    opacity: hideContent ? 0 : 1,
+                    filter: hideContent ? "blur(4px)" : "blur(0px)",
+                    transition: hideContent ? "none" : "opacity 0.4s ease, filter 0.4s ease",
                 }}
             >
                 <div
@@ -5082,6 +6048,7 @@ const DocEditor = React.memo(function DocEditor({
                 >
                     <div
                         ref={editorRef}
+                        data-doc-content="true"
                         contentEditable
                         enterKeyHint="enter"
                         suppressContentEditableWarning
@@ -5182,6 +6149,7 @@ interface ChatInputProps {
     toggleDoc?: () => void
     isAppOpen?: boolean
     toggleApp?: () => void
+    isJobOpen?: boolean
     isConnected?: boolean
     status?: string
     isMobileLayout?: boolean
@@ -5193,6 +6161,8 @@ interface ChatInputProps {
     hasMessages?: boolean
     onClearMessages?: () => void
     hideGradient?: boolean
+    /** Override the solid bottom color of the gradient — defaults to themeColors.background */
+    gradientBackground?: string
     rootStyle?: React.CSSProperties
     showAddPeopleOverlay?: boolean
     setShowAddPeopleOverlay?: (show: boolean) => void
@@ -5224,6 +6194,271 @@ interface ChatInputProps {
     } | null
 }
 
+// Hysteresis prevents flip-flopping when width hovers near the breakpoint.
+// Stack when narrow; switch back to row only when clearly wider.
+const ADD_PEOPLE_OVERLAY_STACK_THRESHOLD = 600
+const ADD_PEOPLE_OVERLAY_ROW_THRESHOLD = 680
+
+const AddPeopleOverlayContent = React.memo(function AddPeopleOverlayContent({
+    themeColors,
+    isMobileLayout = false,
+    hasCopiedLink,
+    shareDisplayUrl,
+    isCopyLinkHovered,
+    setIsCopyLinkHovered,
+    setShowAddPeopleOverlay,
+    setHasCopiedLink,
+    showAddPeopleOverlay,
+}: {
+    themeColors: typeof darkColors
+    isMobileLayout?: boolean
+    hasCopiedLink: boolean
+    shareDisplayUrl: string
+    isCopyLinkHovered: boolean
+    setIsCopyLinkHovered: (v: boolean) => void
+    setShowAddPeopleOverlay: (v: boolean) => void
+    setHasCopiedLink: (v: boolean) => void
+    showAddPeopleOverlay: boolean
+}) {
+    const overlayRef = React.useRef<HTMLDivElement>(null)
+    const [isStacked, setIsStacked] = React.useState(false)
+    const isStackedRef = React.useRef(false)
+
+    React.useEffect(() => {
+        isStackedRef.current = isStacked
+    }, [isStacked])
+
+    React.useEffect(() => {
+        const el = overlayRef.current
+        if (!el) return
+        const observer = new ResizeObserver(([entry]) => {
+            const w = entry.contentRect.width
+            const currentlyStacked = isStackedRef.current
+            if (!currentlyStacked && w < ADD_PEOPLE_OVERLAY_STACK_THRESHOLD) {
+                setIsStacked(true)
+            } else if (currentlyStacked && w > ADD_PEOPLE_OVERLAY_ROW_THRESHOLD) {
+                setIsStacked(false)
+            }
+        })
+        observer.observe(el)
+        const w = el.getBoundingClientRect().width
+        setIsStacked(w < ADD_PEOPLE_OVERLAY_STACK_THRESHOLD)
+        return () => observer.disconnect()
+    }, [])
+
+    const handleCopyLink = () => {
+        const url = typeof window !== "undefined" ? window.location.href : ""
+        const callId =
+            typeof window !== "undefined" && window.location.hash
+                ? window.location.hash.replace("#", "")
+                : ""
+        const shareTitle = callId
+            ? `Join my call (${callId}) | #1 free mentorship`
+            : "Join my call | #1 free mentorship"
+        if (typeof document !== "undefined") document.title = shareTitle
+        if (typeof navigator !== "undefined") {
+            navigator.clipboard
+                .writeText(url)
+                .then(() => {
+                    setHasCopiedLink(true)
+                    setTimeout(() => setHasCopiedLink(false), 2000)
+                })
+                .catch(console.error)
+            // @ts-ignore
+            if (navigator.share) {
+                // @ts-ignore
+                navigator.share({ title: shareTitle, url }).catch(console.error)
+            }
+        }
+    }
+
+    return (
+        <div
+            ref={overlayRef}
+            data-layer="add-people-overlay"
+            className="AddPeopleOverlay"
+            style={{
+                alignSelf: "stretch",
+                paddingTop: 14,
+                paddingBottom: 14,
+                paddingLeft: 16,
+                paddingRight: 16,
+                marginLeft: isMobileLayout ? 16 : 24,
+                marginRight: isMobileLayout ? 16 : 24,
+                minWidth: 0,
+                background:
+                    themeColors.background === lightColors.background
+                        ? themeColors.background
+                        : themeColors.surface,
+                border:
+                    themeColors.background === lightColors.background
+                        ? `0.33px solid ${themeColors.border.subtle}`
+                        : "none",
+                outline: "none",
+                outlineOffset: 0,
+                overflow: "visible",
+                borderRadius: 28,
+                flexDirection: isStacked ? "column" : "row",
+                justifyContent: "flex-start",
+                alignItems: isStacked ? "stretch" : "center",
+                gap: isStacked ? 12 : 4,
+                display: "flex",
+                marginBottom: 12,
+                position: "relative",
+            }}
+        >
+            {/* Text */}
+            <div
+                data-layer="text-content"
+                style={{
+                    flex: isStacked ? "0 0 auto" : "1 1 0",
+                    flexDirection: "column",
+                    justifyContent: "flex-start",
+                    alignItems: "flex-start",
+                    display: "flex",
+                    minWidth: 0,
+                }}
+            >
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        color: themeColors.text.primary,
+                        fontSize: 15,
+                        fontFamily: "Inter",
+                        fontWeight: "400",
+                        lineHeight: "22.5px",
+                        wordWrap: "break-word",
+                    }}
+                >
+                    Invite people to join call
+                </div>
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        color: themeColors.text.secondary,
+                        fontSize: 15,
+                        fontFamily: "Inter",
+                        fontWeight: "400",
+                        lineHeight: "22.5px",
+                        wordWrap: "break-word",
+                        textWrap: "pretty",
+                    }}
+                >
+                    Collaborate on ideas, resumes, and portfolios
+                </div>
+            </div>
+
+            {/* Copy link button */}
+            <div
+                data-layer="copy-link-button"
+                onClick={handleCopyLink}
+                style={{
+                    height: 44,
+                    width: isStacked ? "100%" : "fit-content",
+                    minWidth: isStacked ? 0 : 80,
+                    maxWidth: isStacked ? "none" : 280,
+                    paddingLeft: 20,
+                    paddingRight: 20,
+                    borderRadius: 28,
+                    outline: `0.33px ${themeColors.border.subtle} solid`,
+                    outlineOffset: "-1px",
+                    justifyContent: "flex-start",
+                    alignItems: "center",
+                    gap: 8,
+                    display: "flex",
+                    cursor: "pointer",
+                    transition: "background 0.2s ease",
+                    backgroundColor: isCopyLinkHovered
+                        ? themeColors.hover.subtle
+                        : "transparent",
+                    boxSizing: "border-box",
+                }}
+                onMouseEnter={() => setIsCopyLinkHovered(true)}
+                onMouseLeave={() => setIsCopyLinkHovered(false)}
+            >
+                <div
+                    style={{
+                        justifyContent: "center",
+                        display: "flex",
+                        flexDirection: "column",
+                        color: themeColors.text.primary,
+                        fontSize: 14,
+                        fontFamily: "Inter",
+                        fontWeight: "500",
+                        lineHeight: "19.32px",
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        whiteSpace: "nowrap",
+                        textOverflow: "ellipsis",
+                        textAlign: "left",
+                        alignItems: "flex-start",
+                    }}
+                >
+                    {hasCopiedLink
+                        ? "Copied link"
+                        : showAddPeopleOverlay
+                          ? shareDisplayUrl ||
+                            (typeof window !== "undefined"
+                                ? (() => {
+                                      const h = window.location.hash
+                                      const base =
+                                          window.location.hostname +
+                                          (window.location.pathname !== "/"
+                                              ? window.location.pathname
+                                              : "/") +
+                                          (h || "")
+                                      return base || "Copy link"
+                                  })()
+                                : "Copy link")
+                          : "Copy link"}
+                </div>
+                <div data-svg-wrapper>
+                    {hasCopiedLink ? (
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path fillRule="evenodd" clipRule="evenodd" d="M12.6256 1.57762C13.0167 1.84429 13.1177 2.37754 12.8509 2.76866L6.42242 12.1971C6.27868 12.4081 6.04836 12.5439 5.79431 12.5677C5.54015 12.5915 5.28864 12.5009 5.10816 12.3204L1.25105 8.46328C0.916318 8.12857 0.916318 7.58583 1.25105 7.25112C1.58578 6.91641 2.12849 6.91641 2.46323 7.25112L5.58884 10.3768L11.4346 1.80295C11.7013 1.41183 12.2345 1.31095 12.6256 1.57762Z" fill={themeColors.text.secondary} fillOpacity="1" />
+                        </svg>
+                    ) : (
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M9.28734 7.57185C9.28734 6.96242 9.28733 6.53928 9.2605 6.21051C9.24078 5.96894 9.20829 5.8063 9.16422 5.68307L9.11656 5.57172C8.98453 5.31276 8.78349 5.09579 8.53718 4.94464L8.4283 4.88352C8.29285 4.81461 8.11136 4.76581 7.78952 4.73952C7.46074 4.71267 7.03765 4.71272 6.4282 4.71272H3.99941C3.38983 4.71272 2.96689 4.71266 2.63809 4.73952C2.39637 4.75927 2.2339 4.79168 2.11064 4.8358L1.99929 4.88352C1.74028 5.01549 1.52336 5.21646 1.37221 5.46288L1.31193 5.57172C1.24295 5.70717 1.19423 5.88852 1.16793 6.21051C1.14108 6.53929 1.1403 6.96239 1.1403 7.57185V10.0006C1.1403 10.6102 1.14106 11.0332 1.16793 11.362C1.19425 11.684 1.24291 11.8653 1.31193 12.0007L1.37221 12.1088C1.52336 12.3553 1.74016 12.556 1.99929 12.6881L2.11064 12.7367C2.23388 12.7807 2.39645 12.8124 2.63809 12.8321C2.96689 12.859 3.38983 12.8598 3.99941 12.8598H6.4282C7.03765 12.8598 7.46074 12.859 7.78952 12.8321C8.11153 12.8058 8.29285 12.7571 8.4283 12.6881L8.53718 12.6279C8.78358 12.4766 8.98453 12.2597 9.11656 12.0007L9.16422 11.8894C9.20838 11.7662 9.24078 11.6036 9.2605 11.362C9.28742 11.0332 9.28734 10.6102 9.28734 10.0006V7.57185ZM10.4276 9.28476C10.8175 9.28339 11.1161 9.28065 11.362 9.2605C11.684 9.23418 11.8653 9.18549 12.0007 9.11656L12.1088 9.05543C12.3553 8.9042 12.5561 8.68739 12.6881 8.4283L12.7367 8.31694C12.7807 8.19374 12.8124 8.03103 12.8321 7.78952C12.859 7.46074 12.8598 7.03765 12.8598 6.4282V3.99941C12.8598 3.38983 12.859 2.96689 12.8321 2.63809C12.8124 2.39645 12.7807 2.23388 12.7367 2.11064L12.6881 1.99929C12.556 1.74016 12.3553 1.52336 12.1088 1.37221L12.0007 1.31193C11.8653 1.24291 11.684 1.19425 11.362 1.16793C11.0332 1.14106 10.6102 1.1403 10.0006 1.1403H7.57185C6.96238 1.1403 6.53929 1.14108 6.21051 1.16793C5.969 1.18766 5.80629 1.21931 5.68307 1.26337L5.57172 1.31193C5.31261 1.44395 5.0958 1.64473 4.94464 1.89129L4.88352 1.99929C4.81455 2.13473 4.76583 2.31612 4.73952 2.63809C4.71943 2.88398 4.7158 3.18255 4.71441 3.57243H6.4282C7.01888 3.57243 7.49649 3.57188 7.88245 3.60341C8.2751 3.63549 8.62352 3.70339 8.94655 3.86797L9.13328 3.97262C9.55825 4.23329 9.90443 4.60685 10.132 5.05347L10.189 5.17571C10.3129 5.46421 10.3686 5.77383 10.3966 6.11758C10.4282 6.50356 10.4276 6.98115 10.4276 7.57185V9.28476ZM14 6.4282C14 7.01888 14.0006 7.49649 13.9691 7.88245C13.9409 8.22615 13.8852 8.53581 13.7614 8.8243L13.7045 8.94655C13.4769 9.39313 13.1306 9.76675 12.7057 10.0275L12.5181 10.132C12.1953 10.2966 11.8474 10.3646 11.4549 10.3966C11.166 10.4203 10.8257 10.4237 10.4251 10.4251C10.4237 10.8257 10.4203 11.166 10.3966 11.4549C10.3686 11.7984 10.3127 12.1076 10.189 12.3959L10.132 12.5181C9.90443 12.9649 9.55833 13.3391 9.13328 13.5998L8.94655 13.7045C8.62352 13.8691 8.2751 13.937 7.88245 13.9691C7.49649 14.0006 7.01888 14 6.4282 14H3.99941C3.40864 14 2.93115 14.0006 2.54516 13.9691C2.20167 13.941 1.89243 13.8851 1.60412 13.7614L1.48189 13.7045C1.03519 13.4769 0.660897 13.1307 0.400196 12.7057L0.295543 12.5181C0.131101 12.1953 0.0630563 11.8474 0.0309755 11.4549C-0.000556545 11.0688 6.49256e-07 10.5914 6.49256e-07 10.0006V7.57185C6.49256e-07 6.98116 -0.000547973 6.50355 0.0309755 6.11758C0.0630563 5.72493 0.130964 5.37648 0.295543 5.05347L0.400196 4.86678C0.660905 4.4417 1.03512 4.0956 1.48189 3.86797L1.60412 3.81103C1.89245 3.68735 2.20165 3.63148 2.54516 3.60341C2.8339 3.57982 3.17389 3.57548 3.57411 3.57411C3.57548 3.17389 3.57982 2.8339 3.60341 2.54516C3.63548 2.15265 3.70349 1.80479 3.86797 1.48189L3.97262 1.29435C4.23331 0.869456 4.60687 0.523117 5.05347 0.295543L5.17571 0.238609C5.46418 0.114795 5.77388 0.0590612 6.11758 0.0309755C6.50355 -0.000547973 6.98116 6.49247e-07 7.57185 6.49247e-07H10.0006C10.5914 6.49247e-07 11.0688 -0.000556545 11.4549 0.0309755C11.8474 0.0630563 12.1953 0.131101 12.5181 0.295543L12.7057 0.400196C13.1307 0.660897 13.4769 1.03519 13.7045 1.48189L13.7614 1.60412C13.8851 1.89243 13.941 2.20167 13.9691 2.54516C14.0006 2.93115 14 3.40864 14 3.99941V6.4282Z" fill={themeColors.text.secondary} fillOpacity="1" />
+                        </svg>
+                    )}
+                </div>
+            </div>
+
+            {/* Close button — in flex flow on desktop; absolute overlay when stacked */}
+            <div
+                data-svg-wrapper
+                data-layer="close-button"
+                onClick={() => setShowAddPeopleOverlay(false)}
+                style={{
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    width: 40,
+                    height: 40,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    ...(isStacked
+                        ? {
+                              position: "absolute",
+                              top: 8,
+                              right: 8,
+                              zIndex: 1,
+                              width: 36,
+                              height: 36,
+                          }
+                        : {}),
+                }}
+            >
+                <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M22.3182 23.3033L17.9994 18.9844L13.6805 23.3033C13.4087 23.5751 12.9679 23.5752 12.6961 23.3033C12.4242 23.0315 12.4242 22.5907 12.6961 22.3188L17.0149 18L12.6961 13.6812C12.4242 13.4093 12.4242 12.9685 12.6961 12.6967C12.9679 12.4248 13.4087 12.4249 13.6805 12.6967L17.9994 17.0155L22.3182 12.6967L22.4274 12.6078C22.6976 12.4293 23.0648 12.4588 23.3027 12.6967C23.5406 12.9346 23.5701 13.3018 23.3916 13.572L23.3027 13.6811L18.9838 18L23.3027 22.3189C23.5745 22.5907 23.5745 23.0314 23.3027 23.3033C23.0308 23.5751 22.5901 23.5752 22.3182 23.3033Z" fill={themeColors.text.secondary} fillOpacity="1" />
+                </svg>
+            </div>
+        </div>
+    )
+})
+
 const ChatInput = React.memo(function ChatInput({
     value,
     onChange,
@@ -5246,6 +6481,7 @@ const ChatInput = React.memo(function ChatInput({
     toggleDoc,
     isAppOpen = false,
     toggleApp,
+    isJobOpen = false,
     isConnected = false,
     status = "idle",
     isMobileLayout = false,
@@ -5257,6 +6493,7 @@ const ChatInput = React.memo(function ChatInput({
     hasMessages = false,
     onClearMessages,
     hideGradient = false,
+    gradientBackground,
     rootStyle,
     showAddPeopleOverlay: propShowAddPeopleOverlay,
     setShowAddPeopleOverlay: propSetShowAddPeopleOverlay,
@@ -5270,6 +6507,26 @@ const ChatInput = React.memo(function ChatInput({
     peerSync,
 }: ChatInputProps) {
     const editableRef = React.useRef<HTMLDivElement | null>(null)
+
+    // Blur the input before sending — dismisses the soft keyboard on iOS/Android
+    const sendAndDismissKeyboard = React.useCallback(() => {
+        if (editableRef.current && typeof document !== "undefined") {
+            editableRef.current.blur()
+            // iOS requires a small tick before the blur takes effect on keyboard dismiss
+            if (typeof window !== "undefined" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+                const dummy = document.createElement("input")
+                dummy.setAttribute("type", "text")
+                dummy.setAttribute("readonly", "")
+                dummy.style.cssText = "position:fixed;top:-100px;left:-100px;opacity:0;"
+                document.body.appendChild(dummy)
+                dummy.focus()
+                dummy.blur()
+                document.body.removeChild(dummy)
+            }
+        }
+        onSend()
+    }, [onSend])
+
     // Preserve contenteditable innerHTML across two-row/single-row layout switches
     const savedEditableContentRef = React.useRef<string>("")
     // Track whether content came from peer sync or local typing (so we apply peer updates when content is from peer)
@@ -5302,8 +6559,13 @@ const ChatInput = React.memo(function ChatInput({
                 range.selectNodeContents(el)
                 range.collapse(false)
                 const sel = window.getSelection()
-                if (sel) { sel.removeAllRanges(); sel.addRange(range) }
-            } catch { /* ignore */ }
+                if (sel) {
+                    sel.removeAllRanges()
+                    sel.addRange(range)
+                }
+            } catch {
+                /* ignore */
+            }
         }
     }, [])
     const [isAiTooltipHovered, setIsAiTooltipHovered] = React.useState(false)
@@ -5341,7 +6603,9 @@ const ChatInput = React.memo(function ChatInput({
         const h = window.location.hash
         const base =
             window.location.hostname +
-            (window.location.pathname !== "/" ? window.location.pathname : "/") +
+            (window.location.pathname !== "/"
+                ? window.location.pathname
+                : "/") +
             (h || "")
         setShareDisplayUrl(base || "Copy link")
     }, [])
@@ -5366,7 +6630,8 @@ const ChatInput = React.memo(function ChatInput({
     const skillsMenuRef = React.useRef<HTMLDivElement>(null)
     const selectedSkillRef = React.useRef<HTMLDivElement | null>(null)
     const savedSlashCursorRef = React.useRef<number | null>(null)
-    const [hasExpandedToTwoRows, setHasExpandedToTwoRows] = React.useState(false)
+    const [hasExpandedToTwoRows, setHasExpandedToTwoRows] =
+        React.useState(false)
     // Create local styles with themeColors
     const localStyles = React.useMemo(
         () => getStyles(themeColors),
@@ -5420,13 +6685,20 @@ const ChatInput = React.memo(function ChatInput({
     // Scroll selected skill into view when navigating with keyboard
     React.useEffect(() => {
         if (selectedSkillsIndex >= 0 && selectedSkillRef.current) {
-            selectedSkillRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" })
+            selectedSkillRef.current.scrollIntoView({
+                block: "nearest",
+                behavior: "smooth",
+            })
         }
     }, [selectedSkillsIndex])
 
     const skillsFetchedRef = React.useRef(false)
     React.useEffect(() => {
-        if (typeof window === "undefined" || lastSlash < 0 || afterSlash.includes(" ")) {
+        if (
+            typeof window === "undefined" ||
+            lastSlash < 0 ||
+            afterSlash.includes(" ")
+        ) {
             setShowSkillsMenu(false)
             setSkillsError(null)
             return
@@ -5465,28 +6737,37 @@ const ChatInput = React.memo(function ChatInput({
                 if (!res.ok) throw new Error(`Skills API: ${res.status}`)
                 return res.json()
             })
-            .then((data: Array<{ id: string; name: string; description?: string; path?: string }>) => {
-                const list: AgentSkill[] = (data || []).map((s) => ({
-                    id: s.id,
-                    object: "skill" as const,
-                    name: s.name,
-                    description: s.description || "",
-                    default_version: "",
-                    latest_version: "",
-                    created_at: 0,
-                }))
-                if (!cancelled) {
-                    applyList(list)
-                    try {
-                        localStorage.setItem(
-                            SKILLS_CACHE_KEY,
-                            JSON.stringify({ apiUrl, skills: list })
-                        )
-                    } catch {
-                        /* ignore quota exceeded */
+            .then(
+                (
+                    data: Array<{
+                        id: string
+                        name: string
+                        description?: string
+                        path?: string
+                    }>
+                ) => {
+                    const list: AgentSkill[] = (data || []).map((s) => ({
+                        id: s.id,
+                        object: "skill" as const,
+                        name: s.name,
+                        description: s.description || "",
+                        default_version: "",
+                        latest_version: "",
+                        created_at: 0,
+                    }))
+                    if (!cancelled) {
+                        applyList(list)
+                        try {
+                            localStorage.setItem(
+                                SKILLS_CACHE_KEY,
+                                JSON.stringify({ apiUrl, skills: list })
+                            )
+                        } catch {
+                            /* ignore quota exceeded */
+                        }
                     }
                 }
-            })
+            )
             .catch((e) => {
                 if (!cancelled) {
                     setSkillsList([])
@@ -5534,8 +6815,15 @@ const ChatInput = React.memo(function ChatInput({
     }
 
     // Find DOM position for a character index within the editable (walks text nodes in order)
-    const findPositionOfCharacter = (root: Node, targetIndex: number): { node: Node; offset: number } | null => {
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null)
+    const findPositionOfCharacter = (
+        root: Node,
+        targetIndex: number
+    ): { node: Node; offset: number } | null => {
+        const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_TEXT,
+            null
+        )
         let current = 0
         let node: Node | null
         while ((node = walker.nextNode())) {
@@ -5549,7 +6837,11 @@ const ChatInput = React.memo(function ChatInput({
     }
 
     // Insert a skill chip at the current cursor position, replacing the slash query text (/ can be anywhere)
-    const insertChipAtCursor = (skill: { id: string; name: string; description?: string }) => {
+    const insertChipAtCursor = (skill: {
+        id: string
+        name: string
+        description?: string
+    }) => {
         if (typeof window === "undefined" || !editableRef.current) return
         const sel = window.getSelection()
         if (!sel) return
@@ -5559,7 +6851,8 @@ const ChatInput = React.memo(function ChatInput({
         const saved = savedSlashCursorRef.current
         if (saved != null) {
             const hasValidSelection =
-                sel.rangeCount > 0 && editable.contains(sel.getRangeAt(0).startContainer)
+                sel.rangeCount > 0 &&
+                editable.contains(sel.getRangeAt(0).startContainer)
             if (!hasValidSelection) {
                 const pos = findPositionOfCharacter(editable, saved)
                 if (pos) {
@@ -5621,7 +6914,9 @@ const ChatInput = React.memo(function ChatInput({
         setShowSkillsMenu(false)
         savedEditableContentRef.current = editableRef.current.innerHTML
         const newText = getEditableText(editableRef.current)
-        onChange({ target: { value: newText } } as React.ChangeEvent<HTMLTextAreaElement>)
+        onChange({
+            target: { value: newText },
+        } as React.ChangeEvent<HTMLTextAreaElement>)
         onHtmlChange?.(savedEditableContentRef.current)
     }
 
@@ -5633,7 +6928,9 @@ const ChatInput = React.memo(function ChatInput({
         savedEditableContentRef.current = editableRef.current.innerHTML
 
         // Check if any skill spans were edited — if text no longer matches skillName, de-attribute
-        const skillSpans = Array.from(editableRef.current.querySelectorAll(".InlineSkillChip"))
+        const skillSpans = Array.from(
+            editableRef.current.querySelectorAll(".InlineSkillChip")
+        )
         skillSpans.forEach((el) => {
             const span = el as HTMLElement
             const chipName = span.dataset.chipName ?? ""
@@ -5648,7 +6945,10 @@ const ChatInput = React.memo(function ChatInput({
                     if (span.contains(range.startContainer)) {
                         const startRange = document.createRange()
                         startRange.selectNodeContents(span)
-                        startRange.setEnd(range.startContainer, range.startOffset)
+                        startRange.setEnd(
+                            range.startContainer,
+                            range.startOffset
+                        )
                         savedOffset = startRange.toString().length
                     }
                 }
@@ -5666,8 +6966,12 @@ const ChatInput = React.memo(function ChatInput({
         })
 
         // Check if any chips were deleted by native browser actions (e.g. highlight + backspace)
-        const currentChips = Array.from(editableRef.current.querySelectorAll(".InlineSkillChip"))
-        const currentChipIds = currentChips.map((el) => (el as HTMLElement).dataset.chipId).filter(Boolean)
+        const currentChips = Array.from(
+            editableRef.current.querySelectorAll(".InlineSkillChip")
+        )
+        const currentChipIds = currentChips
+            .map((el) => (el as HTMLElement).dataset.chipId)
+            .filter(Boolean)
         selectedSkills.forEach((skill) => {
             if (!currentChipIds.includes(skill.id)) {
                 onRemoveSkill?.(skill.id)
@@ -5675,10 +6979,13 @@ const ChatInput = React.memo(function ChatInput({
         })
 
         // When no skills remain, strip any stray bold (e.g. after select-all+delete from a skill)
-        if (currentChips.length === 0 && editableRef.current.childNodes.length > 0) {
-            const hasFormatting = Array.from(editableRef.current.childNodes).some(
-                (n) => n.nodeType === Node.ELEMENT_NODE
-            )
+        if (
+            currentChips.length === 0 &&
+            editableRef.current.childNodes.length > 0
+        ) {
+            const hasFormatting = Array.from(
+                editableRef.current.childNodes
+            ).some((n) => n.nodeType === Node.ELEMENT_NODE)
             if (hasFormatting) {
                 const sel = window.getSelection()
                 let charOffset = 0
@@ -5692,7 +6999,9 @@ const ChatInput = React.memo(function ChatInput({
                 const plainText = (editableRef.current.innerText || "").trim()
                 editableRef.current.innerHTML = ""
                 if (plainText) {
-                    editableRef.current.appendChild(document.createTextNode(plainText))
+                    editableRef.current.appendChild(
+                        document.createTextNode(plainText)
+                    )
                 }
                 if (sel && plainText.length > 0) {
                     const pos = findPositionOfCharacter(
@@ -5746,7 +7055,10 @@ const ChatInput = React.memo(function ChatInput({
             while ((node = walker.nextNode())) {
                 const textNode = node as Text
                 const len = textNode.textContent?.length ?? 0
-                const segment = sanitized.substring(charOffset, charOffset + len)
+                const segment = sanitized.substring(
+                    charOffset,
+                    charOffset + len
+                )
                 if (segment !== textNode.textContent) {
                     textNode.textContent = segment
                 }
@@ -5754,7 +7066,10 @@ const ChatInput = React.memo(function ChatInput({
             }
 
             // Restore the caret to exactly where it was before the sanitization pass
-            const pos = findPositionOfCharacter(editableRef.current, savedOffset)
+            const pos = findPositionOfCharacter(
+                editableRef.current,
+                savedOffset
+            )
             if (pos) {
                 const sel = window.getSelection()
                 if (sel) {
@@ -5771,7 +7086,9 @@ const ChatInput = React.memo(function ChatInput({
         }
 
         onHtmlChange?.(savedEditableContentRef.current)
-        onChange({ target: { value: sanitized } } as React.ChangeEvent<HTMLTextAreaElement>)
+        onChange({
+            target: { value: sanitized },
+        } as React.ChangeEvent<HTMLTextAreaElement>)
         // Typing is not a "manual" reposition — reset so cursor can still follow peer
         manualCursorRef.current = false
         onCursorChange?.(getCursorOffset())
@@ -5781,10 +7098,12 @@ const ChatInput = React.memo(function ChatInput({
         }
         // Slash / @ command detection (/ can appear anywhere; show skills if no space after last /)
         const lastSlashIdx = text.lastIndexOf("/")
-        const afterLastSlash = lastSlashIdx >= 0 ? text.slice(lastSlashIdx + 1) : ""
+        const afterLastSlash =
+            lastSlashIdx >= 0 ? text.slice(lastSlashIdx + 1) : ""
         if (lastSlashIdx >= 0 && !afterLastSlash.includes(" ")) {
             // Save cursor position so we can restore it when user clicks a skill (focus may move)
-            const sel = typeof window !== "undefined" ? window.getSelection() : null
+            const sel =
+                typeof window !== "undefined" ? window.getSelection() : null
             if (sel && sel.rangeCount > 0 && editableRef.current) {
                 const range = sel.getRangeAt(0)
                 if (editableRef.current.contains(range.startContainer)) {
@@ -5845,12 +7164,24 @@ const ChatInput = React.memo(function ChatInput({
         if (showMenu) {
             if (e.key === "ArrowUp") {
                 e.preventDefault()
-                setSelectedMenuIndex((prev) => (prev === -1 ? menuItems.length - 1 : prev <= 0 ? menuItems.length - 1 : prev - 1))
+                setSelectedMenuIndex((prev) =>
+                    prev === -1
+                        ? menuItems.length - 1
+                        : prev <= 0
+                          ? menuItems.length - 1
+                          : prev - 1
+                )
                 return
             }
             if (e.key === "ArrowDown") {
                 e.preventDefault()
-                setSelectedMenuIndex((prev) => (prev === -1 ? 0 : prev === menuItems.length - 1 ? 0 : prev + 1))
+                setSelectedMenuIndex((prev) =>
+                    prev === -1
+                        ? 0
+                        : prev === menuItems.length - 1
+                          ? 0
+                          : prev + 1
+                )
                 return
             }
             if (e.key === "Enter") {
@@ -5869,16 +7200,20 @@ const ChatInput = React.memo(function ChatInput({
             e.preventDefault()
             if (hasContent && !isLoading) {
                 haptic.medium()
-                onSend()
+                sendAndDismissKeyboard()
             }
             return
         }
 
         // Arrow / Home / End keys intentionally reposition the caret — mark as manual
         // so incoming peer cursorOffset is ignored while the user is navigating.
-        const isNavKey = e.key === "ArrowLeft" || e.key === "ArrowRight" ||
-                         e.key === "ArrowUp"   || e.key === "ArrowDown"  ||
-                         e.key === "Home"      || e.key === "End"
+        const isNavKey =
+            e.key === "ArrowLeft" ||
+            e.key === "ArrowRight" ||
+            e.key === "ArrowUp" ||
+            e.key === "ArrowDown" ||
+            e.key === "Home" ||
+            e.key === "End"
         if (isNavKey) {
             manualCursorRef.current = true
             // Report new caret position after the browser has moved it
@@ -5908,20 +7243,28 @@ const ChatInput = React.memo(function ChatInput({
         if (text) document.execCommand("insertText", false, text)
     }
 
+    // On mobile, suppress keyboard when a tool overlay (jobs/whiteboard/docs/apps) is covering the UI
+    const mobileToolOpen = isMobileLayout && (isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen)
+
     // The contenteditable element shared between both layout branches
     const editableJSX = (
         <div
             ref={setEditableRef}
-            contentEditable
+            contentEditable={mobileToolOpen ? false : true}
             suppressContentEditableWarning
-            tabIndex={1}
+            tabIndex={mobileToolOpen ? -1 : 1}
+            inputMode={mobileToolOpen ? "none" : undefined}
             data-placeholder={placeholder}
             className="ChatTextInput"
             onInput={handleEditableInput}
             onKeyDown={handleEditableKeyDown}
             onPaste={handleEditablePaste}
-            onMouseDown={() => { manualCursorRef.current = true }}
-            onMouseUp={() => { onCursorChange?.(getCursorOffset()) }}
+            onMouseDown={() => {
+                manualCursorRef.current = true
+            }}
+            onMouseUp={() => {
+                onCursorChange?.(getCursorOffset())
+            }}
             style={{
                 flex: "1 1 0",
                 color: themeColors.text.primary,
@@ -5940,6 +7283,7 @@ const ChatInput = React.memo(function ChatInput({
                 width: "100%",
                 wordBreak: "break-word",
                 whiteSpace: "pre-wrap",
+                caretColor: "#0099FF", // so cute I want to eat it
             }}
         />
     )
@@ -6006,7 +7350,12 @@ const ChatInput = React.memo(function ChatInput({
     // Clear contenteditable when parent resets value to "" (e.g. after send)
     const prevValueRef = React.useRef(value)
     React.useEffect(() => {
-        if (prevValueRef.current !== "" && value === "" && selectedSkills.length === 0 && editableRef.current) {
+        if (
+            prevValueRef.current !== "" &&
+            value === "" &&
+            selectedSkills.length === 0 &&
+            editableRef.current
+        ) {
             editableRef.current.innerHTML = ""
             savedEditableContentRef.current = ""
             contentOriginRef.current = "empty"
@@ -6029,7 +7378,10 @@ const ChatInput = React.memo(function ChatInput({
         // Mirror partner's caret position UNLESS user has manually repositioned theirs.
         // This gives a collaborative "follow" feel — your cursor tracks where they're typing.
         if (!manualCursorRef.current && peerSync.cursorOffset != null) {
-            const pos = findPositionOfCharacter(editableRef.current, peerSync.cursorOffset)
+            const pos = findPositionOfCharacter(
+                editableRef.current,
+                peerSync.cursorOffset
+            )
             if (pos) {
                 const sel = window.getSelection()
                 if (sel) {
@@ -6043,7 +7395,7 @@ const ChatInput = React.memo(function ChatInput({
         }
 
         isApplyingPeerSyncRef.current = false
-    // seq changes each time a new sync arrives, re-running the effect
+        // seq changes each time a new sync arrives, re-running the effect
     }, [peerSync?.seq]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Close menu when clicking outside
@@ -6093,9 +7445,7 @@ const ChatInput = React.memo(function ChatInput({
     }, [showSkillsMenu])
 
     const hasContent =
-        value.trim() ||
-        attachments.length > 0 ||
-        selectedSkills.length > 0
+        value.trim() || attachments.length > 0 || selectedSkills.length > 0
 
     const menuItems = React.useMemo(() => {
         const showReport = isConnected && !isLiveMode
@@ -6110,8 +7460,41 @@ const ChatInput = React.memo(function ChatInput({
         }[] = []
 
         const showShareScreen =
-            canShareScreen &&
-            (status !== "idle" || isLiveMode)
+            canShareScreen && (status !== "idle" || isLiveMode)
+
+        const showAddPeople =
+            (status !== "idle" || role) && !isLiveMode && setShowAddPeopleOverlay
+
+        if (showAddPeople) {
+            items.push({
+                id: "add-people",
+                label: "Add people",
+                icon: (
+                    <svg
+                        width="15"
+                        height="17"
+                        viewBox="0 0 15 17"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+                        <path
+                            d="M0.601562 15.6C0.837572 10.9628 4.81526 8.89799 8.3833 9.40568M8.52696 12.8857H13.901M11.3496 10.226V15.6M10.5656 3.84578C10.5656 2.0779 9.08771 0.599976 7.31983 0.599976C5.55194 0.599976 4.07402 2.0779 4.07402 3.84578C4.07402 5.61367 5.55194 7.09159 7.31983 7.09159C9.08771 7.09159 10.5656 5.61367 10.5656 3.84578Z"
+                            stroke={themeColors.text.primary}
+                            strokeOpacity="0.95"
+                            strokeWidth="1.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
+                    </svg>
+                ),
+                onClick: () => {
+                    setShowAddPeopleOverlay(true)
+                    setShowMenu(false)
+                },
+                className: "AddPeople",
+                isDestructive: false,
+            })
+        }
 
         if (showReport) {
             items.push({
@@ -6150,15 +7533,42 @@ const ChatInput = React.memo(function ChatInput({
                 id: "share",
                 label: isScreenSharing ? "Stop sharing" : "Share screen",
                 icon: isScreenSharing ? (
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M14 2L2 14M2 2L14 14" stroke={themeColors.destructive.light} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+                        <path
+                            d="M14 2L2 14M2 2L14 14"
+                            stroke={themeColors.destructive.light}
+                            strokeWidth="1.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
                     </svg>
                 ) : (
-                    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M0.75 10.6674V11.5078C0.75 12.1791 1.01668 12.823 1.49139 13.2977C1.96609 13.7724 2.60992 14.0391 3.28125 14.0391H11.7188C12.3901 14.0391 13.0339 13.7724 13.5086 13.2977C13.9833 12.823 14.25 12.1791 14.25 11.5078V10.6641M7.5 10.2422V0.960938M7.5 0.960938L10.4531 3.91406M7.5 0.960938L4.54688 3.91406" stroke={themeColors.text.primary} strokeWidth="1.26562" strokeLinecap="round" strokeLinejoin="round" />
+                    <svg
+                        width="15"
+                        height="15"
+                        viewBox="0 0 15 15"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+                        <path
+                            d="M0.75 10.6674V11.5078C0.75 12.1791 1.01668 12.823 1.49139 13.2977C1.96609 13.7724 2.60992 14.0391 3.28125 14.0391H11.7188C12.3901 14.0391 13.0339 13.7724 13.5086 13.2977C13.9833 12.823 14.25 12.1791 14.25 11.5078V10.6641M7.5 10.2422V0.960938M7.5 0.960938L10.4531 3.91406M7.5 0.960938L4.54688 3.91406"
+                            stroke={themeColors.text.primary}
+                            strokeWidth="1.26562"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
                     </svg>
                 ),
-                onClick: () => { if (onScreenShare) onScreenShare(); setShowMenu(false) },
+                onClick: () => {
+                    if (onScreenShare) onScreenShare()
+                    setShowMenu(false)
+                },
                 className: "ShareScreen",
                 isDestructive: isScreenSharing,
             })
@@ -6352,6 +7762,7 @@ const ChatInput = React.memo(function ChatInput({
         role,
         hasMessages,
         isMobileLayout,
+        setShowAddPeopleOverlay,
     ])
 
     return (
@@ -6392,260 +7803,19 @@ const ChatInput = React.memo(function ChatInput({
                 }
             `}</style>
 
-            {showAddPeopleOverlay && !isMobileLayout && (
-                <div
-                    data-layer="add-people-overlay"
-                    className="AddPeopleOverlay"
-                    style={{
-                        alignSelf: "stretch",
-                        maxHeight: 384,
-                        paddingTop: 14,
-                        paddingBottom: 14,
-                        paddingLeft: 20,
-                        paddingRight: 16,
-                        marginLeft: isMobileLayout ? 16 : 24,
-                        marginRight: isMobileLayout ? 16 : 24,
-                        width: "auto",
-                        background:
-                            themeColors.background === lightColors.background
-                                ? themeColors.background
-                                : themeColors.surface,
-                        border:
-                            themeColors.background === lightColors.background
-                                ? `0.33px solid ${themeColors.border.subtle}`
-                                : "none",
-                        outline: "none",
-                        outlineOffset: 0,
-                        overflow: "visible",
-                        borderRadius: 28,
-                        justifyContent: "flex-start",
-                        alignItems: "center",
-                        gap: 4,
-                        display: "inline-flex",
-                        marginBottom: 12,
-                    }}
-                >
-                    <div
-                        data-layer="text-content"
-                        className="TextContent"
-                        style={{
-                            flex: "1 1 0",
-                            flexDirection: "column",
-                            justifyContent: "flex-start",
-                            alignItems: "flex-start",
-                            display: "inline-flex",
-                        }}
-                    >
-                        <div
-                            data-layer="title"
-                            className="Title"
-                            style={{
-                                alignSelf: "stretch",
-                                color: themeColors.text.primary,
-                                fontSize: 15,
-                                fontFamily: "Inter",
-                                fontWeight: "400",
-                                lineHeight: "22.5px",
-                                wordWrap: "break-word",
-                            }}
-                        >
-                            {isDocOpen || isWhiteboardOpen
-                                ? "Invite people"
-                                : "Invite people to group call"}
-                        </div>
-                        <div
-                            data-layer="description"
-                            className="Description"
-                            style={{
-                                alignSelf: "stretch",
-                                color: themeColors.text.secondary,
-                                fontSize: 15,
-                                fontFamily: "Inter",
-                                fontWeight: "400",
-                                lineHeight: "22.5px",
-                                wordWrap: "break-word",
-                            }}
-                        >
-                            {isDocOpen || isWhiteboardOpen
-                                ? "Collaborate on ideas"
-                                : "Collaborate on ideas, resumes, and portfolios"}
-                        </div>
-                    </div>
-                    <div
-                        data-layer="copy-link-button"
-                        className="CopyLinkButton"
-                        onClick={() => {
-                            const url =
-                                typeof window !== "undefined"
-                                    ? window.location.href
-                                    : ""
-                            const callId =
-                                typeof window !== "undefined" &&
-                                window.location.hash
-                                    ? window.location.hash.replace("#", "")
-                                    : ""
-                            const shareTitle = callId
-                                ? `Join my call (${callId}) | #1 free mentorship`
-                                : "Join my call | #1 free mentorship"
+            {showAddPeopleOverlay && (
+                <AddPeopleOverlayContent
+                    themeColors={themeColors}
+                    isMobileLayout={isMobileLayout}
+                    hasCopiedLink={hasCopiedLink}
+                    shareDisplayUrl={shareDisplayUrl}
+                    isCopyLinkHovered={isCopyLinkHovered}
+                    setIsCopyLinkHovered={setIsCopyLinkHovered}
+                    setShowAddPeopleOverlay={setShowAddPeopleOverlay}
+                    setHasCopiedLink={setHasCopiedLink}
+                    showAddPeopleOverlay={showAddPeopleOverlay}
+                />
 
-                            if (typeof document !== "undefined") {
-                                document.title = shareTitle
-                            }
-
-                            if (typeof navigator !== "undefined") {
-                                navigator.clipboard
-                                    .writeText(url)
-                                    .then(() => {
-                                        setHasCopiedLink(true)
-                                        setTimeout(
-                                            () => setHasCopiedLink(false),
-                                            2000
-                                        )
-                                    })
-                                    .catch(console.error)
-                                // @ts-ignore
-                                if (navigator.share) {
-                                    // @ts-ignore
-                                    navigator
-                                        .share({
-                                            title: shareTitle,
-                                            url: url,
-                                        })
-                                        .catch(console.error)
-                                }
-                            }
-                        }}
-                        style={{
-                            height: 44,
-                            width: "fit-content",
-                            minWidth: 80,
-                            maxWidth: 280,
-                            paddingLeft: 20,
-                            paddingRight: 20,
-                            borderRadius: 28,
-                            outline: `0.33px ${themeColors.border.subtle} solid`,
-                            outlineOffset: "-1px",
-                            justifyContent: "flex-start",
-                            alignItems: "center",
-                            gap: 8,
-                            display: "flex",
-                            cursor: "pointer",
-                            transition: "background 0.2s ease",
-                            backgroundColor: isCopyLinkHovered
-                                ? themeColors.hover.subtle
-                                : "transparent",
-                            boxSizing: "border-box",
-                        }}
-                        onMouseEnter={() => setIsCopyLinkHovered(true)}
-                        onMouseLeave={() => setIsCopyLinkHovered(false)}
-                    >
-                        <div
-                            data-layer="link-text"
-                            className="LinkText"
-                            style={{
-                                justifyContent: "center",
-                                display: "flex",
-                                flexDirection: "column",
-                                color: themeColors.text.primary,
-                                fontSize: 14,
-                                fontFamily: "Inter",
-                                fontWeight: "500",
-                                lineHeight: "19.32px",
-                                flex: 1,
-                                minWidth: 0,
-                                overflow: "hidden",
-                                whiteSpace: "nowrap",
-                                textOverflow: "ellipsis",
-                                textAlign: "left",
-                                alignItems: "flex-start",
-                            }}
-                        >
-                            {hasCopiedLink
-                                ? "Copied link"
-                                : showAddPeopleOverlay
-                                  ? shareDisplayUrl ||
-                                    (typeof window !== "undefined"
-                                        ? (() => {
-                                              const h =
-                                                  window.location.hash
-                                              const base =
-                                                  window.location.hostname +
-                                                  (window.location.pathname !==
-                                                  "/"
-                                                      ? window.location.pathname
-                                                      : "/") +
-                                                  (h || "")
-                                              return base || "Copy link"
-                                          })()
-                                        : "Copy link")
-                                  : "Copy link"}
-                        </div>
-                        <div
-                            data-svg-wrapper
-                            data-layer="copy-icon"
-                            className="CopyIcon"
-                        >
-                            {hasCopiedLink ? (
-                                <div
-                                    data-svg-wrapper
-                                    data-layer="checkmark-icon"
-                                    className="CheckmarkIcon"
-                                >
-                                    <svg
-                                        width="14"
-                                        height="14"
-                                        viewBox="0 0 14 14"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                    >
-                                        <path
-                                            fillRule="evenodd"
-                                            clipRule="evenodd"
-                                            d="M12.6256 1.57762C13.0167 1.84429 13.1177 2.37754 12.8509 2.76866L6.42242 12.1971C6.27868 12.4081 6.04836 12.5439 5.79431 12.5677C5.54015 12.5915 5.28864 12.5009 5.10816 12.3204L1.25105 8.46328C0.916318 8.12857 0.916318 7.58583 1.25105 7.25112C1.58578 6.91641 2.12849 6.91641 2.46323 7.25112L5.58884 10.3768L11.4346 1.80295C11.7013 1.41183 12.2345 1.31095 12.6256 1.57762Z"
-                                            fill={themeColors.text.secondary}
-                                            fillOpacity="1"
-                                        />
-                                    </svg>
-                                </div>
-                            ) : (
-                                <svg
-                                    width="14"
-                                    height="14"
-                                    viewBox="0 0 14 14"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                >
-                                    <path
-                                        d="M9.28734 7.57185C9.28734 6.96242 9.28733 6.53928 9.2605 6.21051C9.24078 5.96894 9.20829 5.8063 9.16422 5.68307L9.11656 5.57172C8.98453 5.31276 8.78349 5.09579 8.53718 4.94464L8.4283 4.88352C8.29285 4.81461 8.11136 4.76581 7.78952 4.73952C7.46074 4.71267 7.03765 4.71272 6.4282 4.71272H3.99941C3.38983 4.71272 2.96689 4.71266 2.63809 4.73952C2.39637 4.75927 2.2339 4.79168 2.11064 4.8358L1.99929 4.88352C1.74028 5.01549 1.52336 5.21646 1.37221 5.46288L1.31193 5.57172C1.24295 5.70717 1.19423 5.88852 1.16793 6.21051C1.14108 6.53929 1.1403 6.96239 1.1403 7.57185V10.0006C1.1403 10.6102 1.14106 11.0332 1.16793 11.362C1.19425 11.684 1.24291 11.8653 1.31193 12.0007L1.37221 12.1088C1.52336 12.3553 1.74016 12.556 1.99929 12.6881L2.11064 12.7367C2.23388 12.7807 2.39645 12.8124 2.63809 12.8321C2.96689 12.859 3.38983 12.8598 3.99941 12.8598H6.4282C7.03765 12.8598 7.46074 12.859 7.78952 12.8321C8.11153 12.8058 8.29285 12.7571 8.4283 12.6881L8.53718 12.6279C8.78358 12.4766 8.98453 12.2597 9.11656 12.0007L9.16422 11.8894C9.20838 11.7662 9.24078 11.6036 9.2605 11.362C9.28742 11.0332 9.28734 10.6102 9.28734 10.0006V7.57185ZM10.4276 9.28476C10.8175 9.28339 11.1161 9.28065 11.362 9.2605C11.684 9.23418 11.8653 9.18549 12.0007 9.11656L12.1088 9.05543C12.3553 8.9042 12.5561 8.68739 12.6881 8.4283L12.7367 8.31694C12.7807 8.19374 12.8124 8.03103 12.8321 7.78952C12.859 7.46074 12.8598 7.03765 12.8598 6.4282V3.99941C12.8598 3.38983 12.859 2.96689 12.8321 2.63809C12.8124 2.39645 12.7807 2.23388 12.7367 2.11064L12.6881 1.99929C12.556 1.74016 12.3553 1.52336 12.1088 1.37221L12.0007 1.31193C11.8653 1.24291 11.684 1.19425 11.362 1.16793C11.0332 1.14106 10.6102 1.1403 10.0006 1.1403H7.57185C6.96238 1.1403 6.53929 1.14108 6.21051 1.16793C5.969 1.18766 5.80629 1.21931 5.68307 1.26337L5.57172 1.31193C5.31261 1.44395 5.0958 1.64473 4.94464 1.89129L4.88352 1.99929C4.81455 2.13473 4.76583 2.31612 4.73952 2.63809C4.71943 2.88398 4.7158 3.18255 4.71441 3.57243H6.4282C7.01888 3.57243 7.49649 3.57188 7.88245 3.60341C8.2751 3.63549 8.62352 3.70339 8.94655 3.86797L9.13328 3.97262C9.55825 4.23329 9.90443 4.60685 10.132 5.05347L10.189 5.17571C10.3129 5.46421 10.3686 5.77383 10.3966 6.11758C10.4282 6.50356 10.4276 6.98115 10.4276 7.57185V9.28476ZM14 6.4282C14 7.01888 14.0006 7.49649 13.9691 7.88245C13.9409 8.22615 13.8852 8.53581 13.7614 8.8243L13.7045 8.94655C13.4769 9.39313 13.1306 9.76675 12.7057 10.0275L12.5181 10.132C12.1953 10.2966 11.8474 10.3646 11.4549 10.3966C11.166 10.4203 10.8257 10.4237 10.4251 10.4251C10.4237 10.8257 10.4203 11.166 10.3966 11.4549C10.3686 11.7984 10.3127 12.1076 10.189 12.3959L10.132 12.5181C9.90443 12.9649 9.55833 13.3391 9.13328 13.5998L8.94655 13.7045C8.62352 13.8691 8.2751 13.937 7.88245 13.9691C7.49649 14.0006 7.01888 14 6.4282 14H3.99941C3.40864 14 2.93115 14.0006 2.54516 13.9691C2.20167 13.941 1.89243 13.8851 1.60412 13.7614L1.48189 13.7045C1.03519 13.4769 0.660897 13.1307 0.400196 12.7057L0.295543 12.5181C0.131101 12.1953 0.0630563 11.8474 0.0309755 11.4549C-0.000556545 11.0688 6.49256e-07 10.5914 6.49256e-07 10.0006V7.57185C6.49256e-07 6.98116 -0.000547973 6.50355 0.0309755 6.11758C0.0630563 5.72493 0.130964 5.37648 0.295543 5.05347L0.400196 4.86678C0.660905 4.4417 1.03512 4.0956 1.48189 3.86797L1.60412 3.81103C1.89245 3.68735 2.20165 3.63148 2.54516 3.60341C2.8339 3.57982 3.17389 3.57548 3.57411 3.57411C3.57548 3.17389 3.57982 2.8339 3.60341 2.54516C3.63548 2.15265 3.70349 1.80479 3.86797 1.48189L3.97262 1.29435C4.23331 0.869456 4.60687 0.523117 5.05347 0.295543L5.17571 0.238609C5.46418 0.114795 5.77388 0.0590612 6.11758 0.0309755C6.50355 -0.000547973 6.98116 6.49247e-07 7.57185 6.49247e-07H10.0006C10.5914 6.49247e-07 11.0688 -0.000556545 11.4549 0.0309755C11.8474 0.0630563 12.1953 0.131101 12.5181 0.295543L12.7057 0.400196C13.1307 0.660897 13.4769 1.03519 13.7045 1.48189L13.7614 1.60412C13.8851 1.89243 13.941 2.20167 13.9691 2.54516C14.0006 2.93115 14 3.40864 14 3.99941V6.4282Z"
-                                        fill={themeColors.text.secondary}
-                                        fillOpacity="1"
-                                    />
-                                </svg>
-                            )}
-                        </div>
-                    </div>
-                    <div
-                        data-svg-wrapper
-                        data-layer="close-button"
-                        className="CloseButton"
-                        onClick={() => setShowAddPeopleOverlay(false)}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <svg
-                            width="36"
-                            height="36"
-                            viewBox="0 0 36 36"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
-                        >
-                            <path
-                                d="M22.3182 23.3033L17.9994 18.9844L13.6805 23.3033C13.4087 23.5751 12.9679 23.5752 12.6961 23.3033C12.4242 23.0315 12.4242 22.5907 12.6961 22.3188L17.0149 18L12.6961 13.6812C12.4242 13.4093 12.4242 12.9685 12.6961 12.6967C12.9679 12.4248 13.4087 12.4249 13.6805 12.6967L17.9994 17.0155L22.3182 12.6967L22.4274 12.6078C22.6976 12.4293 23.0648 12.4588 23.3027 12.6967C23.5406 12.9346 23.5701 13.3018 23.3916 13.572L23.3027 13.6811L18.9838 18L23.3027 22.3189C23.5745 22.5907 23.5745 23.0314 23.3027 23.3033C23.0308 23.5751 22.5901 23.5752 22.3182 23.3033Z"
-                                fill={themeColors.text.secondary}
-                                fillOpacity="1"
-                            />
-                        </svg>
-                    </div>
-                </div>
             )}
 
             {children}
@@ -6660,7 +7830,7 @@ const ChatInput = React.memo(function ChatInput({
                     padding: "10px 0 16px 0",
                     background:
                         !hideGradient && showGradient
-                            ? `linear-gradient(180deg, ${themeColors.overlay.gradient} 0%, ${themeColors.background} 35%)`
+                            ? `linear-gradient(180deg, ${themeColors.overlay.gradient} 0%, ${gradientBackground ?? themeColors.background} 35%)`
                             : "transparent",
                     justifyContent: "center",
                     alignItems: "flex-end",
@@ -6738,9 +7908,11 @@ const ChatInput = React.memo(function ChatInput({
                                                 flexShrink: 0,
                                                 marginRight: 8,
                                                 position: "relative",
-                                                background: themeColors.background,
+                                                background:
+                                                    themeColors.background,
                                                 border:
-                                                    themeColors.background === lightColors.background
+                                                    themeColors.background ===
+                                                    lightColors.background
                                                         ? `0.33px solid ${themeColors.border.subtle}`
                                                         : "none",
                                                 overflow: "hidden",
@@ -6834,979 +8006,1418 @@ const ChatInput = React.memo(function ChatInput({
                     )}
 
                     {useTwoRowLayout ? (
-                    /* TWO-ROW LAYOUT: textarea above, then [Plus] [Chips] | [Send] [Start AI Live] */
-                    <>
-                    {/* TEXT INPUT (above bottom row when chips present) */}
-                    <div
-                        data-layer="textarea-wrapper"
-                        className="TextAreaWrapper"
-                        style={{
-                            width: "100%",
-                            display: "flex",
-                            alignItems: "center",
-                            padding: "16px 16px 0px 16px",
-                            position: "relative",
-                        }}
-                    >
-                        {showSkillsMenu &&
-                            !skillsLoading &&
-                            !skillsError &&
-                            filteredSkills.length > 0 && (
-                                <>
-                                    {isMobileLayout && (
-                                        <div
-                                            style={{
-                                                position: "fixed",
-                                                top: 0,
-                                                left: 0,
-                                                right: 0,
-                                                bottom: 0,
-                                                background:
-                                                    themeColors.overlay.black,
-                                                zIndex: 1004,
-                                                pointerEvents: "auto",
-                                            }}
-                                            onClick={() =>
-                                                setShowSkillsMenu(false)
-                                            }
-                                        />
-                                    )}
-                                    <div
-                                        ref={skillsMenuRef}
-                                        style={{
-                                            position: isMobileLayout
-                                                ? "fixed"
-                                                : "absolute",
-                                            bottom: isMobileLayout
-                                                ? 0
-                                                : "calc(100% + 4px)",
-                                            left: isMobileLayout ? 0 : 0,
-                                            right: isMobileLayout ? 0 : "auto",
-                                            zIndex: 2000,
-                                            pointerEvents: "auto",
-                                        }}
-                                    >
-                                        <div
-                                            data-layer="skills-menu"
-                                            className="ConversationActions"
-                                            onMouseLeave={() =>
-                                                setSelectedSkillsIndex(-1)
-                                            }
-                                            style={{
-                                                width: isMobileLayout
-                                                    ? "auto"
-                                                    : 280,
-                                                padding: "10px 10px 0 10px",
-                                                background:
-                                                    themeColors.surfaceMenu,
-                                                boxShadow:
-                                                    "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
-                                                borderRadius: isMobileLayout
-                                                    ? "36px 36px 0px 0px"
-                                                    : 28,
-                                                outline: `0.1px ${themeColors.border.subtle} solid`,
-                                                outlineOffset: "-0.1px",
-                                                flexDirection: "column",
-                                                justifyContent: "flex-start",
-                                                alignItems: "flex-start",
-                                                gap: 4,
-                                                display: "flex",
-                                            }}
-                                        >
+                        /* TWO-ROW LAYOUT: textarea above, then [Plus] [Chips] | [Send] [Start AI Live] */
+                        <>
+                            {/* TEXT INPUT (above bottom row when chips present) */}
+                            <div
+                                data-layer="textarea-wrapper"
+                                className="TextAreaWrapper"
+                                style={{
+                                    width: "100%",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    padding: "16px 16px 0px 16px",
+                                    position: "relative",
+                                }}
+                            >
+                                {showSkillsMenu &&
+                                    !skillsLoading &&
+                                    !skillsError &&
+                                    filteredSkills.length > 0 && (
+                                        <>
+                                            {isMobileLayout && (
+                                                <div
+                                                    style={{
+                                                        position: "fixed",
+                                                        top: 0,
+                                                        left: 0,
+                                                        right: 0,
+                                                        bottom: 0,
+                                                        background:
+                                                            themeColors.overlay
+                                                                .black,
+                                                        zIndex: 1004,
+                                                        pointerEvents: "auto",
+                                                    }}
+                                                    onClick={() =>
+                                                        setShowSkillsMenu(false)
+                                                    }
+                                                />
+                                            )}
                                             <div
+                                                ref={skillsMenuRef}
                                                 style={{
-                                                    fontSize: 12,
-                                                    color: themeColors.text
-                                                        .secondary,
-                                                    paddingLeft: 12,
-                                                    paddingBottom: 4,
-                                                    marginTop: 6,
-                                                    alignSelf: "flex-start",
+                                                    position: isMobileLayout
+                                                        ? "fixed"
+                                                        : "absolute",
+                                                    bottom: isMobileLayout
+                                                        ? 0
+                                                        : "calc(100% + 4px)",
+                                                    left: isMobileLayout
+                                                        ? 0
+                                                        : 0,
+                                                    right: isMobileLayout
+                                                        ? 0
+                                                        : "auto",
+                                                    zIndex: 2000,
+                                                    pointerEvents: "auto",
                                                 }}
                                             >
-                                                Skills
-                                            </div>
-                                            <div
-                                                style={{
-                                                    maxHeight: isMobileLayout ? 240 : 200,
-                                                    overflowY: "auto",
-                                                    overflowX: "hidden",
-                                                    width: "100%",
-                                                }}
-                                            >
-                                            <div
-                                                style={{
-                                                    display: "flex",
-                                                    flexDirection: "column",
-                                                    gap: 4,
-                                                    paddingBottom: 10,
-                                                }}
-                                            >
-                                            {filteredSkills.map(
-                                                    (skill, index) => (
-                                                        <div
-                                                            key={skill.id}
-                                                            ref={(el) => {
-                                                                if (index === selectedSkillsIndex) selectedSkillRef.current = el
-                                                            }}
-                                                            onMouseDown={(e) => e.preventDefault()}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation()
-                                                                insertChipAtCursor(skill)
-                                                            }}
-                                                            title={
-                                                                skill.description ||
-                                                                undefined
-                                                            }
-                                                            style={{
-                                                                ...localStyles.menuItem,
-                                                                height: 36,
-                                                                minHeight: 36,
-                                                                flexShrink: 0,
-                                                                transition: "none",
-                                                                cursor: "pointer",
-                                                                ...(index ===
-                                                                selectedSkillsIndex
-                                                                    ? localStyles.menuItemHover
-                                                                    : {}),
-                                                            }}
-                                                            onMouseEnter={() => {
-                                                                if (isMobileLayout)
-                                                                    return
-                                                                setSelectedSkillsIndex(
-                                                                    index
-                                                                )
-                                                            }}
-                                                        >
-                                                            <div
-                                                                style={{
-                                                                    flex: "1 1 0",
-                                                                    minWidth: 0,
-                                                                    display: "flex",
-                                                                    flexDirection:
-                                                                        "column",
-                                                                    justifyContent:
-                                                                        "center",
-                                                                    overflow:
-                                                                        "hidden",
-                                                                }}
-                                                            >
-                                                                <span
-                                                                    style={{
-                                                                        overflow:
-                                                                            "hidden",
-                                                                        textOverflow:
-                                                                            "ellipsis",
-                                                                        whiteSpace:
-                                                                            "nowrap",
-                                                                        fontSize: 14,
-                                                                    }}
-                                                                >
-                                                                    <span
-                                                                        style={{
-                                                                            color: themeColors
-                                                                                .text
-                                                                                .primary,
-                                                                            fontWeight:
-                                                                                "500",
-                                                                        }}
-                                                                    >
-                                                                        {skill.name}
-                                                                    </span>
-                                                                    {skill.description && (
-                                                                        <span
-                                                                            style={{
-                                                                                color: themeColors
-                                                                                    .text
-                                                                                    .secondary,
-                                                                                fontWeight:
-                                                                                    "400",
-                                                                            }}
-                                                                        >
-                                                                            {" — "}
-                                                                            {skill.description}
-                                                                        </span>
-                                                                    )}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    )
-                                                )}
-                                            </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </>
-                            )}
-                        {editableJSX}
-                    </div>
-
-                    {/* BOTTOM ROW: [Plus + Skills chips] (fills width) | [Send] [Start AI Live] (right) */}
-                    <div
-                        style={{
-                            display: "flex",
-                            alignItems: "flex-end",
-                            justifyContent: "space-between",
-                            gap: 8,
-                            width: "100%",
-                            padding: "0 10px 10px 10px",
-                        }}
-                    >
-                        {/* LEFT: Plus + Skills chips (flexbox that fills width) */}
-                        <div
-                            style={{
-                                display: "flex",
-                                flexDirection: "row",
-                                flexWrap: "wrap",
-                                alignItems: "center",
-                                gap: 8,
-                                flex: "1 1 0",
-                                minWidth: 0,
-                            }}
-                        >
-                        {/* UPLOAD ICON (the button to open the + menu) */}
-                        <div
-                            id="upload-trigger-btn"
-                            data-svg-wrapper
-                            data-layer="upload-button"
-                            className="UploadButton"
-                            tabIndex={2}
-                            onClick={(e) => {
-                                e.stopPropagation()
-                                if (attachments.length < 10) {
-                                    haptic.medium()
-                                    const nextState = !showMenu
-                                    setShowMenu(nextState)
-                                    if (nextState) setIsAddFilesTooltipHovered(false)
-                                }
-                            }}
-                            onMouseEnter={() => {
-                                if (
-                                    attachments.length < 10 &&
-                                    isHoverCapable()
-                                ) {
-                                    setIsUploadButtonHovered(true)
-                                    if (!showMenu) {
-                                        setIsAddFilesTooltipHovered(true)
-                                    }
-                                }
-                            }}
-                            onMouseLeave={() => {
-                                setIsUploadButtonHovered(false)
-                                setIsAddFilesTooltipHovered(false)
-                            }}
-                            style={{
-                                cursor:
-                                    attachments.length >= 10
-                                        ? "not-allowed"
-                                        : "pointer",
-                                pointerEvents:
-                                    attachments.length >= 10 ? "none" : "auto",
-                                width: 36,
-                                height: 36,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                marginBottom: 0, // Aligned with send button
-                                position: "relative",
-                                zIndex: 1,
-                                borderRadius: "50%",
-                                background:
-                                    (showMenu || isUploadButtonHovered) &&
-                                    attachments.length < 10
-                                        ? themeColors.hover.subtle
-                                        : "transparent",
-                            }}
-                        >
-                            {showMenu && (
-                                <>
-                                    {isMobileLayout && (
-                                        <div
-                                            style={{
-                                                position: "fixed",
-                                                top: 0,
-                                                left: 0,
-                                                right: 0,
-                                                bottom: 0,
-                                                background:
-                                                    themeColors.overlay.black,
-                                                zIndex: 1004,
-                                                pointerEvents: "auto",
-                                            }}
-                                            onClick={(e) => {
-                                                e.stopPropagation()
-                                                setShowMenu(false)
-                                            }}
-                                        />
-                                    )}
-                                    <div
-                                        ref={menuRef}
-                                        style={{
-                                            position: isMobileLayout
-                                                ? "fixed"
-                                                : "absolute",
-                                            bottom: isMobileLayout
-                                                ? 0
-                                                : "calc(100% + 4px)",
-                                            left: isMobileLayout
-                                                ? 0
-                                                : "calc(100% - 40px)",
-                                            right: isMobileLayout ? 0 : "auto",
-                                            zIndex: 2000, // Force very high z-index
-                                            pointerEvents: "auto",
-                                        }}
-                                    >
-                                        <div
-                                            data-layer="conversation actions"
-                                            className="ConversationActions"
-                                            onMouseLeave={() =>
-                                                setSelectedMenuIndex(-1)
-                                            }
-                                            style={{
-                                                width: isMobileLayout
-                                                    ? "auto"
-                                                    : 196,
-                                                padding: 10,
-                                                background:
-                                                    themeColors.surfaceMenu,
-                                                boxShadow:
-                                                    "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
-                                                borderRadius: isMobileLayout
-                                                    ? "36px 36px 0px 0px"
-                                                    : 28,
-                                                outline: `0.1px ${themeColors.border.subtle} solid`,
-                                                outlineOffset: "-0.1px",
-                                                flexDirection: "column",
-                                                justifyContent: "flex-start",
-                                                alignItems: "flex-start",
-                                                gap: 4,
-                                                display: "flex",
-                                            }}
-                                        >
-                                            {menuItems.map((item, index) => (
-                                                <React.Fragment key={item.id}>
-                                                    {item.hasSeparator && (
-                                                        <div
-                                                            data-layer="separator"
-                                                            className="Separator"
-                                                            style={{
-                                                                alignSelf:
-                                                                    "stretch",
-                                                                marginLeft: 4,
-                                                                marginRight: 4,
-                                                                marginTop: 2,
-                                                                marginBottom: 2,
-                                                                height: 1,
-                                                                position:
-                                                                    "relative",
-                                                                background:
-                                                                    themeColors
-                                                                        .border
-                                                                        .subtle,
-                                                                borderRadius: 4,
-                                                            }}
-                                                        />
-                                                    )}
+                                                <div
+                                                    data-layer="skills-menu"
+                                                    className="ConversationActions"
+                                                    onMouseLeave={() =>
+                                                        setSelectedSkillsIndex(
+                                                            -1
+                                                        )
+                                                    }
+                                                    style={{
+                                                        width: isMobileLayout
+                                                            ? "auto"
+                                                            : 280,
+                                                        padding:
+                                                            "10px 10px 0 10px",
+                                                        background:
+                                                            themeColors.surfaceMenu,
+                                                        boxShadow:
+                                                            "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                        borderRadius:
+                                                            isMobileLayout
+                                                                ? "36px 36px 0px 0px"
+                                                                : 28,
+                                                        outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                        outlineOffset: "-0.1px",
+                                                        flexDirection: "column",
+                                                        justifyContent:
+                                                            "flex-start",
+                                                        alignItems:
+                                                            "flex-start",
+                                                        gap: 4,
+                                                        display: "flex",
+                                                    }}
+                                                >
                                                     <div
-                                                        className={
-                                                            item.className
-                                                        }
-                                                        onClick={(e) => {
-                                                            e.stopPropagation()
-                                                            item.onClick()
-                                                        }}
                                                         style={{
-                                                            ...localStyles.menuItem,
-                                                            height: isMobileLayout
-                                                                ? 44
-                                                                : 36,
-                                                            transition: "none",
-                                                            ...(index ===
-                                                            selectedMenuIndex
-                                                                ? item.isDestructive
-                                                                    ? localStyles.menuItemDestructiveHover
-                                                                    : localStyles.menuItemHover
-                                                                : {}),
+                                                            fontSize: 12,
+                                                            color: themeColors
+                                                                .text.secondary,
+                                                            paddingLeft: 12,
+                                                            paddingBottom: 4,
+                                                            marginTop: 6,
+                                                            alignSelf:
+                                                                "flex-start",
                                                         }}
-                                                        onMouseEnter={() => {
-                                                            if (isMobileLayout)
-                                                                return
-                                                            setSelectedMenuIndex(
-                                                                index
-                                                            )
-                                                        }}
-                                                        onMouseLeave={(e) => {
-                                                            // Handled by parent container
+                                                    >
+                                                        Skills
+                                                    </div>
+                                                    <div
+                                                        style={{
+                                                            maxHeight:
+                                                                isMobileLayout
+                                                                    ? 240
+                                                                    : 200,
+                                                            overflowY: "auto",
+                                                            overflowX: "hidden",
+                                                            width: "100%",
                                                         }}
                                                     >
                                                         <div
-                                                            data-svg-wrapper
-                                                            className="Icon"
                                                             style={{
-                                                                width: 15,
-                                                                display: "flex",
-                                                                justifyContent:
-                                                                    "center",
-                                                            }}
-                                                        >
-                                                            {item.icon}
-                                                        </div>
-                                                        <div
-                                                            className="Label"
-                                                            style={{
-                                                                flex: "1 1 0",
-                                                                justifyContent:
-                                                                    "center",
                                                                 display: "flex",
                                                                 flexDirection:
                                                                     "column",
-                                                                color: item.isDestructive
-                                                                    ? themeColors
-                                                                          .destructive
-                                                                          .light
-                                                                    : themeColors
-                                                                          .text
-                                                                          .primary,
-                                                                fontSize: 14,
-                                                                fontFamily:
-                                                                    "Inter",
-                                                                fontWeight:
-                                                                    "400",
-                                                                lineHeight:
-                                                                    "19.32px",
-                                                                wordWrap:
-                                                                    "break-word",
+                                                                gap: 4,
+                                                                paddingBottom: 10,
                                                             }}
                                                         >
-                                                            {item.label}
+                                                            {filteredSkills.map(
+                                                                (
+                                                                    skill,
+                                                                    index
+                                                                ) => (
+                                                                    <div
+                                                                        key={
+                                                                            skill.id
+                                                                        }
+                                                                        ref={(
+                                                                            el
+                                                                        ) => {
+                                                                            if (
+                                                                                index ===
+                                                                                selectedSkillsIndex
+                                                                            )
+                                                                                selectedSkillRef.current =
+                                                                                    el
+                                                                        }}
+                                                                        onMouseDown={(
+                                                                            e
+                                                                        ) =>
+                                                                            e.preventDefault()
+                                                                        }
+                                                                        onClick={(
+                                                                            e
+                                                                        ) => {
+                                                                            e.stopPropagation()
+                                                                            insertChipAtCursor(
+                                                                                skill
+                                                                            )
+                                                                        }}
+                                                                        title={
+                                                                            skill.description ||
+                                                                            undefined
+                                                                        }
+                                                                        style={{
+                                                                            ...localStyles.menuItem,
+                                                                            height: 36,
+                                                                            minHeight: 36,
+                                                                            flexShrink: 0,
+                                                                            transition:
+                                                                                "none",
+                                                                            cursor: "pointer",
+                                                                            ...(index ===
+                                                                            selectedSkillsIndex
+                                                                                ? localStyles.menuItemHover
+                                                                                : {}),
+                                                                        }}
+                                                                        onMouseEnter={() => {
+                                                                            if (
+                                                                                isMobileLayout
+                                                                            )
+                                                                                return
+                                                                            setSelectedSkillsIndex(
+                                                                                index
+                                                                            )
+                                                                        }}
+                                                                    >
+                                                                        <div
+                                                                            style={{
+                                                                                flex: "1 1 0",
+                                                                                minWidth: 0,
+                                                                                display:
+                                                                                    "flex",
+                                                                                flexDirection:
+                                                                                    "column",
+                                                                                justifyContent:
+                                                                                    "center",
+                                                                                overflow:
+                                                                                    "hidden",
+                                                                            }}
+                                                                        >
+                                                                            <span
+                                                                                style={{
+                                                                                    overflow:
+                                                                                        "hidden",
+                                                                                    textOverflow:
+                                                                                        "ellipsis",
+                                                                                    whiteSpace:
+                                                                                        "nowrap",
+                                                                                    fontSize: 14,
+                                                                                }}
+                                                                            >
+                                                                                <span
+                                                                                    style={{
+                                                                                        color: themeColors
+                                                                                            .text
+                                                                                            .primary,
+                                                                                        fontWeight:
+                                                                                            "500",
+                                                                                    }}
+                                                                                >
+                                                                                    {
+                                                                                        skill.name
+                                                                                    }
+                                                                                </span>
+                                                                                {skill.description && (
+                                                                                    <span
+                                                                                        style={{
+                                                                                            color: themeColors
+                                                                                                .text
+                                                                                                .secondary,
+                                                                                            fontWeight:
+                                                                                                "400",
+                                                                                        }}
+                                                                                    >
+                                                                                        {
+                                                                                            " — "
+                                                                                        }
+                                                                                        {
+                                                                                            skill.description
+                                                                                        }
+                                                                                    </span>
+                                                                                )}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                )
+                                                            )}
                                                         </div>
-                                                    </div>
-                                                </React.Fragment>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </>
-                            )}
-                            {/* Tooltip */}
-                            {!showMenu && isAddFilesTooltipHovered && (
-                                <Tooltip
-                                    style={{
-                                        bottom: "100%",
-                                        left: "50%",
-                                        transform: isMobileLayout
-                                            ? "translate(-25%, -17px)"
-                                            : "translate(-50%, -17px)",
-                                    }}
-                                >
-                                    Add files and more
-                                </Tooltip>
-                            )}
-                            <div
-                                style={{
-                                    opacity:
-                                        attachments.length >= 10 ? 0.3 : 0.95,
-                                    display: "flex",
-                                }}
-                            >
-                                <svg
-                                    width="24"
-                                    height="24"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                >
-                                    <path
-                                        d="M12 5V19M5 12H19"
-                                        stroke={themeColors.text.primary}
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                    />
-                                </svg>
-                            </div>
-                        </div>
-
-                        </div>
-
-                        {/* RIGHT: Send + Start AI Live (top right corner) */}
-                        <div
-                            style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 8,
-                                flexShrink: 0,
-                            }}
-                        >
-                        {/* SEND / STOP BUTTON */}
-                        <div
-                            data-svg-wrapper
-                            data-layer="send-button"
-                            className="SendButton"
-                            aria-label={
-                                isLoading
-                                    ? "Stop generating response"
-                                    : hasContent
-                                      ? "Send message"
-                                      : "Send"
-                            }
-                            onClick={() => {
-                                if (isLoading && onStop) {
-                                    onStop()
-                                } else if (hasContent) {
-                                    haptic.medium()
-                                    onSend()
-                                }
-                            }}
-                            style={{
-                                cursor: "pointer",
-                                display:
-                                    hasContent || isLoading ? "block" : "none",
-                                opacity: 1,
-                                width: 36,
-                                height: 36,
-                            }}
-                        >
-                            {isLoading ? (
-                                <svg
-                                    width="36"
-                                    height="36"
-                                    viewBox="0 0 36 36"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                >
-                                    <rect
-                                        width="36"
-                                        height="36"
-                                        rx="18"
-                                        fill={themeColors.text.primary}
-                                        fillOpacity="0.95"
-                                    />
-                                    <rect
-                                        x="12"
-                                        y="12"
-                                        width="12"
-                                        height="12"
-                                        rx="2"
-                                        fill={themeColors.background}
-                                        fillOpacity="0.95"
-                                    />
-                                </svg>
-                            ) : (
-                                <svg
-                                    width="36"
-                                    height="36"
-                                    viewBox="0 0 36 36"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                >
-                                    <rect
-                                        width="36"
-                                        height="36"
-                                        rx="18"
-                                        fill={themeColors.text.primary}
-                                        fillOpacity="0.95"
-                                    />
-                                    <path
-                                        fillRule="evenodd"
-                                        clipRule="evenodd"
-                                        d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z"
-                                        fill={themeColors.background}
-                                        fillOpacity="0.95"
-                                    />
-                                </svg>
-                            )}
-                        </div>
-
-                        {/* START LIVE AI CALL BUTTON (When idle and no input) */}
-                        {!hasContent &&
-                            !isLoading &&
-                            (!showEndCall || showAiLiveButton) &&
-                            onConnectWithAI && (
-                                <div
-                                    data-svg-wrapper
-                                    data-layer="start ai live call"
-                                    className="StartAiLiveCall"
-                                    tabIndex={3}
-                                    onClick={onConnectWithAI}
-                                    onMouseEnter={() =>
-                                        isHoverCapable() &&
-                                        setIsAiTooltipHovered(true)
-                                    }
-                                    onMouseLeave={() =>
-                                        setIsAiTooltipHovered(false)
-                                    }
-                                    style={{
-                                        cursor: "pointer",
-                                        width: 36,
-                                        height: 36,
-                                        display: "block",
-                                        position: "relative",
-                                        zIndex: 0,
-                                        borderRadius: "50%",
-                                        WebkitBorderRadius: "50%",
-                                        flexShrink: 0,
-                                        WebkitBackfaceVisibility: "hidden",
-                                        backfaceVisibility: "hidden",
-                                        WebkitTransform: "translateZ(0)",
-                                        transform: "translateZ(0)",
-                                    }}
-                                >
-                                    {isAiTooltipHovered && (
-                                        <Tooltip
-                                            style={{
-                                                bottom: "100%",
-                                                left: "50%",
-                                                transform: "translate(-50%, -8px)",
-                                            }}
-                                        >
-                                            Connect with AI
-                                        </Tooltip>
-                                    )}
-                                    <ChatInputBarAiIcon />
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                    </>
-                    ) : (
-                    /* SINGLE ROW (no chips): [Plus] [Textarea] [Send] [Start AI Live] - normal layout */
-                    <div
-                        style={{
-                            display: "flex",
-                            alignItems: "flex-end",
-                            gap: 8,
-                            width: "100%",
-                            padding: "0 10px 10px 10px",
-                        }}
-                    >
-                        {/* Plus - same as chips branch, inline in row */}
-                        <div
-                            id="upload-trigger-btn"
-                            data-svg-wrapper
-                            data-layer="upload-button"
-                            className="UploadButton"
-                            tabIndex={2}
-                            onClick={(e) => {
-                                e.stopPropagation()
-                                if (attachments.length < 10) {
-                                    haptic.medium()
-                                    const nextState = !showMenu
-                                    setShowMenu(nextState)
-                                    if (nextState) setIsAddFilesTooltipHovered(false)
-                                }
-                            }}
-                            onMouseEnter={() => {
-                                if (attachments.length < 10 && isHoverCapable()) {
-                                    setIsUploadButtonHovered(true)
-                                    if (!showMenu) setIsAddFilesTooltipHovered(true)
-                                }
-                            }}
-                            onMouseLeave={() => {
-                                setIsUploadButtonHovered(false)
-                                setIsAddFilesTooltipHovered(false)
-                            }}
-                            style={{
-                                cursor: attachments.length >= 10 ? "not-allowed" : "pointer",
-                                pointerEvents: attachments.length >= 10 ? "none" : "auto",
-                                width: 36,
-                                height: 36,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                marginBottom: 0,
-                                position: "relative",
-                                zIndex: 1,
-                                borderRadius: "50%",
-                                background: (showMenu || isUploadButtonHovered) && attachments.length < 10 ? themeColors.hover.subtle : "transparent",
-                            }}
-                        >
-                            {showMenu && (
-                                <>
-                                    {isMobileLayout && (
-                                        <div
-                                            style={{
-                                                position: "fixed",
-                                                top: 0, left: 0, right: 0, bottom: 0,
-                                                background: themeColors.overlay.black,
-                                                zIndex: 1004,
-                                                pointerEvents: "auto",
-                                            }}
-                                            onClick={(e) => { e.stopPropagation(); setShowMenu(false) }}
-                                        />
-                                    )}
-                                    <div
-                                        ref={menuRef}
-                                        style={{
-                                            position: isMobileLayout ? "fixed" : "absolute",
-                                            bottom: isMobileLayout ? 0 : "calc(100% + 4px)",
-                                            left: isMobileLayout ? 0 : "calc(100% - 40px)",
-                                            right: isMobileLayout ? 0 : "auto",
-                                            zIndex: 2000,
-                                            pointerEvents: "auto",
-                                        }}
-                                    >
-                                        <div
-                                            data-layer="conversation actions"
-                                            className="ConversationActions"
-                                            onMouseLeave={() => setSelectedMenuIndex(-1)}
-                                            style={{
-                                                width: isMobileLayout ? "auto" : 196,
-                                                padding: 10,
-                                                background: themeColors.surfaceMenu,
-                                                boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
-                                                borderRadius: isMobileLayout ? "36px 36px 0px 0px" : 28,
-                                                outline: `0.1px ${themeColors.border.subtle} solid`,
-                                                outlineOffset: "-0.1px",
-                                                flexDirection: "column",
-                                                justifyContent: "flex-start",
-                                                alignItems: "flex-start",
-                                                gap: 4,
-                                                display: "flex",
-                                            }}
-                                        >
-                                            {menuItems.map((item, index) => (
-                                                <React.Fragment key={item.id}>
-                                                    {item.hasSeparator && (
-                                                        <div
-                                                            data-layer="separator"
-                                                            className="Separator"
-                                                            style={{
-                                                                alignSelf: "stretch",
-                                                                marginLeft: 4, marginRight: 4, marginTop: 2, marginBottom: 2,
-                                                                height: 1,
-                                                                position: "relative",
-                                                                background: themeColors.border.subtle,
-                                                                borderRadius: 4,
-                                                            }}
-                                                        />
-                                                    )}
-                                                    <div
-                                                        className={item.className}
-                                                        onClick={(e) => { e.stopPropagation(); item.onClick() }}
-                                                        style={{
-                                                            ...localStyles.menuItem,
-                                                            height: isMobileLayout ? 44 : 36,
-                                                            transition: "none",
-                                                            ...(index === selectedMenuIndex ? (item.isDestructive ? localStyles.menuItemDestructiveHover : localStyles.menuItemHover) : {}),
-                                                        }}
-                                                        onMouseEnter={() => { if (!isMobileLayout) setSelectedMenuIndex(index) }}
-                                                    >
-                                                        <div data-svg-wrapper className="Icon" style={{ width: 15, display: "flex", justifyContent: "center" }}>
-                                                            {item.icon}
-                                                        </div>
-                                                        <div className="Label" style={{
-                                                            flex: "1 1 0", justifyContent: "center", display: "flex", flexDirection: "column",
-                                                            color: item.isDestructive ? themeColors.destructive.light : themeColors.text.primary,
-                                                            fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.32px", wordWrap: "break-word",
-                                                        }}>
-                                                            {item.label}
-                                                        </div>
-                                                    </div>
-                                                </React.Fragment>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </>
-                            )}
-                            {!showMenu && isAddFilesTooltipHovered && (
-                                <Tooltip style={{ bottom: "100%", left: "50%", transform: isMobileLayout ? "translate(-25%, -17px)" : "translate(-50%, -17px)" }}>
-                                    Add files and more
-                                </Tooltip>
-                            )}
-                            <div style={{ opacity: attachments.length >= 10 ? 0.3 : 0.95, display: "flex" }}>
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M12 5V19M5 12H19" stroke={themeColors.text.primary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                            </div>
-                        </div>
-                        {/* TextAreaWrapper - inline, flex: 1 */}
-                        <div
-                            data-layer="textarea-wrapper"
-                            className="TextAreaWrapper"
-                            style={{
-                                flex: "1 1 0",
-                                alignSelf: "stretch",
-                                display: "flex",
-                                alignItems: "center",
-                                paddingTop: 6,
-                                paddingBottom: 6,
-                                position: "relative",
-                            }}
-                        >
-                            {showSkillsMenu &&
-                                !skillsLoading &&
-                                !skillsError &&
-                                filteredSkills.length > 0 && (
-                                <>
-                                    {isMobileLayout && (
-                                        <div
-                                            style={{
-                                                position: "fixed",
-                                                top: 0,
-                                                left: 0,
-                                                right: 0,
-                                                bottom: 0,
-                                                background: themeColors.overlay.black,
-                                                zIndex: 1004,
-                                                pointerEvents: "auto",
-                                            }}
-                                            onClick={() => setShowSkillsMenu(false)}
-                                        />
-                                    )}
-                                    <div
-                                        ref={skillsMenuRef}
-                                        style={{
-                                            position: isMobileLayout ? "fixed" : "absolute",
-                                            bottom: isMobileLayout ? 0 : "calc(100% + 4px)",
-                                            left: isMobileLayout ? 0 : 0,
-                                            right: isMobileLayout ? 0 : "auto",
-                                            zIndex: 2000,
-                                            pointerEvents: "auto",
-                                        }}
-                                    >
-                                        <div
-                                            data-layer="skills-menu"
-                                            className="ConversationActions"
-                                            onMouseLeave={() => setSelectedSkillsIndex(-1)}
-                                            style={{
-                                                width: isMobileLayout ? "auto" : 280,
-                                                padding: "10px 10px 0 10px",
-                                                background: themeColors.surfaceMenu,
-                                                boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
-                                                borderRadius: isMobileLayout ? "36px 36px 0px 0px" : 28,
-                                                outline: `0.1px ${themeColors.border.subtle} solid`,
-                                                outlineOffset: "-0.1px",
-                                                flexDirection: "column",
-                                                justifyContent: "flex-start",
-                                                alignItems: "flex-start",
-                                                gap: 4,
-                                                display: "flex",
-                                            }}
-                                        >
-                                            <div style={{ fontSize: 12, color: themeColors.text.secondary, paddingLeft: 12, paddingBottom: 4, marginTop: 6, alignSelf: "flex-start" }}>
-                                                Skills
-                                            </div>
-                                            <div
-                                                style={{
-                                                    maxHeight: isMobileLayout ? 240 : 200,
-                                                    overflowY: "auto",
-                                                    overflowX: "hidden",
-                                                    width: "100%",
-                                                }}
-                                            >
-                                            <div
-                                                style={{
-                                                    display: "flex",
-                                                    flexDirection: "column",
-                                                    gap: 4,
-                                                    paddingBottom: 10,
-                                                }}
-                                            >
-                                            {filteredSkills.map((skill, index) => (
-                                                <div
-                                                    key={skill.id}
-                                                    ref={(el) => {
-                                                        if (index === selectedSkillsIndex) selectedSkillRef.current = el
-                                                    }}
-                                                    onMouseDown={(e) => e.preventDefault()}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation()
-                                                        insertChipAtCursor(skill)
-                                                    }}
-                                                    title={skill.description || undefined}
-                                                    style={{
-                                                        ...localStyles.menuItem,
-                                                        height: 36,
-                                                        minHeight: 36,
-                                                        flexShrink: 0,
-                                                        transition: "none",
-                                                        cursor: "pointer",
-                                                        ...(index === selectedSkillsIndex ? localStyles.menuItemHover : {}),
-                                                    }}
-                                                    onMouseEnter={() => { if (!isMobileLayout) setSelectedSkillsIndex(index) }}
-                                                >
-                                                    <div style={{ flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "column", justifyContent: "center", overflow: "hidden" }}>
-                                                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14 }}>
-                                                            <span style={{ color: themeColors.text.primary, fontWeight: "500" }}>{skill.name}</span>
-                                                            {skill.description && <span style={{ color: themeColors.text.secondary, fontWeight: "400" }}>{" — "}{skill.description}</span>}
-                                                        </span>
                                                     </div>
                                                 </div>
-                                            ))}
                                             </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </>
-                            )}
-                            {editableJSX}
-                        </div>
-                        {/* Send + Start AI Live - reuse from chips branch structure */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                                        </>
+                                    )}
+                                {editableJSX}
+                            </div>
+
+                            {/* BOTTOM ROW: [Plus + Skills chips] (fills width) | [Send] [Start AI Live] (right) */}
                             <div
-                                data-svg-wrapper
-                                data-layer="send-button"
-                                className="SendButton"
-                                aria-label={isLoading ? "Stop generating response" : hasContent ? "Send message" : "Send"}
-                                onClick={() => {
-                                    if (isLoading && onStop) onStop()
-                                    else if (hasContent) onSend()
-                                }}
                                 style={{
-                                    cursor: "pointer",
-                                    display: hasContent || isLoading ? "block" : "none",
-                                    opacity: 1,
-                                    width: 36,
-                                    height: 36,
+                                    display: "flex",
+                                    alignItems: "flex-end",
+                                    justifyContent: "space-between",
+                                    gap: 8,
+                                    width: "100%",
+                                    padding: "0 10px 10px 10px",
                                 }}
                             >
-                                {isLoading ? (
-                                    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                        <rect width="36" height="36" rx="18" fill={themeColors.text.primary} fillOpacity="0.95" />
-                                        <rect x="12" y="12" width="12" height="12" rx="2" fill={themeColors.background} fillOpacity="0.95" />
-                                    </svg>
-                                ) : (
-                                    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                        <rect width="36" height="36" rx="18" fill={themeColors.text.primary} fillOpacity="0.95" />
-                                        <path fillRule="evenodd" clipRule="evenodd" d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z" fill={themeColors.background} fillOpacity="0.95" />
-                                    </svg>
-                                )}
-                            </div>
-                            {!hasContent && !isLoading && (!showEndCall || showAiLiveButton) && onConnectWithAI && (
+                                {/* LEFT: Plus + Skills chips (flexbox that fills width) */}
                                 <div
-                                    data-svg-wrapper
-                                    data-layer="start ai live call"
-                                    className="StartAiLiveCall"
-                                    tabIndex={3}
-                                    onClick={onConnectWithAI}
-                                    onMouseEnter={() => isHoverCapable() && setIsAiTooltipHovered(true)}
-                                    onMouseLeave={() => setIsAiTooltipHovered(false)}
                                     style={{
-                                        cursor: "pointer",
-                                        width: 36,
-                                        height: 36,
-                                        display: "block",
-                                        position: "relative",
-                                        zIndex: 0,
-                                        borderRadius: "50%",
-                                        WebkitBorderRadius: "50%",
-                                        flexShrink: 0,
-                                        WebkitBackfaceVisibility: "hidden",
-                                        backfaceVisibility: "hidden",
-                                        WebkitTransform: "translateZ(0)",
-                                        transform: "translateZ(0)",
+                                        display: "flex",
+                                        flexDirection: "row",
+                                        flexWrap: "wrap",
+                                        alignItems: "center",
+                                        gap: 8,
+                                        flex: "1 1 0",
+                                        minWidth: 0,
                                     }}
                                 >
-                                    {isAiTooltipHovered && (
-                                        <Tooltip style={{ bottom: "100%", left: "50%", transform: "translate(-50%, -8px)" }}>
-                                            Connect with AI
-                                        </Tooltip>
-                                    )}
-                                    <ChatInputBarAiIcon />
+                                    {/* UPLOAD ICON (the button to open the + menu) */}
+                                    <div
+                                        id="upload-trigger-btn"
+                                        data-svg-wrapper
+                                        data-layer="upload-button"
+                                        className="UploadButton"
+                                        tabIndex={2}
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            setIsAddFilesTooltipHovered(false)
+                                            if (attachments.length < 10) {
+                                                haptic.medium()
+                                                setShowMenu(!showMenu)
+                                            }
+                                        }}
+                                        onMouseEnter={() => {
+                                            if (
+                                                attachments.length < 10 &&
+                                                isHoverCapable()
+                                            ) {
+                                                setIsUploadButtonHovered(true)
+                                                if (!showMenu) {
+                                                    setIsAddFilesTooltipHovered(
+                                                        true
+                                                    )
+                                                }
+                                            }
+                                        }}
+                                        onMouseLeave={() => {
+                                            setIsUploadButtonHovered(false)
+                                            setIsAddFilesTooltipHovered(false)
+                                        }}
+                                        style={{
+                                            cursor:
+                                                attachments.length >= 10
+                                                    ? "not-allowed"
+                                                    : "pointer",
+                                            pointerEvents:
+                                                attachments.length >= 10
+                                                    ? "none"
+                                                    : "auto",
+                                            width: 36,
+                                            height: 36,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            marginBottom: 0, // Aligned with send button
+                                            position: "relative",
+                                            zIndex: 1,
+                                            borderRadius: "50%",
+                                            background:
+                                                (showMenu ||
+                                                    isUploadButtonHovered) &&
+                                                attachments.length < 10
+                                                    ? themeColors.hover.subtle
+                                                    : "transparent",
+                                        }}
+                                    >
+                                        {showMenu && (
+                                            <>
+                                                {isMobileLayout && (
+                                                    <div
+                                                        style={{
+                                                            position: "fixed",
+                                                            top: 0,
+                                                            left: 0,
+                                                            right: 0,
+                                                            bottom: 0,
+                                                            background:
+                                                                themeColors
+                                                                    .overlay
+                                                                    .black,
+                                                            zIndex: 1004,
+                                                            pointerEvents:
+                                                                "auto",
+                                                        }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            setShowMenu(false)
+                                                        }}
+                                                    />
+                                                )}
+                                                <div
+                                                    ref={menuRef}
+                                                    style={{
+                                                        position: isMobileLayout
+                                                            ? "fixed"
+                                                            : "absolute",
+                                                        bottom: isMobileLayout
+                                                            ? 0
+                                                            : "calc(100% + 4px)",
+                                                        left: isMobileLayout
+                                                            ? 0
+                                                            : "calc(100% - 40px)",
+                                                        right: isMobileLayout
+                                                            ? 0
+                                                            : "auto",
+                                                        zIndex: 2000, // Force very high z-index
+                                                        pointerEvents: "auto",
+                                                    }}
+                                                >
+                                                    <div
+                                                        data-layer="conversation actions"
+                                                        className="ConversationActions"
+                                                        onMouseLeave={() =>
+                                                            setSelectedMenuIndex(
+                                                                -1
+                                                            )
+                                                        }
+                                                        style={{
+                                                            width: isMobileLayout
+                                                                ? "auto"
+                                                                : 196,
+                                                            padding: 10,
+                                                            background:
+                                                                themeColors.surfaceMenu,
+                                                            boxShadow:
+                                                                "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                            borderRadius:
+                                                                isMobileLayout
+                                                                    ? "36px 36px 0px 0px"
+                                                                    : 28,
+                                                            outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                            outlineOffset:
+                                                                "-0.1px",
+                                                            flexDirection:
+                                                                "column",
+                                                            justifyContent:
+                                                                "flex-start",
+                                                            alignItems:
+                                                                "flex-start",
+                                                            gap: 4,
+                                                            display: "flex",
+                                                        }}
+                                                    >
+                                                        {menuItems.map(
+                                                            (item, index) => (
+                                                                <React.Fragment
+                                                                    key={
+                                                                        item.id
+                                                                    }
+                                                                >
+                                                                    {item.hasSeparator && (
+                                                                        <div
+                                                                            data-layer="separator"
+                                                                            className="Separator"
+                                                                            style={{
+                                                                                alignSelf:
+                                                                                    "stretch",
+                                                                                marginLeft: 4,
+                                                                                marginRight: 4,
+                                                                                marginTop: 2,
+                                                                                marginBottom: 2,
+                                                                                height: 1,
+                                                                                position:
+                                                                                    "relative",
+                                                                                background:
+                                                                                    themeColors
+                                                                                        .border
+                                                                                        .subtle,
+                                                                                borderRadius: 4,
+                                                                            }}
+                                                                        />
+                                                                    )}
+                                                                    <div
+                                                                        className={
+                                                                            item.className
+                                                                        }
+                                                                        onClick={(
+                                                                            e
+                                                                        ) => {
+                                                                            e.stopPropagation()
+                                                                            item.onClick()
+                                                                        }}
+                                                                        style={{
+                                                                            ...localStyles.menuItem,
+                                                                            height: isMobileLayout
+                                                                                ? 44
+                                                                                : 36,
+                                                                            transition:
+                                                                                "none",
+                                                                            ...(index ===
+                                                                            selectedMenuIndex
+                                                                                ? item.isDestructive
+                                                                                    ? localStyles.menuItemDestructiveHover
+                                                                                    : localStyles.menuItemHover
+                                                                                : {}),
+                                                                        }}
+                                                                        onMouseEnter={() => {
+                                                                            if (
+                                                                                isMobileLayout
+                                                                            )
+                                                                                return
+                                                                            setSelectedMenuIndex(
+                                                                                index
+                                                                            )
+                                                                        }}
+                                                                        onMouseLeave={(
+                                                                            e
+                                                                        ) => {
+                                                                            // Handled by parent container
+                                                                        }}
+                                                                    >
+                                                                        <div
+                                                                            data-svg-wrapper
+                                                                            className="Icon"
+                                                                            style={{
+                                                                                width: 15,
+                                                                                display:
+                                                                                    "flex",
+                                                                                justifyContent:
+                                                                                    "center",
+                                                                            }}
+                                                                        >
+                                                                            {
+                                                                                item.icon
+                                                                            }
+                                                                        </div>
+                                                                        <div
+                                                                            className="Label"
+                                                                            style={{
+                                                                                flex: "1 1 0",
+                                                                                justifyContent:
+                                                                                    "center",
+                                                                                display:
+                                                                                    "flex",
+                                                                                flexDirection:
+                                                                                    "column",
+                                                                                color: item.isDestructive
+                                                                                    ? themeColors
+                                                                                          .destructive
+                                                                                          .light
+                                                                                    : themeColors
+                                                                                          .text
+                                                                                          .primary,
+                                                                                fontSize: 14,
+                                                                                fontFamily:
+                                                                                    "Inter",
+                                                                                fontWeight:
+                                                                                    "400",
+                                                                                lineHeight:
+                                                                                    "19.32px",
+                                                                                wordWrap:
+                                                                                    "break-word",
+                                                                            }}
+                                                                        >
+                                                                            {
+                                                                                item.label
+                                                                            }
+                                                                        </div>
+                                                                    </div>
+                                                                </React.Fragment>
+                                                            )
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+                                        {/* Tooltip */}
+                                        {!showMenu &&
+                                            isAddFilesTooltipHovered && (
+                                                <Tooltip
+                                                    style={{
+                                                        bottom: "100%",
+                                                        left: "50%",
+                                                        transform:
+                                                            isMobileLayout
+                                                                ? "translate(-25%, -17px)"
+                                                                : "translate(-50%, -17px)",
+                                                    }}
+                                                >
+                                                    Add files and more
+                                                </Tooltip>
+                                            )}
+                                        <div
+                                            style={{
+                                                opacity:
+                                                    attachments.length >= 10
+                                                        ? 0.3
+                                                        : 0.95,
+                                                display: "flex",
+                                            }}
+                                        >
+                                            <svg
+                                                width="24"
+                                                height="24"
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                xmlns="http://www.w3.org/2000/svg"
+                                            >
+                                                <path
+                                                    d="M12 5V19M5 12H19"
+                                                    stroke={
+                                                        themeColors.text.primary
+                                                    }
+                                                    strokeWidth="2"
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                />
+                                            </svg>
+                                        </div>
+                                    </div>
                                 </div>
-                            )}
+
+                                {/* RIGHT: Send + Start AI Live (top right corner) */}
+                                <div
+                                    style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 8,
+                                        flexShrink: 0,
+                                    }}
+                                >
+                                    {/* SEND / STOP BUTTON */}
+                                    <div
+                                        data-svg-wrapper
+                                        data-layer="send-button"
+                                        className="SendButton"
+                                        aria-label={
+                                            isLoading
+                                                ? "Stop generating response"
+                                                : hasContent
+                                                  ? "Send message"
+                                                  : "Send"
+                                        }
+                                        onClick={() => {
+                                            if (isLoading && onStop) {
+                                                onStop()
+                                            } else if (hasContent) {
+                                                haptic.medium()
+                                                sendAndDismissKeyboard()
+                                            }
+                                        }}
+                                        style={{
+                                            cursor: "pointer",
+                                            display:
+                                                hasContent || isLoading
+                                                    ? "block"
+                                                    : "none",
+                                            opacity: 1,
+                                            width: 36,
+                                            height: 36,
+                                        }}
+                                    >
+                                        {isLoading ? (
+                                            <svg
+                                                width="36"
+                                                height="36"
+                                                viewBox="0 0 36 36"
+                                                fill="none"
+                                                xmlns="http://www.w3.org/2000/svg"
+                                            >
+                                                <rect
+                                                    width="36"
+                                                    height="36"
+                                                    rx="18"
+                                                    fill={
+                                                        themeColors.text.primary
+                                                    }
+                                                    fillOpacity="0.95"
+                                                />
+                                                <rect
+                                                    x="12"
+                                                    y="12"
+                                                    width="12"
+                                                    height="12"
+                                                    rx="2"
+                                                    fill={
+                                                        themeColors.background
+                                                    }
+                                                    fillOpacity="0.95"
+                                                />
+                                            </svg>
+                                        ) : (
+                                            <svg
+                                                width="36"
+                                                height="36"
+                                                viewBox="0 0 36 36"
+                                                fill="none"
+                                                xmlns="http://www.w3.org/2000/svg"
+                                            >
+                                                <rect
+                                                    width="36"
+                                                    height="36"
+                                                    rx="18"
+                                                    fill={
+                                                        themeColors.text.primary
+                                                    }
+                                                    fillOpacity="0.95"
+                                                />
+                                                <path
+                                                    fillRule="evenodd"
+                                                    clipRule="evenodd"
+                                                    d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z"
+                                                    fill={
+                                                        themeColors.background
+                                                    }
+                                                    fillOpacity="0.95"
+                                                />
+                                            </svg>
+                                        )}
+                                    </div>
+
+                                    {/* START LIVE AI CALL BUTTON (When idle and no input) */}
+                                    {!hasContent &&
+                                        !isLoading &&
+                                        (!showEndCall || showAiLiveButton) &&
+                                        onConnectWithAI && (
+                                            <div
+                                                data-svg-wrapper
+                                                data-layer="start ai live call"
+                                                className="StartAiLiveCall"
+                                                tabIndex={3}
+                                                onClick={() => {
+                                                    setIsAiTooltipHovered(false)
+                                                    onConnectWithAI?.()
+                                                }}
+                                                onMouseEnter={() =>
+                                                    isHoverCapable() &&
+                                                    setIsAiTooltipHovered(true)
+                                                }
+                                                onMouseLeave={() =>
+                                                    setIsAiTooltipHovered(false)
+                                                }
+                                                style={{
+                                                    cursor: "pointer",
+                                                    width: 36,
+                                                    height: 36,
+                                                    display: "block",
+                                                    position: "relative",
+                                                    zIndex: 0,
+                                                    borderRadius: "50%",
+                                                    WebkitBorderRadius: "50%",
+                                                    flexShrink: 0,
+                                                    WebkitBackfaceVisibility:
+                                                        "hidden",
+                                                    backfaceVisibility:
+                                                        "hidden",
+                                                    WebkitTransform:
+                                                        "translateZ(0)",
+                                                    transform: "translateZ(0)",
+                                                }}
+                                            >
+                                                {isAiTooltipHovered && (
+                                                    <Tooltip
+                                                        style={{
+                                                            bottom: "100%",
+                                                            left: "50%",
+                                                            transform:
+                                                                "translate(-50%, -8px)",
+                                                        }}
+                                                    >
+                                                        Connect with AI
+                                                    </Tooltip>
+                                                )}
+                                                <ChatInputBarAiIcon />
+                                            </div>
+                                        )}
+                                </div>
+                            </div>
+                        </>
+                    ) : (
+                        /* SINGLE ROW (no chips): [Plus] [Textarea] [Send] [Start AI Live] - normal layout */
+                        <div
+                            style={{
+                                display: "flex",
+                                alignItems: "flex-end",
+                                gap: 8,
+                                width: "100%",
+                                padding: "0 10px 10px 10px",
+                            }}
+                        >
+                            {/* Plus - same as chips branch, inline in row */}
+                            <div
+                                id="upload-trigger-btn"
+                                data-svg-wrapper
+                                data-layer="upload-button"
+                                className="UploadButton"
+                                tabIndex={2}
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    setIsAddFilesTooltipHovered(false)
+                                    if (attachments.length < 10) {
+                                        haptic.medium()
+                                        setShowMenu(!showMenu)
+                                    }
+                                }}
+                                onMouseEnter={() => {
+                                    if (
+                                        attachments.length < 10 &&
+                                        isHoverCapable()
+                                    ) {
+                                        setIsUploadButtonHovered(true)
+                                        if (!showMenu)
+                                            setIsAddFilesTooltipHovered(true)
+                                    }
+                                }}
+                                onMouseLeave={() => {
+                                    setIsUploadButtonHovered(false)
+                                    setIsAddFilesTooltipHovered(false)
+                                }}
+                                style={{
+                                    cursor:
+                                        attachments.length >= 10
+                                            ? "not-allowed"
+                                            : "pointer",
+                                    pointerEvents:
+                                        attachments.length >= 10
+                                            ? "none"
+                                            : "auto",
+                                    width: 36,
+                                    height: 36,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    marginBottom: 0,
+                                    position: "relative",
+                                    zIndex: 1,
+                                    borderRadius: "50%",
+                                    background:
+                                        (showMenu || isUploadButtonHovered) &&
+                                        attachments.length < 10
+                                            ? themeColors.hover.subtle
+                                            : "transparent",
+                                }}
+                            >
+                                {showMenu && (
+                                    <>
+                                        {isMobileLayout && (
+                                            <div
+                                                style={{
+                                                    position: "fixed",
+                                                    top: 0,
+                                                    left: 0,
+                                                    right: 0,
+                                                    bottom: 0,
+                                                    background:
+                                                        themeColors.overlay
+                                                            .black,
+                                                    zIndex: 1004,
+                                                    pointerEvents: "auto",
+                                                }}
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    setShowMenu(false)
+                                                }}
+                                            />
+                                        )}
+                                        <div
+                                            ref={menuRef}
+                                            style={{
+                                                position: isMobileLayout
+                                                    ? "fixed"
+                                                    : "absolute",
+                                                bottom: isMobileLayout
+                                                    ? 0
+                                                    : "calc(100% + 4px)",
+                                                left: isMobileLayout
+                                                    ? 0
+                                                    : "calc(100% - 40px)",
+                                                right: isMobileLayout
+                                                    ? 0
+                                                    : "auto",
+                                                zIndex: 2000,
+                                                pointerEvents: "auto",
+                                            }}
+                                        >
+                                            <div
+                                                data-layer="conversation actions"
+                                                className="ConversationActions"
+                                                onMouseLeave={() =>
+                                                    setSelectedMenuIndex(-1)
+                                                }
+                                                style={{
+                                                    width: isMobileLayout
+                                                        ? "auto"
+                                                        : 196,
+                                                    padding: 10,
+                                                    background:
+                                                        themeColors.surfaceMenu,
+                                                    boxShadow:
+                                                        "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                    borderRadius: isMobileLayout
+                                                        ? "36px 36px 0px 0px"
+                                                        : 28,
+                                                    outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                    outlineOffset: "-0.1px",
+                                                    flexDirection: "column",
+                                                    justifyContent:
+                                                        "flex-start",
+                                                    alignItems: "flex-start",
+                                                    gap: 4,
+                                                    display: "flex",
+                                                }}
+                                            >
+                                                {menuItems.map(
+                                                    (item, index) => (
+                                                        <React.Fragment
+                                                            key={item.id}
+                                                        >
+                                                            {item.hasSeparator && (
+                                                                <div
+                                                                    data-layer="separator"
+                                                                    className="Separator"
+                                                                    style={{
+                                                                        alignSelf:
+                                                                            "stretch",
+                                                                        marginLeft: 4,
+                                                                        marginRight: 4,
+                                                                        marginTop: 2,
+                                                                        marginBottom: 2,
+                                                                        height: 1,
+                                                                        position:
+                                                                            "relative",
+                                                                        background:
+                                                                            themeColors
+                                                                                .border
+                                                                                .subtle,
+                                                                        borderRadius: 4,
+                                                                    }}
+                                                                />
+                                                            )}
+                                                            <div
+                                                                className={
+                                                                    item.className
+                                                                }
+                                                                onClick={(
+                                                                    e
+                                                                ) => {
+                                                                    e.stopPropagation()
+                                                                    item.onClick()
+                                                                }}
+                                                                style={{
+                                                                    ...localStyles.menuItem,
+                                                                    height: isMobileLayout
+                                                                        ? 44
+                                                                        : 36,
+                                                                    transition:
+                                                                        "none",
+                                                                    ...(index ===
+                                                                    selectedMenuIndex
+                                                                        ? item.isDestructive
+                                                                            ? localStyles.menuItemDestructiveHover
+                                                                            : localStyles.menuItemHover
+                                                                        : {}),
+                                                                }}
+                                                                onMouseEnter={() => {
+                                                                    if (
+                                                                        !isMobileLayout
+                                                                    )
+                                                                        setSelectedMenuIndex(
+                                                                            index
+                                                                        )
+                                                                }}
+                                                            >
+                                                                <div
+                                                                    data-svg-wrapper
+                                                                    className="Icon"
+                                                                    style={{
+                                                                        width: 15,
+                                                                        display:
+                                                                            "flex",
+                                                                        justifyContent:
+                                                                            "center",
+                                                                    }}
+                                                                >
+                                                                    {item.icon}
+                                                                </div>
+                                                                <div
+                                                                    className="Label"
+                                                                    style={{
+                                                                        flex: "1 1 0",
+                                                                        justifyContent:
+                                                                            "center",
+                                                                        display:
+                                                                            "flex",
+                                                                        flexDirection:
+                                                                            "column",
+                                                                        color: item.isDestructive
+                                                                            ? themeColors
+                                                                                  .destructive
+                                                                                  .light
+                                                                            : themeColors
+                                                                                  .text
+                                                                                  .primary,
+                                                                        fontSize: 14,
+                                                                        fontFamily:
+                                                                            "Inter",
+                                                                        fontWeight:
+                                                                            "400",
+                                                                        lineHeight:
+                                                                            "19.32px",
+                                                                        wordWrap:
+                                                                            "break-word",
+                                                                    }}
+                                                                >
+                                                                    {item.label}
+                                                                </div>
+                                                            </div>
+                                                        </React.Fragment>
+                                                    )
+                                                )}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                                {!showMenu && isAddFilesTooltipHovered && (
+                                    <Tooltip
+                                        style={{
+                                            bottom: "100%",
+                                            left: "50%",
+                                            transform: isMobileLayout
+                                                ? "translate(-25%, -17px)"
+                                                : "translate(-50%, -17px)",
+                                        }}
+                                    >
+                                        Add files and more
+                                    </Tooltip>
+                                )}
+                                <div
+                                    style={{
+                                        opacity:
+                                            attachments.length >= 10
+                                                ? 0.3
+                                                : 0.95,
+                                        display: "flex",
+                                    }}
+                                >
+                                    <svg
+                                        width="24"
+                                        height="24"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                    >
+                                        <path
+                                            d="M12 5V19M5 12H19"
+                                            stroke={themeColors.text.primary}
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    </svg>
+                                </div>
+                            </div>
+                            {/* TextAreaWrapper - inline, flex: 1 */}
+                            <div
+                                data-layer="textarea-wrapper"
+                                className="TextAreaWrapper"
+                                style={{
+                                    flex: "1 1 0",
+                                    alignSelf: "stretch",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    paddingTop: 6,
+                                    paddingBottom: 6,
+                                    position: "relative",
+                                }}
+                            >
+                                {showSkillsMenu &&
+                                    !skillsLoading &&
+                                    !skillsError &&
+                                    filteredSkills.length > 0 && (
+                                        <>
+                                            {isMobileLayout && (
+                                                <div
+                                                    style={{
+                                                        position: "fixed",
+                                                        top: 0,
+                                                        left: 0,
+                                                        right: 0,
+                                                        bottom: 0,
+                                                        background:
+                                                            themeColors.overlay
+                                                                .black,
+                                                        zIndex: 1004,
+                                                        pointerEvents: "auto",
+                                                    }}
+                                                    onClick={() =>
+                                                        setShowSkillsMenu(false)
+                                                    }
+                                                />
+                                            )}
+                                            <div
+                                                ref={skillsMenuRef}
+                                                style={{
+                                                    position: isMobileLayout
+                                                        ? "fixed"
+                                                        : "absolute",
+                                                    bottom: isMobileLayout
+                                                        ? 0
+                                                        : "calc(100% + 4px)",
+                                                    left: isMobileLayout
+                                                        ? 0
+                                                        : 0,
+                                                    right: isMobileLayout
+                                                        ? 0
+                                                        : "auto",
+                                                    zIndex: 2000,
+                                                    pointerEvents: "auto",
+                                                }}
+                                            >
+                                                <div
+                                                    data-layer="skills-menu"
+                                                    className="ConversationActions"
+                                                    onMouseLeave={() =>
+                                                        setSelectedSkillsIndex(
+                                                            -1
+                                                        )
+                                                    }
+                                                    style={{
+                                                        width: isMobileLayout
+                                                            ? "auto"
+                                                            : 280,
+                                                        padding:
+                                                            "10px 10px 0 10px",
+                                                        background:
+                                                            themeColors.surfaceMenu,
+                                                        boxShadow:
+                                                            "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                        borderRadius:
+                                                            isMobileLayout
+                                                                ? "36px 36px 0px 0px"
+                                                                : 28,
+                                                        outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                        outlineOffset: "-0.1px",
+                                                        flexDirection: "column",
+                                                        justifyContent:
+                                                            "flex-start",
+                                                        alignItems:
+                                                            "flex-start",
+                                                        gap: 4,
+                                                        display: "flex",
+                                                    }}
+                                                >
+                                                    <div
+                                                        style={{
+                                                            fontSize: 12,
+                                                            color: themeColors
+                                                                .text.secondary,
+                                                            paddingLeft: 12,
+                                                            paddingBottom: 4,
+                                                            marginTop: 6,
+                                                            alignSelf:
+                                                                "flex-start",
+                                                        }}
+                                                    >
+                                                        Skills
+                                                    </div>
+                                                    <div
+                                                        style={{
+                                                            maxHeight:
+                                                                isMobileLayout
+                                                                    ? 240
+                                                                    : 200,
+                                                            overflowY: "auto",
+                                                            overflowX: "hidden",
+                                                            width: "100%",
+                                                        }}
+                                                    >
+                                                        <div
+                                                            style={{
+                                                                display: "flex",
+                                                                flexDirection:
+                                                                    "column",
+                                                                gap: 4,
+                                                                paddingBottom: 10,
+                                                            }}
+                                                        >
+                                                            {filteredSkills.map(
+                                                                (
+                                                                    skill,
+                                                                    index
+                                                                ) => (
+                                                                    <div
+                                                                        key={
+                                                                            skill.id
+                                                                        }
+                                                                        ref={(
+                                                                            el
+                                                                        ) => {
+                                                                            if (
+                                                                                index ===
+                                                                                selectedSkillsIndex
+                                                                            )
+                                                                                selectedSkillRef.current =
+                                                                                    el
+                                                                        }}
+                                                                        onMouseDown={(
+                                                                            e
+                                                                        ) =>
+                                                                            e.preventDefault()
+                                                                        }
+                                                                        onClick={(
+                                                                            e
+                                                                        ) => {
+                                                                            e.stopPropagation()
+                                                                            insertChipAtCursor(
+                                                                                skill
+                                                                            )
+                                                                        }}
+                                                                        title={
+                                                                            skill.description ||
+                                                                            undefined
+                                                                        }
+                                                                        style={{
+                                                                            ...localStyles.menuItem,
+                                                                            height: 36,
+                                                                            minHeight: 36,
+                                                                            flexShrink: 0,
+                                                                            transition:
+                                                                                "none",
+                                                                            cursor: "pointer",
+                                                                            ...(index ===
+                                                                            selectedSkillsIndex
+                                                                                ? localStyles.menuItemHover
+                                                                                : {}),
+                                                                        }}
+                                                                        onMouseEnter={() => {
+                                                                            if (
+                                                                                !isMobileLayout
+                                                                            )
+                                                                                setSelectedSkillsIndex(
+                                                                                    index
+                                                                                )
+                                                                        }}
+                                                                    >
+                                                                        <div
+                                                                            style={{
+                                                                                flex: "1 1 0",
+                                                                                minWidth: 0,
+                                                                                display:
+                                                                                    "flex",
+                                                                                flexDirection:
+                                                                                    "column",
+                                                                                justifyContent:
+                                                                                    "center",
+                                                                                overflow:
+                                                                                    "hidden",
+                                                                            }}
+                                                                        >
+                                                                            <span
+                                                                                style={{
+                                                                                    overflow:
+                                                                                        "hidden",
+                                                                                    textOverflow:
+                                                                                        "ellipsis",
+                                                                                    whiteSpace:
+                                                                                        "nowrap",
+                                                                                    fontSize: 14,
+                                                                                }}
+                                                                            >
+                                                                                <span
+                                                                                    style={{
+                                                                                        color: themeColors
+                                                                                            .text
+                                                                                            .primary,
+                                                                                        fontWeight:
+                                                                                            "500",
+                                                                                    }}
+                                                                                >
+                                                                                    {
+                                                                                        skill.name
+                                                                                    }
+                                                                                </span>
+                                                                                {skill.description && (
+                                                                                    <span
+                                                                                        style={{
+                                                                                            color: themeColors
+                                                                                                .text
+                                                                                                .secondary,
+                                                                                            fontWeight:
+                                                                                                "400",
+                                                                                        }}
+                                                                                    >
+                                                                                        {
+                                                                                            " — "
+                                                                                        }
+                                                                                        {
+                                                                                            skill.description
+                                                                                        }
+                                                                                    </span>
+                                                                                )}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                )
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
+                                {editableJSX}
+                            </div>
+                            {/* Send + Start AI Live - reuse from chips branch structure */}
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    flexShrink: 0,
+                                }}
+                            >
+                                <div
+                                    data-svg-wrapper
+                                    data-layer="send-button"
+                                    className="SendButton"
+                                    aria-label={
+                                        isLoading
+                                            ? "Stop generating response"
+                                            : hasContent
+                                              ? "Send message"
+                                              : "Send"
+                                    }
+                                    onClick={() => {
+                                        if (isLoading && onStop) onStop()
+                                        else if (hasContent) sendAndDismissKeyboard()
+                                    }}
+                                    style={{
+                                        cursor: "pointer",
+                                        display:
+                                            hasContent || isLoading
+                                                ? "block"
+                                                : "none",
+                                        opacity: 1,
+                                        width: 36,
+                                        height: 36,
+                                    }}
+                                >
+                                    {isLoading ? (
+                                        <svg
+                                            width="36"
+                                            height="36"
+                                            viewBox="0 0 36 36"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <rect
+                                                width="36"
+                                                height="36"
+                                                rx="18"
+                                                fill={themeColors.text.primary}
+                                                fillOpacity="0.95"
+                                            />
+                                            <rect
+                                                x="12"
+                                                y="12"
+                                                width="12"
+                                                height="12"
+                                                rx="2"
+                                                fill={themeColors.background}
+                                                fillOpacity="0.95"
+                                            />
+                                        </svg>
+                                    ) : (
+                                        <svg
+                                            width="36"
+                                            height="36"
+                                            viewBox="0 0 36 36"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <rect
+                                                width="36"
+                                                height="36"
+                                                rx="18"
+                                                fill={themeColors.text.primary}
+                                                fillOpacity="0.95"
+                                            />
+                                            <path
+                                                fillRule="evenodd"
+                                                clipRule="evenodd"
+                                                d="M14.5611 18.1299L16.8709 15.8202V23.3716C16.8709 23.9948 17.3762 24.5 17.9994 24.5C18.6226 24.5 19.1278 23.9948 19.1278 23.3716V15.8202L21.4375 18.1299C21.8782 18.5706 22.5927 18.5706 23.0334 18.1299C23.4741 17.6893 23.4741 16.9748 23.0334 16.5341L17.9994 11.5L12.9653 16.5341C12.5246 16.9748 12.5246 17.6893 12.9653 18.1299C13.406 18.5706 14.1204 18.5706 14.5611 18.1299Z"
+                                                fill={themeColors.background}
+                                                fillOpacity="0.95"
+                                            />
+                                        </svg>
+                                    )}
+                                </div>
+                                {!hasContent &&
+                                    !isLoading &&
+                                    (!showEndCall || showAiLiveButton) &&
+                                    onConnectWithAI && (
+                                        <div
+                                            data-svg-wrapper
+                                            data-layer="start ai live call"
+                                            className="StartAiLiveCall"
+                                            tabIndex={3}
+                                            onClick={() => {
+                                                setIsAiTooltipHovered(false)
+                                                onConnectWithAI?.()
+                                            }}
+                                            onMouseEnter={() =>
+                                                isHoverCapable() &&
+                                                setIsAiTooltipHovered(true)
+                                            }
+                                            onMouseLeave={() =>
+                                                setIsAiTooltipHovered(false)
+                                            }
+                                            style={{
+                                                cursor: "pointer",
+                                                width: 36,
+                                                height: 36,
+                                                display: "block",
+                                                position: "relative",
+                                                zIndex: 0,
+                                                borderRadius: "50%",
+                                                WebkitBorderRadius: "50%",
+                                                flexShrink: 0,
+                                                WebkitBackfaceVisibility:
+                                                    "hidden",
+                                                backfaceVisibility: "hidden",
+                                                WebkitTransform:
+                                                    "translateZ(0)",
+                                                transform: "translateZ(0)",
+                                            }}
+                                        >
+                                            {isAiTooltipHovered && (
+                                                <Tooltip
+                                                    style={{
+                                                        bottom: "100%",
+                                                        left: "50%",
+                                                        transform:
+                                                            "translate(-50%, -8px)",
+                                                    }}
+                                                >
+                                                    Connect with AI
+                                                </Tooltip>
+                                            )}
+                                            <ChatInputBarAiIcon />
+                                        </div>
+                                    )}
+                            </div>
                         </div>
-                    </div>
                     )}
                 </div>
 
@@ -7816,7 +9427,11 @@ const ChatInput = React.memo(function ChatInput({
                         data-svg-wrapper
                         data-layer="end call button."
                         className="EndCallButton"
-                        onClick={() => { playCallEndSound(); onEndCall() }}
+                        onClick={() => {
+                            setIsEndCallTooltipHovered(false)
+                            playCallEndSound()
+                            onEndCall()
+                        }}
                         onMouseEnter={() =>
                             isHoverCapable() && setIsEndCallTooltipHovered(true)
                         }
@@ -8458,10 +10073,21 @@ interface JobDescriptionDetail {
 }
 
 const FALLBACK_QUERIES = [
-    "software engineer", "sales associate", "product designer",
-    "operations manager", "marketing specialist", "data analyst",
-    "customer success", "retail associate", "warehouse associate",
-    "teacher", "nurse", "driver", "cook", "mechanic", "accountant",
+    "software engineer",
+    "sales associate",
+    "product designer",
+    "operations manager",
+    "marketing specialist",
+    "data analyst",
+    "customer success",
+    "retail associate",
+    "warehouse associate",
+    "teacher",
+    "nurse",
+    "driver",
+    "cook",
+    "mechanic",
+    "accountant",
 ]
 
 function jobTimeAgo(iso: string | null): string {
@@ -8476,17 +10102,181 @@ function jobTimeAgo(iso: string | null): string {
     return `${d}d ago`
 }
 
-const JobSkeleton = ({ style, themeColors }: { style?: React.CSSProperties; themeColors: typeof darkColors }) => (
-    <div style={{
-        background: themeColors.hover.default,
-        borderRadius: 10,
-        animation: "homepageSkeleton 1.4s ease-in-out infinite",
-        ...style,
-    }} />
+/** Job cards rendered inside the chat bubble after a search_jobs tool call. */
+const ChatJobCards = React.memo(function ChatJobCards({
+    jobs,
+    onJobClick,
+    themeColors = darkColors,
+}: {
+    jobs: JobSnippet[]
+    onJobClick?: (job: JobSnippet) => void
+    themeColors?: typeof darkColors
+}) {
+    if (!jobs || jobs.length === 0) return null
+
+    const metaStyle: React.CSSProperties = {
+        color: themeColors.text.secondary,
+        fontSize: 12,
+        fontFamily: "Inter",
+        fontWeight: 400,
+        lineHeight: "18px",
+        whiteSpace: "nowrap",
+    }
+
+    return (
+        <div
+            data-layer="jobs"
+            style={{
+                alignSelf: "stretch",
+                flexDirection: "column",
+                justifyContent: "flex-start",
+                alignItems: "flex-start",
+                gap: 10,
+                display: "flex",
+                width: "100%",
+                marginTop: 12,
+                marginBottom: 4,
+            }}
+        >
+            {jobs.map((job, i) => (
+                <div
+                    key={job.id || i}
+                    style={{
+                        alignSelf: "stretch",
+                        paddingLeft: 20,
+                        paddingRight: 20,
+                        paddingTop: 16,
+                        paddingBottom: 16,
+                        background: themeColors.surfaceHighlight,
+                        overflow: "hidden",
+                        borderRadius: 28,
+                        flexDirection: "column",
+                        justifyContent: "center",
+                        alignItems: "flex-start",
+                        gap: 8,
+                        display: "flex",
+                        cursor: "pointer",
+                        transition: "opacity 0.15s ease",
+                    }}
+                    onClick={() => onJobClick?.(job)}
+                    onMouseEnter={(e) => {
+                        ;(e.currentTarget as HTMLDivElement).style.opacity =
+                            "0.75"
+                    }}
+                    onMouseLeave={(e) => {
+                        ;(e.currentTarget as HTMLDivElement).style.opacity = "1"
+                    }}
+                >
+                    <div
+                        style={{
+                            color: themeColors.text.primary,
+                            fontSize: 16,
+                            fontFamily: "Inter",
+                            fontWeight: 500,
+                            lineHeight: "24px",
+                            wordBreak: "break-word",
+                        }}
+                    >
+                        {job.title}
+                    </div>
+                    <div
+                        style={{
+                            justifyContent: "flex-start",
+                            alignItems: "center",
+                            gap: 6,
+                            display: "flex",
+                            flexWrap: "wrap",
+                        }}
+                    >
+                        {/* Logo */}
+                        <div
+                            style={{
+                                width: 16,
+                                height: 16,
+                                borderRadius: "50%",
+                                overflow: "hidden",
+                                flexShrink: 0,
+                                background: themeColors.surface,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                            }}
+                        >
+                            {job.company_logo && (
+                                <img
+                                    style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        objectFit: "contain",
+                                    }}
+                                    src={job.company_logo}
+                                    alt=""
+                                    onError={(e) => {
+                                        ;(
+                                            e.currentTarget as HTMLImageElement
+                                        ).style.display = "none"
+                                    }}
+                                />
+                            )}
+                        </div>
+                        {/* Company */}
+                        <span style={metaStyle}>{job.company}</span>
+                        {/* Date — before location */}
+                        {job.posted_at && (
+                            <>
+                                <span style={metaStyle}>•</span>
+                                <span style={metaStyle}>
+                                    {jobTimeAgo(job.posted_at)}
+                                </span>
+                            </>
+                        )}
+                        {/* Location */}
+                        {job.location && (
+                            <>
+                                <span style={metaStyle}>•</span>
+                                <span style={metaStyle}>{job.location}</span>
+                            </>
+                        )}
+                        {/* Salary */}
+                        {job.salary && (
+                            <>
+                                <span style={metaStyle}>•</span>
+                                <span style={metaStyle}>{job.salary}</span>
+                            </>
+                        )}
+                    </div>
+                </div>
+            ))}
+        </div>
+    )
+})
+
+const JobSkeleton = ({
+    style,
+    themeColors,
+}: {
+    style?: React.CSSProperties
+    themeColors: typeof darkColors
+}) => (
+    <div
+        style={{
+            background: themeColors.hover.default,
+            borderRadius: 10,
+            animation: "homepageSkeleton 1.4s ease-in-out infinite",
+            ...style,
+        }}
+    />
 )
 
 // Large card: featured card in sections 1 and 2
-const BigJobCard = ({ job, borderRadius = 36, style, onClick, themeColors, isMobile = false }: {
+const BigJobCard = ({
+    job,
+    borderRadius = 36,
+    style,
+    onClick,
+    themeColors,
+    isMobile = false,
+}: {
     job: HomepageJob | null
     borderRadius?: number
     style?: React.CSSProperties
@@ -8514,38 +10304,147 @@ const BigJobCard = ({ job, borderRadius = 36, style, onClick, themeColors, isMob
                 ...style,
             }}
         >
-            <div style={{ alignSelf: "stretch", flexDirection: "column", gap: isMobile ? 16 : 24, display: "flex" }}>
-                <div style={{ alignSelf: "stretch", justifyContent: "flex-start", alignItems: "center", gap: isMobile ? 8 : 12, display: "flex" }}>
-                    <div style={{ width: logoSz, height: logoSz, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        {job?.company.logo_url
-                            ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                            : <JobSkeleton themeColors={themeColors} style={{ width: logoSz, height: logoSz, borderRadius: "50%" }} />
-                        }
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    flexDirection: "column",
+                    gap: isMobile ? 16 : 24,
+                    display: "flex",
+                }}
+            >
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        justifyContent: "flex-start",
+                        alignItems: "center",
+                        gap: isMobile ? 8 : 12,
+                        display: "flex",
+                    }}
+                >
+                    <div
+                        style={{
+                            width: logoSz,
+                            height: logoSz,
+                            borderRadius: "50%",
+                            overflow: "hidden",
+                            flexShrink: 0,
+                            background: themeColors.surface,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                        }}
+                    >
+                        {job?.company.logo_url ? (
+                            <img
+                                src={job.company.logo_url}
+                                style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    objectFit: "contain",
+                                }}
+                            />
+                        ) : (
+                            <JobSkeleton
+                                themeColors={themeColors}
+                                style={{
+                                    width: logoSz,
+                                    height: logoSz,
+                                    borderRadius: "50%",
+                                }}
+                            />
+                        )}
                     </div>
-                    {job
-                        ? <span style={{ color: themeColors.text.primary, fontSize: companyFs, fontFamily: "Inter", fontWeight: 400 }}>{job.company.name}</span>
-                        : <JobSkeleton themeColors={themeColors} style={{ width: 72, height: companyFs }} />
-                    }
+                    {job ? (
+                        <span
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: companyFs,
+                                fontFamily: "Inter",
+                                fontWeight: 400,
+                            }}
+                        >
+                            {job.company.name}
+                        </span>
+                    ) : (
+                        <JobSkeleton
+                            themeColors={themeColors}
+                            style={{ width: 72, height: companyFs }}
+                        />
+                    )}
                 </div>
-                {job
-                    ? <div style={{ alignSelf: "stretch", color: themeColors.text.primary, fontSize: titleFs, fontFamily: "Inter", fontWeight: 500, lineHeight: "1.2", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{job.title}</div>
-                    : <div style={{ display: "flex", flexDirection: "column", gap: 8, alignSelf: "stretch" }}>
-                        <JobSkeleton themeColors={themeColors} style={{ height: titleFs - 2, borderRadius: 6 }} />
-                        <JobSkeleton themeColors={themeColors} style={{ height: titleFs - 2, width: "60%", borderRadius: 6 }} />
+                {job ? (
+                    <div
+                        style={{
+                            alignSelf: "stretch",
+                            color: themeColors.text.primary,
+                            fontSize: titleFs,
+                            fontFamily: "Inter",
+                            fontWeight: 500,
+                            lineHeight: "1.2",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 3,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                        }}
+                    >
+                        {job.title}
                     </div>
-                }
+                ) : (
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 8,
+                            alignSelf: "stretch",
+                        }}
+                    >
+                        <JobSkeleton
+                            themeColors={themeColors}
+                            style={{ height: titleFs - 2, borderRadius: 6 }}
+                        />
+                        <JobSkeleton
+                            themeColors={themeColors}
+                            style={{
+                                height: titleFs - 2,
+                                width: "60%",
+                                borderRadius: 6,
+                            }}
+                        />
+                    </div>
+                )}
             </div>
-            {job
-                ? <span style={{ color: themeColors.text.secondary, fontSize: timeFs, fontFamily: "Inter", fontWeight: 400 }}>{jobTimeAgo(job.posted_at)}</span>
-                : <JobSkeleton themeColors={themeColors} style={{ width: 60, height: timeFs }} />
-            }
+            {job ? (
+                <span
+                    style={{
+                        color: themeColors.text.secondary,
+                        fontSize: timeFs,
+                        fontFamily: "Inter",
+                        fontWeight: 400,
+                    }}
+                >
+                    {jobTimeAgo(job.posted_at)}
+                </span>
+            ) : (
+                <JobSkeleton
+                    themeColors={themeColors}
+                    style={{ width: 60, height: timeFs }}
+                />
+            )}
         </div>
     )
 }
 
 // Stacked card: title + company row
-const StackedJobCard = ({ job, onClick, themeColors, isMobile = false }: {
-    job: HomepageJob | null; onClick?: () => void; themeColors: typeof darkColors; isMobile?: boolean
+const StackedJobCard = ({
+    job,
+    onClick,
+    themeColors,
+    isMobile = false,
+}: {
+    job: HomepageJob | null
+    onClick?: () => void
+    themeColors: typeof darkColors
+    isMobile?: boolean
 }) => {
     const px = isMobile ? 20 : 24
     const py = isMobile ? 16 : 20
@@ -8556,7 +10455,10 @@ const StackedJobCard = ({ job, onClick, themeColors, isMobile = false }: {
             onClick={onClick}
             style={{
                 alignSelf: "stretch",
-                paddingLeft: px, paddingRight: px, paddingTop: py, paddingBottom: py,
+                paddingLeft: px,
+                paddingRight: px,
+                paddingTop: py,
+                paddingBottom: py,
                 background: themeColors.surfaceHighlight,
                 borderRadius: 28,
                 flexDirection: "column",
@@ -8567,33 +10469,119 @@ const StackedJobCard = ({ job, onClick, themeColors, isMobile = false }: {
                 cursor: job ? "pointer" : "default",
             }}
         >
-            {job
-                ? <div style={{ color: themeColors.text.primary, fontSize: titleFs, fontFamily: "Inter", fontWeight: 500, lineHeight: "1.2" }}>{job.title}</div>
-                : <JobSkeleton themeColors={themeColors} style={{ width: "70%", height: titleFs }} />
-            }
-            <div style={{ justifyContent: "flex-start", alignItems: "center", gap: 6, display: "flex", flexWrap: "wrap" }}>
-                <div style={{ width: 16, height: 16, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {job?.company.logo_url
-                        ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                        : <JobSkeleton themeColors={themeColors} style={{ width: 16, height: 16, borderRadius: "50%" }} />
-                    }
+            {job ? (
+                <div
+                    style={{
+                        color: themeColors.text.primary,
+                        fontSize: titleFs,
+                        fontFamily: "Inter",
+                        fontWeight: 500,
+                        lineHeight: "1.2",
+                    }}
+                >
+                    {job.title}
                 </div>
-                {job
-                    ? <>
-                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs, fontFamily: "Inter", fontWeight: 400 }}>{job.company.name}</span>
-                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs }}>•</span>
-                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs, fontFamily: "Inter", fontWeight: 400 }}>{jobTimeAgo(job.posted_at)}</span>
+            ) : (
+                <JobSkeleton
+                    themeColors={themeColors}
+                    style={{ width: "70%", height: titleFs }}
+                />
+            )}
+            <div
+                style={{
+                    justifyContent: "flex-start",
+                    alignItems: "center",
+                    gap: 6,
+                    display: "flex",
+                    flexWrap: "wrap",
+                }}
+            >
+                <div
+                    style={{
+                        width: 16,
+                        height: 16,
+                        borderRadius: "50%",
+                        overflow: "hidden",
+                        flexShrink: 0,
+                        background: themeColors.surface,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                    }}
+                >
+                    {job?.company.logo_url ? (
+                        <img
+                            src={job.company.logo_url}
+                            style={{
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "contain",
+                            }}
+                        />
+                    ) : (
+                        <JobSkeleton
+                            themeColors={themeColors}
+                            style={{
+                                width: 16,
+                                height: 16,
+                                borderRadius: "50%",
+                            }}
+                        />
+                    )}
+                </div>
+                {job ? (
+                    <>
+                        <span
+                            style={{
+                                color: themeColors.text.secondary,
+                                fontSize: metaFs,
+                                fontFamily: "Inter",
+                                fontWeight: 400,
+                            }}
+                        >
+                            {job.company.name}
+                        </span>
+                        <span
+                            style={{
+                                color: themeColors.text.secondary,
+                                fontSize: metaFs,
+                            }}
+                        >
+                            •
+                        </span>
+                        <span
+                            style={{
+                                color: themeColors.text.secondary,
+                                fontSize: metaFs,
+                                fontFamily: "Inter",
+                                fontWeight: 400,
+                            }}
+                        >
+                            {jobTimeAgo(job.posted_at)}
+                        </span>
                     </>
-                    : <JobSkeleton themeColors={themeColors} style={{ width: 120, height: metaFs }} />
-                }
+                ) : (
+                    <JobSkeleton
+                        themeColors={themeColors}
+                        style={{ width: 120, height: metaFs }}
+                    />
+                )}
             </div>
         </div>
     )
 }
 
 // Row card: title left, company+time right
-const RowJobCard = ({ job, onClick, themeColors, isMobile = false }: {
-    job: HomepageJob | null; onClick?: () => void; themeColors: typeof darkColors; isMobile?: boolean
+const RowJobCard = ({
+    job,
+    onClick,
+    themeColors,
+    isMobile = false,
+}: {
+    job: HomepageJob | null
+    onClick?: () => void
+    themeColors: typeof darkColors
+    isMobile?: boolean
 }) => {
     const titleFs = isMobile ? 15 : 17
     const metaFs = isMobile ? 12 : 14
@@ -8603,7 +10591,10 @@ const RowJobCard = ({ job, onClick, themeColors, isMobile = false }: {
             style={{
                 alignSelf: "stretch",
                 minWidth: 0,
-                paddingLeft: 24, paddingRight: 24, paddingTop: 20, paddingBottom: 20,
+                paddingLeft: 24,
+                paddingRight: 24,
+                paddingTop: 20,
+                paddingBottom: 20,
                 background: themeColors.surfaceHighlight,
                 borderRadius: 48,
                 justifyContent: "flex-start",
@@ -8614,26 +10605,477 @@ const RowJobCard = ({ job, onClick, themeColors, isMobile = false }: {
                 cursor: job ? "pointer" : "default",
             }}
         >
-            {job
-                ? <div style={{ flex: "1 1 0", color: themeColors.text.primary, fontSize: titleFs, fontFamily: "Inter", fontWeight: 500, lineHeight: "1.2", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{job.title}</div>
-                : <JobSkeleton themeColors={themeColors} style={{ flex: "1 1 0", height: titleFs }} />
-            }
-            <div style={{ justifyContent: "flex-start", alignItems: "center", gap: 6, display: "flex", flexWrap: "nowrap", flexShrink: 0 }}>
-            <div style={{ width: 16, height: 16, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {job?.company.logo_url && <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
-            </div>
-                {job
-                    ? <>
-                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs, fontFamily: "Inter", fontWeight: 400, whiteSpace: "nowrap" }}>{job.company.name}</span>
-                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs }}>•</span>
-                        <span style={{ color: themeColors.text.secondary, fontSize: metaFs, fontFamily: "Inter", fontWeight: 400, whiteSpace: "nowrap" }}>{jobTimeAgo(job.posted_at)}</span>
+            {job ? (
+                <div
+                    style={{
+                        flex: "1 1 0",
+                        color: themeColors.text.primary,
+                        fontSize: titleFs,
+                        fontFamily: "Inter",
+                        fontWeight: 500,
+                        lineHeight: "1.2",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
+                    }}
+                >
+                    {job.title}
+                </div>
+            ) : (
+                <JobSkeleton
+                    themeColors={themeColors}
+                    style={{ flex: "1 1 0", height: titleFs }}
+                />
+            )}
+            <div
+                style={{
+                    justifyContent: "flex-start",
+                    alignItems: "center",
+                    gap: 6,
+                    display: "flex",
+                    flexWrap: "nowrap",
+                    flexShrink: 0,
+                }}
+            >
+                <div
+                    style={{
+                        width: 16,
+                        height: 16,
+                        borderRadius: "50%",
+                        overflow: "hidden",
+                        flexShrink: 0,
+                        background: themeColors.surface,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                    }}
+                >
+                    {job?.company.logo_url && (
+                        <img
+                            src={job.company.logo_url}
+                            style={{
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "contain",
+                            }}
+                        />
+                    )}
+                </div>
+                {job ? (
+                    <>
+                        <span
+                            style={{
+                                color: themeColors.text.secondary,
+                                fontSize: metaFs,
+                                fontFamily: "Inter",
+                                fontWeight: 400,
+                                whiteSpace: "nowrap",
+                            }}
+                        >
+                            {job.company.name}
+                        </span>
+                        <span
+                            style={{
+                                color: themeColors.text.secondary,
+                                fontSize: metaFs,
+                            }}
+                        >
+                            •
+                        </span>
+                        <span
+                            style={{
+                                color: themeColors.text.secondary,
+                                fontSize: metaFs,
+                                fontFamily: "Inter",
+                                fontWeight: 400,
+                                whiteSpace: "nowrap",
+                            }}
+                        >
+                            {jobTimeAgo(job.posted_at)}
+                        </span>
                     </>
-                    : <JobSkeleton themeColors={themeColors} style={{ width: 100, height: metaFs }} />
-                }
+                ) : (
+                    <JobSkeleton
+                        themeColors={themeColors}
+                        style={{ width: 100, height: metaFs }}
+                    />
+                )}
             </div>
         </div>
     )
 }
+
+// ---------------------------------------------------------------------------
+// KeywordOrbitOverlay
+// ---------------------------------------------------------------------------
+// position:fixed overlay that drives the resume keyword animation.
+// Uses framer-motion's imperative `animate(motionValue, target)` API so the
+// RAF spin loop updates the DOM directly — no React re-renders per frame.
+//
+// Phases:
+//   orbiting — keywords fly from their captured start positions to an orbit
+//               ring centered on the right sidebar, then spin continuously
+//   landing  — RAF stops; used keywords fly to exact DocEditor text positions
+//               (TreeWalker scan); unused ones fade/scale out
+// ---------------------------------------------------------------------------
+
+interface CapturedKeyword {
+    word: string
+    startX: number   // viewport center-x of the [data-keyword] span at capture time
+    startY: number   // viewport center-y
+    baseAngle: number // radians — evenly distributed around the orbit ring
+    fontSize: string  // computed font size of the span (e.g. "14px")
+    fontWeight: string // computed font weight (e.g. "600")
+    isTitle?: boolean // job title gets variable-font weight animation
+}
+
+const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
+    phase,
+    capturedItems,
+    usedKeywords,
+    textColor,
+    dimColor,
+    onAllSettled,
+}: {
+    phase: "idle" | "fading" | "orbiting" | "landing" | "done"
+    capturedItems: CapturedKeyword[]
+    usedKeywords: string[]
+    textColor: string
+    dimColor: string
+    onAllSettled: () => void
+}) {
+    const settledCountRef = React.useRef(0)
+    const [landPositions, setLandPositions] = React.useState<
+        Record<string, { x: number; y: number }>
+    >({})
+    const usedSet = React.useMemo(
+        () => new Set(usedKeywords),
+        [usedKeywords]
+    )
+
+    // Shared mutable orbit geometry — updated by ResizeObserver so the RAF
+    // spin loop always reads the panel's current size, not a stale snapshot.
+    // Works for both desktop sidebar and the mobile full-screen overlay.
+    const orbitRef = React.useRef({ x: 0, y: 0, r: 120 })
+
+    React.useEffect(() => {
+        if (phase === "idle" || phase === "done") return
+
+        const findPanel = () =>
+            (document.querySelector(
+                "[data-layer='desktop-tool-panel']"
+            ) as HTMLElement | null) ??
+            (document.querySelector(
+                "[data-layer='mobile-tool-overlay']"
+            ) as HTMLElement | null)
+
+        const update = () => {
+            const el = findPanel()
+            if (!el) {
+                // Absolute fallback: use the full viewport
+                orbitRef.current = {
+                    x: window.innerWidth / 2,
+                    y: window.innerHeight / 2,
+                    r: Math.min(window.innerWidth, window.innerHeight) * 0.28,
+                }
+                return
+            }
+            const rect = el.getBoundingClientRect()
+            orbitRef.current = {
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2,
+                r: Math.min(rect.width, rect.height) * 0.28,
+            }
+        }
+        update()
+        const obs = new ResizeObserver(update)
+        const el = findPanel()
+        if (el) obs.observe(el)
+        window.addEventListener("resize", update)
+        return () => {
+            obs.disconnect()
+            window.removeEventListener("resize", update)
+        }
+    }, [phase])
+
+    // When landing phase starts, read positions from the data-keyword-land
+    // marker spans that were injected into the resume HTML before it was set
+    // as docContent. Direct getBoundingClientRect() on a real DOM element is
+    // pixel-perfect and immune to the TreeWalker + Range offset fragility.
+    React.useEffect(() => {
+        if (phase !== "landing" || capturedItems.length === 0) return
+        const t = setTimeout(() => {
+            requestAnimationFrame(() => {
+                // Scroll to top so every marker is on-screen when measured
+                const scrollEl = document.querySelector(
+                    "[data-doc-scroll]"
+                ) as HTMLElement | null
+                if (scrollEl) scrollEl.scrollTop = 0
+
+                const positions: Record<string, { x: number; y: number }> = {}
+                const markers = document.querySelectorAll(
+                    "[data-keyword-land]"
+                )
+                markers.forEach((el) => {
+                    const kw = el.getAttribute("data-keyword-land") ?? ""
+                    if (!kw || positions[kw]) return
+                    const r = el.getBoundingClientRect()
+                    if (r.width > 0 && r.height > 0) {
+                        positions[kw] = {
+                            x: r.left + r.width / 2,
+                            y: r.top + r.height / 2,
+                        }
+                    }
+                })
+
+                settledCountRef.current = 0
+                setLandPositions(positions)
+            })
+        }, 500)
+        return () => clearTimeout(t)
+    }, [phase, capturedItems])
+
+    const handleSettled = React.useCallback(() => {
+        settledCountRef.current += 1
+        if (settledCountRef.current >= capturedItems.length) onAllSettled()
+    }, [capturedItems.length, onAllSettled])
+
+    React.useEffect(() => {
+        if (phase === "idle" || phase === "done") setLandPositions({})
+    }, [phase])
+
+    if (phase === "idle" || phase === "done" || capturedItems.length === 0)
+        return null
+
+    return (
+        <div
+            style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 9999,
+                pointerEvents: "none",
+            }}
+        >
+            {capturedItems.map((item, i) => (
+                <KeywordOrbitItem
+                    key={item.word + i}
+                    item={item}
+                    phase={phase}
+                    isUsed={usedSet.has(item.word)}
+                    landPos={landPositions[item.word] ?? null}
+                    orbitRef={orbitRef}
+                    orbitIndex={i}
+                    totalOrbitItems={capturedItems.length}
+                    textColor={textColor}
+                    dimColor={dimColor}
+                    onSettled={handleSettled}
+                />
+            ))}
+        </div>
+    )
+})
+
+const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
+    item,
+    phase,
+    isUsed,
+    landPos,
+    orbitRef,
+    orbitIndex,
+    totalOrbitItems,
+    textColor,
+    dimColor,
+    onSettled,
+}: {
+    item: CapturedKeyword
+    phase: "fading" | "orbiting" | "landing" | "done"
+    isUsed: boolean
+    landPos: { x: number; y: number } | null
+    orbitRef: React.MutableRefObject<{ x: number; y: number; r: number }>
+    orbitIndex: number
+    totalOrbitItems: number
+    textColor: string
+    dimColor: string
+    onSettled: () => void
+}) {
+    const x = useMotionValue(item.startX)
+    const y = useMotionValue(item.startY)
+    const opacity = useMotionValue(0)
+    const scale = useMotionValue(0.85)
+    // Color interpolation for the highlight — brightness drives a number
+    // 0→1 which framer-motion maps smoothly between dimColor and textColor.
+    // Opacity stays at 1 so no parent overlay can alter the highlight effect.
+    const colorMv = useMotionValue(0)
+    const interpolatedColor = useTransform(
+        colorMv,
+        [0, 1],
+        [dimColor, textColor]
+    )
+    const baseKeywordSize = 14 // px — orbit size; animates to 16 when landed
+    const fontSizeMv = useMotionValue(baseKeywordSize)
+    // fontWeight transitions via a 0→1 progress value mapped to 600→400
+    const fontWeightProgress = useMotionValue(0)
+    const fontSizeStyle = useTransform(fontSizeMv, (v) => `${v}px`)
+    const fontWeightStyle = useTransform(fontWeightProgress, [0, 1], [600, 400])
+    const hasSettledRef = React.useRef(false)
+    const rafRef = React.useRef<number | null>(null)
+
+    // Fading phase: appear in-place at the keyword's original position.
+    // The job detail non-keyword content is fading out beneath — keywords
+    // stay put so they look like they're "surviving" the fade.
+    React.useEffect(() => {
+        if (phase !== "fading") return
+        x.set(item.startX)
+        y.set(item.startY)
+        fontSizeMv.set(baseKeywordSize)
+        fontWeightProgress.set(0)
+        animate(opacity, 1, { duration: 0.25 })
+        animate(scale, 1, { duration: 0.25 })
+    }, [phase])
+
+    // Orbiting phase: single RAF loop that runs from t=0.
+    // The ring is spinning immediately — each keyword chases its moving
+    // target on the ring, so keywords that are farther away visibly join
+    // a circle that's already in motion. Cubic ease-out on the approach
+    // makes the path curve naturally into the ring.
+    React.useEffect(() => {
+        if (phase !== "orbiting") return
+        let cancelled = false
+
+        animate(scale, 1, { duration: 0.2 })
+        // Fade in quickly, then the RAF drives opacity for the spotlight effect
+        animate(opacity, 1, { duration: 0.15 })
+
+        // Snapshot start position (may have moved during fading phase)
+        const fromX = x.get()
+        const fromY = y.get()
+
+        // Fly duration based on distance to the initial orbit point
+        const { x: cx0, y: cy0, r: r0 } = orbitRef.current
+        const initX = cx0 + Math.cos(item.baseAngle) * r0
+        const initY = cy0 + Math.sin(item.baseAngle) * r0
+        const dist = Math.sqrt((initX - fromX) ** 2 + (initY - fromY) ** 2)
+        const flyDuration = Math.min(1.4, Math.max(0.45, dist / 700))
+
+        let startTs: number | null = null
+        const tick = (ts: number) => {
+            if (cancelled) return
+            if (!startTs) startTs = ts
+            const elapsed = (ts - startTs) / 1000
+
+            const { x: cx, y: cy, r } = orbitRef.current
+            const spinAngle = item.baseAngle + (elapsed / 6) * 2 * Math.PI
+
+            const targetX = cx + Math.cos(spinAngle) * r
+            const targetY = cy + Math.sin(spinAngle) * r
+
+            // Sequential word highlight: a float index advances through words.
+            // Each word brightens as the cursor passes through its index slot.
+            // Transition window: smaller divisor = crisper/faster brightness change.
+            const floatIdx = (elapsed / 0.18) % totalOrbitItems
+            const fwd = ((orbitIndex - floatIdx) % totalOrbitItems + totalOrbitItems) % totalOrbitItems
+            const dist = Math.min(fwd, totalOrbitItems - fwd)
+            const brightness = Math.max(0, 1.5 - dist / .8)
+            const targetOpacity = 0.65 + 0.35 * brightness
+
+            if (elapsed < flyDuration) {
+                const t = elapsed / flyDuration
+                const eased = 1 - (1 - t) ** 3
+                x.set(fromX + (targetX - fromX) * eased)
+                y.set(fromY + (targetY - fromY) * eased)
+                // Color blends in as the keyword flies toward the ring
+                colorMv.set(brightness * eased)
+            } else {
+                x.set(targetX)
+                y.set(targetY)
+                colorMv.set(brightness)
+            }
+
+            rafRef.current = requestAnimationFrame(tick)
+        }
+        rafRef.current = requestAnimationFrame(tick)
+
+        return () => {
+            cancelled = true
+            if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+        }
+    }, [phase])
+
+    // Landing phase: stop spinning; keywords fly with spring-overshoot easing
+    // to their exact positions in the DocEditor. They stay fully visible when
+    // they arrive — the content then fades in over them in the "done" phase.
+    React.useEffect(() => {
+        if (phase !== "landing") return
+        if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+        const settle = () => {
+            if (!hasSettledRef.current) {
+                hasSettledRef.current = true
+                onSettled()
+            }
+        }
+        if (isUsed && landPos) {
+            const fromX = x.get()
+            const fromY = y.get()
+            const dist = Math.sqrt(
+                (landPos.x - fromX) ** 2 + (landPos.y - fromY) ** 2
+            )
+            // Proportional flight time so far-away words feel like they traveled
+            const duration = Math.min(1.1, Math.max(0.45, dist / 550))
+            // Stagger based on orbit slot so words land one by one, not all at once
+            const delay = (orbitIndex / totalOrbitItems) * 0.25
+            // Spring-overshoot bezier — fast deceleration with a subtle bounce
+            const ease: [number, number, number, number] = [0.34, 1.1, 0.64, 1]
+
+            animate(x, landPos.x, { duration, delay, ease })
+            animate(y, landPos.y, { duration, delay, ease }).then(settle)
+            // Snap to full brightness as the keyword flies in
+            animate(colorMv, 1, { duration: 0.2, delay })
+            animate(scale, 1, { duration: 0.2, delay })
+            animate(opacity, 1, { duration: 0.15 })
+            // Grow to 16px and ease to normal weight when placed in resume
+            animate(fontSizeMv, 16, { duration: 0.35, delay, ease })
+            animate(fontWeightProgress, 1, { duration: 0.35, delay, ease })
+        } else {
+            // Unused: quick scatter-fade so only the resume keywords dominate
+            animate(scale, 0.5, { duration: 0.3 })
+            animate(opacity, 0, { duration: 0.3, ease: "easeOut" }).then(settle)
+        }
+    }, [phase, isUsed, landPos])
+
+    // Done phase: resume content fades in underneath — dissolve keywords into
+    // the page so the content "materializes" from where they landed.
+    React.useEffect(() => {
+        if (phase !== "done") return
+        animate(opacity, 0, { duration: 0.45, ease: "easeIn" })
+    }, [phase])
+
+    return (
+        <motion.div
+            style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                x,
+                y,
+                opacity,
+                scale,
+                translateX: "-50%",
+                translateY: "-50%",
+                fontSize: fontSizeStyle,
+                fontFamily: "Inter",
+                fontWeight: fontWeightStyle,
+                // Color drives the highlight; opacity only used for appear/fade
+                color: interpolatedColor,
+                whiteSpace: "nowrap",
+                pointerEvents: "none",
+                userSelect: "none",
+            }}
+        >
+            {item.word}
+        </motion.div>
+    )
+})
 
 const JobDetailPanel = React.memo(function JobDetailPanel({
     job,
@@ -8641,302 +11083,104 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     onClose,
     themeColors,
     isMobile = false,
+    resumeAnimPhase = "idle",
+    onCreateResume,
 }: {
     job: HomepageJob
     jobsApiUrl: string
     onClose: () => void
     themeColors: typeof darkColors
     isMobile?: boolean
+    resumeAnimPhase?: "idle" | "fading" | "orbiting" | "landing" | "done"
+    onCreateResume?: (job: HomepageJob, keywords: string[]) => void
 }) {
     const [desc, setDesc] = React.useState<JobDescriptionDetail | null>(null)
-    const [detailSummary, setDetailSummary] = React.useState<string | null>(null)
-    const [detailCompanyDesc, setDetailCompanyDesc] = React.useState<string | null>(null)
+    const [detailSummary, setDetailSummary] = React.useState<string | null>(
+        null
+    )
+    const [detailCompanyDesc, setDetailCompanyDesc] = React.useState<
+        string | null
+    >(null)
     const [loadingDesc, setLoadingDesc] = React.useState(true)
+    // Keywords come from the API detail endpoint — no hardcoded list in the client.
+    const [apiKeywords, setApiKeywords] = React.useState<string[]>([])
+    const [isShareHovered, setIsShareHovered] = React.useState(false)
+    const [isCloseHovered, setIsCloseHovered] = React.useState(false)
 
     React.useEffect(() => {
         let cancelled = false
         setDesc(null)
         setDetailSummary(null)
         setDetailCompanyDesc(null)
+        setApiKeywords([])
         setLoadingDesc(true)
         const ctrl = new AbortController()
         const timer = setTimeout(() => ctrl.abort(), 8000)
         fetch(`${jobsApiUrl}/jobs/${job.id}`, { signal: ctrl.signal })
-            .then(r => r.ok ? r.json() : null)
-            .then((d: { job_description?: JobDescriptionDetail | null; job_summary?: string | null; company?: { description?: string | null } } | null) => {
-                if (!cancelled) {
-                    setDesc(d?.job_description ?? null)
-                    setDetailSummary(d?.job_summary ?? null)
-                    setDetailCompanyDesc(d?.company?.description ?? null)
-                    setLoadingDesc(false)
+            .then((r) => (r.ok ? r.json() : null))
+            .then(
+                (
+                    d: {
+                        job_description?: JobDescriptionDetail | null
+                        job_summary?: string | null
+                        company?: { description?: string | null }
+                        keywords?: string[]
+                    } | null
+                ) => {
+                    if (!cancelled) {
+                        setDesc(d?.job_description ?? null)
+                        setDetailSummary(d?.job_summary ?? null)
+                        setDetailCompanyDesc(d?.company?.description ?? null)
+                        setApiKeywords(d?.keywords ?? [])
+                        setLoadingDesc(false)
+                    }
                 }
+            )
+            .catch(() => {
+                if (!cancelled) setLoadingDesc(false)
             })
-            .catch(() => { if (!cancelled) setLoadingDesc(false) })
             .finally(() => clearTimeout(timer))
-        return () => { cancelled = true; ctrl.abort() }
+        return () => {
+            cancelled = true
+            ctrl.abort()
+        }
     }, [job.id, jobsApiUrl])
 
     const effectiveSummary = job.job_summary || detailSummary
     const effectiveCompanyDesc = job.company.description || detailCompanyDesc
 
-    // Manual list of phrases to highlight in About the job (yellow highlight, theme-aware)
-    const JOB_HIGHLIGHT_PHRASES = [
-        "end-to-end",
-        "high-fidelity",
-        "customer-centric",
-        "interaction design",
-        "information architecture",
-        "user-centered design",
-        "cross-functional",
-        "emerging technologies",
-        "emerging technology",
-        "user-focused",
-        "business objectives",
-        "UX writing",
-        "AI-powered",
-        "strategy",
-        "customer behavior",
-        "communication",
-        "relationships",
-        "monetization",
-        "data-driven",
-        "conversion",
-        "retention",
-        "user feedback",
-        "user research",
-        "usability tests",
-        "user needs",
-        "enterprise",
-        "business goals",
-        "research",
-        "competitive",
-        "scalability",
-        "reusability",
-        "architecture",
-        "leading",
-        "algorithms",
-        "data structures",
-        "PostgreSQL",
-        "AWS",
-        "data modeling",
-        "Node.js",
-        "TypeScript",
-        "JavaScript",
-        "observability",
-        "Python",
-        "Java",
-        "C++",
-        "object-oriented design",
-        "Kotlin",
-        "UI/UX",
-        "UI",
-        "workflows",
-        "product managers",
-        "developers",
-        "designers",
-        "Collaborate",
-        "analyze",
-        "analytics",
-        "user behavior",
-        "experimentation",
-        "data engineers",
-        "data scientists",
-        "deploy",
-        "CI/CD pipelines",
-        "React",
-        "monitoring",
-        "code reviews",
-        "design patterns",
-        "schema design",
-        "query optimization",
-        "replication",
-        "reusable",
-        "customer experience",
-        "sales targets",
-        "marketing",
-        "teamwork",
-        "email marketing",
-        "website",
-        "outbound",
-        "lead follow-up",
-        "dashboards",
-        "funnel optimization",
-        "revenue goals",
-        "SEO",
-        "SEM",
-        "B2B",
-        "pipeline",
-        "CRM",
-        "PRM",
-        "automation",
-        "persona",
-        "Salesforce",
-        "UTMs",
-        "MQL",
-        "qualification",
-        "processing",
-        "routing",
-        "campaign attribution",
-        "sales follow-up",
-        "attention to detail",
-        "high-quality",
-        "campaign management",
-        "Marketo",
-        "reporting",
-        "email",
-        "landing page",
-        "A/B testing",
-        "images",
-        "templates",
-        "segmentations",
-        "database",
-        "HTML",
-        "CSS",
-        "production",
-        "stakeholders",
-        "ROI",
-        "KPIs",
-        "growth",
-        "customer",
-        "engagement",
-        "inbound",
-        "campaigns",
-        "LinkedIn Campaign Manager",
-        "ABM",
-        "paid social",
-        "vision",
-        "experiences",
-        "SaaS",
-        "user-centric",
-        "Figma",
-        "prototyping",
-        "UX research",
-        "debug",
-        "machine learning",
-        "engineering",
-        "data science",
-        "evaluate",
-        "quantitative",
-        "qualitative",
-        "ML models",
-        "deep learning",
-        "NLP",
-        "computer vision",
-        "datasets",
-        "fine-tuning",
-        "PEFT",
-        "LoRA",
-        "foundation models",
-        "pipelines",
-        "cross-functionally",
-        "user-facing",
-        "MLOps",
-        "statistics",
-        "Pandas",
-        "NumPy",
-        "PyTorch",
-        "TensorFlow",
-        "JAX",
-        "gradient debugging",
-        "distributed training",
-        "EDA",
-        "architectures",
-        "ethical",
-        "spatial",
-        "testing",
-        "teams",
-        "develop",
-        "intuitive",
-        "design",
-        "AI",
-        "fast-moving",
-        "prototypes",
-        "LLMs",
-        "vulnerabilities",
-        "biases",
-        "data quality",
-        "RLHF",
-        "SFT",
-        "data synthesis",
-        "search quality",
-        "moderation",
-        "labeling",
-        "biological",
-        "physicochemical",
-        "IP",
-        "patent",
-        "product development lifecycle",
-        "biomaterials",
-        "handoffs",
-        "technical constraints",
-        "trade-offs",
-        "scalable",
-        "recommendations",
-        "onboarding",
-        "model selection",
-        "multimodal",
-        "Diffusion",
-        "GNNs",
-        "production-ready",
-        "low-latency",
-        "ML",
-        "internal",
-        "external",
-        "Mentor",
-        "agents",
-        "privacy",
-        "performance",
-        "compliance",
-        "documentation",
-        "generative AI",
-        "accuracy",
-        "latency",
-        "vector",
-        "multi-modal",
-        "WebSockets",
-        "API",
-        "Hugging Face",
-        "Transformers",
-        "RAG",
-        "WebGL",
-        "Azure",
-        "Retool",
-        "Unify",
-        "LinkedIn",
-        "Google",
-        "Clay",
-        "HubSpot",
-        "landing pages",
-        "forms",
-        "intelligence",
-        "speed",
-        "stock",
-        "commercial",
-        "distributors",
-        "budgets",
-        "forecasting",
-        "data",
-        "trends",
-        "forecasts",
-        "CRM",
-    ]
+    // Highlight phrases come from the API detail response (keywords field).
+    // The phrase list lives in curastem-jobs-api/src/enrichment/keywords.ts —
+    // no duplication in the client.
     const highlightedPhrases = React.useRef(new Set<string>())
     React.useEffect(() => {
         highlightedPhrases.current.clear()
     }, [job.id])
     const highlightText = (text: string) => {
-        if (!text || !JOB_HIGHLIGHT_PHRASES.length) return text
-        const sorted = [...JOB_HIGHLIGHT_PHRASES].sort((a, b) => b.length - a.length)
-        const escaped = sorted.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        if (!text || !apiKeywords.length) return text
+        const sorted = [...apiKeywords].sort((a, b) => b.length - a.length)
+        const escaped = sorted.map((p) =>
+            p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        )
         const regex = new RegExp(`(\\b(?:${escaped.join("|")})\\b)`, "gi")
         const parts = text.split(regex)
         return parts.map((part, i) => {
-            const matched = sorted.find((p) => p.toLowerCase() === part.toLowerCase())
+            const matched = sorted.find(
+                (p) => p.toLowerCase() === part.toLowerCase()
+            )
             if (matched) {
                 const key = matched.toLowerCase()
                 if (highlightedPhrases.current.has(key)) return part
                 highlightedPhrases.current.add(key)
-                return <span key={i} style={{ fontWeight: 600 }}>{part}</span>
+                return (
+                    <span
+                        key={i}
+                        data-keyword={matched}
+                        style={{ fontWeight: 600 }}
+                    >
+                        {part}
+                    </span>
+                )
             }
             return part
         })
@@ -8948,11 +11192,13 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
 
     const formatEmploymentType = (t: string | null) => {
         if (!t) return null
-        return t.replace(/_/g, "-").replace(/\b\w/g, c => c.toUpperCase())
+        return t.replace(/_/g, "-").replace(/\b\w/g, (c) => c.toUpperCase())
     }
     const formatWorkplace = (t: string | null) => {
         if (!t) return null
-        return t === "on_site" ? "On-site" : t.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+        return t === "on_site"
+            ? "On-site"
+            : t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
     }
 
     const metaItems = [
@@ -8966,64 +11212,120 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     const sectionSkeleton = (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {[80, 95, 70, 88].map((w, i) => (
-                <div key={i} style={{ height: 14, width: `${w}%`, background: themeColors.hover.default, borderRadius: 6, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
+                <div
+                    key={i}
+                    style={{
+                        height: 14,
+                        width: `${w}%`,
+                        background: themeColors.hover.default,
+                        borderRadius: 6,
+                        animation: "homepageSkeleton 1.4s ease-in-out infinite",
+                    }}
+                />
             ))}
         </div>
     )
 
-    const SectionBlock = ({ title, items }: { title: string; items: string[] }) => (
+    const SectionBlock = ({
+        title,
+        items,
+    }: {
+        title: string
+        items: string[]
+    }) => (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 500, lineHeight: "21px" }}>{title}</div>
-            <ul style={{ listStyleType: "disc", listStylePosition: "outside", paddingLeft: 20, margin: 0, color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
+            <div
+                style={{
+                    color: themeColors.text.primary,
+                    fontSize: 14,
+                    fontFamily: "Inter",
+                    fontWeight: 500,
+                    lineHeight: "21px",
+                }}
+            >
+                {title}
+            </div>
+            <ul
+                style={{
+                    listStyleType: "disc",
+                    listStylePosition: "outside",
+                    paddingLeft: 20,
+                    margin: 0,
+                    color: themeColors.text.primary,
+                    fontSize: 14,
+                    fontFamily: "Inter",
+                    fontWeight: 400,
+                    lineHeight: "21px",
+                }}
+            >
                 {items.map((item, i) => (
-                    <li key={i} style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}>{highlightText(item)}</li>
+                    <li
+                        key={i}
+                        style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}
+                    >
+                        {highlightText(item)}
+                    </li>
                 ))}
             </ul>
         </div>
     )
 
     return (
-        <div style={{
-            width: "100%",
-            height: "100%",
-            background: themeColors.backgroundDark,
-            borderRadius: isMobile ? "28px 28px 0 0" : "28px 0 0 28px",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            position: "relative",
-            boxShadow: isMobile ? "none" : "2px 0 24px 2px rgba(0,0,0,0.04)",
-        }}>
-            {/* Toolbar */}
-            <div style={{
-                position: "absolute",
-                top: 16,
-                left: 0,
-                right: 0,
-                paddingLeft: 16,
-                paddingRight: 16,
+        <div
+            style={{
+                width: "100%",
+                height: "100%",
+                background: themeColors.backgroundDark,
+                borderRadius: isMobile ? "28px 28px 0 0" : "28px 0 0 28px",
                 display: "flex",
-                justifyContent: "flex-end",
-                alignItems: "center",
-                gap: 8,
-                zIndex: 10,
-                pointerEvents: "none",
-            }}>
-                <div style={{
-                    paddingLeft: 4,
-                    paddingRight: 4,
-                    background: themeColors.surface,
-                    borderRadius: 31,
+                flexDirection: "column",
+                overflow: "hidden",
+                position: "relative",
+                boxShadow: isMobile
+                    ? "none"
+                    : "2px 0 24px 2px rgba(0,0,0,0.04)",
+            }}
+        >
+            {/* Toolbar — instantly hidden the moment resume animation starts.
+                The DocEditor right toolbar (X button) takes its place. */}
+            <div
+                style={{
+                    position: "absolute",
+                    top: 16,
+                    left: 0,
+                    right: 0,
+                    paddingLeft: 16,
+                    paddingRight: 16,
                     display: "flex",
+                    justifyContent: "flex-end",
                     alignItems: "center",
-                    pointerEvents: "auto",
-                }}>
+                    gap: 8,
+                    zIndex: 10,
+                    opacity: resumeAnimPhase === "idle" ? 1 : 0,
+                    pointerEvents: "none",
+                }}
+            >
+                <div
+                    style={{
+                        paddingLeft: 4,
+                        paddingRight: 4,
+                        background: themeColors.surface,
+                        borderRadius: 31,
+                        display: "flex",
+                        alignItems: "center",
+                        pointerEvents: "auto",
+                    }}
+                >
                     {/* Share — native share sheet if available, else copy link to clipboard */}
                     <div
                         onClick={async () => {
+                            setIsShareHovered(false)
                             const shareUrl = job.apply_url || job.url || ""
                             const shareText = `${job.title} at ${job.company.name}`
-                            if (typeof navigator !== "undefined" && navigator.share) {
+                            if (
+                                typeof navigator !== "undefined" &&
+                                navigator.share
+                            ) {
                                 try {
                                     await navigator.share({
                                         title: shareText,
@@ -9033,153 +11335,733 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                                 } catch (e) {
                                     if ((e as Error).name !== "AbortError") {
                                         if (navigator.clipboard?.writeText) {
-                                            navigator.clipboard.writeText(shareUrl || shareText)
+                                            navigator.clipboard.writeText(
+                                                shareUrl || shareText
+                                            )
                                         }
                                     }
                                 }
-                            } else if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-                                navigator.clipboard.writeText(shareUrl || shareText)
+                            } else if (
+                                typeof navigator !== "undefined" &&
+                                navigator.clipboard?.writeText
+                            ) {
+                                navigator.clipboard.writeText(
+                                    shareUrl || shareText
+                                )
                             }
                         }}
-                        style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-                        title="Share"
+                        onMouseEnter={() => setIsShareHovered(true)}
+                        onMouseLeave={() => setIsShareHovered(false)}
+                        style={{
+                            width: 40,
+                            height: 40,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            position: "relative",
+                        }}
+                        aria-label="Share"
                     >
-                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                        {isShareHovered && (
+                            <Tooltip
+                                style={{
+                                    top: "100%",
+                                    left: "50%",
+                                    transform: "translate(-50%, 8px)",
+                                    zIndex: 100,
+                                }}
+                            >
+                                Share
+                            </Tooltip>
+                        )}
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 40 40"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
+                                stroke={themeColors.text.primary}
+                                strokeWidth="1.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
                         </svg>
                     </div>
                     {/* Close */}
                     <div
-                        onClick={onClose}
-                        style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-                        title="Close"
+                        onClick={() => {
+                            setIsCloseHovered(false)
+                            onClose()
+                        }}
+                        onMouseEnter={() => setIsCloseHovered(true)}
+                        onMouseLeave={() => setIsCloseHovered(false)}
+                        style={{
+                            width: 40,
+                            height: 40,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            position: "relative",
+                        }}
+                        aria-label="Close"
                     >
-                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                        {isCloseHovered && (
+                            <Tooltip
+                                style={{
+                                    top: "100%",
+                                    left: "50%",
+                                    transform: "translate(-50%, 8px)",
+                                    zIndex: 100,
+                                }}
+                            >
+                                Close
+                            </Tooltip>
+                        )}
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 40 40"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25"
+                                stroke={themeColors.text.primary}
+                                strokeWidth="1.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
                         </svg>
                     </div>
                 </div>
             </div>
 
             {/* Scrollable content */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 48px 24px", paddingTop: 24, display: "flex", flexDirection: "column", gap: 32 }}>
-
+            <div
+                style={{
+                    flex: 1,
+                    overflowY: "auto",
+                    padding: "24px 24px 48px 24px",
+                    paddingTop: 24,
+                }}
+            >
+            {/* During fading phase: all content blurs/scales out while
+                keywords stay visible via KeywordOrbitOverlay (position:fixed).
+                Must be a real box (not display:contents) for framer-motion
+                to apply opacity/filter/scale transforms. */}
+            <motion.div
+                animate={{
+                    opacity: resumeAnimPhase === "fading" ? 0 : 1,
+                    filter:
+                        resumeAnimPhase === "fading"
+                            ? "blur(4px)"
+                            : "blur(0px)",
+                }}
+                transition={{ duration: 0.25, ease: "easeInOut" }}
+                style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 32,
+                }}
+            >
                 {/* Header: company + title + meta + apply */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                <div
+                    style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 20,
+                    }}
+                >
                     {/* Company name + logo */}
                     <div
-                        onClick={() => openUrl(job.apply_url)}
-                        style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: job.apply_url ? "pointer" : "default" }}
+                        onClick={() => openUrl(job.company.website_url)}
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 12,
+                            flexWrap: "wrap",
+                            cursor: job.company.website_url
+                                ? "pointer"
+                                : "default",
+                        }}
                     >
-                        <div style={{ width: 32, height: 32, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            {job.company.logo_url
-                                ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                                : <div style={{ width: 32, height: 32, background: themeColors.surfaceHighlight, borderRadius: "50%" }} />
-                            }
+                        <div
+                            style={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: "50%",
+                                overflow: "hidden",
+                                flexShrink: 0,
+                                background: themeColors.surface,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                            }}
+                        >
+                            {job.company.logo_url ? (
+                                <img
+                                    src={job.company.logo_url}
+                                    style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        objectFit: "contain",
+                                    }}
+                                />
+                            ) : (
+                                <div
+                                    style={{
+                                        width: 32,
+                                        height: 32,
+                                        background:
+                                            themeColors.surfaceHighlight,
+                                        borderRadius: "50%",
+                                    }}
+                                />
+                            )}
                         </div>
-                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{job.company.name}</span>
+                        <div
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 5,
+                            }}
+                        >
+                            <span
+                                data-company-name
+                                style={{
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    fontFamily: "Inter",
+                                    fontWeight: 400,
+                                    lineHeight: "21px",
+                                }}
+                            >
+                                {job.company.name}
+                            </span>
+                            <div
+                                data-company-chevron
+                                className="CompanyChevron"
+                                style={{ flexShrink: 0, marginTop: 2 }}
+                            >
+                                <svg width="6" height="10" viewBox="0 0 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                                    <path d="M0.601562 8.6L4.60156 4.6L0.601562 0.599998" stroke={themeColors.text.primary} strokeOpacity={0.65} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
+                            </div>
+                        </div>
                     </div>
 
                     {/* Title + meta + apply */}
-                    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                        <div style={{ color: themeColors.text.primary, fontSize: 24, fontFamily: "Inter", fontWeight: 600, lineHeight: "1.2" }}>{job.title}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 16,
+                        }}
+                    >
+                        <div
+                            data-job-title
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 24,
+                                fontFamily: "Inter",
+                                fontWeight: 600,
+                                lineHeight: "1.2",
+                            }}
+                        >
+                            {job.title}
+                        </div>
+                        <div
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                                flexWrap: "wrap",
+                            }}
+                        >
                             {metaItems.map((item, i) => (
                                 <React.Fragment key={i}>
-                                    {i > 0 && <span style={{ color: themeColors.text.primary, fontSize: 14 }}>•</span>}
-                                    <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{item}</span>
+                                    {i > 0 && (
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                            }}
+                                        >
+                                            •
+                                        </span>
+                                    )}
+                                    <span
+                                        style={{
+                                            color: themeColors.text.primary,
+                                            fontSize: 14,
+                                            fontFamily: "Inter",
+                                            fontWeight: 400,
+                                            lineHeight: "21px",
+                                        }}
+                                    >
+                                        {item}
+                                    </span>
                                 </React.Fragment>
                             ))}
                         </div>
-                        <div>
+                        <div
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                flexWrap: isMobile ? "nowrap" : "wrap",
+                                // Bleed edge-to-edge so scroll doesn't show side gaps,
+                                // and overflow visible so scale animations aren't clipped
+                                ...(isMobile ? {
+                                    marginLeft: -24,
+                                    marginRight: -24,
+                                    paddingLeft: 24,
+                                    paddingRight: 24,
+                                    overflowX: "auto",
+                                    overflowY: "visible",
+                                    // Hide scrollbar visually but keep scrollable
+                                    scrollbarWidth: "none",
+                                    WebkitOverflowScrolling: "touch",
+                                    paddingBottom: 6,
+                                    marginBottom: -6,
+                                } : {}),
+                            }}
+                        >
+                            {/* Apply button */}
                             <motion.div
                                 onClick={() => openUrl(job.apply_url)}
                                 whileHover={{ scale: 1.02 }}
                                 whileTap={{ scale: 0.97 }}
-                                transition={{ type: "spring", stiffness: 400, damping: 20 }}
-                                style={{ height: 40, paddingLeft: 20, paddingRight: 20, background: "#0099FF", borderRadius: 31, display: "inline-flex", alignItems: "center", cursor: "pointer" }}
+                                transition={{
+                                    type: "spring",
+                                    stiffness: 400,
+                                    damping: 20,
+                                }}
+                                style={{
+                                    height: 40,
+                                    paddingLeft: 20,
+                                    paddingRight: 20,
+                                    background: "#0099FF",
+                                    borderRadius: 31,
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    cursor: "pointer",
+                                    flex: isMobile ? 1 : undefined,
+                                    minWidth: isMobile ? 148 : undefined,
+                                    justifyContent: isMobile ? "center" : undefined,
+                                }}
                             >
-                                <span style={{ color: "rgba(255,255,255,0.95)", fontSize: 15, fontFamily: "Inter", fontWeight: 500, lineHeight: "22.5px" }}>Apply</span>
+                                <span
+                                    style={{
+                                        color: "rgba(255,255,255,0.95)",
+                                        fontSize: 15,
+                                        fontFamily: "Inter",
+                                        fontWeight: 500,
+                                        lineHeight: "22.5px",
+                                    }}
+                                >
+                                    Apply
+                                </span>
                             </motion.div>
+                            {/* Create Resume button */}
+                            {onCreateResume && (
+                                <motion.div
+                                    onClick={() =>
+                                        resumeAnimPhase === "idle" &&
+                                        onCreateResume(job, apiKeywords)
+                                    }
+                                    whileHover={{ scale: 1.02 }}
+                                    whileTap={{ scale: 0.97 }}
+                                    transition={{
+                                        type: "spring",
+                                        stiffness: 400,
+                                        damping: 20,
+                                    }}
+                                    style={{
+                                        height: 40,
+                                        paddingLeft: 20,
+                                        paddingRight: 20,
+                                        background: themeColors.surface,
+                                        borderRadius: 28,
+                                        display: "inline-flex",
+                                        justifyContent: "center",
+                                        alignItems: "center",
+                                        gap: 6,
+                                        cursor: "pointer",
+                                        flexWrap: "wrap",
+                                        alignContent: "center",
+                                        flex: isMobile ? 1 : undefined,
+                                        minWidth: isMobile ? 170 : undefined,
+                                    }}
+                                >
+                                    <svg
+                                        width="15"
+                                        height="14"
+                                        viewBox="0 0 15 14"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                    >
+                                        <path
+                                            d="M11.3289 1.09214C10.3915 1.09214 9.54907 1.50477 8.96289 2.14171L3.16814 7.93728C2.63599 8.46943 2.26266 9.1555 2.1112 9.91443L1.61261 12.8413C1.50864 13.4594 1.89588 14.057 2.54265 13.9956L5.60049 13.4881C6.28574 13.3718 6.90386 13.0378 7.39672 12.5032L13.5599 6.33918C14.178 5.74726 14.4916 4.98833 14.4523 4.17208C14.3753 2.6403 13.085 1.09214 11.3289 1.09214ZM6.65088 11.6943C6.25954 12.1069 5.98774 12.2485 5.4081 12.3468L2.79973 12.8126L3.30159 10.1445C3.41784 9.5714 3.6962 9.11866 4.09572 8.71913L8.70499 4.03454L11.6523 6.8918L6.65088 11.6943ZM12.4849 6.03544L9.56463 3.19047C10.0575 2.65586 10.5233 2.30955 11.3289 2.30955C12.4399 2.30955 13.302 3.2576 13.302 4.2736C13.302 5.0047 12.9884 5.53931 12.4849 6.03544Z"
+                                            fill={themeColors.text.primary}
+                                        />
+                                        <path
+                                            d="M0.203947 2.18429C-0.00236458 2.26779 -0.11862 2.62065 0.185117 2.73036C0.307922 2.77539 0.479848 2.76311 0.631308 2.78849C1.4934 2.9465 2.02801 3.63175 2.18602 4.51348C2.23104 4.7198 2.37595 4.89991 2.45946 4.89991C2.60437 4.89991 2.75583 4.72962 2.80741 4.51348C3.02518 3.60637 3.57944 3.00053 4.55369 2.79422C4.77146 2.74264 4.94912 2.65258 4.94257 2.44627C4.92947 2.23914 4.73626 2.17774 4.56024 2.15891C3.744 2.06066 3.18401 1.40734 2.87045 0.57882C2.85735 0.244791 2.74764 0.0450284 2.47256 0C2.24824 0 2.12543 0.25789 2.0804 0.57882C1.82824 1.31647 1.12989 2.0754 0.404528 2.14253C0.35295 2.14253 0.262894 2.15563 0.203947 2.18429Z"
+                                            fill={themeColors.text.primary}
+                                        />
+                                    </svg>
+                                    <span
+                                        style={{
+                                            justifyContent: "center",
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            color: themeColors.text.primary,
+                                            fontSize: 15,
+                                            fontFamily: "Inter",
+                                            fontWeight: 500,
+                                            lineHeight: "22.5px",
+                                            wordWrap: "break-word",
+                                        }}
+                                    >
+                                        Create resume
+                                    </span>
+                                </motion.div>
+                            )}
                         </div>
                     </div>
                 </div>
 
                 {/* Job summary — shown once detail load completes (detail endpoint triggers lazy AI enrichment). No keyword highlights here. */}
                 {!loadingDesc && effectiveSummary && (
-                    <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
+                    <div
+                        style={{
+                            color: themeColors.text.primary,
+                            fontSize: 14,
+                            fontFamily: "Inter",
+                            fontWeight: 400,
+                            lineHeight: "21px",
+                        }}
+                    >
                         {effectiveSummary}
                     </div>
                 )}
 
                 {/* About the job */}
                 {loadingDesc ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 24,
+                        }}
+                    >
                         {sectionSkeleton}
                         {sectionSkeleton}
                         {sectionSkeleton}
                     </div>
-                ) : <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-                    <div style={{ color: themeColors.text.primary, fontSize: 17, fontFamily: "Inter", fontWeight: 600, lineHeight: "17px" }}>About the job</div>
-                    {desc ? (
-                        <>
-                            {desc.responsibilities.length > 0 && <SectionBlock title="Responsibilities" items={desc.responsibilities} />}
-                            {desc.minimum_qualifications.length > 0 && <SectionBlock title="Minimum Qualifications" items={desc.minimum_qualifications} />}
-                            {desc.preferred_qualifications.length > 0 && <SectionBlock title="Preferred Qualifications" items={desc.preferred_qualifications} />}
-                        </>
-                    ) : (
-                        <div style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>
-                            Full description available on the job posting.
+                ) : (
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 24,
+                        }}
+                    >
+                        <div
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 17,
+                                fontFamily: "Inter",
+                                fontWeight: 600,
+                                lineHeight: "17px",
+                            }}
+                        >
+                            About the job
                         </div>
-                    )}
-                </div>}
+                        {desc ? (
+                            <>
+                                {desc.responsibilities.length > 0 && (
+                                    <SectionBlock
+                                        title="Responsibilities"
+                                        items={desc.responsibilities}
+                                    />
+                                )}
+                                {desc.minimum_qualifications.length > 0 && (
+                                    <SectionBlock
+                                        title="Minimum Qualifications"
+                                        items={desc.minimum_qualifications}
+                                    />
+                                )}
+                                {desc.preferred_qualifications.length > 0 && (
+                                    <SectionBlock
+                                        title="Preferred Qualifications"
+                                        items={desc.preferred_qualifications}
+                                    />
+                                )}
+                            </>
+                        ) : (
+                            <div
+                                style={{
+                                    color: themeColors.text.secondary,
+                                    fontSize: 14,
+                                    fontFamily: "Inter",
+                                    fontWeight: 400,
+                                }}
+                            >
+                                Apply to see the full job description.
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* About the company — shown only after detail loads so enriched company description is available */}
-                {!loadingDesc && <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-                    <div style={{ color: themeColors.text.primary, fontSize: 17, fontFamily: "Inter", fontWeight: 600, lineHeight: "17px" }}>About the company</div>
-
+                {!loadingDesc && (
                     <div
-                        onClick={() => openUrl(job.company.website_url)}
-                        style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: job.company.website_url ? "pointer" : "default" }}
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 24,
+                        }}
                     >
-                        <div style={{ width: 40, height: 40, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            {job.company.logo_url
-                                ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                                : <div style={{ width: 40, height: 40, background: themeColors.surfaceHighlight, borderRadius: "50%" }} />
-                            }
+                        <div
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 17,
+                                fontFamily: "Inter",
+                                fontWeight: 600,
+                                lineHeight: "17px",
+                            }}
+                        >
+                            About the company
                         </div>
-                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{job.company.name}</span>
+
+                        <div
+                            onClick={() => openUrl(job.company.website_url)}
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 12,
+                                flexWrap: "wrap",
+                                cursor: job.company.website_url
+                                    ? "pointer"
+                                    : "default",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    width: 40,
+                                    height: 40,
+                                    borderRadius: "50%",
+                                    overflow: "hidden",
+                                    flexShrink: 0,
+                                    background: themeColors.surface,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                }}
+                            >
+                                {job.company.logo_url ? (
+                                    <img
+                                        src={job.company.logo_url}
+                                        style={{
+                                            width: "100%",
+                                            height: "100%",
+                                            objectFit: "contain",
+                                        }}
+                                    />
+                                ) : (
+                                    <div
+                                        style={{
+                                            width: 40,
+                                            height: 40,
+                                            background:
+                                                themeColors.surfaceHighlight,
+                                            borderRadius: "50%",
+                                        }}
+                                    />
+                                )}
+                            </div>
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                }}
+                            >
+                                <span
+                                    style={{
+                                        color: themeColors.text.primary,
+                                        fontSize: 14,
+                                        fontFamily: "Inter",
+                                        fontWeight: 400,
+                                        lineHeight: "21px",
+                                    }}
+                                >
+                                    {job.company.name}
+                                </span>
+                                <div
+                                    data-company-chevron
+                                    className="CompanyChevron"
+                                    style={{ flexShrink: 0, marginTop: 1.5 }}
+                                >
+                                    <svg width="6" height="10" viewBox="0 0 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                                        <path d="M0.601562 8.6L4.60156 4.6L0.601562 0.599998" stroke={themeColors.text.primary} strokeOpacity={0.65} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Social links — only rendered when at least one link exists to avoid empty gap */}
+                        {(job.company.website_url ||
+                            job.company.linkedin_url ||
+                            job.company.x_url) && (
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    flexWrap: "wrap",
+                                }}
+                            >
+                                {job.company.website_url && (
+                                    <div
+                                        onClick={() =>
+                                            openUrl(job.company.website_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            Website
+                                        </span>
+                                    </div>
+                                )}
+                                {job.company.linkedin_url && (
+                                    <div
+                                        onClick={() =>
+                                            openUrl(job.company.linkedin_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <svg
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 16 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287-0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603-0.00831011 14.8147 0.000101367"
+                                                fill={themeColors.text.primary}
+                                            />
+                                        </svg>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            LinkedIn
+                                        </span>
+                                    </div>
+                                )}
+                                {job.company.x_url && (
+                                    <div
+                                        onClick={() =>
+                                            openUrl(job.company.x_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <svg
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 16 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623"
+                                                stroke={
+                                                    themeColors.text.primary
+                                                }
+                                                strokeWidth="1.2"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                            />
+                                        </svg>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            X/Twitter
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {effectiveCompanyDesc && (
+                            <div
+                                style={{
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    fontFamily: "Inter",
+                                    fontWeight: 400,
+                                    lineHeight: "21px",
+                                }}
+                            >
+                                {effectiveCompanyDesc}
+                            </div>
+                        )}
                     </div>
-
-                    {/* Social links — only rendered when at least one link exists to avoid empty gap */}
-                    {(job.company.website_url || job.company.linkedin_url || job.company.x_url) && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                            {job.company.website_url && (
-                                <div onClick={() => openUrl(job.company.website_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", cursor: "pointer" }}>
-                                    <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Website</span>
-                                </div>
-                            )}
-                            {job.company.linkedin_url && (
-                                <div onClick={() => openUrl(job.company.linkedin_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287-0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603-0.00831011 14.8147 0.000101367" fill={themeColors.text.primary}/></svg>
-                                    <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>LinkedIn</span>
-                                </div>
-                            )}
-                            {job.company.x_url && (
-                                <div onClick={() => openUrl(job.company.x_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                                    <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>X/Twitter</span>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {effectiveCompanyDesc && (
-                        <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
-                            {effectiveCompanyDesc}
-                        </div>
-                    )}
-                </div>}
+                )}
+            </motion.div>
             </div>
         </div>
     )
@@ -9205,6 +12087,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
     const [topJobs, setTopJobs] = React.useState<HomepageJob[]>([])
     const [loadingPicks, setLoadingPicks] = React.useState(true)
     const [loadingNear, setLoadingNear] = React.useState(true)
+    const [nearbyBasedOnLocation, setNearbyBasedOnLocation] =
+        React.useState(true) // true until we know we fell back to keyword search
     React.useEffect(() => {
         if (!jobsApiUrl) {
             setLoadingPicks(false)
@@ -9213,36 +12097,126 @@ const HomepageJobs = React.memo(function HomepageJobs({
         }
         setLoadingPicks(true)
         setLoadingNear(true)
+        setNearbyBasedOnLocation(true)
         let cancelled = false
 
         const fetchJ = (url: string) => {
             const ctrl = new AbortController()
             const id = setTimeout(() => ctrl.abort(), 10000)
-            return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
+            return fetch(url, { signal: ctrl.signal }).finally(() =>
+                clearTimeout(id)
+            )
         }
 
+        const since3Days = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
         const api = (params: string): Promise<HomepageJob[]> => {
-            const url = `${jobsApiUrl}/jobs?${params}&limit=6`
+            const url = `${jobsApiUrl}/jobs?${params}&limit=6&since=${since3Days}`
             return fetchJ(url)
-                .then(r => r.ok ? r.json() : { data: [] })
-                .then(({ data }) => (Array.isArray(data) ? data : []) as HomepageJob[])
+                .then((r) => (r.ok ? r.json() : { data: [] }))
+                .then(
+                    ({ data }) =>
+                        (Array.isArray(data) ? data : []) as HomepageJob[]
+                )
                 .catch(() => [] as HomepageJob[])
         }
 
-        const baseQuery = userQuery.trim() || FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
-        const altQuery  = FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
+        const baseQuery =
+            userQuery.trim() ||
+            FALLBACK_QUERIES[
+                Math.floor(Math.random() * FALLBACK_QUERIES.length)
+            ]
+        const altQuery =
+            FALLBACK_QUERIES[
+                Math.floor(Math.random() * FALLBACK_QUERIES.length)
+            ]
 
-        const picksPromise = api(`q=${encodeURIComponent(baseQuery)}`)
-        const altPromise   = api(`q=${encodeURIComponent(altQuery)}`)
+        const picksPromise = api(`q=${encodeURIComponent(baseQuery)}`).then(
+            (picks) => {
+                if (cancelled) return []
+                setNextJobs(picks.slice(0, 3))
+                const top3 = picks.slice(3, 6)
+                if (top3.length >= 3) {
+                    setTopJobs(top3)
+                    setLoadingPicks(false)
+                } else {
+                    altPromise.then((alt) => {
+                        if (cancelled) return
+                        if (picks.length === 0) setNextJobs(alt.slice(0, 3))
+                        setTopJobs(alt.slice(0, 3))
+                        setLoadingPicks(false)
+                    })
+                }
+                return picks
+            }
+        )
 
-        const ipCtrl  = new AbortController()
+        const altPromise = api(`q=${encodeURIComponent(altQuery)}`)
+
+        const ipCtrl = new AbortController()
         const ipTimer = setTimeout(() => ipCtrl.abort(), 3000)
-        const nearPromise = fetch("https://ipwho.is/", { signal: ipCtrl.signal })
+        const ipPromise = fetch("https://ipwho.is/", {
+            signal: ipCtrl.signal,
+        })
             .finally(() => clearTimeout(ipTimer))
-            .then(r => r.ok ? r.json() : {})
-            .then(({ city }: { city?: string }) => city || "")
-            .catch(() => "")
-            .then((city: string) => api(city ? `location=${encodeURIComponent(city)}&limit=5` : `q=${encodeURIComponent(altQuery)}&limit=5`))
+            .then((r) => (r.ok ? r.json() : {}))
+            .then(
+                ({
+                    latitude,
+                    longitude,
+                }: { latitude?: number; longitude?: number }) =>
+                    ({
+                        lat: typeof latitude === "number" ? latitude : NaN,
+                        lng: typeof longitude === "number" ? longitude : NaN,
+                    }) as { lat: number; lng: number }
+            )
+            .catch(() => ({ lat: NaN, lng: NaN }))
+
+        const nearPromise = Promise.all([
+            picksPromise,
+            altPromise,
+            ipPromise,
+        ]).then(async ([picks, alt, { lat, lng }]) => {
+                const next3 = picks.slice(0, 3)
+                const top3 =
+                    picks.length >= 6 ? picks.slice(3, 6) : alt.slice(0, 3)
+                const excludeIds = [...next3, ...top3]
+                    .map((j) => j.id)
+                    .filter((id, i, arr) => arr.indexOf(id) === i)
+
+                const hasCoords =
+                    !isNaN(lat) &&
+                    !isNaN(lng) &&
+                    lat >= -90 &&
+                    lat <= 90 &&
+                    lng >= -180 &&
+                    lng <= 180
+
+                if (!hasCoords) {
+                    setNearbyBasedOnLocation(false)
+                    return api(`q=${encodeURIComponent(altQuery)}&limit=5`)
+                }
+
+                const buildNearParams = (withQ: boolean) => {
+                    const params = new URLSearchParams({
+                        limit: "5",
+                        near_lat: String(lat),
+                        near_lng: String(lng),
+                        radius_km: "75",
+                        exclude_remote: "true",
+                    })
+                    if (excludeIds.length > 0)
+                        params.set("exclude_ids", excludeIds.join(","))
+                    if (withQ && userQuery.trim())
+                        params.set("q", userQuery.trim())
+                    return params.toString()
+                }
+
+                const withTitle = api(buildNearParams(true))
+                const near = await withTitle
+                if (near.length >= 5 || !userQuery.trim()) return near
+                return api(buildNearParams(false))
+            }
+        )
 
         const safetyTimer = setTimeout(() => {
             if (!cancelled) {
@@ -9251,29 +12225,20 @@ const HomepageJobs = React.memo(function HomepageJobs({
             }
         }, 12000)
 
-        picksPromise.then(picks => {
-            if (cancelled) return
-            setNextJobs(picks.slice(0, 3))
-            const top3 = picks.slice(3, 6)
-            if (top3.length >= 3) {
-                setTopJobs(top3)
-                setLoadingPicks(false)
-            } else {
-                altPromise.then(alt => {
-                    if (cancelled) return
-                    if (picks.length === 0) setNextJobs(alt.slice(0, 3))
-                    setTopJobs(alt.slice(0, 3))
-                    setLoadingPicks(false)
-                }).catch(() => { if (!cancelled) setLoadingPicks(false) })
-            }
-        }).catch(() => { if (!cancelled) setLoadingPicks(false) })
+        picksPromise.catch(() => {
+            if (!cancelled) setLoadingPicks(false)
+        })
 
-        nearPromise.then(near => {
-            if (!cancelled) {
-                setNearJobs(near.slice(0, 5))
-                setLoadingNear(false)
-            }
-        }).catch(() => { if (!cancelled) setLoadingNear(false) })
+        nearPromise
+            .then((near) => {
+                if (!cancelled) {
+                    setNearJobs(near.slice(0, 5))
+                    setLoadingNear(false)
+                }
+            })
+            .catch(() => {
+                if (!cancelled) setLoadingNear(false)
+            })
 
         return () => {
             cancelled = true
@@ -9283,18 +12248,28 @@ const HomepageJobs = React.memo(function HomepageJobs({
     }, [jobsApiUrl, userQuery])
 
     const openJob = (job: HomepageJob) => {
-        if (onJobClick) { onJobClick(job); return }
+        if (onJobClick) {
+            onJobClick(job)
+            return
+        }
         if (typeof window !== "undefined") window.open(job.apply_url, "_blank")
     }
 
-    const pad = (arr: HomepageJob[], n: number, isLoading: boolean): (HomepageJob | null)[] =>
+    const pad = (
+        arr: HomepageJob[],
+        n: number,
+        isLoading: boolean
+    ): (HomepageJob | null)[] =>
         isLoading
             ? Array(n).fill(null)
-            : [...arr, ...Array(Math.max(0, n - arr.length)).fill(null)].slice(0, n)
+            : [...arr, ...Array(Math.max(0, n - arr.length)).fill(null)].slice(
+                  0,
+                  n
+              )
 
     const nextList = pad(nextJobs, 3, loadingPicks)
     const nearList = pad(nearJobs, 5, loadingNear)
-    const topList  = pad(topJobs,  3, loadingPicks)
+    const topList = pad(topJobs, 3, loadingPicks)
 
     // Measure the actual rendered container width so layout adapts when the
     // sidebar is resized on desktop, not just when the window hits 768px.
@@ -9303,7 +12278,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
     React.useEffect(() => {
         const el = containerRef.current
         if (!el) return
-        const ro = new ResizeObserver(entries => {
+        const ro = new ResizeObserver((entries) => {
             setContainerWidth(entries[0]?.contentRect.width ?? 9999)
         })
         ro.observe(el)
@@ -9354,47 +12329,216 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 }}
             >
                 {/* ── SECTION 1: WHAT'S YOUR NEXT JOB ── */}
-                <div style={{ alignSelf: "stretch", flexDirection: "column", gap: m ? 24 : 48, display: "flex" }}>
-                    <div style={{ alignSelf: "stretch", textAlign: "center", color: themeColors.text.primary, fontSize: m ? 21 : 28, fontFamily: "Inter", fontWeight: 600, lineHeight: 1 }}>
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        flexDirection: "column",
+                        gap: m ? 24 : 48,
+                        display: "flex",
+                    }}
+                >
+                    <div
+                        style={{
+                            alignSelf: "stretch",
+                            textAlign: "center",
+                            color: themeColors.text.primary,
+                            fontSize: m ? 21 : 28,
+                            fontFamily: "Inter",
+                            fontWeight: 600,
+                            lineHeight: 1,
+                        }}
+                    >
                         What's your next job?
                     </div>
                     {m ? (
                         // Mobile: big card on top, 2 stacked cards below
-                        <div style={{ alignSelf: "stretch", flexDirection: "column", gap: 12, display: "flex" }}>
-                            <BigJobCard job={nextList[0] ?? null} borderRadius={32} style={{ height: 164 }} onClick={nextList[0] ? () => openJob(nextList[0]) : undefined} themeColors={themeColors} isMobile />
-                            <StackedJobCard job={nextList[1] ?? null} onClick={nextList[1] ? () => openJob(nextList[1]) : undefined} themeColors={themeColors} isMobile />
-                            <StackedJobCard job={nextList[2] ?? null} onClick={nextList[2] ? () => openJob(nextList[2]) : undefined} themeColors={themeColors} isMobile />
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                flexDirection: "column",
+                                gap: 12,
+                                display: "flex",
+                            }}
+                        >
+                            <BigJobCard
+                                job={nextList[0] ?? null}
+                                borderRadius={32}
+                                style={{ height: 164 }}
+                                onClick={
+                                    nextList[0]
+                                        ? () => openJob(nextList[0])
+                                        : undefined
+                                }
+                                themeColors={themeColors}
+                                isMobile
+                            />
+                            <StackedJobCard
+                                job={nextList[1] ?? null}
+                                onClick={
+                                    nextList[1]
+                                        ? () => openJob(nextList[1])
+                                        : undefined
+                                }
+                                themeColors={themeColors}
+                                isMobile
+                            />
+                            <StackedJobCard
+                                job={nextList[2] ?? null}
+                                onClick={
+                                    nextList[2]
+                                        ? () => openJob(nextList[2])
+                                        : undefined
+                                }
+                                themeColors={themeColors}
+                                isMobile
+                            />
                         </div>
                     ) : (
                         // Desktop: big card left, 2 stacked cards right
-                        <div style={{ alignSelf: "stretch", justifyContent: "center", alignItems: "stretch", gap: 12, display: "inline-flex" }}>
-                            <BigJobCard job={nextList[0] ?? null} borderRadius={36} style={{ flex: "1 1 0" }} onClick={nextList[0] ? () => openJob(nextList[0]) : undefined} themeColors={themeColors} />
-                            <div style={{ flex: "1 1 0", flexDirection: "column", gap: 12, display: "flex" }}>
-                                <StackedJobCard job={nextList[1] ?? null} onClick={nextList[1] ? () => openJob(nextList[1]) : undefined} themeColors={themeColors} />
-                                <StackedJobCard job={nextList[2] ?? null} onClick={nextList[2] ? () => openJob(nextList[2]) : undefined} themeColors={themeColors} />
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                justifyContent: "center",
+                                alignItems: "stretch",
+                                gap: 12,
+                                display: "inline-flex",
+                            }}
+                        >
+                            <BigJobCard
+                                job={nextList[0] ?? null}
+                                borderRadius={36}
+                                style={{ flex: "1 1 0" }}
+                                onClick={
+                                    nextList[0]
+                                        ? () => openJob(nextList[0])
+                                        : undefined
+                                }
+                                themeColors={themeColors}
+                            />
+                            <div
+                                style={{
+                                    flex: "1 1 0",
+                                    flexDirection: "column",
+                                    gap: 12,
+                                    display: "flex",
+                                }}
+                            >
+                                <StackedJobCard
+                                    job={nextList[1] ?? null}
+                                    onClick={
+                                        nextList[1]
+                                            ? () => openJob(nextList[1])
+                                            : undefined
+                                    }
+                                    themeColors={themeColors}
+                                />
+                                <StackedJobCard
+                                    job={nextList[2] ?? null}
+                                    onClick={
+                                        nextList[2]
+                                            ? () => openJob(nextList[2])
+                                            : undefined
+                                    }
+                                    themeColors={themeColors}
+                                />
                             </div>
                         </div>
                     )}
                 </div>
 
                 {/* ── SECTION 2: JOBS NEAR YOU ── */}
-                <div style={{ alignSelf: "stretch", flexDirection: "column", gap: m ? 24 : 48, display: "flex" }}>
-                    <div style={sectionTitleStyle}>Jobs near you</div>
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        flexDirection: "column",
+                        gap: m ? 24 : 48,
+                        display: "flex",
+                    }}
+                >
+                    <div style={sectionTitleStyle}>
+                        {nearbyBasedOnLocation
+                            ? "Jobs near you"
+                            : "Explore jobs"}
+                    </div>
                     {m ? (
                         // Mobile: 4 row cards on top, big card at bottom
-                        <div style={{ alignSelf: "stretch", flexDirection: "column", gap: 12, display: "flex" }}>
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                flexDirection: "column",
+                                gap: 12,
+                                display: "flex",
+                            }}
+                        >
                             {nearList.slice(1, 5).map((job, i) => (
-                                <RowJobCard key={job?.id ?? i} job={job} onClick={job ? () => openJob(job) : undefined} themeColors={themeColors} isMobile />
+                                <RowJobCard
+                                    key={job?.id ?? i}
+                                    job={job}
+                                    onClick={
+                                        job ? () => openJob(job) : undefined
+                                    }
+                                    themeColors={themeColors}
+                                    isMobile
+                                />
                             ))}
-                            <BigJobCard job={nearList[0] ?? null} borderRadius={36} style={{ height: 164 }} onClick={nearList[0] ? () => openJob(nearList[0]) : undefined} themeColors={themeColors} isMobile />
+                            <BigJobCard
+                                job={nearList[0] ?? null}
+                                borderRadius={36}
+                                style={{ height: 164 }}
+                                onClick={
+                                    nearList[0]
+                                        ? () => openJob(nearList[0])
+                                        : undefined
+                                }
+                                themeColors={themeColors}
+                                isMobile
+                            />
                         </div>
                     ) : (
                         // Desktop: big card left (square by default, grows taller if content needs it), 4 row cards right
-                        <div style={{ alignSelf: "stretch", justifyContent: "center", alignItems: "stretch", gap: 12, display: "flex" }}>
-                            <BigJobCard job={nearList[0] ?? null} borderRadius={48} style={{ width: 272, minWidth: 272, maxWidth: 272, minHeight: 272 }} onClick={nearList[0] ? () => openJob(nearList[0]) : undefined} themeColors={themeColors} />
-                            <div style={{ flex: "1 1 0", minWidth: 0, flexDirection: "column", gap: 12, display: "flex" }}>
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                justifyContent: "center",
+                                alignItems: "stretch",
+                                gap: 12,
+                                display: "flex",
+                            }}
+                        >
+                            <BigJobCard
+                                job={nearList[0] ?? null}
+                                borderRadius={48}
+                                style={{
+                                    width: 272,
+                                    minWidth: 272,
+                                    maxWidth: 272,
+                                    minHeight: 272,
+                                }}
+                                onClick={
+                                    nearList[0]
+                                        ? () => openJob(nearList[0])
+                                        : undefined
+                                }
+                                themeColors={themeColors}
+                            />
+                            <div
+                                style={{
+                                    flex: "1 1 0",
+                                    minWidth: 0,
+                                    flexDirection: "column",
+                                    gap: 12,
+                                    display: "flex",
+                                }}
+                            >
                                 {nearList.slice(1, 5).map((job, i) => (
-                                    <RowJobCard key={job?.id ?? i} job={job} onClick={job ? () => openJob(job) : undefined} themeColors={themeColors} />
+                                    <RowJobCard
+                                        key={job?.id ?? i}
+                                        job={job}
+                                        onClick={
+                                            job ? () => openJob(job) : undefined
+                                        }
+                                        themeColors={themeColors}
+                                    />
                                 ))}
                             </div>
                         </div>
@@ -9402,20 +12546,59 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 </div>
 
                 {/* ── SECTION 3: TOP PICKS FOR YOU ── */}
-                <div style={{ alignSelf: "stretch", flexDirection: "column", gap: m ? 24 : 48, display: "flex" }}>
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        flexDirection: "column",
+                        gap: m ? 24 : 48,
+                        display: "flex",
+                    }}
+                >
                     <div style={sectionTitleStyle}>Top picks for you</div>
                     {m ? (
                         // Mobile: 3 stacked cards vertically
-                        <div style={{ alignSelf: "stretch", flexDirection: "column", gap: 12, display: "flex" }}>
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                flexDirection: "column",
+                                gap: 12,
+                                display: "flex",
+                            }}
+                        >
                             {topList.map((job, i) => (
-                                <StackedJobCard key={job?.id ?? i} job={job} onClick={job ? () => openJob(job) : undefined} themeColors={themeColors} isMobile />
+                                <StackedJobCard
+                                    key={job?.id ?? i}
+                                    job={job}
+                                    onClick={
+                                        job ? () => openJob(job) : undefined
+                                    }
+                                    themeColors={themeColors}
+                                    isMobile
+                                />
                             ))}
                         </div>
                     ) : (
                         // Desktop: 3 big cards side by side
-                        <div style={{ alignSelf: "stretch", justifyContent: "center", alignItems: "stretch", gap: 12, display: "flex" }}>
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                justifyContent: "center",
+                                alignItems: "stretch",
+                                gap: 12,
+                                display: "flex",
+                            }}
+                        >
                             {topList.map((job, i) => (
-                                <BigJobCard key={job?.id ?? i} job={job} borderRadius={48} style={{ flex: "1 1 0", minHeight: 234 }} onClick={job ? () => openJob(job) : undefined} themeColors={themeColors} />
+                                <BigJobCard
+                                    key={job?.id ?? i}
+                                    job={job}
+                                    borderRadius={48}
+                                    style={{ flex: "1 1 0", minHeight: 234 }}
+                                    onClick={
+                                        job ? () => openJob(job) : undefined
+                                    }
+                                    themeColors={themeColors}
+                                />
                             ))}
                         </div>
                     )}
@@ -9426,11 +12609,15 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     onClick={onOpenSettings}
                     style={{
                         alignSelf: "stretch",
-                        paddingLeft: 24, paddingRight: 24, paddingTop: 19, paddingBottom: 19,
+                        paddingLeft: 24,
+                        paddingRight: 24,
+                        paddingTop: 19,
+                        paddingBottom: 19,
                         borderRadius: 48,
-                        border: themeColors.background === lightColors.background
-                            ? `0.33px solid ${themeColors.border.subtle}`
-                            : `1px solid ${themeColors.border.subtle}`,
+                        border:
+                            themeColors.background === lightColors.background
+                                ? `0.33px solid ${themeColors.border.subtle}`
+                                : `1px solid ${themeColors.border.subtle}`,
                         justifyContent: "flex-start",
                         alignItems: "center",
                         gap: 4,
@@ -9438,14 +12625,43 @@ const HomepageJobs = React.memo(function HomepageJobs({
                         cursor: "pointer",
                     }}
                 >
-                    <div style={{ flex: "1 1 0", color: themeColors.text.primary, fontSize: 15, fontFamily: "Inter", fontWeight: 400, lineHeight: 1.2 }}>
+                    <div
+                        style={{
+                            flex: "1 1 0",
+                            color: themeColors.text.primary,
+                            fontSize: 15,
+                            fontFamily: "Inter",
+                            fontWeight: 400,
+                            lineHeight: 1.2,
+                        }}
+                    >
                         Customize
                     </div>
                     {/* Magic pencil icon */}
-                    <div data-svg-wrapper data-layer="magic pencil icon" style={{ flexShrink: 0, opacity: 0.95, display: "flex" }}>
-                        <svg width="17" height="16" viewBox="0 0 17 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z" fill={themeColors.text.primary}/>
-                            <path d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z" fill={themeColors.text.primary}/>
+                    <div
+                        data-svg-wrapper
+                        data-layer="magic pencil icon"
+                        style={{
+                            flexShrink: 0,
+                            opacity: 0.95,
+                            display: "flex",
+                        }}
+                    >
+                        <svg
+                            width="17"
+                            height="16"
+                            viewBox="0 0 17 16"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z"
+                                fill={themeColors.text.primary}
+                            />
+                            <path
+                                d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z"
+                                fill={themeColors.text.primary}
+                            />
                         </svg>
                     </div>
                 </div>
@@ -9487,10 +12703,26 @@ const BaseModalOverlay = ({
         onClick={onClose}
     >
         <motion.div
-            initial={isMobile ? { y: "100%", scale: 0, opacity: 0 } : { scale: 0.95, opacity: 0 }}
-            animate={isMobile ? { y: "0%", scale: 1, opacity: 1 } : { scale: 1, opacity: 1 }}
-            exit={isMobile ? { y: "100%", scale: 0, opacity: 0 } : { scale: 0.95, opacity: 0 }}
-            transition={isMobile ? { duration: 0.25, ease: "easeInOut" } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+            initial={
+                isMobile
+                    ? { y: "100%", scale: 0, opacity: 0 }
+                    : { scale: 0.95, opacity: 0 }
+            }
+            animate={
+                isMobile
+                    ? { y: "0%", scale: 1, opacity: 1 }
+                    : { scale: 1, opacity: 1 }
+            }
+            exit={
+                isMobile
+                    ? { y: "100%", scale: 0, opacity: 0 }
+                    : { scale: 0.95, opacity: 0 }
+            }
+            transition={
+                isMobile
+                    ? { duration: 0.25, ease: "easeInOut" }
+                    : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }
+            }
             onClick={(e) => e.stopPropagation()}
             style={{
                 flex: isMobile ? "none" : "1 1 0",
@@ -9510,8 +12742,24 @@ const BaseModalOverlay = ({
                 transformOrigin: isMobile ? "bottom center" : "center",
             }}
         >
-            <div style={{ alignSelf: "stretch", height: 224, overflow: "hidden", flexShrink: 0, position: "relative" }}>
-                <img style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} src={imageSrc} />
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    height: 224,
+                    overflow: "hidden",
+                    flexShrink: 0,
+                    position: "relative",
+                }}
+            >
+                <img
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        display: "block",
+                    }}
+                    src={imageSrc}
+                />
             </div>
             {children}
         </motion.div>
@@ -9534,17 +12782,63 @@ const WelcomeOverlay = ({
         themeColors={themeColors}
         imageSrc="https://framerusercontent.com/images/iDGXsLUjWFYougkKQaiObRc6vng.jpg?scale-down-to=2048&width=2720&height=1568"
     >
-        <div style={{ alignSelf: "stretch", paddingTop: 28, paddingBottom: 36, paddingLeft: 28, paddingRight: 28, flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 8, display: "flex" }}>
-            <h1 style={{ alignSelf: "stretch", color: themeColors.text.primary, fontSize: 16, fontFamily: "Inter", fontWeight: "400", lineHeight: "21px", wordWrap: "break-word", margin: 0, padding: 0 }}>
+        <div
+            style={{
+                alignSelf: "stretch",
+                paddingTop: 28,
+                paddingBottom: 36,
+                paddingLeft: 28,
+                paddingRight: 28,
+                flexDirection: "column",
+                justifyContent: "flex-start",
+                alignItems: "flex-start",
+                gap: 8,
+                display: "flex",
+            }}
+        >
+            <h1
+                style={{
+                    alignSelf: "stretch",
+                    color: themeColors.text.primary,
+                    fontSize: 16,
+                    fontFamily: "Inter",
+                    fontWeight: "400",
+                    lineHeight: "21px",
+                    wordWrap: "break-word",
+                    margin: 0,
+                    padding: 0,
+                }}
+            >
                 Curastem is the #1 way to get a job
             </h1>
             <div style={{ alignSelf: "stretch" }}>
-                <span style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.60px", wordWrap: "break-word" }}>
-                    Video call with mentors or chat with AI to create resumes, make apps, and practice for interviews.{" "}
+                <span
+                    style={{
+                        color: themeColors.text.secondary,
+                        fontSize: 14,
+                        fontFamily: "Inter",
+                        fontWeight: "400",
+                        lineHeight: "19.60px",
+                        wordWrap: "break-word",
+                    }}
+                >
+                    Video call with mentors or chat with AI to create resumes,
+                    make apps, and practice for interviews.{" "}
                 </span>
                 <span
-                    onClick={() => window.open("https://curastem.org/about", "_blank")}
-                    style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", textDecoration: "underline", lineHeight: "19.60px", wordWrap: "break-word", cursor: "pointer" }}
+                    onClick={() =>
+                        window.open("https://curastem.org/about", "_blank")
+                    }
+                    style={{
+                        color: themeColors.text.secondary,
+                        fontSize: 14,
+                        fontFamily: "Inter",
+                        fontWeight: "400",
+                        textDecoration: "underline",
+                        lineHeight: "19.60px",
+                        wordWrap: "break-word",
+                        cursor: "pointer",
+                    }}
                 >
                     Learn more
                 </span>
@@ -9573,35 +12867,149 @@ const JoinVideoCallOverlay = ({
         themeColors={themeColors}
         imageSrc="https://framerusercontent.com/images/NhsCrNqyU1mwQ6dy5tnRQCWctP0.png?width=1560&height=896"
     >
-        <div style={{ alignSelf: "stretch", paddingTop: 28, paddingBottom: 36, paddingLeft: 28, paddingRight: 28, flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 24, display: "flex" }}>
-            <div style={{ alignSelf: "stretch", flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 12, display: "flex" }}>
-                <div style={{ alignSelf: "stretch", color: themeColors.text.primary, fontSize: 16, fontFamily: "Inter", fontWeight: "500", lineHeight: "16px", wordWrap: "break-word" }}>
+        <div
+            style={{
+                alignSelf: "stretch",
+                paddingTop: 28,
+                paddingBottom: 36,
+                paddingLeft: 28,
+                paddingRight: 28,
+                flexDirection: "column",
+                justifyContent: "flex-start",
+                alignItems: "flex-start",
+                gap: 24,
+                display: "flex",
+            }}
+        >
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    flexDirection: "column",
+                    justifyContent: "flex-start",
+                    alignItems: "flex-start",
+                    gap: 12,
+                    display: "flex",
+                }}
+            >
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        color: themeColors.text.primary,
+                        fontSize: 16,
+                        fontFamily: "Inter",
+                        fontWeight: "500",
+                        lineHeight: "16px",
+                        wordWrap: "break-word",
+                    }}
+                >
                     Join a video call
                 </div>
-                <div style={{ alignSelf: "stretch", color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.60px", wordWrap: "break-word" }}>
-                    Connect with a mentor to get free help, or volunteer to offer free college and career advice.{" "}
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        color: themeColors.text.secondary,
+                        fontSize: 14,
+                        fontFamily: "Inter",
+                        fontWeight: "400",
+                        lineHeight: "19.60px",
+                        wordWrap: "break-word",
+                    }}
+                >
+                    Connect with a mentor to get free help, or volunteer to
+                    offer free college and career advice.{" "}
                     <span
-                        onClick={() => window.open("https://curastem.org/about", "_blank")}
-                        style={{ color: "inherit", textDecoration: "underline", cursor: "pointer" }}
+                        onClick={() =>
+                            window.open("https://curastem.org/about", "_blank")
+                        }
+                        style={{
+                            color: "inherit",
+                            textDecoration: "underline",
+                            cursor: "pointer",
+                        }}
                     >
                         Learn more
                     </span>
                 </div>
             </div>
-            <div style={{ alignSelf: "stretch", flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 12, display: "flex" }}>
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    flexDirection: "column",
+                    justifyContent: "flex-start",
+                    alignItems: "flex-start",
+                    gap: 12,
+                    display: "flex",
+                }}
+            >
                 <button
                     onClick={onVolunteer}
-                    style={{ alignSelf: "stretch", height: 48, paddingLeft: 4, paddingRight: 4, paddingTop: 12, paddingBottom: 12, background: themeColors.hover.default, overflow: "hidden", borderRadius: 28, justifyContent: "center", alignItems: "center", gap: 10, display: "inline-flex", border: "none", cursor: "pointer", width: "100%" }}
+                    style={{
+                        alignSelf: "stretch",
+                        height: 48,
+                        paddingLeft: 4,
+                        paddingRight: 4,
+                        paddingTop: 12,
+                        paddingBottom: 12,
+                        background: themeColors.hover.default,
+                        overflow: "hidden",
+                        borderRadius: 28,
+                        justifyContent: "center",
+                        alignItems: "center",
+                        gap: 10,
+                        display: "inline-flex",
+                        border: "none",
+                        cursor: "pointer",
+                        width: "100%",
+                    }}
                 >
-                    <span style={{ flex: "1 1 0", textAlign: "center", color: themeColors.text.primary, fontSize: 15, fontFamily: "Inter", fontWeight: "400", lineHeight: "21px", wordWrap: "break-word" }}>
+                    <span
+                        style={{
+                            flex: "1 1 0",
+                            textAlign: "center",
+                            color: themeColors.text.primary,
+                            fontSize: 15,
+                            fontFamily: "Inter",
+                            fontWeight: "400",
+                            lineHeight: "21px",
+                            wordWrap: "break-word",
+                        }}
+                    >
                         Volunteer
                     </span>
                 </button>
                 <button
                     onClick={onStudent}
-                    style={{ alignSelf: "stretch", height: 48, paddingLeft: 4, paddingRight: 4, paddingTop: 12, paddingBottom: 12, background: themeColors.semantic.accent, overflow: "hidden", borderRadius: 28, justifyContent: "center", alignItems: "center", gap: 10, display: "inline-flex", border: "none", cursor: "pointer", width: "100%" }}
+                    style={{
+                        alignSelf: "stretch",
+                        height: 48,
+                        paddingLeft: 4,
+                        paddingRight: 4,
+                        paddingTop: 12,
+                        paddingBottom: 12,
+                        background: themeColors.semantic.accent,
+                        overflow: "hidden",
+                        borderRadius: 28,
+                        justifyContent: "center",
+                        alignItems: "center",
+                        gap: 10,
+                        display: "inline-flex",
+                        border: "none",
+                        cursor: "pointer",
+                        width: "100%",
+                    }}
                 >
-                    <span style={{ flex: "1 1 0", textAlign: "center", color: "hsla(0, 0%, 100%, 0.95)", fontSize: 15, fontFamily: "Inter", fontWeight: "500", lineHeight: "21px", wordWrap: "break-word" }}>
+                    <span
+                        style={{
+                            flex: "1 1 0",
+                            textAlign: "center",
+                            color: "hsla(0, 0%, 100%, 0.95)",
+                            fontSize: 15,
+                            fontFamily: "Inter",
+                            fontWeight: "500",
+                            lineHeight: "21px",
+                            wordWrap: "break-word",
+                        }}
+                    >
                         Call a mentor
                     </span>
                 </button>
@@ -10419,6 +13827,8 @@ const MessageBubble = React.memo(
         isDocOpen,
         isWhiteboardOpen,
         isAppOpen,
+        docCallType,
+        onJobClick,
     }: {
         msg: Message
         isMobileLayout: boolean
@@ -10438,6 +13848,8 @@ const MessageBubble = React.memo(
         isDocOpen?: boolean
         isWhiteboardOpen?: boolean
         isAppOpen?: boolean
+        docCallType?: "doc" | "resume" | "cover_letter"
+        onJobClick?: (job: JobSnippet) => void
     }) => {
         // Memoize base styles to avoid recreation
         const baseTextStyle = React.useMemo(
@@ -11258,7 +14670,10 @@ const MessageBubble = React.memo(
                                                 display: "flex",
                                                 flexDirection: "row",
                                                 flexWrap: "wrap",
-                                                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                                                justifyContent:
+                                                    msg.role === "user"
+                                                        ? "flex-end"
+                                                        : "flex-start",
                                                 gap: 8,
                                                 width: "100%",
                                                 marginBottom: 4,
@@ -11269,61 +14684,81 @@ const MessageBubble = React.memo(
                                                     {att.type === "video" ? (
                                                         <div
                                                             style={{
-                                                                maxWidth: "100%",
+                                                                maxWidth:
+                                                                    "100%",
                                                                 borderRadius: 16,
-                                                                overflow: "hidden",
-                                                                background: themeColors.surface,
-                                                                position: "relative",
+                                                                overflow:
+                                                                    "hidden",
+                                                                background:
+                                                                    themeColors.surface,
+                                                                position:
+                                                                    "relative",
                                                                 flexShrink: 0,
-                                                                display: "inline-flex",
-                                                                alignItems: "center",
-                                                                justifyContent: "center",
+                                                                display:
+                                                                    "inline-flex",
+                                                                alignItems:
+                                                                    "center",
+                                                                justifyContent:
+                                                                    "center",
                                                             }}
                                                         >
                                                             <video
                                                                 src={att.url}
                                                                 controls
                                                                 style={{
-                                                                    maxWidth: "100%",
-                                                                    maxHeight: "128px",
+                                                                    maxWidth:
+                                                                        "100%",
+                                                                    maxHeight:
+                                                                        "128px",
                                                                     width: "auto",
                                                                     height: "auto",
-                                                                    objectFit: "contain",
-                                                                    display: "block",
+                                                                    objectFit:
+                                                                        "contain",
+                                                                    display:
+                                                                        "block",
                                                                 }}
                                                             />
                                                         </div>
-                                                    ) : (
-                                                        // Image: width based on image dimensions with max height
-                                                        att.url ? (
-                                                            <div
+                                                    ) : // Image: width based on image dimensions with max height
+                                                    att.url ? (
+                                                        <div
+                                                            style={{
+                                                                maxWidth:
+                                                                    "100%",
+                                                                borderRadius: 16,
+                                                                overflow:
+                                                                    "hidden",
+                                                                background:
+                                                                    themeColors.surface,
+                                                                position:
+                                                                    "relative",
+                                                                flexShrink: 0,
+                                                                display:
+                                                                    "inline-flex",
+                                                                alignItems:
+                                                                    "center",
+                                                                justifyContent:
+                                                                    "center",
+                                                            }}
+                                                        >
+                                                            <img
+                                                                src={att.url}
+                                                                alt="Image" // Uploaded image alt textma
                                                                 style={{
-                                                                    maxWidth: "100%",
-                                                                    borderRadius: 16,
-                                                                    overflow: "hidden",
-                                                                    background: themeColors.surface,
-                                                                    position: "relative",
-                                                                    flexShrink: 0,
-                                                                    display: "inline-flex",
-                                                                    alignItems: "center",
-                                                                    justifyContent: "center",
+                                                                    maxWidth:
+                                                                        "100%",
+                                                                    maxHeight:
+                                                                        "128px",
+                                                                    width: "auto",
+                                                                    height: "auto",
+                                                                    objectFit:
+                                                                        "contain",
+                                                                    display:
+                                                                        "block",
                                                                 }}
-                                                            >
-                                                                <img
-                                                                    src={att.url}
-                                                                    alt="Image" // Uploaded image alt textma
-                                                                    style={{
-                                                                        maxWidth: "100%",
-                                                                        maxHeight: "128px",
-                                                                        width: "auto",
-                                                                        height: "auto",
-                                                                        objectFit: "contain",
-                                                                        display: "block",
-                                                                    }}
-                                                                />
-                                                            </div>
-                                                        ) : null
-                                                    )}
+                                                            />
+                                                        </div>
+                                                    ) : null}
                                                 </React.Fragment>
                                             ))}
                                         </div>
@@ -11338,7 +14773,10 @@ const MessageBubble = React.memo(
                                                 display: "flex",
                                                 flexDirection: "row",
                                                 flexWrap: "wrap",
-                                                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                                                justifyContent:
+                                                    msg.role === "user"
+                                                        ? "flex-end"
+                                                        : "flex-start",
                                                 gap: 8,
                                                 marginBottom: 4,
                                                 paddingBottom: 4,
@@ -11419,6 +14857,15 @@ const MessageBubble = React.memo(
                                       linkStyle
                                   )}
                         </div>
+                    )}
+
+                    {/* Job cards from search_jobs tool call */}
+                    {msg.jobs && msg.jobs.length > 0 && (
+                        <ChatJobCards
+                            jobs={msg.jobs}
+                            themeColors={themeColors}
+                            onJobClick={onJobClick}
+                        />
                     )}
 
                     {/* User Message Copy Button */}
@@ -11617,7 +15064,13 @@ const MessageBubble = React.memo(
                                             wordWrap: "break-word",
                                         }}
                                     >
-                                        {isDocOpen ? "Close" : "Docs"}
+                                        {isDocOpen
+                                            ? "Close"
+                                            : docCallType === "resume"
+                                              ? "Resume"
+                                              : docCallType === "cover_letter"
+                                                ? "Cover letter"
+                                                : "Docs"}
                                     </div>
                                 </div>
                             )}
@@ -12376,8 +15829,10 @@ const MiniIDE = React.memo(
         const textareaRef = React.useRef<HTMLTextAreaElement>(null)
         const [isDownloadHovered, setIsDownloadHovered] = React.useState(false)
         const [isCloseHovered, setIsCloseHovered] = React.useState(false)
-        const [isPlayButtonHovered, setIsPlayButtonHovered] = React.useState(false)
-        const [isCodeButtonHovered, setIsCodeButtonHovered] = React.useState(false)
+        const [isPlayButtonHovered, setIsPlayButtonHovered] =
+            React.useState(false)
+        const [isCodeButtonHovered, setIsCodeButtonHovered] =
+            React.useState(false)
 
         // Line numbers generator
         const lineNumbers = React.useMemo(() => {
@@ -12464,13 +15919,24 @@ const MiniIDE = React.memo(
                     }
                     // Unknown message types from the iframe are silently ignored
                 } catch (e) {
-                    console.error("[App Player] Error handling iframe message:", e)
+                    console.error(
+                        "[App Player] Error handling iframe message:",
+                        e
+                    )
                 }
             }
 
             window.addEventListener("message", handleMessage)
             return () => window.removeEventListener("message", handleMessage)
-        }, [mode, onCursorMove, onAppInteraction, onAppMutation, onAppInitialState, onRequestInitialState, debugMode])
+        }, [
+            mode,
+            onCursorMove,
+            onAppInteraction,
+            onAppMutation,
+            onAppInitialState,
+            onRequestInitialState,
+            debugMode,
+        ])
 
         // Replay remote events
         React.useEffect(() => {
@@ -12649,7 +16115,10 @@ const MiniIDE = React.memo(
                             >
                                 {(() => {
                                     try {
-                                        return highlightSyntax(code, themeColors)
+                                        return highlightSyntax(
+                                            code,
+                                            themeColors
+                                        )
                                     } catch {
                                         // If syntax highlighting fails on unusual code, render plain text
                                         return code
@@ -12734,10 +16203,20 @@ const MiniIDE = React.memo(
                                 data-svg-wrapper
                                 data-layer="open code editor button."
                                 className="OpenCodeEditorButton"
-                                onClick={() => onModeChange("editor")}
-                                onMouseEnter={() => setIsCodeButtonHovered(true)}
-                                onMouseLeave={() => setIsCodeButtonHovered(false)}
-                                style={{ cursor: "pointer", position: "relative" }}
+                                onClick={() => {
+                                    setIsCodeButtonHovered(false)
+                                    onModeChange("editor")
+                                }}
+                                onMouseEnter={() =>
+                                    setIsCodeButtonHovered(true)
+                                }
+                                onMouseLeave={() =>
+                                    setIsCodeButtonHovered(false)
+                                }
+                                style={{
+                                    cursor: "pointer",
+                                    position: "relative",
+                                }}
                             >
                                 {isCodeButtonHovered && (
                                     <Tooltip
@@ -12773,10 +16252,15 @@ const MiniIDE = React.memo(
                                 data-layer="play button. opens the working app. (50% greyed out when IDE is already open)"
                                 className="PlayButtonOpensTheWorkingApp50GreyedOutWhenIdeIsAlreadyOpen"
                                 onClick={() => {
+                                    setIsPlayButtonHovered(false)
                                     if (isPlayable) onModeChange("player")
                                 }}
-                                onMouseEnter={() => setIsPlayButtonHovered(true)}
-                                onMouseLeave={() => setIsPlayButtonHovered(false)}
+                                onMouseEnter={() =>
+                                    setIsPlayButtonHovered(true)
+                                }
+                                onMouseLeave={() =>
+                                    setIsPlayButtonHovered(false)
+                                }
                                 style={{
                                     cursor: isPlayable ? "pointer" : "default",
                                     opacity: isPlayable ? 1 : 0.5,
@@ -12851,8 +16335,8 @@ const MiniIDE = React.memo(
                                     // Entire srcDoc computation is wrapped in try-catch so
                                     // malformed AI-generated code never crashes the React render.
                                     try {
-                                    // HOST SCRIPT: Captures mutations + Replays interactions
-                                    const hostScript = `<script>
+                                        // HOST SCRIPT: Captures mutations + Replays interactions
+                                        const hostScript = `<script>
                                     // Utility to generate a selector for an element
                                     function getSelector(el) {
                                         if (!el) return null;
@@ -13078,8 +16562,8 @@ const MiniIDE = React.memo(
                                     });
                                 </script>`
 
-                                    // CLIENT SCRIPT: Captures interactions + Applies mutations
-                                    const clientScript = `<script>
+                                        // CLIENT SCRIPT: Captures interactions + Applies mutations
+                                        const clientScript = `<script>
                                     function getSelector(el) {
                                         if (!el) return null;
                                         if (el.nodeType === 3) return getSelector(el.parentNode);
@@ -13294,63 +16778,95 @@ const MiniIDE = React.memo(
                                     }
                                 </script>`
 
-                                    // Inject default body styles in app player if margin, color, or font-family are missing
-                                    let processedCode = code
-                                    if (mode === "player") {
-                                        const styles = code.match(/<style[^>]*>([\s\S]*?)<\/style>/gi)?.join("") || ""
-                                        const inlineStyle = code.match(/<body[^>]*style\s*=\s*["']([^"']*)["']/i)?.[1] || ""
-                                        const allStyles = styles + inlineStyle
-                                        const hasAll = /\bbody\s*\{/i.test(allStyles) && /margin\s*:/i.test(allStyles) && /color\s*:/i.test(allStyles) && /font-family\s*:/i.test(allStyles)
-                                        
-                                        if (!hasAll) {
-                                            const defaultStyle = `<style>body { margin: 86px 24px 0px 24px; color: #ffffff; font-family: sans-serif; }</style>`
-                                            if (code.includes("<head>")) {
-                                                processedCode = code.replace("<head>", `<head>${defaultStyle}`)
-                                            } else if (code.includes("<html>")) {
-                                                processedCode = code.replace("<html>", `<html><head>${defaultStyle}</head>`)
-                                            } else {
-                                                processedCode = `<html><head>${defaultStyle}</head><body>${code}</body></html>`
+                                        // Inject default body styles in app player if margin, color, or font-family are missing
+                                        let processedCode = code
+                                        if (mode === "player") {
+                                            const styles =
+                                                code
+                                                    .match(
+                                                        /<style[^>]*>([\s\S]*?)<\/style>/gi
+                                                    )
+                                                    ?.join("") || ""
+                                            const inlineStyle =
+                                                code.match(
+                                                    /<body[^>]*style\s*=\s*["']([^"']*)["']/i
+                                                )?.[1] || ""
+                                            const allStyles =
+                                                styles + inlineStyle
+                                            const hasAll =
+                                                /\bbody\s*\{/i.test(
+                                                    allStyles
+                                                ) &&
+                                                /margin\s*:/i.test(allStyles) &&
+                                                /color\s*:/i.test(allStyles) &&
+                                                /font-family\s*:/i.test(
+                                                    allStyles
+                                                )
+
+                                            if (!hasAll) {
+                                                const defaultStyle = `<style>body { margin: 86px 24px 0px 24px; color: #ffffff; font-family: sans-serif; }</style>`
+                                                if (code.includes("<head>")) {
+                                                    processedCode =
+                                                        code.replace(
+                                                            "<head>",
+                                                            `<head>${defaultStyle}`
+                                                        )
+                                                } else if (
+                                                    code.includes("<html>")
+                                                ) {
+                                                    processedCode =
+                                                        code.replace(
+                                                            "<html>",
+                                                            `<html><head>${defaultStyle}</head>`
+                                                        )
+                                                } else {
+                                                    processedCode = `<html><head>${defaultStyle}</head><body>${code}</body></html>`
+                                                }
                                             }
                                         }
-                                    }
 
-                                    if (amIHost) {
-                                        // Host loads full code + Host Script
-                                        return processedCode.includes("<head>")
-                                            ? processedCode.replace(
-                                                  "<head>",
-                                                  `<head><base target="_blank">${hostScript}`
-                                              )
-                                            : `<base target="_blank">${hostScript}${processedCode}`
-                                    } else {
-                                        // Client loads Sanitized Code (No JS) + Client Script
-                                        // We strip scripts to prevent local execution logic
-                                        // And strip inline handlers more robustly
-                                        const sanitized = processedCode
-                                            .replace(
-                                                /<script\b[^>]*>([\s\S]*?)<\/script>/gim,
-                                                ""
+                                        if (amIHost) {
+                                            // Host loads full code + Host Script
+                                            return processedCode.includes(
+                                                "<head>"
                                             )
-                                            .replace(
-                                                /\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
-                                                ""
-                                            ) // Remove inline handlers
+                                                ? processedCode.replace(
+                                                      "<head>",
+                                                      `<head><base target="_blank">${hostScript}`
+                                                  )
+                                                : `<base target="_blank">${hostScript}${processedCode}`
+                                        } else {
+                                            // Client loads Sanitized Code (No JS) + Client Script
+                                            // We strip scripts to prevent local execution logic
+                                            // And strip inline handlers more robustly
+                                            const sanitized = processedCode
+                                                .replace(
+                                                    /<script\b[^>]*>([\s\S]*?)<\/script>/gim,
+                                                    ""
+                                                )
+                                                .replace(
+                                                    /\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
+                                                    ""
+                                                ) // Remove inline handlers
 
-                                        // If code has no body/head, wrap it
-                                        let finalCode = sanitized
-                                        if (!finalCode.includes("<body")) {
-                                            finalCode = `<body>${finalCode}</body>`
+                                            // If code has no body/head, wrap it
+                                            let finalCode = sanitized
+                                            if (!finalCode.includes("<body")) {
+                                                finalCode = `<body>${finalCode}</body>`
+                                            }
+
+                                            return finalCode.includes("<head>")
+                                                ? finalCode.replace(
+                                                      "<head>",
+                                                      `<head><base target="_blank">${clientScript}`
+                                                  )
+                                                : `<base target="_blank">${clientScript}${finalCode}`
                                         }
-
-                                        return finalCode.includes("<head>")
-                                            ? finalCode.replace(
-                                                  "<head>",
-                                                  `<head><base target="_blank">${clientScript}`
-                                              )
-                                            : `<base target="_blank">${clientScript}${finalCode}`
-                                    }
                                     } catch (e) {
-                                        console.error("[App Player] Failed to build srcDoc:", e)
+                                        console.error(
+                                            "[App Player] Failed to build srcDoc:",
+                                            e
+                                        )
                                         return `<!DOCTYPE html><html><body style="background:#141414;color:#fff;font-family:sans-serif;padding:86px 24px 24px;margin:0"><p style="opacity:0.7">⚠️ Could not render app. Open the editor to fix the code.</p></body></html>`
                                     }
                                 })()}
@@ -13708,7 +17224,8 @@ export default function OmegleMentorshipUI(props: Props) {
 
     const [remoteAppMutation, setRemoteAppMutation] = React.useState<any>(null)
     const [remoteAppEvent, setRemoteAppEvent] = React.useState<any>(null)
-    const [remoteAppInitialState, setRemoteAppInitialState] = React.useState<any>(null)
+    const [remoteAppInitialState, setRemoteAppInitialState] =
+        React.useState<any>(null)
     const [amIHost, setAmIHost] = React.useState(false)
 
     // --- STATE: WEBRTC & CONNECTIVITY ---
@@ -13782,7 +17299,77 @@ export default function OmegleMentorshipUI(props: Props) {
 
     // --- STATE: JOB DETAIL ---
     const [isJobOpen, setIsJobOpen] = React.useState(false)
-    const [selectedJob, setSelectedJob] = React.useState<HomepageJob | null>(null)
+    const [selectedJob, setSelectedJob] = React.useState<HomepageJob | null>(
+        null
+    )
+    // Ref so async callbacks (tool handlers, getSystemPromptWithContext) always
+    // see the current job without needing it in their dependency arrays.
+    const selectedJobRef = React.useRef<HomepageJob | null>(null)
+    React.useEffect(() => {
+        selectedJobRef.current = isJobOpen ? selectedJob : null
+    }, [selectedJob, isJobOpen])
+
+    // Delayed flag so context-aware placeholder only shows after the overlay
+    // slide-up animation is well underway (~halfway through 250ms).
+    const [toolOverlayReady, setToolOverlayReady] = React.useState(false)
+    const jobOverlayReady = toolOverlayReady && isJobOpen
+    React.useEffect(() => {
+        const onMobile =
+            typeof window !== "undefined" && window.innerWidth < 768
+        if (!onMobile) return
+        const anyOverlayOpen = isJobOpen || isDocOpen || isAppOpen
+        let t: ReturnType<typeof setTimeout>
+        if (anyOverlayOpen) {
+            t = setTimeout(() => setToolOverlayReady(true), 150)
+        } else {
+            setToolOverlayReady(false)
+        }
+        return () => clearTimeout(t)
+    }, [isJobOpen, isDocOpen, isAppOpen])
+
+    const isToolOpen =
+        isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen
+
+    // --- STATE: RESUME KEYWORD ANIMATION ---
+    // Drives the multi-phase animation: keywords orbit the right sidebar during
+    // generation, then fly to their exact positions in the rendered resume.
+    const [resumeAnimPhase, setResumeAnimPhase] = React.useState<
+        "idle" | "fading" | "orbiting" | "landing" | "done"
+    >("idle")
+    const [resumeAnimKeywords, setResumeAnimKeywords] = React.useState<
+        string[]
+    >([])
+    const [resumeUsedKeywords, setResumeUsedKeywords] = React.useState<
+        string[]
+    >([])
+    // Pre-captured keyword positions + orbit geometry (set synchronously in
+    // handleCreateResume so the job detail DOM is still intact at capture time)
+    const [resumeCapturedItems, setResumeCapturedItems] = React.useState<
+        CapturedKeyword[]
+    >([])
+    // Refs so async tool handlers can read current values without stale closure
+    const resumeAnimPhaseRef = React.useRef(resumeAnimPhase)
+    const resumeAnimKeywordsRef = React.useRef(resumeAnimKeywords)
+    React.useEffect(() => {
+        resumeAnimPhaseRef.current = resumeAnimPhase
+    }, [resumeAnimPhase])
+    React.useEffect(() => {
+        resumeAnimKeywordsRef.current = resumeAnimKeywords
+    }, [resumeAnimKeywords])
+
+    // Per-job resume cache: jobId → generated HTML.
+    // Skips the AI call on repeat clicks — same animation, instant result.
+    const resumeCache = React.useRef<Map<string, string>>(new Map())
+    // Tracks which job the current animation is for so the cache can be written
+    // from inside the create_resume async tool handler.
+    const resumeJobIdRef = React.useRef<string | null>(null)
+
+    // Reset animation when the user switches to a different job
+    React.useEffect(() => {
+        setResumeAnimPhase("idle")
+        setResumeCapturedItems([])
+        setResumeUsedKeywords([])
+    }, [selectedJob?.id])
 
     const openJobDetail = React.useCallback((job: HomepageJob) => {
         setSelectedJob(job)
@@ -13794,6 +17381,19 @@ export default function OmegleMentorshipUI(props: Props) {
 
     const closeJobDetail = React.useCallback(() => {
         setIsJobOpen(false)
+    }, [])
+
+    // Close the DocEditor — if a resume animation is active, also reset all
+    // animation state and close the job panel so the whole sidebar dismisses.
+    const handleDocClose = React.useCallback(() => {
+        setIsDocOpen(false)
+        isDocOpenRef.current = false
+        if (resumeAnimPhaseRef.current !== "idle") {
+            setResumeAnimPhase("idle")
+            setResumeCapturedItems([])
+            setResumeUsedKeywords([])
+            setIsJobOpen(false)
+        }
     }, [])
 
     // Track pending connections (black tiles)
@@ -13855,6 +17455,9 @@ export default function OmegleMentorshipUI(props: Props) {
     // Shadow global styles with themed styles
     const styles = React.useMemo(() => getStyles(themeColors), [themeColors])
     const [docContent, setDocContent] = React.useState(DEFAULT_DOC_CONTENT)
+    const [docType, setDocType] = React.useState<
+        "doc" | "resume" | "cover_letter"
+    >("doc")
     interface DocSettings {
         fontStyle: "serif" | "sans"
         fontSize: number // Base font size
@@ -13954,6 +17557,26 @@ export default function OmegleMentorshipUI(props: Props) {
                 prompt += `\nLocation: ${locationInfo.city}, ${locationInfo.region}, ${locationInfo.country}`
             }
 
+            // Inject saved memories so AI can personalise without calling retrieve_memories every turn
+            const memories = getMemories()
+            if (memories.length > 0) {
+                prompt += `\n\n[What You Know About This User]\n${memories.map((m) => `- ${m.text}`).join("\n")}`
+            }
+
+            // Inject saved resume so AI can use it for job matching, resume creation, etc.
+            const resume = getResume()
+            if (resume) {
+                prompt += `\n\n[User's Saved Resume]\n${resume}`
+            }
+
+            // Surface only the job ID — the model must call get_job_details to
+            // get the actual data. Pre-injecting title/description would defeat
+            // the purpose of the tool and risk serving stale data.
+            if (selectedJobRef.current) {
+                const j = selectedJobRef.current
+                prompt += `\n\n[Currently Viewed Job]\nJob ID: ${j.id}\nThe user has a job open in the right sidebar. When they ask about "this job", "it", or "the job", call get_job_details with job_id: "${j.id}" to get the full details before responding.`
+            }
+
             if (forVoice) {
                 // Voice session: natural speech only — no XML tags, no delimiters.
                 // Suggestions are generated separately via fetchAiSuggestions().
@@ -13978,7 +17601,8 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
 
             return prompt
         },
-        [systemPrompt, locationInfo, role]
+        // selectedJobRef is a ref — no need to list in deps; it's always current.
+        [systemPrompt, locationInfo, role, isJobOpen, selectedJob]
     )
 
     const docContentRef = React.useRef(docContent)
@@ -14201,6 +17825,17 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
     // --- STATE: GEMINI LIVE ---
     const [isLiveMode, setIsLiveMode] = React.useState(false)
     const lastLiveUpdateRef = React.useRef(Date.now())
+
+    const wasInP2PRef = React.useRef(false)
+    React.useEffect(() => {
+        const inP2P = (status !== "idle" || !!role) && !isLiveMode
+        if (inP2P && !wasInP2PRef.current) {
+            setShowAddPeopleOverlay(true)
+        } else if (!inP2P && wasInP2PRef.current) {
+            setShowAddPeopleOverlay(false)
+        }
+        wasInP2PRef.current = inP2P
+    }, [status, role, isLiveMode])
 
     React.useEffect(() => {
         if (!isLiveMode) return
@@ -14810,6 +18445,63 @@ Do not include markdown formatting or explanations.`
                                     },
                                 ],
                             },
+                            tools: [
+                                {
+                                    functionDeclarations: [
+                                        {
+                                            name: "search_jobs",
+                                            description:
+                                                "Search Curastem's job listings by keyword, location, or job type. Use when the user asks to find or browse jobs during the voice call. Results will be shown as cards in the chat. Say something like 'I found X jobs for you — check the chat.'",
+                                            parameters: {
+                                                type: "OBJECT",
+                                                properties: {
+                                                    query: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "Job title, role, skill, or company name",
+                                                    },
+                                                    location: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "City, state, or region",
+                                                    },
+                                                    employment_type: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "full_time, part_time, contract, internship, or temporary",
+                                                    },
+                                                    workplace_type: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "remote, hybrid, or on_site",
+                                                    },
+                                                    limit: {
+                                                        type: "NUMBER",
+                                                        description:
+                                                            "Number of results (default 6, max 20)",
+                                                    },
+                                                },
+                                            },
+                                        },
+                                        {
+                                            name: "get_job_details",
+                                            description:
+                                                "Get full details about a specific job. Use when the user asks about 'this job', 'that job', or wants to know more. If a job is currently open in the sidebar its ID is in the system context — use it directly.",
+                                            parameters: {
+                                                type: "OBJECT",
+                                                properties: {
+                                                    job_id: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "The job ID from a search result or from the currently viewed job context",
+                                                    },
+                                                },
+                                                required: ["job_id"],
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
                             inputAudioTranscription: {},
                             outputAudioTranscription: {},
                         },
@@ -14836,8 +18528,12 @@ Do not include markdown formatting or explanations.`
                     let stream = localStreamRef.current
                     if (!stream) {
                         // Same iOS audioSession fix as startChat()
-                        if (typeof navigator !== "undefined" && "audioSession" in navigator) {
-                            ;(navigator as any).audioSession.type = "play-and-record"
+                        if (
+                            typeof navigator !== "undefined" &&
+                            "audioSession" in navigator
+                        ) {
+                            ;(navigator as any).audioSession.type =
+                                "play-and-record"
                         }
                         stream = await navigator.mediaDevices.getUserMedia({
                             video: true,
@@ -15105,6 +18801,164 @@ Do not include markdown formatting or explanations.`
                                 }
                                 return prev
                             })
+                        }
+                    }
+
+                    // ---------------------------------------------------------------------------
+                    // Handle tool calls from Gemini Live (search_jobs, get_job_details)
+                    // The model sends a toolCall message; we execute the function and reply
+                    // with toolResponse so the model can continue speaking.
+                    // ---------------------------------------------------------------------------
+                    if (data.toolCall?.functionCalls?.length) {
+                        for (const fc of data.toolCall.functionCalls) {
+                            ;(async () => {
+                                let responsePayload: any = {}
+
+                                if (fc.name === "search_jobs") {
+                                    const args = fc.args ?? {}
+                                    const params = new URLSearchParams()
+                                    if (args.query) params.set("q", args.query)
+                                    if (args.location)
+                                        params.set("location", args.location)
+                                    if (args.employment_type)
+                                        params.set(
+                                            "employment_type",
+                                            args.employment_type
+                                        )
+                                    if (args.workplace_type)
+                                        params.set(
+                                            "workplace_type",
+                                            args.workplace_type
+                                        )
+                                    params.set(
+                                        "limit",
+                                        String(Math.min(args.limit ?? 6, 20))
+                                    )
+                                    try {
+                                        const jobsRes = await fetch(
+                                            `${jobsApiUrl}/jobs?${params}`
+                                        )
+                                        if (jobsRes.ok) {
+                                            const jobsData = await jobsRes.json()
+                                            const snippets: JobSnippet[] = (
+                                                jobsData.data ?? []
+                                            ).map((j: any): JobSnippet => ({
+                                                id: j.id,
+                                                title: j.title,
+                                                company: j.company?.name ?? "",
+                                                company_logo:
+                                                    j.company?.logo_url ?? null,
+                                                location: j.location ?? null,
+                                                employment_type:
+                                                    j.employment_type ?? null,
+                                                workplace_type:
+                                                    j.workplace_type ?? null,
+                                                posted_at: j.posted_at ?? null,
+                                                apply_url: j.apply_url ?? null,
+                                                summary: j.job_summary ?? null,
+                                                salary: j.salary
+                                                    ? `${j.salary.currency} ${[j.salary.min, j.salary.max].filter(Boolean).join("–")}/${j.salary.period}`
+                                                    : null,
+                                            }))
+                                            // Show cards in chat
+                                            if (snippets.length > 0) {
+                                                setMessages((prev) => [
+                                                    ...prev,
+                                                    {
+                                                        role: "model",
+                                                        text: "",
+                                                        jobs: snippets,
+                                                    },
+                                                ])
+                                            }
+                                            responsePayload = {
+                                                jobs: snippets
+                                                    .slice(0, 6)
+                                                    .map(
+                                                        (j, i) =>
+                                                            `${i + 1}. ${j.title} at ${j.company}${j.location ? ` — ${j.location}` : ""}`
+                                                    )
+                                                    .join("\n"),
+                                                total: snippets.length,
+                                            }
+                                        }
+                                    } catch (err) {
+                                        console.error(
+                                            "live search_jobs fetch:",
+                                            err
+                                        )
+                                        responsePayload = {
+                                            error: "Could not reach jobs API.",
+                                        }
+                                    }
+                                } else if (fc.name === "get_job_details") {
+                                    const jobId =
+                                        fc.args?.job_id ||
+                                        selectedJobRef.current?.id ||
+                                        null
+                                    if (jobId) {
+                                        try {
+                                            const detailRes = await fetch(
+                                                `${jobsApiUrl}/jobs/${jobId}`
+                                            )
+                                            if (detailRes.ok) {
+                                                const j = await detailRes.json()
+                                                responsePayload = {
+                                                    title: j.title,
+                                                    company: j.company?.name,
+                                                    location: j.location,
+                                                    employment_type:
+                                                        j.employment_type,
+                                                    workplace_type:
+                                                        j.workplace_type,
+                                                    summary: j.job_summary,
+                                                    salary: j.salary,
+                                                    responsibilities:
+                                                        j.job_description
+                                                            ?.responsibilities ??
+                                                        [],
+                                                    minimum_qualifications:
+                                                        j.job_description
+                                                            ?.minimum_qualifications ??
+                                                        [],
+                                                    apply_url: j.apply_url,
+                                                }
+                                            }
+                                        } catch (err) {
+                                            console.error(
+                                                "live get_job_details fetch:",
+                                                err
+                                            )
+                                            responsePayload = {
+                                                error: "Could not retrieve job details.",
+                                            }
+                                        }
+                                    } else {
+                                        responsePayload = {
+                                            error: "No job ID provided.",
+                                        }
+                                    }
+                                }
+
+                                // Send tool response back so the model can speak its answer
+                                if (
+                                    ws.readyState === WebSocket.OPEN
+                                ) {
+                                    ws.send(
+                                        JSON.stringify({
+                                            toolResponse: {
+                                                functionResponses: [
+                                                    {
+                                                        id: fc.id,
+                                                        response:
+                                                            responsePayload,
+                                                    },
+                                                ],
+                                            },
+                                        })
+                                    )
+                                }
+                            })()
                         }
                     }
 
@@ -15536,7 +19390,9 @@ Do not include markdown formatting or explanations.`
 
     // Always start a fresh chat on load — a new ID won't match any savedChats entry,
     // so the restore effect falls through to the "new chat" branch automatically.
-    const [currentChatId, setCurrentChatId] = React.useState<string>(() => Date.now().toString())
+    const [currentChatId, setCurrentChatId] = React.useState<string>(() =>
+        Date.now().toString()
+    )
 
     React.useEffect(() => {
         if (typeof window !== "undefined") {
@@ -15620,7 +19476,6 @@ Do not include markdown formatting or explanations.`
         }
     }, [isSidebarOpen])
 
-
     // Motion values for sidebar gesture
     const sidebarX = useMotionValue(-260)
     const sidebarOverlayOpacity = useTransform(sidebarX, [-260, 0], [0, 1])
@@ -15632,34 +19487,14 @@ Do not include markdown formatting or explanations.`
         }
     }, [isSidebarOpen])
 
-    // Store sidebar state before tool opened
-    const wasSidebarOpenBeforeTool = React.useRef<boolean | null>(null)
-
-    React.useEffect(() => {
-        const isAnyToolOpen = isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen
-
-        if (isAnyToolOpen) {
-            // Tool(s) just opened or switched
-            if (wasSidebarOpenBeforeTool.current === null) {
-                // If this is the transition from No Tool -> Tool
-                // Save current sidebar state
-                wasSidebarOpenBeforeTool.current = isSidebarOpen
-                // Close sidebar if it was open
-                if (isSidebarOpen) {
-                    setIsSidebarOpen(false)
-                }
-            }
-        } else {
-            // All tools closed
-            if (wasSidebarOpenBeforeTool.current !== null) {
-                // Restore sidebar state
-                if (wasSidebarOpenBeforeTool.current !== isSidebarOpen) {
-                    setIsSidebarOpen(wasSidebarOpenBeforeTool.current)
-                }
-                wasSidebarOpenBeforeTool.current = null
-            }
+    useSaveRestoreOnToggle(
+        isToolOpen,
+        () => isSidebarOpen,
+        setIsSidebarOpen,
+        (saved) => {
+            if (saved) setIsSidebarOpen(false)
         }
-    }, [isDocOpen, isWhiteboardOpen, isAppOpen])
+    )
 
     const [isSidebarBtnHovered, setIsSidebarBtnHovered] = React.useState(false)
     const [isVideoCallIconHovered, setIsVideoCallIconHovered] =
@@ -15675,7 +19510,6 @@ Do not include markdown formatting or explanations.`
     const [isTopNewChatHovered, setIsTopNewChatHovered] = React.useState(false)
     const [isNewChatTopRightHovered, setIsNewChatTopRightHovered] =
         React.useState(false)
-    const [isAddPeopleHovered, setIsAddPeopleHovered] = React.useState(false)
     const [isYouHovered, setIsYouHovered] = React.useState(false)
     const [searchQuery, setSearchQuery] = React.useState("")
     const messagesRef = React.useRef(messages)
@@ -16049,6 +19883,16 @@ Do not include markdown formatting or explanations.`
                         if (savedDoc && savedDoc !== docContent) {
                             setDocContent(savedDoc)
                         }
+                        const savedDocType =
+                            localStorage.getItem("student_doc_type")
+                        if (
+                            savedDocType === "resume" ||
+                            savedDocType === "cover_letter"
+                        ) {
+                            setDocType(
+                                savedDocType as "resume" | "cover_letter"
+                            )
+                        }
                     }
                     // Restore App Code
                     const savedAppCode =
@@ -16119,6 +19963,7 @@ Do not include markdown formatting or explanations.`
 
             localStorage.setItem("student_messages", JSON.stringify(messages))
             localStorage.setItem("student_doc", docContent)
+            localStorage.setItem("student_doc_type", docType)
             localStorage.setItem("student_app_code", appCode)
             localStorage.setItem("student_app_mode", appMode)
             localStorage.setItem(
@@ -16139,7 +19984,7 @@ Do not include markdown formatting or explanations.`
                 }
             }
         }
-    }, [role, messages, docContent, appCode, appMode, editor, status])
+    }, [role, messages, docContent, docType, appCode, appMode, editor, status])
 
     // --- PERSISTENCE: STUDENT / NO-ROLE DATA (24H) ---
     React.useEffect(() => {
@@ -16166,6 +20011,16 @@ Do not include markdown formatting or explanations.`
                         const savedDoc = localStorage.getItem("student_doc")
                         if (savedDoc && savedDoc !== docContent) {
                             setDocContent(savedDoc)
+                        }
+                        const savedDocType =
+                            localStorage.getItem("student_doc_type")
+                        if (
+                            savedDocType === "resume" ||
+                            savedDocType === "cover_letter"
+                        ) {
+                            setDocType(
+                                savedDocType as "resume" | "cover_letter"
+                            )
                         }
                     }
                     // Restore App Code
@@ -16237,6 +20092,7 @@ Do not include markdown formatting or explanations.`
 
             localStorage.setItem("student_messages", JSON.stringify(messages))
             localStorage.setItem("student_doc", docContent)
+            localStorage.setItem("student_doc_type", docType)
             localStorage.setItem("student_app_code", appCode)
             localStorage.setItem("student_app_mode", appMode)
             localStorage.setItem(
@@ -16257,7 +20113,7 @@ Do not include markdown formatting or explanations.`
                 }
             }
         }
-    }, [role, messages, docContent, appCode, appMode, editor, status]) // Triggers on message/doc change. Whiteboard might lag if no other activity.
+    }, [role, messages, docContent, docType, appCode, appMode, editor, status]) // Triggers on message/doc change. Whiteboard might lag if no other activity.
 
     const hasMessages = messages.length > 0
     const [copiedMessageId, setCopiedMessageId] = React.useState<string | null>(
@@ -16370,7 +20226,9 @@ Do not include markdown formatting or explanations.`
     const inputHtmlRef = React.useRef<string>("")
     // Refs for broadcast to always send latest (avoids stale closure when throttled)
     const inputTextRef = React.useRef<string>("")
-    const selectedSkillsRef = React.useRef<Array<{ id: string; name: string; description?: string }>>([])
+    const selectedSkillsRef = React.useRef<
+        Array<{ id: string; name: string; description?: string }>
+    >([])
     React.useEffect(() => {
         inputTextRef.current = inputText
         selectedSkillsRef.current = selectedSkills
@@ -16404,6 +20262,9 @@ Do not include markdown formatting or explanations.`
 
     // --- CONSTANTS ---
     const MIN_CHAT_HEIGHT = 204
+    const LEFT_SIDEBAR_WIDTH = 260
+    const MIN_CHAT_WIDTH = 400
+    const SIDEBAR_MODE_WIDTH = 400
 
     // --- STATE: LAYOUT & DIMENSIONS ---
     const [containerSize, setContainerSize] = React.useState(() => {
@@ -16432,20 +20293,20 @@ Do not include markdown formatting or explanations.`
 
         // Only enforce on desktop
         if (containerSize.width >= 768) {
-            const leftSidebarWidth = isSidebarOpen ? 260 : 0
-            const availableWidth = containerSize.width - leftSidebarWidth
+            const _leftSidebarWidth = isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
+            const availableWidth = containerSize.width - _leftSidebarWidth
 
-            // Tool needs at least 400px
-            const maxChatWidth = Math.max(0, availableWidth - 400)
+            // Tool needs at least MIN_CHAT_WIDTH
+            const maxChatWidth = Math.max(0, availableWidth - MIN_CHAT_WIDTH)
 
             setChatWidth((prev) => {
                 // If current chat width violates the tool's space, shrink it
-                // We also respect the chat's own min width (400) if possible,
+                // We also respect the chat's own min width if possible,
                 // but Tool Min Width is the hard constraint.
-                // Logic: Clamp(prev, 400, maxChatWidth)
-                // If maxChatWidth < 400, we clamp to maxChatWidth (Tool wins).
-
-                const target = Math.min(Math.max(prev, 400), maxChatWidth)
+                const target = Math.min(
+                    Math.max(prev, MIN_CHAT_WIDTH),
+                    maxChatWidth
+                )
 
                 // Only update if different to avoid loops
                 if (prev !== target) return target
@@ -16458,9 +20319,11 @@ Do not include markdown formatting or explanations.`
     const hasSnappedForMessages = React.useRef(false)
     const chatHeightBeforeOverlay = React.useRef<number | null>(null)
     const isMobileLayout = containerSize.width < 768
+    const leftSidebarWidth =
+        !isMobileLayout && isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
 
     React.useEffect(() => {
-        animate(sidebarX, isSidebarOpen ? 0 : -260, {
+        animate(sidebarX, isSidebarOpen ? 0 : -LEFT_SIDEBAR_WIDTH, {
             type: "spring",
             stiffness: 700,
             damping: 50,
@@ -16509,7 +20372,7 @@ Do not include markdown formatting or explanations.`
         })
         observer.observe(mobileInputRef.current)
         return () => observer.disconnect()
-    }, [isMobileLayout, isWhiteboardOpen, isDocOpen])
+    }, [isMobileLayout, isWhiteboardOpen, isDocOpen, isAppOpen, isJobOpen])
 
     const [sharedScreenSize, setSharedScreenSize] = React.useState<{
         width: number
@@ -16614,26 +20477,19 @@ Do not include markdown formatting or explanations.`
                 2,
                 1 + remoteStreams.size + pendingPeerIds.size
             )
-            const isMultiParty = numTiles > 2
-            const isContentOpen =
-                _isScreenSharing ||
-                !!_remoteScreenStream ||
-                _isWhiteboardOpen ||
-                _isDocOpen ||
+            const isContentOpen = hasVideoContent(
+                _isScreenSharing,
+                _remoteScreenStream,
+                _isWhiteboardOpen,
+                _isDocOpen,
                 _isAppOpen
-            const targetRatio =
-                isMultiParty || (isContentOpen && isMultiParty) ? 1.0 : 1.55
+            )
+            const targetRatio = getTargetRatioForTiles(numTiles, isContentOpen)
 
             // 1. Calculate Min Height (Max Video Height Constraint)
             let minHeight = MIN_CHAT_HEIGHT
 
-            if (
-                !_isScreenSharing &&
-                !_remoteScreenStream &&
-                !_isWhiteboardOpen &&
-                !_isDocOpen &&
-                !_isAppOpen
-            ) {
+            if (!isContentOpen) {
                 let maxVideoHeightNeeded = 0
 
                 if (_isMobileLayout) {
@@ -16652,31 +20508,15 @@ Do not include markdown formatting or explanations.`
                 minHeight = Math.max(MIN_CHAT_HEIGHT, calculatedMinChatHeight)
             } else {
                 // Screen Share / Whiteboard / Document Mode
-                let activeWidth = _sharedScreenSize?.width
-                let activeHeight = _sharedScreenSize?.height
-
-                if (_isWhiteboardOpen) {
-                    if (_isMobileLayout) {
-                        activeWidth = 1080
-                        activeHeight = 1350
-                    } else {
-                        activeWidth = 1920
-                        activeHeight = 1080
-                    }
-                } else if (_isDocOpen) {
-                    // A4 Dimensions
-                    activeWidth = 1240
-                    activeHeight = 1754
-                } else if (_isAppOpen) {
-                    // App IDE dimensions (similar to whiteboard)
-                    if (_isMobileLayout) {
-                        activeWidth = 1080
-                        activeHeight = 1350
-                    } else {
-                        activeWidth = 1920
-                        activeHeight = 1080
-                    }
-                }
+                const contentDims =
+                    getContentDimensions(
+                        _isWhiteboardOpen,
+                        _isDocOpen,
+                        _isAppOpen,
+                        _isMobileLayout
+                    ) ?? _sharedScreenSize
+                const activeWidth = contentDims?.width
+                const activeHeight = contentDims?.height
 
                 if (activeWidth && activeHeight) {
                     const videoRatio = activeWidth / activeHeight
@@ -16702,14 +20542,7 @@ Do not include markdown formatting or explanations.`
             // 2. Calculate Max Height (Min Video Height Constraint)
             let maxHeight = cHeight - MIN_CHAT_HEIGHT // Default
 
-            if (
-                _isMobileLayout &&
-                !_isScreenSharing &&
-                !_remoteScreenStream &&
-                !_isWhiteboardOpen &&
-                !_isDocOpen &&
-                !_isAppOpen
-            ) {
+            if (_isMobileLayout && !isContentOpen) {
                 const minVideoSectionHeight = 80
                 maxHeight = Math.max(
                     MIN_CHAT_HEIGHT,
@@ -16717,13 +20550,7 @@ Do not include markdown formatting or explanations.`
                 )
             }
 
-            if (
-                _isScreenSharing ||
-                !!_remoteScreenStream ||
-                _isWhiteboardOpen ||
-                _isDocOpen ||
-                _isAppOpen
-            ) {
+            if (isContentOpen) {
                 let topRowHeight = 140
                 if (_isMobileLayout) {
                     const availableW = Math.max(0, cWidth - 32)
@@ -16814,13 +20641,20 @@ Do not include markdown formatting or explanations.`
 
         // On mobile with active messages, completely skip resize handling
         // to prevent virtual keyboard from affecting layout
-        if (isMobileLayout && hasMessages && !isWhiteboardOpen && !isDocOpen) {
+        if (
+            isMobileLayout &&
+            hasMessages &&
+            !isWhiteboardOpen &&
+            !isDocOpen &&
+            !isAppOpen &&
+            !isJobOpen
+        ) {
             prevContainerSize.current = containerSize
             return
         }
 
         const { minHeight, maxHeight } = calculateHeightConstraints(
-            containerSize.width - (!isMobileLayout && isSidebarOpen ? 260 : 0),
+            containerSize.width - leftSidebarWidth,
             containerSize.height,
             isMobileLayout,
             isScreenSharing,
@@ -16857,7 +20691,9 @@ Do not include markdown formatting or explanations.`
             containerSize.width === 0 ||
             containerSize.height === 0 ||
             isWhiteboardOpen ||
-            isDocOpen
+            isDocOpen ||
+            isAppOpen ||
+            isJobOpen
         )
             return
 
@@ -16918,6 +20754,8 @@ Do not include markdown formatting or explanations.`
         hasMessages,
         isWhiteboardOpen,
         isDocOpen,
+        isAppOpen,
+        isJobOpen,
         isMobileLayout,
         containerSize,
         isScreenSharing,
@@ -16936,22 +20774,23 @@ Do not include markdown formatting or explanations.`
     const chatHeightBeforeSidebar = React.useRef<number | null>(null)
     const prevSidebarOpen = React.useRef(isSidebarOpen)
 
-    // --- EFFECT: MINIMIZE CHAT WHEN DOC OR WHITEBOARD OPENS ---
+    // --- EFFECT: MINIMIZE CHAT WHEN DOC, WHITEBOARD, APP, OR JOBS OPENS ---
     // Save previous height and restore when closing
     React.useEffect(() => {
-        if (isDocOpen || isWhiteboardOpen) {
+        if (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) {
             // Calculate proper initial height based on constraints
             const containerHeight =
                 containerRef.current?.clientHeight || window.innerHeight
             const containerWidth =
                 containerRef.current?.clientWidth || window.innerWidth
 
-            const isSidebarMode =
-                !isMobileLayout && (isWhiteboardOpen || isDocOpen)
-            const effectiveWidth = isSidebarMode ? 400 : containerWidth
+            const isSidebarMode = !isMobileLayout && isToolOpen
+            const effectiveWidth = isSidebarMode
+                ? SIDEBAR_MODE_WIDTH
+                : containerWidth
 
             // Adjust effective width if sidebar is open on desktop standard mode
-            const widthReduction = !isMobileLayout && isSidebarOpen ? 260 : 0
+            const widthReduction = leftSidebarWidth
             const finalWidth = effectiveWidth - widthReduction
 
             const effectiveMobile = isSidebarMode || isMobileLayout
@@ -16987,6 +20826,8 @@ Do not include markdown formatting or explanations.`
     }, [
         isDocOpen,
         isWhiteboardOpen,
+        isAppOpen,
+        isJobOpen,
         calculateHeightConstraints,
         isMobileLayout,
         isScreenSharing,
@@ -17709,6 +21550,10 @@ Do not include markdown formatting or explanations.`
         if (typeof window !== "undefined") {
             localStorage.setItem("current_chat_id", newId)
         }
+
+        // Scroll to top so jobs homepage feels like a new page (not stuck at chat scroll position)
+        if (typeof window !== "undefined") window.scrollTo(0, 0)
+        chatHistoryRef.current?.scrollTo(0, 0)
     }, [saveChatHistory])
 
     // --- SIDEBAR ACTIONS ---
@@ -18012,7 +21857,10 @@ Do not include markdown formatting or explanations.`
                 // our sound functions). "playback" blocks microphone access.
                 // "play-and-record" explicitly permits both output and capture.
                 // Guard: this API is Safari/iOS-only; safe no-op on other browsers.
-                if (typeof navigator !== "undefined" && "audioSession" in navigator) {
+                if (
+                    typeof navigator !== "undefined" &&
+                    "audioSession" in navigator
+                ) {
                     ;(navigator as any).audioSession.type = "play-and-record"
                 }
                 console.log("[Curastem] calling getUserMedia...")
@@ -18027,13 +21875,22 @@ Do not include markdown formatting or explanations.`
 
             initPeerJS()
         } catch (err: any) {
-            console.error("[Curastem] getUserMedia error:", err.name, err.message)
+            console.error(
+                "[Curastem] getUserMedia error:",
+                err.name,
+                err.message
+            )
             log(`Media Error: ${err.name} — ${err.message}`)
 
             // NotAllowedError = user denied OR iOS Settings blocked the site.
             // On iOS: Settings → Privacy & Security → Camera → Safari → Allow
-            if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-                log("Camera blocked. On iOS: Settings → Privacy & Security → Camera → Safari → turn on for this site.")
+            if (
+                err.name === "NotAllowedError" ||
+                err.name === "PermissionDeniedError"
+            ) {
+                log(
+                    "Camera blocked. On iOS: Settings → Privacy & Security → Camera → Safari → turn on for this site."
+                )
             }
             // NotFoundError = no camera/mic device found
             if (err.name === "NotFoundError") {
@@ -19628,7 +23485,8 @@ Hard rules: index unique per shape ("a1","a2"…); x/y/w/h finite numbers, w/h >
                                     properties: {
                                         shapes: {
                                             type: "ARRAY",
-                                            description: "Array of new shape records to create.",
+                                            description:
+                                                "Array of new shape records to create.",
                                             items: { type: "OBJECT" },
                                         },
                                     },
@@ -19653,12 +23511,14 @@ Never send fields not in the original shape schema — unknown fields crash tldr
                                     properties: {
                                         patches: {
                                             type: "ARRAY",
-                                            description: "Array of patch objects. Each must have 'id' plus only the fields to change.",
+                                            description:
+                                                "Array of patch objects. Each must have 'id' plus only the fields to change.",
                                             items: { type: "OBJECT" },
                                         },
                                         remove: {
                                             type: "ARRAY",
-                                            description: "Array of shape ID strings to delete.",
+                                            description:
+                                                "Array of shape ID strings to delete.",
                                             items: { type: "STRING" },
                                         },
                                     },
@@ -19678,11 +23538,219 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     properties: {
                                         ids: {
                                             type: "ARRAY",
-                                            description: "Array of shape ID strings to delete (e.g. [\"shape:box1\", \"shape:arr1\"]). Must be IDs from the canvas snapshot.",
+                                            description:
+                                                'Array of shape ID strings to delete (e.g. ["shape:box1", "shape:arr1"]). Must be IDs from the canvas snapshot.',
                                             items: { type: "STRING" },
                                         },
                                     },
                                     required: ["ids"],
+                                },
+                            },
+                            {
+                                name: "search_jobs",
+                                description: [
+                                    "Search Curastem's job listings. Use this when a user asks to find, search, or browse jobs by keyword, location, job type, or work arrangement.",
+                                    "Returns a list of matching job cards displayed directly in the chat.",
+                                    "Do NOT call for general career advice — only call when the user explicitly wants to see job listings.",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        query: {
+                                            type: "STRING",
+                                            description:
+                                                "Search keywords — job title, role, skill, or company name. Examples: 'cashier', 'software engineer', 'customer service'",
+                                        },
+                                        location: {
+                                            type: "STRING",
+                                            description:
+                                                "City, state, or region to filter by. Examples: 'Austin TX', 'New York'. Leave empty for all locations.",
+                                        },
+                                        employment_type: {
+                                            type: "STRING",
+                                            description:
+                                                "Type of employment: full_time, part_time, contract, internship, or temporary.",
+                                        },
+                                        workplace_type: {
+                                            type: "STRING",
+                                            description:
+                                                "Work arrangement: remote, hybrid, or on_site.",
+                                        },
+                                        limit: {
+                                            type: "NUMBER",
+                                            description:
+                                                "Number of results to return (default 6, max 20).",
+                                        },
+                                    },
+                                    required: [],
+                                },
+                            },
+                            {
+                                name: "get_job_details",
+                                description: [
+                                    "Fetch full details about a specific job: responsibilities, qualifications, salary, company info.",
+                                    "Use when the user asks for more details about a job, wants to know if they're a good fit, or asks to write a cover letter for a specific posting.",
+                                    "If the user is currently viewing a job in the sidebar and asks about 'this job' or 'it', use that job's ID from the system context — do NOT ask the user to provide the ID.",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        job_id: {
+                                            type: "STRING",
+                                            description:
+                                                "The job ID from a previous search_jobs result or from the [Currently Viewed Job] system context.",
+                                        },
+                                    },
+                                    required: ["job_id"],
+                                },
+                            },
+                            {
+                                name: "save_resume",
+                                description: [
+                                    "Saves the user's own resume to on-device storage so future sessions can personalise responses and create tailored resumes.",
+                                    "ONLY call this when: (1) the user uploads a file AND explicitly says it is their resume, OR (2) the user says something like 'save this as my resume' / 'use this resume', OR (3) you are highly confident the document belongs to the user (e.g. their name appears in it).",
+                                    "NEVER call this for AI-generated resumes (create_resume output) or for resumes that clearly belong to someone else.",
+                                    "The content parameter should be the full plain-text extracted from the uploaded document.",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        content: {
+                                            type: "STRING",
+                                            description:
+                                                "Full plain-text content of the user's resume.",
+                                        },
+                                    },
+                                    required: ["content"],
+                                },
+                            },
+                            {
+                                name: "retrieve_resume",
+                                description: [
+                                    "Retrieves the user's saved resume from on-device storage.",
+                                    "Call ONLY when: (1) the user asks you to create a new resume or cover letter and you need their work/education history, OR (2) the user's request genuinely requires full job history or skills to give a useful answer (e.g. 'what jobs should I apply for?').",
+                                    "Do NOT call on every message — only when resume content would meaningfully improve your response.",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {},
+                                    required: [],
+                                },
+                            },
+                            {
+                                name: "create_resume",
+                                description: [
+                                    "Creates a polished AI-generated resume and opens it in the doc editor.",
+                                    "Call when the user explicitly asks to create, write, or build a resume.",
+                                    "Write the full resume content in the content parameter — include all standard sections: summary, experience, education, skills.",
+                                    "Do NOT call save_resume after this — AI-generated resumes are not the user's real resume.",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        content: {
+                                            type: "STRING",
+                                            description: `The full HTML resume. Follow this exact order and structure:
+
+1. <h1> — Candidate full name
+2. <p> — Email | LinkedIn | GitHub | Portfolio (use what you know; leave fields blank if unknown)
+3. <h2>Experience</h2> — list jobs most recent first. If multiple roles have an end date of "Present", put the most relevant to the target job first. For EACH job use this exact pattern — job header on its own <p>, bullets in a separate <ul>:
+   <p><b>Job Title</b> · Company Name · Start – End</p>
+   <ul>
+     <li>Action verb + task + measurable result (e.g. "Increased conversion rate by 34%")</li>
+     <li>2–3 bullets per job, each on its own <li>. NO nested lists.</li>
+   </ul>
+   NEVER put the job title, company, or dates inside a <li>. They belong only in the <p> header above the <ul>.
+4. <h2>Education</h2> — <ul> with one <li> per degree: Degree, School, Year
+5. <h2>Skills</h2> — comma-separated <p> of relevant skills
+
+Rules: use <b> only for job titles and company names in the <p> header. NO <i>/<em> anywhere. Write every section completely — never truncate. This will be auto-formatted to one page when downloaded.`,
+                                        },
+                                    },
+                                    required: ["content"],
+                                },
+                            },
+                            {
+                                name: "create_cover_letter",
+                                description: [
+                                    "Creates a polished AI-generated cover letter and opens it in the doc editor.",
+                                    "Call when the user explicitly asks to create, write, or draft a cover letter.",
+                                    "Write the full cover letter in the content parameter — address it to the employer if known, personalise it to the role.",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        content: {
+                                            type: "STRING",
+                                            description: `The full HTML cover letter. Follow this exact structure:
+
+1. <h1>Hi team [Company Name]!</h1> (use the actual company name if known, otherwise "Hi team!")
+2. Three short <p> paragraphs: first about your relevant work history, second about why you're a great fit, third about your excitement for the role
+3. <p>Have a great day,<br/>[Candidate Name]</p>
+
+Keep each paragraph to 2–3 sentences max. Write the complete letter — never truncate. This will be auto-formatted to fit one page when downloaded.`,
+                                        },
+                                    },
+                                    required: ["content"],
+                                },
+                            },
+                            {
+                                name: "retrieve_memories",
+                                description: [
+                                    "Retrieves facts previously saved about this user to personalise your response.",
+                                    "Call ONLY when the user's request would genuinely benefit from knowing their personal background (e.g. career goals, school, interests, life context).",
+                                    "Do NOT call on every message — only when the stored memories would meaningfully improve the answer.",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {},
+                                    required: [],
+                                },
+                            },
+                            {
+                                name: "save_memories",
+                                description: [
+                                    "Saves a rare, durable, personally meaningful fact about the user for future chats.",
+                                    "ONLY call for things the user reveals that are unlikely to change soon and would meaningfully personalise future responses — e.g. their major, career goal, school, city, a specific challenge they mentioned.",
+                                    "ALWAYS call retrieve_memories first (in a prior turn or the same session) to avoid saving duplicates.",
+                                    "NEVER save: temporary preferences, things already in system context (name, school, work, resume), one-off questions, or trivial details.",
+                                    "One memory per call. Keep the memory text concise (1 sentence max).",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        memory: {
+                                            type: "STRING",
+                                            description:
+                                                "A concise factual statement about the user (1–2 sentences).",
+                                        },
+                                    },
+                                    required: ["memory"],
+                                },
+                            },
+                            {
+                                name: "edit_memories",
+                                description: [
+                                    "Edits or deletes a previously saved memory by its ID.",
+                                    "Use to update outdated information (e.g. user changed schools, updated their goal) or remove a memory the user wants deleted.",
+                                    "Omit new_text to delete the memory entirely.",
+                                    "Always retrieve_memories first so you know the correct IDs.",
+                                ].join(" "),
+                                parameters: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        id: {
+                                            type: "STRING",
+                                            description:
+                                                "The ID of the memory to edit or delete.",
+                                        },
+                                        new_text: {
+                                            type: "STRING",
+                                            description:
+                                                "Replacement text for the memory. Omit or leave empty to delete the memory.",
+                                        },
+                                    },
+                                    required: ["id"],
                                 },
                             },
                         ],
@@ -19691,22 +23759,33 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
 
                 const userText = userContent?.[0]?.parts?.[0]?.text || ""
                 const isWhiteboardIntent =
-                    /draw|whiteboard|diagram|chart|mind map|flowchart/i.test(userText)
+                    /draw|whiteboard|diagram|chart|mind map|flowchart/i.test(
+                        userText
+                    )
                 // Use the ref (not state) — state can be stale inside async callbacks.
                 // Thinking is always on when the whiteboard is open or the user is asking
                 // for a diagram, so the model plans layout before generating coordinates.
-                const useThinking = isWhiteboardOpenRef.current || isWhiteboardIntent
+                const useThinking =
+                    isWhiteboardOpenRef.current || isWhiteboardIntent
 
                 // Inject a canvas snapshot into the user message so the model knows
                 // occupied regions, bounding boxes, and shape IDs before it picks a
                 // whiteboard tool and generates coordinates.
                 // Uses editorRef (not editor state) — state can be stale in async closures.
                 let augmentedUserContent = userContent
-                if ((isWhiteboardOpenRef.current || isWhiteboardIntent) && editorRef.current) {
+                if (
+                    (isWhiteboardOpenRef.current || isWhiteboardIntent) &&
+                    editorRef.current
+                ) {
                     try {
-                        const shapeIds = editorRef.current.getCurrentPageShapeIds?.()
+                        const shapeIds =
+                            editorRef.current.getCurrentPageShapeIds?.()
                         const shapes = shapeIds
-                            ? [...shapeIds].map((id: string) => editorRef.current.getShape(id)).filter(Boolean)
+                            ? [...shapeIds]
+                                  .map((id: string) =>
+                                      editorRef.current.getShape(id)
+                                  )
+                                  .filter(Boolean)
                             : []
 
                         const snapshot = shapes.map((s: any) => {
@@ -19717,17 +23796,25 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             return {
                                 id: s.id,
                                 type: s.type,
-                                x, y, w, h,
+                                x,
+                                y,
+                                w,
+                                h,
                                 right: x + w,
                                 bottom: y + h,
-                                ...(s.props?.text !== undefined && { text: s.props.text }),
-                                ...(s.props?.geo !== undefined && { geo: s.props.geo }),
+                                ...(s.props?.text !== undefined && {
+                                    text: s.props.text,
+                                }),
+                                ...(s.props?.geo !== undefined && {
+                                    geo: s.props.geo,
+                                }),
                             }
                         })
 
-                        let maxRight = 50, maxBottom = 50
+                        let maxRight = 50,
+                            maxBottom = 50
                         snapshot.forEach((s: any) => {
-                            if (s.right  > maxRight)  maxRight  = s.right
+                            if (s.right > maxRight) maxRight = s.right
                             if (s.bottom > maxBottom) maxBottom = s.bottom
                         })
                         const suggestedY = maxBottom + 80
@@ -19735,11 +23822,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         // Only raw canvas data is injected here — all layout rules and
                         // constraints live inside the individual tool descriptions.
                         // The AI needs shape IDs and positions to call edit/erase tools correctly.
-                        const snapshotText = shapes.length > 0
-                            ? `\n\n[CANVAS STATE — ${shapes.length} shape(s)]\n` +
-                              `Shapes (id, type, x, y, w, h, right, bottom, text):\n${JSON.stringify(snapshot, null, 2)}\n\n` +
-                              `Occupied region: x 0–${maxRight}, y 0–${maxBottom}`
-                            : `\n\n[CANVAS STATE — empty]`
+                        const snapshotText =
+                            shapes.length > 0
+                                ? `\n\n[CANVAS STATE — ${shapes.length} shape(s)]\n` +
+                                  `Shapes (id, type, x, y, w, h, right, bottom, text):\n${JSON.stringify(snapshot, null, 2)}\n\n` +
+                                  `Occupied region: x 0–${maxRight}, y 0–${maxBottom}`
+                                : `\n\n[CANVAS STATE — empty]`
 
                         augmentedUserContent = [
                             ...userContent,
@@ -19763,7 +23851,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         // thinkingBudget: 0 = disabled (faster, cheaper for normal chat).
                         // includeThoughts: false = don't stream thought tokens to the client.
                         ...(useThinking
-                            ? { thinkingConfig: { thinkingBudget: -1, includeThoughts: false } }
+                            ? {
+                                  thinkingConfig: {
+                                      thinkingBudget: -1,
+                                      includeThoughts: false,
+                                  },
+                              }
                             : { thinkingConfig: { thinkingBudget: 0 } }),
                     },
                     toolConfig: {
@@ -19834,7 +23927,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
 
                 // --- DELIMITER STREAMING STATE ---
                 // Tracks whether we are inside a <curastem-suggestions> block.
-                const DELIM_SUGG_OPEN  = "<curastem-suggestions>"
+                const DELIM_SUGG_OPEN = "<curastem-suggestions>"
                 const DELIM_SUGG_CLOSE = "</curastem-suggestions>"
                 let inSuggBlock = false
                 let suggBlockContentStart = -1
@@ -19866,43 +23959,85 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     const sig =
                                         (part as any).thoughtSignature ||
                                         (part as any).thought_signature
-                                    if (sig)
-                                        accumulatedThoughtSignature = sig
+                                    if (sig) accumulatedThoughtSignature = sig
                                     if (part.text) {
                                         accumulatedText += part.text
 
                                         // Detect <curastem-suggestions> opening tag
                                         if (!inSuggBlock) {
-                                            const suggTagIdx = accumulatedText.indexOf(DELIM_SUGG_OPEN)
+                                            const suggTagIdx =
+                                                accumulatedText.indexOf(
+                                                    DELIM_SUGG_OPEN
+                                                )
                                             if (suggTagIdx !== -1) {
                                                 inSuggBlock = true
-                                                suggBlockContentStart = suggTagIdx + DELIM_SUGG_OPEN.length
-                                                if (accumulatedText[suggBlockContentStart] === "\n") {
+                                                suggBlockContentStart =
+                                                    suggTagIdx +
+                                                    DELIM_SUGG_OPEN.length
+                                                if (
+                                                    accumulatedText[
+                                                        suggBlockContentStart
+                                                    ] === "\n"
+                                                ) {
                                                     suggBlockContentStart++
                                                 }
                                             }
                                         }
 
                                         // Parse suggestions from <curastem-suggestions>.
-                                        if (inSuggBlock && suggBlockContentStart !== -1) {
-                                            const closeIdx = accumulatedText.indexOf(DELIM_SUGG_CLOSE, suggBlockContentStart)
+                                        if (
+                                            inSuggBlock &&
+                                            suggBlockContentStart !== -1
+                                        ) {
+                                            const closeIdx =
+                                                accumulatedText.indexOf(
+                                                    DELIM_SUGG_CLOSE,
+                                                    suggBlockContentStart
+                                                )
                                             if (closeIdx !== -1) {
-                                                const jsonStr = accumulatedText.substring(suggBlockContentStart, closeIdx).trim()
+                                                const jsonStr = accumulatedText
+                                                    .substring(
+                                                        suggBlockContentStart,
+                                                        closeIdx
+                                                    )
+                                                    .trim()
                                                 try {
-                                                    const parsed = JSON.parse(jsonStr)
+                                                    const parsed =
+                                                        JSON.parse(jsonStr)
                                                     if (Array.isArray(parsed)) {
                                                         const isAnyMobile =
                                                             isMobileLayoutRef.current ||
-                                                            Array.from(peerMetadataRef.current.values()).some(
-                                                                (p: any) => p.isMobile
+                                                            Array.from(
+                                                                peerMetadataRef.current.values()
+                                                            ).some(
+                                                                (p: any) =>
+                                                                    p.isMobile
                                                             )
-                                                        const maxCount = isAnyMobile ? 5 : 3
-                                                        const finalSuggs = (parsed as string[])
-                                                            .filter((s) => typeof s === "string" && s.trim())
+                                                        const maxCount =
+                                                            isAnyMobile ? 5 : 3
+                                                        const finalSuggs = (
+                                                            parsed as string[]
+                                                        )
+                                                            .filter(
+                                                                (s) =>
+                                                                    typeof s ===
+                                                                        "string" &&
+                                                                    s.trim()
+                                                            )
                                                             .slice(0, maxCount)
-                                                        setAiGeneratedSuggestions(finalSuggs)
-                                                        if (dataConnectionsRef.current.size > 0) {
-                                                            broadcastData({ type: "ai-suggestions", payload: finalSuggs })
+                                                        setAiGeneratedSuggestions(
+                                                            finalSuggs
+                                                        )
+                                                        if (
+                                                            dataConnectionsRef
+                                                                .current.size >
+                                                            0
+                                                        ) {
+                                                            broadcastData({
+                                                                type: "ai-suggestions",
+                                                                payload:
+                                                                    finalSuggs,
+                                                            })
                                                         }
                                                     }
                                                 } catch {
@@ -19913,10 +24048,16 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         }
 
                                         // Strip <curastem-suggestions> block from chat bubble display text.
-                                        const suggTagPos = accumulatedText.indexOf(DELIM_SUGG_OPEN)
-                                        const chatDisplayText = suggTagPos !== -1
-                                            ? accumulatedText.substring(0, suggTagPos).trimEnd()
-                                            : accumulatedText
+                                        const suggTagPos =
+                                            accumulatedText.indexOf(
+                                                DELIM_SUGG_OPEN
+                                            )
+                                        const chatDisplayText =
+                                            suggTagPos !== -1
+                                                ? accumulatedText
+                                                      .substring(0, suggTagPos)
+                                                      .trimEnd()
+                                                : accumulatedText
 
                                         // Trim any partial delimiter opening tag from the
                                         // end of the display text. When the model sends
@@ -19930,12 +24071,20 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             .trimEnd()
 
                                         // Broadcast streaming text to peers
-                                        if (dataConnectionsRef.current.size > 0) {
+                                        if (
+                                            dataConnectionsRef.current.size > 0
+                                        ) {
                                             const now = Date.now()
-                                            if (now - lastAISendTimeRef.current > 50) {
+                                            if (
+                                                now -
+                                                    lastAISendTimeRef.current >
+                                                50
+                                            ) {
                                                 broadcastData({
                                                     type: "ai-stream",
-                                                    payload: { text: safeDisplayText },
+                                                    payload: {
+                                                        text: safeDisplayText,
+                                                    },
                                                 })
                                                 lastAISendTimeRef.current = now
                                             }
@@ -19946,10 +24095,13 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             const newArr = [...prev]
                                             if (
                                                 newArr.length > 0 &&
-                                                newArr[newArr.length - 1].role === "model"
+                                                newArr[newArr.length - 1]
+                                                    .role === "model"
                                             ) {
                                                 newArr[newArr.length - 1] = {
-                                                    ...newArr[newArr.length - 1],
+                                                    ...newArr[
+                                                        newArr.length - 1
+                                                    ],
                                                     text: safeDisplayText,
                                                 }
                                             }
@@ -19989,7 +24141,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                                 newArgs
                                         }
 
-                                        const toolName = accumulatedFunctionCall.name || fnCall.name
+                                        const toolName =
+                                            accumulatedFunctionCall.name ||
+                                            fnCall.name
 
                                         // Open the app editor immediately when create_app starts arriving.
                                         if (toolName === "create_app") {
@@ -19999,22 +24153,43 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                                 setIsWhiteboardOpen(false)
                                                 isAppOpenRef.current = true
                                             }
-                                            if (appModeRef.current !== "editor") {
+                                            if (
+                                                appModeRef.current !== "editor"
+                                            ) {
                                                 setAppMode("editor")
                                                 appModeRef.current = "editor"
                                             }
-                                            const newCode = (accumulatedFunctionCall.args as any)?.code || ""
+                                            const newCode =
+                                                (
+                                                    accumulatedFunctionCall.args as any
+                                                )?.code || ""
                                             if (newCode) setAppCode(newCode)
                                         }
 
-                                        // Open the doc editor immediately when update_doc starts arriving.
-                                        if (toolName === "update_doc") {
+                                        // Open the doc editor immediately when update_doc / create_resume / create_cover_letter starts arriving.
+                                        if (
+                                            toolName === "update_doc" ||
+                                            toolName === "create_resume" ||
+                                            toolName === "create_cover_letter"
+                                        ) {
                                             if (!isDocOpenRef.current) {
                                                 setIsDocOpen(true)
                                                 isDocOpenRef.current = true
                                             }
-                                            const newContent = (accumulatedFunctionCall.args as any)?.content || ""
-                                            if (newContent) setDocContent(newContent)
+                                            if (toolName === "create_resume")
+                                                setDocType("resume")
+                                            else if (
+                                                toolName ===
+                                                "create_cover_letter"
+                                            )
+                                                setDocType("cover_letter")
+                                            else setDocType("doc")
+                                            const newContent =
+                                                (
+                                                    accumulatedFunctionCall.args as any
+                                                )?.content || ""
+                                            if (newContent)
+                                                setDocContent(newContent)
                                         }
 
                                         // Open the whiteboard immediately when any whiteboard tool starts.
@@ -20025,7 +24200,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         ) {
                                             if (!isWhiteboardOpenRef.current) {
                                                 setIsWhiteboardOpen(true)
-                                                isWhiteboardOpenRef.current = true
+                                                isWhiteboardOpenRef.current =
+                                                    true
                                                 setIsDocOpen(false)
                                                 setIsAppOpen(false)
                                                 isDocOpenRef.current = false
@@ -20057,7 +24233,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 // ---------------------------------------------------------------------------
                 const computeDisplayText = (text: string): string => {
                     const suggPos = text.indexOf(DELIM_SUGG_OPEN)
-                    return suggPos !== -1 ? text.substring(0, suggPos).trimEnd() : text
+                    return suggPos !== -1
+                        ? text.substring(0, suggPos).trimEnd()
+                        : text
                 }
 
                 const parseSuggestionsFrom = (text: string): void => {
@@ -20065,20 +24243,29 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     if (open === -1) return
                     const close = text.indexOf(DELIM_SUGG_CLOSE, open)
                     if (close === -1) return
-                    const jsonStr = text.substring(open + DELIM_SUGG_OPEN.length, close).trim()
+                    const jsonStr = text
+                        .substring(open + DELIM_SUGG_OPEN.length, close)
+                        .trim()
                     try {
                         const parsed = JSON.parse(jsonStr)
                         if (Array.isArray(parsed)) {
                             const isAnyMobile =
                                 isMobileLayoutRef.current ||
-                                Array.from(peerMetadataRef.current.values()).some((p: any) => p.isMobile)
+                                Array.from(
+                                    peerMetadataRef.current.values()
+                                ).some((p: any) => p.isMobile)
                             const maxCount = isAnyMobile ? 5 : 3
                             const finalSuggs = (parsed as string[])
-                                .filter((s) => typeof s === "string" && s.trim())
+                                .filter(
+                                    (s) => typeof s === "string" && s.trim()
+                                )
                                 .slice(0, maxCount)
                             setAiGeneratedSuggestions(finalSuggs)
                             if (dataConnectionsRef.current.size > 0) {
-                                broadcastData({ type: "ai-suggestions", payload: finalSuggs })
+                                broadcastData({
+                                    type: "ai-suggestions",
+                                    payload: finalSuggs,
+                                })
                             }
                         }
                     } catch {
@@ -20091,7 +24278,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 // ---------------------------------------------------------------------------
                 if (accumulatedFunctionCall) {
                     if (accumulatedFunctionCall.name === "create_app") {
-                        const code = (accumulatedFunctionCall.args as any)?.code || ""
+                        const code =
+                            (accumulatedFunctionCall.args as any)?.code || ""
                         setAppCode(code)
                         if (!isAppOpen) {
                             setIsAppOpen(true)
@@ -20102,9 +24290,15 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             setAppMode("player")
                             appModeRef.current = "player"
                         }
-                        if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
+                        if (
+                            !isMobileLayout &&
+                            dataConnectionsRef.current.size > 0
+                        ) {
                             broadcastData({ type: "app-update", payload: code })
-                            broadcastData({ type: "app-mode-change", payload: appModeRef.current })
+                            broadcastData({
+                                type: "app-mode-change",
+                                payload: appModeRef.current,
+                            })
                             broadcastData({ type: "app-start" })
                         }
                         // Follow up with a short contextual message describing what was built.
@@ -20115,40 +24309,83 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
                                 {
                                     method: "POST",
-                                    headers: { "Content-Type": "application/json" },
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
                                     body: JSON.stringify({
-                                        contents: [{ role: "user", parts: [{ text: `The user asked you to build a personal use app: "${userText}". You just built a very simple version of it. In 1–2 sentences, describe what you created and ask one specific question about features or improvements. Be friendly and enthusiastic. Max 40 words.` }] }],
-                                        generationConfig: { temperature: 1.0, maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } },
+                                        contents: [
+                                            {
+                                                role: "user",
+                                                parts: [
+                                                    {
+                                                        text: `The user asked you to build a personal use app: "${userText}". You just built a very simple version of it. In 1–2 sentences, describe what you created and ask one specific question about features or improvements. Be friendly and enthusiastic. Max 40 words.`,
+                                                    },
+                                                ],
+                                            },
+                                        ],
+                                        generationConfig: {
+                                            temperature: 1.0,
+                                            maxOutputTokens: 100,
+                                            thinkingConfig: {
+                                                thinkingBudget: 0,
+                                            },
+                                        },
                                     }),
                                     signal: controller.signal,
                                 }
                             )
-                            const followUpData = await followUpRes.json().catch(() => ({}))
-                            const followUpText = followUpRes.ok ? extractTextFromGeminiResponse(followUpData) : ""
-                            accumulatedText = computeDisplayText(followUpText) || accumulatedText || "Here's your app!"
+                            const followUpData = await followUpRes
+                                .json()
+                                .catch(() => ({}))
+                            const followUpText = followUpRes.ok
+                                ? extractTextFromGeminiResponse(followUpData)
+                                : ""
+                            accumulatedText =
+                                computeDisplayText(followUpText) ||
+                                accumulatedText ||
+                                "Here's your app!"
                             parseSuggestionsFrom(followUpText)
                         } catch (err) {
-                            if ((err as Error).name !== "AbortError") console.error("create_app follow-up:", err)
-                            accumulatedText = accumulatedText || "Here's your app!"
+                            if ((err as Error).name !== "AbortError")
+                                console.error("create_app follow-up:", err)
+                            accumulatedText =
+                                accumulatedText || "Here's your app!"
                         }
                         setMessages((prev) => {
                             const newArr = [...prev]
-                            if (newArr.length > 0 && newArr[newArr.length - 1].role === "model") {
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
                                 newArr[newArr.length - 1] = {
                                     ...newArr[newArr.length - 1],
                                     text: accumulatedText,
                                     functionCall: accumulatedFunctionCall,
-                                    functionResponse: { name: "create_app", response: { content: "App created successfully." } },
+                                    functionResponse: {
+                                        name: "create_app",
+                                        response: {
+                                            content:
+                                                "App created successfully.",
+                                        },
+                                    },
                                 }
                             }
                             return newArr
                         })
                     } else if (accumulatedFunctionCall.name === "update_doc") {
-                        const newContent = (accumulatedFunctionCall.args as any)?.content || ""
+                        const newContent =
+                            (accumulatedFunctionCall.args as any)?.content || ""
                         setDocContent(newContent)
+                        setDocType("doc")
                         if (!isDocOpen) setIsDocOpen(true)
-                        if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
-                            broadcastData({ type: "doc-update", payload: newContent })
+                        if (
+                            !isMobileLayout &&
+                            dataConnectionsRef.current.size > 0
+                        ) {
+                            broadcastData({
+                                type: "doc-update",
+                                payload: newContent,
+                            })
                             broadcastData({ type: "doc-start" })
                         }
                         // Follow up with a short contextual message describing what was written.
@@ -20157,30 +24394,65 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
                                 {
                                     method: "POST",
-                                    headers: { "Content-Type": "application/json" },
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
                                     body: JSON.stringify({
-                                        contents: [{ role: "user", parts: [{ text: `The user asked you to write a document: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.` }] }],
-                                        generationConfig: { temperature: 1.0, maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 0 } },
+                                        contents: [
+                                            {
+                                                role: "user",
+                                                parts: [
+                                                    {
+                                                        text: `The user asked you to write a document: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.`,
+                                                    },
+                                                ],
+                                            },
+                                        ],
+                                        generationConfig: {
+                                            temperature: 1.0,
+                                            maxOutputTokens: 100,
+                                            thinkingConfig: {
+                                                thinkingBudget: 0,
+                                            },
+                                        },
                                     }),
                                     signal: controller.signal,
                                 }
                             )
-                            const followUpData = await followUpRes.json().catch(() => ({}))
-                            const followUpText = followUpRes.ok ? extractTextFromGeminiResponse(followUpData) : ""
-                            accumulatedText = computeDisplayText(followUpText) || accumulatedText || "Here's your document!"
+                            const followUpData = await followUpRes
+                                .json()
+                                .catch(() => ({}))
+                            const followUpText = followUpRes.ok
+                                ? extractTextFromGeminiResponse(followUpData)
+                                : ""
+                            accumulatedText =
+                                computeDisplayText(followUpText) ||
+                                accumulatedText ||
+                                "Here's your document!"
                             parseSuggestionsFrom(followUpText)
                         } catch (err) {
-                            if ((err as Error).name !== "AbortError") console.error("update_doc follow-up:", err)
-                            accumulatedText = accumulatedText || "Here's your document!"
+                            if ((err as Error).name !== "AbortError")
+                                console.error("update_doc follow-up:", err)
+                            accumulatedText =
+                                accumulatedText || "Here's your document!"
                         }
                         setMessages((prev) => {
                             const newArr = [...prev]
-                            if (newArr.length > 0 && newArr[newArr.length - 1].role === "model") {
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
                                 newArr[newArr.length - 1] = {
                                     ...newArr[newArr.length - 1],
                                     text: accumulatedText,
                                     functionCall: accumulatedFunctionCall,
-                                    functionResponse: { name: "update_doc", response: { content: "Document created successfully." } },
+                                    functionResponse: {
+                                        name: "update_doc",
+                                        response: {
+                                            content:
+                                                "Document created successfully.",
+                                        },
+                                    },
                                 }
                             }
                             return newArr
@@ -20224,7 +24496,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             functionResponse: {
                                                 name: RETRIEVE_RESOURCES_TOOL_NAME,
                                                 response: {
-                                                    content: resourcesWithLinkDirective,
+                                                    content:
+                                                        resourcesWithLinkDirective,
                                                 },
                                             },
                                         },
@@ -20248,7 +24521,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
                                 {
                                     method: "POST",
-                                    headers: { "Content-Type": "application/json" },
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
                                     body: JSON.stringify(followUpPayload),
                                     signal: controller.signal,
                                 }
@@ -20264,7 +24539,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             if ((err as Error).name !== "AbortError") {
                                 console.error("Resources tool follow-up:", err)
                             }
-                            followUpRaw = followUpRaw || CAREER_COLLEGE_RESOURCES_CONTENT
+                            followUpRaw =
+                                followUpRaw || CAREER_COLLEGE_RESOURCES_CONTENT
                         }
 
                         // Parse suggestions from the raw follow-up text (non-streaming,
@@ -20283,7 +24559,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
 
                         const functionResponse = {
                             name: RETRIEVE_RESOURCES_TOOL_NAME,
-                            response: { content: CAREER_COLLEGE_RESOURCES_CONTENT },
+                            response: {
+                                content: CAREER_COLLEGE_RESOURCES_CONTENT,
+                            },
                         }
                         setMessages((prev) => {
                             const arr = [...prev]
@@ -20298,6 +24576,394 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             }
                             return arr
                         })
+                    } else if (accumulatedFunctionCall.name === "save_resume") {
+                        const content =
+                            (accumulatedFunctionCall.args as any)?.content || ""
+                        if (content) saveResume(content)
+                        accumulatedText =
+                            "Got it — I've saved your resume. I'll use it to personalise future responses and create tailored resumes for you."
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: {
+                                        name: "save_resume",
+                                        response: { saved: true },
+                                    },
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (
+                        accumulatedFunctionCall.name === "retrieve_resume"
+                    ) {
+                        const resume = getResume()
+                        const resumeContent = resume || "No resume saved yet."
+                        const modelPart = {
+                            functionCall: { name: "retrieve_resume", args: {} },
+                            thoughtSignature:
+                                accumulatedThoughtSignature ??
+                                GEMINI_THOUGHT_SIGNATURE_SKIP,
+                        }
+                        const followUpPayload = {
+                            contents: [
+                                ...history,
+                                { role: "user" as const, parts: userContent },
+                                { role: "model" as const, parts: [modelPart] },
+                                {
+                                    role: "user" as const,
+                                    parts: [
+                                        {
+                                            functionResponse: {
+                                                name: "retrieve_resume",
+                                                response: {
+                                                    content: resumeContent,
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                            tools,
+                            generationConfig: payload.generationConfig,
+                            ...(getSystemPromptWithContext().trim() && {
+                                systemInstruction: payload.systemInstruction,
+                            }),
+                        }
+                        try {
+                            const res = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify(followUpPayload),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const data = await res.json().catch(() => ({}))
+                            const followUpText = res.ok
+                                ? extractTextFromGeminiResponse(data)
+                                : ""
+                            accumulatedText =
+                                computeDisplayText(followUpText) ||
+                                accumulatedText ||
+                                ""
+                            parseSuggestionsFrom(followUpText)
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError")
+                                console.error("retrieve_resume follow-up:", err)
+                        }
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: {
+                                        name: "retrieve_resume",
+                                        response: { content: resumeContent },
+                                    },
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (
+                        accumulatedFunctionCall.name === "create_resume" ||
+                        accumulatedFunctionCall.name === "create_cover_letter"
+                    ) {
+                        const toolName = accumulatedFunctionCall.name
+                        const newContent =
+                            (accumulatedFunctionCall.args as any)?.content || ""
+                        setDocType(
+                            toolName === "create_resume"
+                                ? "resume"
+                                : "cover_letter"
+                        )
+                        if (!isDocOpen) setIsDocOpen(true)
+                        isDocOpenRef.current = true
+
+                        // Resume keyword animation: transition orbiting → landing.
+                        // Inject data-keyword-land markers into the HTML so the
+                        // landing scan can use a direct DOM query instead of
+                        // fragile TreeWalker + Range offset arithmetic.
+                        if (
+                            toolName === "create_resume" &&
+                            resumeAnimPhaseRef.current !== "idle" &&
+                            resumeAnimPhaseRef.current !== "done"
+                        ) {
+                            // Exact case match — keyword must appear in the resume
+                            // with the same capitalisation to land on it.
+                            const used = resumeAnimKeywordsRef.current.filter(
+                                (k) => newContent.includes(k)
+                            )
+                            // Mark keyword positions in the HTML before setting
+                            // content so getBoundingClientRect on the markers is
+                            // pixel-perfect once the browser paints.
+                            const markedContent = markKeywordsInHtml(
+                                newContent,
+                                used
+                            )
+                            setDocContent(markedContent)
+                            setResumeUsedKeywords(used)
+                            setResumeAnimPhase("landing")
+                        } else {
+                            setDocContent(newContent)
+                        }
+
+                        // Cache the original (unmarked) HTML so repeat clicks
+                        // replay the animation with fresh markers each time.
+                        if (
+                            toolName === "create_resume" &&
+                            newContent &&
+                            resumeJobIdRef.current
+                        ) {
+                            resumeCache.current.set(
+                                resumeJobIdRef.current,
+                                newContent
+                            )
+                        }
+                        if (
+                            !isMobileLayout &&
+                            dataConnectionsRef.current.size > 0
+                        ) {
+                            broadcastData({
+                                type: "doc-update",
+                                payload: newContent,
+                            })
+                            broadcastData({ type: "doc-start" })
+                        }
+                        const isResume = toolName === "create_resume"
+                        try {
+                            const followUpRes = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify({
+                                        contents: [
+                                            {
+                                                role: "user",
+                                                parts: [
+                                                    {
+                                                        text: `The user asked you to write a ${isResume ? "resume" : "cover letter"}: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.`,
+                                                    },
+                                                ],
+                                            },
+                                        ],
+                                        generationConfig: {
+                                            temperature: 1.0,
+                                            maxOutputTokens: 100,
+                                            thinkingConfig: {
+                                                thinkingBudget: 0,
+                                            },
+                                        },
+                                    }),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const followUpData = await followUpRes
+                                .json()
+                                .catch(() => ({}))
+                            const followUpText = followUpRes.ok
+                                ? extractTextFromGeminiResponse(followUpData)
+                                : ""
+                            accumulatedText =
+                                computeDisplayText(followUpText) ||
+                                accumulatedText ||
+                                `Here's your ${isResume ? "resume" : "cover letter"}!`
+                            parseSuggestionsFrom(followUpText)
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError")
+                                console.error(`${toolName} follow-up:`, err)
+                            accumulatedText =
+                                accumulatedText ||
+                                `Here's your ${isResume ? "resume" : "cover letter"}!`
+                        }
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: {
+                                        name: toolName,
+                                        response: {
+                                            content: "Created successfully.",
+                                        },
+                                    },
+                                    toolUsed:
+                                        accumulatedFunctionCall.name === "create_resume"
+                                            ? "resume"
+                                            : accumulatedFunctionCall.name === "create_cover_letter"
+                                              ? "cover_letter"
+                                              : "doc",
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (
+                        accumulatedFunctionCall.name === "retrieve_memories"
+                    ) {
+                        const memories = getMemories()
+                        const memoriesContent =
+                            memories.length > 0
+                                ? memories
+                                      .map((m) => `[${m.id}] ${m.text}`)
+                                      .join("\n")
+                                : "No memories saved yet."
+                        const modelPart = {
+                            functionCall: {
+                                name: "retrieve_memories",
+                                args: {},
+                            },
+                            thoughtSignature:
+                                accumulatedThoughtSignature ??
+                                GEMINI_THOUGHT_SIGNATURE_SKIP,
+                        }
+                        const followUpPayload = {
+                            contents: [
+                                ...history,
+                                { role: "user" as const, parts: userContent },
+                                { role: "model" as const, parts: [modelPart] },
+                                {
+                                    role: "user" as const,
+                                    parts: [
+                                        {
+                                            functionResponse: {
+                                                name: "retrieve_memories",
+                                                response: {
+                                                    memories: memoriesContent,
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                            tools,
+                            generationConfig: payload.generationConfig,
+                            ...(getSystemPromptWithContext().trim() && {
+                                systemInstruction: payload.systemInstruction,
+                            }),
+                        }
+                        try {
+                            const res = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify(followUpPayload),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const data = await res.json().catch(() => ({}))
+                            const followUpText = res.ok
+                                ? extractTextFromGeminiResponse(data)
+                                : ""
+                            accumulatedText =
+                                computeDisplayText(followUpText) ||
+                                accumulatedText ||
+                                ""
+                            parseSuggestionsFrom(followUpText)
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError")
+                                console.error(
+                                    "retrieve_memories follow-up:",
+                                    err
+                                )
+                        }
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: {
+                                        name: "retrieve_memories",
+                                        response: { memories: memoriesContent },
+                                    },
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (
+                        accumulatedFunctionCall.name === "save_memories"
+                    ) {
+                        const memoryText =
+                            (accumulatedFunctionCall.args as any)?.memory || ""
+                        if (memoryText) saveMemory(memoryText)
+                        // Silent — don't interrupt the conversation with a confirmation message.
+                        // Keep any text the model streamed before the tool call.
+                        accumulatedText =
+                            computeDisplayText(accumulatedText) || ""
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: {
+                                        name: "save_memories",
+                                        response: { saved: true },
+                                    },
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (
+                        accumulatedFunctionCall.name === "edit_memories"
+                    ) {
+                        const { id, new_text } =
+                            (accumulatedFunctionCall.args as any) || {}
+                        if (id) updateMemory(id, new_text || null)
+                        // Silent — no confirmation needed
+                        accumulatedText =
+                            computeDisplayText(accumulatedText) || ""
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: {
+                                        name: "edit_memories",
+                                        response: { updated: true },
+                                    },
+                                }
+                            }
+                            return newArr
+                        })
                     } else if (
                         accumulatedFunctionCall.name === "draw_whiteboard" ||
                         accumulatedFunctionCall.name === "edit_whiteboard" ||
@@ -20307,11 +24973,17 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         const args = accumulatedFunctionCall.args as any
 
                         // Auto-open whiteboard
-                        if (!isWhiteboardOpenRef.current && !hasWhiteboardStarted) {
+                        if (
+                            !isWhiteboardOpenRef.current &&
+                            !hasWhiteboardStarted
+                        ) {
                             setHasWhiteboardStarted(true)
                             setIsWhiteboardOpen(true)
                             setIsDocOpen(false)
-                            if (!isMobileLayout && dataConnectionsRef.current.size > 0) {
+                            if (
+                                !isMobileLayout &&
+                                dataConnectionsRef.current.size > 0
+                            ) {
                                 broadcastData({ type: "tldraw-start" })
                             }
                         }
@@ -20322,32 +24994,94 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     ;(args.ids || []).forEach((id: string) => {
                                         try {
                                             const sid = wbSanitizeId(id)
-                                            if (editorRef.current.getShape(sid)) editorRef.current.deleteShapes([sid])
-                                        } catch (e) { console.error("[Whiteboard] erase failed:", id, e) }
+                                            if (editorRef.current.getShape(sid))
+                                                editorRef.current.deleteShapes([
+                                                    sid,
+                                                ])
+                                        } catch (e) {
+                                            console.error(
+                                                "[Whiteboard] erase failed:",
+                                                id,
+                                                e
+                                            )
+                                        }
                                     })
                                 } else if (toolName === "draw_whiteboard") {
-                                    ;(args.shapes || []).map(wbValidateShape).filter(Boolean).forEach((s: any) => {
-                                        try {
-                                            if (editorRef.current.getShape(s.id)) editorRef.current.updateShapes([s])
-                                            else editorRef.current.createShapes([s])
-                                        } catch (e) { console.error("[Whiteboard] draw failed:", s.id, e) }
-                                    })
+                                    ;(args.shapes || [])
+                                        .map(wbValidateShape)
+                                        .filter(Boolean)
+                                        .forEach((s: any) => {
+                                            try {
+                                                if (
+                                                    editorRef.current.getShape(
+                                                        s.id
+                                                    )
+                                                )
+                                                    editorRef.current.updateShapes(
+                                                        [s]
+                                                    )
+                                                else
+                                                    editorRef.current.createShapes(
+                                                        [s]
+                                                    )
+                                            } catch (e) {
+                                                console.error(
+                                                    "[Whiteboard] draw failed:",
+                                                    s.id,
+                                                    e
+                                                )
+                                            }
+                                        })
                                 } else if (toolName === "edit_whiteboard") {
-                                    ;(args.patches || []).filter((s: any) => s?.id).map(wbApplyToPatch).forEach((s: any) => {
-                                        try {
-                                            if (editorRef.current.getShape(s.id)) editorRef.current.updateShapes([s])
-                                        } catch (e) { console.error("[Whiteboard] patch failed:", s.id, e) }
-                                    })
-                                    ;(args.remove || []).forEach((id: string) => {
-                                        try {
-                                            const sid = wbSanitizeId(id)
-                                            if (editorRef.current.getShape(sid)) editorRef.current.deleteShapes([sid])
-                                        } catch (e) { console.error("[Whiteboard] remove failed:", id, e) }
-                                    })
+                                    ;(args.patches || [])
+                                        .filter((s: any) => s?.id)
+                                        .map(wbApplyToPatch)
+                                        .forEach((s: any) => {
+                                            try {
+                                                if (
+                                                    editorRef.current.getShape(
+                                                        s.id
+                                                    )
+                                                )
+                                                    editorRef.current.updateShapes(
+                                                        [s]
+                                                    )
+                                            } catch (e) {
+                                                console.error(
+                                                    "[Whiteboard] patch failed:",
+                                                    s.id,
+                                                    e
+                                                )
+                                            }
+                                        })
+                                    ;(args.remove || []).forEach(
+                                        (id: string) => {
+                                            try {
+                                                const sid = wbSanitizeId(id)
+                                                if (
+                                                    editorRef.current.getShape(
+                                                        sid
+                                                    )
+                                                )
+                                                    editorRef.current.deleteShapes(
+                                                        [sid]
+                                                    )
+                                            } catch (e) {
+                                                console.error(
+                                                    "[Whiteboard] remove failed:",
+                                                    id,
+                                                    e
+                                                )
+                                            }
+                                        }
+                                    )
                                 }
                             })
                         } else {
-                            pendingWhiteboardUpdates.current.push({ toolName, args })
+                            pendingWhiteboardUpdates.current.push({
+                                toolName,
+                                args,
+                            })
                         }
 
                         // Follow up with a short contextual message so the chat doesn't
@@ -20356,37 +25090,350 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             toolName === "erase_whiteboard"
                                 ? `The user asked you to erase something on the whiteboard: "${userText}". You just removed those shapes. In 1 sentence confirm what you erased and offer a helpful next step. Be concise. Max 30 words.`
                                 : toolName === "edit_whiteboard"
-                                ? `The user asked you to edit the whiteboard: "${userText}". You just updated those shapes. In 1 sentence confirm what you changed and invite a follow-up. Be concise. Max 30 words.`
-                                : `The user asked you to draw on the whiteboard: "${userText}". You just added the diagram. In 1–2 sentences describe what you drew and ask one question to refine it. Be friendly. Max 40 words.`
+                                  ? `The user asked you to edit the whiteboard: "${userText}". You just updated those shapes. In 1 sentence confirm what you changed and invite a follow-up. Be concise. Max 30 words.`
+                                  : `The user asked you to draw on the whiteboard: "${userText}". You just added the diagram. In 1–2 sentences describe what you drew and ask one question to refine it. Be friendly. Max 40 words.`
                         try {
                             const wbRes = await fetch(
                                 `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
                                 {
                                     method: "POST",
-                                    headers: { "Content-Type": "application/json" },
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
                                     body: JSON.stringify({
-                                        contents: [{ role: "user", parts: [{ text: whiteboardFollowUpPrompt }] }],
-                                        generationConfig: { temperature: 1.0, maxOutputTokens: 80, thinkingConfig: { thinkingBudget: 0 } },
+                                        contents: [
+                                            {
+                                                role: "user",
+                                                parts: [
+                                                    {
+                                                        text: whiteboardFollowUpPrompt,
+                                                    },
+                                                ],
+                                            },
+                                        ],
+                                        generationConfig: {
+                                            temperature: 1.0,
+                                            maxOutputTokens: 80,
+                                            thinkingConfig: {
+                                                thinkingBudget: 0,
+                                            },
+                                        },
                                     }),
                                     signal: controller.signal,
                                 }
                             )
                             const wbData = await wbRes.json().catch(() => ({}))
-                            const wbText = wbRes.ok ? extractTextFromGeminiResponse(wbData) : ""
-                            accumulatedText = computeDisplayText(wbText) || accumulatedText || "Check out the whiteboard!"
+                            const wbText = wbRes.ok
+                                ? extractTextFromGeminiResponse(wbData)
+                                : ""
+                            accumulatedText =
+                                computeDisplayText(wbText) ||
+                                accumulatedText ||
+                                "Check out the whiteboard!"
                             parseSuggestionsFrom(wbText)
                         } catch (err) {
-                            if ((err as Error).name !== "AbortError") console.error("whiteboard follow-up:", err)
-                            accumulatedText = accumulatedText || "Check out the whiteboard!"
+                            if ((err as Error).name !== "AbortError")
+                                console.error("whiteboard follow-up:", err)
+                            accumulatedText =
+                                accumulatedText || "Check out the whiteboard!"
                         }
                         setMessages((prev) => {
                             const newArr = [...prev]
-                            if (newArr.length > 0 && newArr[newArr.length - 1].role === "model") {
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
                                 newArr[newArr.length - 1] = {
                                     ...newArr[newArr.length - 1],
                                     text: accumulatedText,
                                     functionCall: accumulatedFunctionCall,
-                                    functionResponse: { name: toolName, response: { result: "ok" } },
+                                    functionResponse: {
+                                        name: toolName,
+                                        response: { result: "ok" },
+                                    },
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (
+                        accumulatedFunctionCall.name === "search_jobs"
+                    ) {
+                        // ---------------------------------------------------------------------------
+                        // search_jobs — fetch from jobs API, render cards in chat, follow up
+                        // ---------------------------------------------------------------------------
+                        const args = accumulatedFunctionCall.args as any
+                        const params = new URLSearchParams()
+                        if (args.query) params.set("q", args.query)
+                        if (args.location) params.set("location", args.location)
+                        if (args.employment_type)
+                            params.set("employment_type", args.employment_type)
+                        if (args.workplace_type)
+                            params.set("workplace_type", args.workplace_type)
+                        params.set(
+                            "limit",
+                            String(Math.min(args.limit ?? 6, 20))
+                        )
+
+                        let jobSnippets: JobSnippet[] = []
+                        let searchError = false
+                        try {
+                            const jobsRes = await fetch(
+                                `${jobsApiUrl}/jobs?${params}`,
+                                { signal: controller.signal }
+                            )
+                            if (jobsRes.ok) {
+                                const jobsData = await jobsRes.json()
+                                jobSnippets = (jobsData.data ?? []).map(
+                                    (j: any): JobSnippet => ({
+                                        id: j.id,
+                                        title: j.title,
+                                        company: j.company?.name ?? "",
+                                        company_logo:
+                                            j.company?.logo_url ?? null,
+                                        location: j.location ?? null,
+                                        employment_type:
+                                            j.employment_type ?? null,
+                                        workplace_type:
+                                            j.workplace_type ?? null,
+                                        posted_at: j.posted_at ?? null,
+                                        apply_url: j.apply_url ?? null,
+                                        summary: j.job_summary ?? null,
+                                        salary: j.salary
+                                            ? `${j.salary.currency} ${[j.salary.min, j.salary.max].filter(Boolean).join("–")}/${j.salary.period}`
+                                            : null,
+                                    })
+                                )
+                            }
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError") {
+                                console.error("search_jobs fetch:", err)
+                                searchError = true
+                            }
+                        }
+
+                        // Compact job data for the model — just enough context to write a
+                        // good intro. The cards are already rendered in the UI, so the model
+                        // must NOT repeat them as a text list.
+                        const jobSummaryForModel =
+                            jobSnippets.length > 0
+                                ? `Found ${jobSnippets.length} jobs. Job cards are already shown to the user in the chat UI — DO NOT list them again as text. Write 1 short sentence acknowledging the results and inviting them to tap a card or refine the search.`
+                                : "No jobs found matching those criteria."
+
+                        const modelPart = {
+                            functionCall: {
+                                name: "search_jobs",
+                                args: accumulatedFunctionCall.args,
+                            },
+                            thoughtSignature:
+                                accumulatedThoughtSignature ??
+                                GEMINI_THOUGHT_SIGNATURE_SKIP,
+                        }
+                        const followUpPayload = {
+                            contents: [
+                                ...history,
+                                { role: "user" as const, parts: userContent },
+                                { role: "model" as const, parts: [modelPart] },
+                                {
+                                    role: "user" as const,
+                                    parts: [
+                                        {
+                                            functionResponse: {
+                                                name: "search_jobs",
+                                                response: {
+                                                    result: jobSummaryForModel,
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                            tools,
+                            generationConfig: payload.generationConfig,
+                            ...(getSystemPromptWithContext().trim() && {
+                                systemInstruction: payload.systemInstruction,
+                            }),
+                        }
+                        const introText = computeDisplayText(accumulatedText)
+                        try {
+                            const res = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify(followUpPayload),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const data = await res.json().catch(() => ({}))
+                            const followUpText = res.ok
+                                ? extractTextFromGeminiResponse(data)
+                                : ""
+                            const followUpDisplay =
+                                computeDisplayText(followUpText)
+                            accumulatedText = introText
+                                ? `${introText}\n\n${followUpDisplay}`
+                                : followUpDisplay ||
+                                  (searchError
+                                      ? "I had trouble reaching the jobs API — please try again."
+                                      : jobSnippets.length === 0
+                                        ? "No jobs found for that search. Try different keywords or location."
+                                        : "Here are some matching jobs!")
+                            parseSuggestionsFrom(followUpText)
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError")
+                                console.error("search_jobs follow-up:", err)
+                            accumulatedText =
+                                accumulatedText ||
+                                (jobSnippets.length > 0
+                                    ? "Here are some matching jobs!"
+                                    : "No jobs found for that search.")
+                        }
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: {
+                                        name: "search_jobs",
+                                        response: { count: jobSnippets.length },
+                                    },
+                                    jobs: jobSnippets,
+                                }
+                            }
+                            return newArr
+                        })
+                    } else if (
+                        accumulatedFunctionCall.name === "get_job_details"
+                    ) {
+                        // ---------------------------------------------------------------------------
+                        // get_job_details — fetch full job from API, pass to model for follow-up
+                        // ---------------------------------------------------------------------------
+                        const args = accumulatedFunctionCall.args as any
+                        // Fall back to currently open job if the model omitted the ID
+                        const jobId =
+                            args.job_id ||
+                            selectedJobRef.current?.id ||
+                            null
+
+                        let jobDetail: any = null
+                        if (jobId) {
+                            try {
+                                const detailRes = await fetch(
+                                    `${jobsApiUrl}/jobs/${jobId}`,
+                                    { signal: controller.signal }
+                                )
+                                if (detailRes.ok) {
+                                    jobDetail = await detailRes.json()
+                                }
+                            } catch (err) {
+                                if ((err as Error).name !== "AbortError")
+                                    console.error("get_job_details fetch:", err)
+                            }
+                        }
+
+                        const detailContent = jobDetail
+                            ? JSON.stringify({
+                                  id: jobDetail.id,
+                                  title: jobDetail.title,
+                                  company: jobDetail.company?.name,
+                                  location: jobDetail.location,
+                                  employment_type: jobDetail.employment_type,
+                                  workplace_type: jobDetail.workplace_type,
+                                  summary: jobDetail.job_summary,
+                                  salary: jobDetail.salary,
+                                  description: jobDetail.job_description,
+                                  company_description:
+                                      jobDetail.company?.description,
+                                  apply_url: jobDetail.apply_url,
+                              })
+                            : jobId
+                              ? "Job details could not be retrieved."
+                              : "No job ID provided and no job is currently open."
+
+                        const modelPart = {
+                            functionCall: {
+                                name: "get_job_details",
+                                args: { job_id: jobId ?? "" },
+                            },
+                            thoughtSignature:
+                                accumulatedThoughtSignature ??
+                                GEMINI_THOUGHT_SIGNATURE_SKIP,
+                        }
+                        const followUpPayload = {
+                            contents: [
+                                ...history,
+                                { role: "user" as const, parts: userContent },
+                                { role: "model" as const, parts: [modelPart] },
+                                {
+                                    role: "user" as const,
+                                    parts: [
+                                        {
+                                            functionResponse: {
+                                                name: "get_job_details",
+                                                response: {
+                                                    job: detailContent,
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                            tools,
+                            generationConfig: payload.generationConfig,
+                            ...(getSystemPromptWithContext().trim() && {
+                                systemInstruction: payload.systemInstruction,
+                            }),
+                        }
+                        const introText = computeDisplayText(accumulatedText)
+                        try {
+                            const res = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                {
+                                    method: "POST",
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify(followUpPayload),
+                                    signal: controller.signal,
+                                }
+                            )
+                            const data = await res.json().catch(() => ({}))
+                            const followUpText = res.ok
+                                ? extractTextFromGeminiResponse(data)
+                                : ""
+                            const followUpDisplay =
+                                computeDisplayText(followUpText)
+                            accumulatedText = introText
+                                ? `${introText}\n\n${followUpDisplay}`
+                                : followUpDisplay || "Here are the job details!"
+                            parseSuggestionsFrom(followUpText)
+                        } catch (err) {
+                            if ((err as Error).name !== "AbortError")
+                                console.error("get_job_details follow-up:", err)
+                            accumulatedText =
+                                accumulatedText || "Here are the job details!"
+                        }
+                        setMessages((prev) => {
+                            const newArr = [...prev]
+                            if (
+                                newArr.length > 0 &&
+                                newArr[newArr.length - 1].role === "model"
+                            ) {
+                                newArr[newArr.length - 1] = {
+                                    ...newArr[newArr.length - 1],
+                                    text: accumulatedText,
+                                    functionCall: accumulatedFunctionCall,
+                                    functionResponse: {
+                                        name: "get_job_details",
+                                        response: { fetched: !!jobDetail },
+                                    },
                                 }
                             }
                             return newArr
@@ -20505,10 +25552,53 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
         () => new Set(["rectangle", "ellipse", "diamond", "triangle", "star"]),
         []
     )
-    const WB_SAFE_PATCH_TOP = ["x", "y", "rotation", "opacity", "isLocked", "index"]
-    const WB_SAFE_PATCH_GEO   = ["w","h","geo","color","size","fill","dash","text","labelColor","font","align","verticalAlign","growY","url"]
-    const WB_SAFE_PATCH_TEXT  = ["text","color","size","font","align","autoSize","scale","w"]
-    const WB_SAFE_PATCH_ARROW = ["start","end","arrowheadStart","arrowheadEnd","color","size","fill","dash","bend","labelColor","font"]
+    const WB_SAFE_PATCH_TOP = [
+        "x",
+        "y",
+        "rotation",
+        "opacity",
+        "isLocked",
+        "index",
+    ]
+    const WB_SAFE_PATCH_GEO = [
+        "w",
+        "h",
+        "geo",
+        "color",
+        "size",
+        "fill",
+        "dash",
+        "text",
+        "labelColor",
+        "font",
+        "align",
+        "verticalAlign",
+        "growY",
+        "url",
+    ]
+    const WB_SAFE_PATCH_TEXT = [
+        "text",
+        "color",
+        "size",
+        "font",
+        "align",
+        "autoSize",
+        "scale",
+        "w",
+    ]
+    const WB_SAFE_PATCH_ARROW = [
+        "start",
+        "end",
+        "arrowheadStart",
+        "arrowheadEnd",
+        "color",
+        "size",
+        "fill",
+        "dash",
+        "bend",
+        "labelColor",
+        "font",
+    ]
 
     /**
      * Normalises an AI-generated shape object into a tldraw-safe record.
@@ -20528,7 +25618,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 if (!["geo", "text", "arrow"].includes(type)) return null
 
                 const base: any = {
-                    id: s.id ? wbSanitizeId(s.id) : `shape:${Math.random().toString(36).slice(2, 11)}`,
+                    id: s.id
+                        ? wbSanitizeId(s.id)
+                        : `shape:${Math.random().toString(36).slice(2, 11)}`,
                     type,
                     typeName: "shape",
                     x: isFinite(Number(s.x)) ? Number(s.x) : 0,
@@ -20537,7 +25629,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     isLocked: false,
                     opacity: 1,
                     parentId: "page:page",
-                    index: typeof s.index === "string" && s.index ? s.index : "a1",
+                    index:
+                        typeof s.index === "string" && s.index ? s.index : "a1",
                     props: {},
                 }
 
@@ -20545,33 +25638,59 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
 
                 if (type === "geo") {
                     base.props = {
-                        w: Math.max(20, isFinite(Number(p.w)) ? Number(p.w) : 160),
-                        h: Math.max(20, isFinite(Number(p.h)) ? Number(p.h) : 60),
+                        w: Math.max(
+                            20,
+                            isFinite(Number(p.w)) ? Number(p.w) : 160
+                        ),
+                        h: Math.max(
+                            20,
+                            isFinite(Number(p.h)) ? Number(p.h) : 60
+                        ),
                         geo: WB_VALID_GEO.has(p.geo) ? p.geo : "rectangle",
-                        color: "black", size: "m", fill: "none", dash: "draw",
+                        color: "black",
+                        size: "m",
+                        fill: "none",
+                        dash: "draw",
                         text: wbUnescapeText(p.text),
-                        labelColor: "black", font: "draw",
-                        align: "middle", verticalAlign: "middle", growY: 0, url: "",
+                        labelColor: "black",
+                        font: "draw",
+                        align: "middle",
+                        verticalAlign: "middle",
+                        growY: 0,
+                        url: "",
                     }
                 } else if (type === "text") {
                     base.props = {
                         text: wbUnescapeText(p.text ?? s.text) || "Text",
-                        color: "black", size: "m", font: "draw",
-                        align: "start", autoSize: true, scale: 1,
+                        color: "black",
+                        size: "m",
+                        font: "draw",
+                        align: "start",
+                        autoSize: true,
+                        scale: 1,
                         w: isFinite(Number(p.w)) ? Number(p.w) : 200,
                     }
                 } else {
                     const mkPoint = (pt: any, dx: number, dy: number) =>
                         pt && isFinite(Number(pt.x)) && isFinite(Number(pt.y))
-                            ? { type: "point", x: Number(pt.x), y: Number(pt.y) }
+                            ? {
+                                  type: "point",
+                                  x: Number(pt.x),
+                                  y: Number(pt.y),
+                              }
                             : { type: "point", x: dx, y: dy }
                     base.props = {
                         start: mkPoint(p.start, 0, 0),
-                        end:   mkPoint(p.end,   200, 0),
-                        arrowheadStart: "none", arrowheadEnd: "arrow",
-                        color: "black", size: "m", fill: "none", dash: "draw",
+                        end: mkPoint(p.end, 200, 0),
+                        arrowheadStart: "none",
+                        arrowheadEnd: "arrow",
+                        color: "black",
+                        size: "m",
+                        fill: "none",
+                        dash: "draw",
                         bend: isFinite(Number(p.bend)) ? Number(p.bend) : 0,
-                        labelColor: "black", font: "draw",
+                        labelColor: "black",
+                        font: "draw",
                     }
                 }
 
@@ -20596,15 +25715,22 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     patch[k] = isFinite(Number(s[k])) ? Number(s[k]) : s[k]
             })
             if (s.props && typeof s.props === "object") {
-                const existing = editorRef.current?.getShape(wbSanitizeId(s.id)) as any
+                const existing = editorRef.current?.getShape(
+                    wbSanitizeId(s.id)
+                ) as any
                 const safeKeys =
-                    existing?.type === "text"  ? WB_SAFE_PATCH_TEXT  :
-                    existing?.type === "arrow" ? WB_SAFE_PATCH_ARROW :
-                                                 WB_SAFE_PATCH_GEO
+                    existing?.type === "text"
+                        ? WB_SAFE_PATCH_TEXT
+                        : existing?.type === "arrow"
+                          ? WB_SAFE_PATCH_ARROW
+                          : WB_SAFE_PATCH_GEO
                 const filtered: any = {}
                 safeKeys.forEach((k) => {
                     if (s.props[k] !== undefined)
-                        filtered[k] = k === "text" ? wbUnescapeText(s.props[k]) : s.props[k]
+                        filtered[k] =
+                            k === "text"
+                                ? wbUnescapeText(s.props[k])
+                                : s.props[k]
                 })
                 if (Object.keys(filtered).length > 0) patch.props = filtered
             }
@@ -20617,7 +25743,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
      * Handles message delivery to the Google Gemini API.
      */
     const handleSendMessage = React.useCallback(
-        async (overrideText?: string) => {
+        async (overrideText?: string, aiOverrideText?: string) => {
             fetchLocation()
             const textToCheck =
                 overrideText !== undefined ? overrideText : inputText
@@ -20638,10 +25764,13 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             if (
                 isWhiteboardOpenRef.current &&
                 editorRef.current &&
-                /^(clear|delete|erase|wipe|remove)\s*(all|everything|the\s+whiteboard|whiteboard)?[\s!.]*$/i.test(textToCheck.trim())
+                /^(clear|delete|erase|wipe|remove)\s*(all|everything|the\s+whiteboard|whiteboard)?[\s!.]*$/i.test(
+                    textToCheck.trim()
+                )
             ) {
                 try {
-                    const shapeIds = editorRef.current.getCurrentPageShapeIds?.()
+                    const shapeIds =
+                        editorRef.current.getCurrentPageShapeIds?.()
                     if (shapeIds && shapeIds.size > 0) {
                         editorRef.current.deleteShapes([...shapeIds])
                     }
@@ -20649,7 +25778,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     console.error("Clear whiteboard failed:", e)
                 }
                 setInputText("")
-                setMessages((prev) => [...prev,
+                setMessages((prev) => [
+                    ...prev,
                     { role: "user", text: textToCheck.trim() },
                     { role: "model", text: "Whiteboard cleared." },
                 ])
@@ -20666,7 +25796,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             // Clear AI suggestions when user sends a message
             setAiGeneratedSuggestions([])
 
-            let textToSend = sanitizeMessage(textToCheck)
+            // aiOverrideText lets callers show a friendly display message while
+            // sending a more explicit instruction to the AI (e.g. "Create resume" button)
+            let textToSend = sanitizeMessage(aiOverrideText ?? textToCheck)
             // Inject selected skills context (Skills API) so the model can use them
             if (selectedSkills.length > 0) {
                 const skillContext = selectedSkills
@@ -20675,15 +25807,18 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             `[Skill: ${s.name}${s.description ? ` - ${s.description}` : ""}]`
                     )
                     .join("\n")
-                textToSend =
-                    (textToSend
+                textToSend = (
+                    textToSend
                         ? `${skillContext}\n\n${textToSend}`
-                        : skillContext)
-                .trim()
+                        : skillContext
+                ).trim()
             }
 
-            // Input length check
-            if (textToSend.length > MAX_INPUT_LENGTH) {
+            // Input length check — guard against users pasting huge blocks of
+            // text. We check the user-visible text (textToCheck), NOT textToSend,
+            // because textToSend may include a long AI override (e.g. the resume
+            // creation prompt) that should not be capped the same way.
+            if (textToCheck.trim().length > MAX_INPUT_LENGTH) {
                 setMessages((prev) => [
                     ...prev,
                     {
@@ -20691,7 +25826,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         text: `Message too long (max ${MAX_INPUT_LENGTH} characters).`,
                     },
                 ])
-                return
+                return false
             }
 
             // Daily Limit Check
@@ -20716,7 +25851,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 text: "Daily message limit reached. Please try again at 12AM.",
                             },
                         ])
-                        return
+                        return false
                     }
 
                     // Increment and save (optimistically)
@@ -20733,7 +25868,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             // Rate limiting check
             const now = Date.now()
             if (now - lastMessageTimeRef.current < MESSAGE_RATE_LIMIT_MS) {
-                return
+                return false
             }
             lastMessageTimeRef.current = now
 
@@ -20886,7 +26021,15 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     })
 
                     // Clear peer's input bar as well
-                    broadcastData({ type: "input-sync", payload: { text: "", html: "", skills: [], seq: Date.now() } })
+                    broadcastData({
+                        type: "input-sync",
+                        payload: {
+                            text: "",
+                            html: "",
+                            skills: [],
+                            seq: Date.now(),
+                        },
+                    })
                 })
             }
 
@@ -20949,7 +26092,6 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
 
     const rightContentPanelRef = React.useRef<HTMLDivElement>(null)
 
-
     const handlePointerMove = React.useCallback(
         (e: PointerEvent) => {
             if (!isDragging.current) return
@@ -20988,14 +26130,11 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     const newWidth = dragStartWidth.current + deltaX
 
                     // Constraints
-                    const minChatWidth = 400
-                    const leftSidebarWidth =
-                        !isMobileLayout && isSidebarOpen ? 260 : 0
                     const availableWidth = containerWidth - leftSidebarWidth
-                    const maxChatWidth = availableWidth - 400 // Ensure at least 400px for tool
+                    const maxChatWidth = availableWidth - MIN_CHAT_WIDTH
 
                     const clampedWidth = Math.max(
-                        minChatWidth,
+                        MIN_CHAT_WIDTH,
                         Math.min(newWidth, maxChatWidth)
                     )
 
@@ -21005,20 +26144,15 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     return
                 }
 
-                const isToolOpen =
-                    isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen
                 const isSidebarMode = !isMobileLayout && isToolOpen
                 let effectiveIsMobile = isMobileLayout
 
                 if (isSidebarMode) {
-                    containerWidth = 400
+                    containerWidth = SIDEBAR_MODE_WIDTH
                     effectiveIsMobile = true
                 }
 
-                // Adjust container width if sidebar is open on desktop standard mode
-                const widthReduction =
-                    !isMobileLayout && isSidebarOpen ? 260 : 0
-                const finalWidth = containerWidth - widthReduction
+                const finalWidth = containerWidth - leftSidebarWidth
 
                 const { minHeight, maxHeight } = calculateHeightConstraints(
                     finalWidth,
@@ -21098,11 +26232,13 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             isMobileLayout,
             isScreenSharing,
             remoteScreenStream,
+            isToolOpen,
             isWhiteboardOpen,
             isDocOpen,
+            isAppOpen,
             sharedScreenSize,
             calculateHeightConstraints,
-            isSidebarOpen, // Added dependency
+            leftSidebarWidth,
         ]
     )
 
@@ -21138,18 +26274,15 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             let containerWidth =
                 containerRef.current?.clientWidth || window.innerWidth
 
-            const isToolOpen = isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen
             const isSidebarMode = !isMobileLayout && isToolOpen
             let effectiveIsMobile = isMobileLayout
 
             if (isSidebarMode) {
-                containerWidth = 400
+                containerWidth = SIDEBAR_MODE_WIDTH
                 effectiveIsMobile = true
             }
 
-            // Adjust container width if sidebar is open on desktop standard mode
-            const widthReduction = !isMobileLayout && isSidebarOpen ? 260 : 0
-            const finalWidth = containerWidth - widthReduction
+            const finalWidth = containerWidth - leftSidebarWidth
 
             const { minHeight, maxHeight } = calculateHeightConstraints(
                 finalWidth,
@@ -21190,12 +26323,15 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
         chatHeight,
         calculateHeightConstraints,
         isMobileLayout,
+        isToolOpen,
         isScreenSharing,
         remoteScreenStream,
         isWhiteboardOpen,
         isDocOpen,
+        isAppOpen,
         sharedScreenSize,
-        isSidebarOpen, // Added dependency
+        isSidebarOpen,
+        leftSidebarWidth,
     ])
 
     // --- UI DIMENSION CALCULATIONS ---
@@ -21203,7 +26339,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
     // Calculate current constraints for UI feedback (e.g. tooltip)
     const currentConstraints = React.useMemo(() => {
         return calculateHeightConstraints(
-            containerSize.width - (!isMobileLayout && isSidebarOpen ? 260 : 0),
+            containerSize.width - leftSidebarWidth,
             containerSize.height,
             isMobileLayout,
             isScreenSharing,
@@ -21249,7 +26385,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
     // User request: "on whiteboard/notes/screenshare, aspect ratio should be square for 3+ people"
     const isMultiParty = numTiles > 2
     const isContentOpen =
-        isScreenSharing || !!remoteScreenStream || isWhiteboardOpen || isDocOpen
+        isScreenSharing ||
+        !!remoteScreenStream ||
+        isWhiteboardOpen ||
+        isDocOpen ||
+        isAppOpen ||
+        isJobOpen
     const targetRatio =
         isMultiParty || (isContentOpen && isMultiParty) ? 1.0 : 1.55
 
@@ -21259,7 +26400,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
         let activeWidth: number
         let activeHeight: number
 
-        if (isDocOpen || isWhiteboardOpen) {
+        if (
+            isDocOpen ||
+            isWhiteboardOpen ||
+            isAppOpen ||
+            isJobOpen
+        ) {
             return {
                 width: "100%",
                 height: "100%",
@@ -21333,11 +26479,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
         sharedScreenSize,
         isWhiteboardOpen,
         isDocOpen,
+        isAppOpen,
+        isJobOpen,
         targetRatio,
     ])
 
     // Sidebar Logic Definition (Hoist for layout calc)
-    const isToolOpen = isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen
     const isSidebarMode = !isMobileLayout && isToolOpen
     const isMobileToolMode = isMobileLayout && isToolOpen
 
@@ -21348,7 +26495,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
     if (isMobileLayout || isSidebarMode) {
         // MOBILE / SIDEBAR LOGIC
         // "if 3 tiles then side-by-side horizontal. if 4 tiles, its a 2x2 grid."
-        const availableWidth = (isSidebarMode ? 400 : containerSize.width) - 32 // 16px padding on each side
+        const availableWidth =
+            (isSidebarMode ? SIDEBAR_MODE_WIDTH : containerSize.width) - 32
 
         if (numTiles === 4) {
             // 2x2 Grid
@@ -21585,19 +26733,331 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
         []
     )
 
+    // --- RESUME ANIMATION CALLBACK ---
+    const handleCreateResume = React.useCallback(
+        async (job: HomepageJob, keywords: string[]) => {
+            // Capture [data-keyword] span positions SYNCHRONOUSLY — the job
+            // detail DOM is still fully mounted and measured at this point.
+            const spans = Array.from(
+                document.querySelectorAll("[data-keyword]")
+            ) as HTMLElement[]
+            const seen = new Set<string>()
+            const uniqueSpans: {
+                word: string
+                rect: DOMRect
+                fontSize: string
+                fontWeight: string
+            }[] = []
+            for (const span of spans) {
+                const word = span.getAttribute("data-keyword") ?? ""
+                if (word && !seen.has(word.toLowerCase())) {
+                    seen.add(word.toLowerCase())
+                    const cs = window.getComputedStyle(span)
+                    uniqueSpans.push({
+                        word,
+                        rect: span.getBoundingClientRect(),
+                        fontSize: cs.fontSize,
+                        fontWeight: cs.fontWeight,
+                    })
+                }
+            }
+            // Capture job title + company name as separate orbit entities
+            const captureEl = (
+                selector: string,
+                word: string,
+                extra?: Partial<CapturedKeyword>
+            ): Omit<CapturedKeyword, "baseAngle"> | null => {
+                const el = document.querySelector(selector) as HTMLElement | null
+                if (!el) return null
+                const r = el.getBoundingClientRect()
+                const cs = window.getComputedStyle(el)
+                return {
+                    word,
+                    startX: r.left + r.width / 2,
+                    startY: r.top + r.height / 2,
+                    fontSize: cs.fontSize,
+                    fontWeight: cs.fontWeight,
+                    ...extra,
+                }
+            }
+            const titleEntry = captureEl(
+                "[data-job-title]",
+                job.title.split(" - ")[0].split(" – ")[0],
+                { isTitle: true }
+            )
+            const companyEntry = captureEl(
+                "[data-company-name]",
+                job.company.name
+            )
+
+            // Build the pre-keyword entries (title then company)
+            const preEntries = [titleEntry, companyEntry].filter(Boolean) as
+                Omit<CapturedKeyword, "baseAngle">[]
+            const totalCount = uniqueSpans.length + preEntries.length || 1
+
+            const captured: CapturedKeyword[] = [
+                ...preEntries.map((entry, i) => ({
+                    ...entry,
+                    baseAngle: (i / totalCount) * 2 * Math.PI,
+                })),
+                ...uniqueSpans.map(({ word, rect, fontSize, fontWeight }, i) => ({
+                    word,
+                    startX: rect.left + rect.width / 2,
+                    startY: rect.top + rect.height / 2,
+                    baseAngle: ((i + preEntries.length) / totalCount) * 2 * Math.PI,
+                    fontSize,
+                    fontWeight,
+                })),
+            ]
+
+            // Track which job this animation belongs to so the cache can be
+            // written from inside the async create_resume tool handler.
+            resumeJobIdRef.current = job.id
+
+            // Phase 1 — "fading": job detail content blurs out (keywords stay
+            // via overlay at startX/Y). Toolbar changes instantly to DocEditor.
+            setResumeCapturedItems(captured)
+            setResumeAnimKeywords(keywords)
+            setResumeUsedKeywords([])
+            setResumeAnimPhase("fading")
+            setDocContent("")
+            setDocType("resume")
+            setIsDocOpen(true)
+            isDocOpenRef.current = true
+
+            // Phase 2 — "orbiting": effectively immediate after the fade.
+            const orbitTimer = setTimeout(() => {
+                setResumeAnimPhase("orbiting")
+            }, 250)
+
+            // Check if we already generated a resume for this job.
+            // If so: play the same animation but skip the AI call —
+            // load cached HTML, orbit briefly, then land.
+            const cachedHtml = resumeCache.current.get(job.id)
+            if (cachedHtml) {
+                const landTimer = setTimeout(() => {
+                    const used = keywords.filter((k) =>
+                        cachedHtml.includes(k)
+                    )
+                    // Re-inject markers so the landing scan has direct targets
+                    const markedContent = markKeywordsInHtml(cachedHtml, used)
+                    setDocContent(markedContent)
+                    setResumeUsedKeywords(used)
+                    setResumeAnimPhase("landing")
+                }, 2200) // orbit for ~2 s before landing
+                return () => {
+                    clearTimeout(orbitTimer)
+                    clearTimeout(landTimer)
+                }
+            }
+
+            // Fresh generation — pre-load all context client-side so the
+            // model only needs to call create_resume in a single hop.
+            const savedResume = getResume()
+            const memories = getMemories()
+
+            const contextParts: string[] = [
+                `Role: "${job.title}" at ${job.company.name}`,
+            ]
+            if (keywords.length > 0) {
+                contextParts.push(
+                    `Key skills and technologies for this role: ${keywords.join(", ")}`
+                )
+            }
+            if (savedResume) {
+                contextParts.push(
+                    `Candidate background (their saved resume):\n${savedResume.substring(0, 2000)}`
+                )
+            }
+            if (memories.length > 0) {
+                contextParts.push(
+                    `Additional info about the candidate:\n${memories.map((m) => m.text).join("\n")}`
+                )
+            }
+
+            const displayText = `Create a resume for ${job.title} at ${job.company.name}`
+            const aiText =
+                `Call create_resume immediately with a complete, tailored HTML resume.\n\n` +
+                contextParts.join("\n\n") +
+                `\n\nWrite every section in full — do not ask questions, do not call any other tools first.`
+
+            const sent = await handleSendMessage(displayText, aiText)
+            if (sent === false) {
+                // Send was rejected (rate limit, daily limit, etc.) — roll back
+                // all animation state so the user stays on the job details page.
+                clearTimeout(orbitTimer)
+                setResumeAnimPhase("idle")
+                setResumeCapturedItems([])
+                setResumeUsedKeywords([])
+                setIsDocOpen(false)
+                isDocOpenRef.current = false
+            }
+        },
+        [handleSendMessage]
+    )
+
     // --- LAYOUT HELPERS ---
 
     // 1. Tool Renderer (Whiteboard / Doc)
     const renderActiveTool = (isOverlay: boolean) => {
-        if (isJobOpen && selectedJob) {
-            return (
-                <JobDetailPanel
-                    job={selectedJob}
-                    jobsApiUrl={jobsApiUrl}
-                    onClose={closeJobDetail}
+        // During fading: keep JobDetailPanel mounted so its content fades out.
+        // From orbiting onwards: switch to DocEditor (already isDocOpen=true).
+        const showJobPanel =
+            isJobOpen &&
+            selectedJob &&
+            (resumeAnimPhase === "idle" || resumeAnimPhase === "fading")
+        const showMobileOverlay =
+            isMobileLayout &&
+            (showJobPanel || isDocOpen || isAppOpen)
+        const overlayGradientBg = showJobPanel
+            ? themeColors.backgroundDark
+            : chatThemeColors.background
+        const overlayPlaceholder =
+            isLoading
+                ? "Thinking..."
+                : toolOverlayReady
+                  ? showJobPanel
+                      ? "Ask about this job"
+                      : isDocOpen
+                        ? "Edit doc"
+                        : isAppOpen
+                          ? "Edit app"
+                          : "Ask anything"
+                  : "Ask anything"
+
+        const mobileOverlayInput = showMobileOverlay && (
+            <div
+                ref={mobileInputRef}
+                style={{
+                    position: "absolute",
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    zIndex: 10,
+                    paddingBottom: "env(safe-area-inset-bottom)",
+                    pointerEvents: "none",
+                }}
+            >
+                <ChatInput
+                    showAddPeopleOverlay={
+                        showAddPeopleOverlay &&
+                        !(isMobileLayout && isToolOpen)
+                    }
+                    setShowAddPeopleOverlay={setShowAddPeopleOverlay}
+                    hideGradient={false}
+                    gradientBackground={overlayGradientBg}
+                    value={inputText}
+                    onChange={(e) => {
+                        const newValue = sanitizeMessage(e.target.value)
+                        inputTextRef.current = newValue
+                        setInputText(newValue)
+                        if (!showJobPanel && dataConnectionsRef.current.size > 0) {
+                            const now = Date.now()
+                            const interval = 50
+                            const timeSinceLastSend =
+                                now - lastInputSendTimeRef.current
+                            if (inputTimeoutRef.current)
+                                clearTimeout(inputTimeoutRef.current)
+                            const broadcast = () => {
+                                broadcastData({
+                                    type: "input-sync",
+                                    payload: {
+                                        text: inputTextRef.current,
+                                        html: inputHtmlRef.current,
+                                        skills: selectedSkillsRef.current,
+                                        seq: Date.now(),
+                                        cursorOffset: inputCursorRef.current,
+                                    },
+                                })
+                                lastInputSendTimeRef.current = Date.now()
+                            }
+                            if (timeSinceLastSend > interval) {
+                                broadcast()
+                            } else {
+                                inputTimeoutRef.current = setTimeout(
+                                    broadcast,
+                                    interval - timeSinceLastSend
+                                )
+                            }
+                        }
+                    }}
+                    onHtmlChange={(html) => {
+                        inputHtmlRef.current = html
+                    }}
+                    onCursorChange={(offset) => {
+                        inputCursorRef.current = offset
+                    }}
+                    peerSync={peerSyncState}
+                    onSend={handleSendMessage}
+                    onConnectWithAI={handleConnectWithAI}
+                    onStop={handleStop}
+                    onEndCall={() => cleanup(true)}
+                    onFileSelect={handleFileSelect}
+                    onScreenShare={toggleScreenShare}
+                    onReport={handleReport}
+                    placeholder={overlayPlaceholder}
+                    showEndCall={status !== "idle"}
+                    showAiLiveButton={showJobPanel ? false : status === "searching" && role === "student"}
+                    attachments={attachments}
+                    onRemoveAttachment={handleRemoveAttachment}
+                    isLoading={isLoading}
+                    isScreenSharing={isScreenSharing}
+                    isWhiteboardOpen={isWhiteboardOpen}
+                    toggleWhiteboard={toggleWhiteboard}
+                    isDocOpen={isDocOpen}
+                    toggleDoc={toggleDoc}
+                    isAppOpen={isAppOpen}
+                    toggleApp={toggleApp}
+                    isJobOpen={isJobOpen}
+                    isConnected={status === "connected" && !isLiveMode}
+                    status={status}
+                    isMobileLayout={isMobileLayout}
+                    isLiveMode={isLiveMode}
+                    onPasteFile={processFiles}
                     themeColors={themeColors}
-                    isMobile={isMobileLayout}
+                    role={role}
+                    hasMessages={messages.length > 0}
+                    onClearMessages={handleClearMessages}
+                    skillsApiUrl={skillsApiUrl}
+                    selectedSkills={selectedSkills}
+                    onSelectSkill={(skill) =>
+                        setSelectedSkills((prev) =>
+                            prev.some((s) => s.id === skill.id)
+                                ? prev
+                                : [...prev, skill]
+                        )
+                    }
+                    onRemoveSkill={(id) =>
+                        setSelectedSkills((prev) =>
+                            prev.filter((s) => s.id !== id)
+                        )
+                    }
+                    rootStyle={{ pointerEvents: "none" }}
                 />
+            </div>
+        )
+
+        if (showJobPanel) {
+            return (
+                <div
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        position: "relative",
+                        overflow: "hidden",
+                    }}
+                >
+                    <JobDetailPanel
+                        job={selectedJob}
+                        jobsApiUrl={jobsApiUrl}
+                        onClose={closeJobDetail}
+                        themeColors={themeColors}
+                        isMobile={isMobileLayout}
+                        resumeAnimPhase={resumeAnimPhase}
+                        onCreateResume={handleCreateResume}
+                    />
+                    {mobileOverlayInput}
+                </div>
             )
         }
         return (
@@ -21606,9 +27066,17 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     width: "100%",
                     height: "100%",
                     position: "relative",
+                    overflow: "hidden",
+                }}
+            >
+            <div
+                style={{
+                    width: "100%",
+                    height: "100%",
+                    position: "relative",
                     background:
                         isWhiteboardOpen && isMobileLayout
-                            ? themeColors.text.primary
+                            ? "#F9FAFC"
                             : chatThemeColors.background,
                     display: "flex",
                     flexDirection: "column",
@@ -21621,7 +27089,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             ? "2px 0 24px 2px rgba(0,0,0,0.04)"
                             : "none",
                     border: "none",
-                    paddingBottom: isMobileLayout ? mobileInputHeight : 0,
+                    // Whiteboard: ChatInput in flow pushes content up; docs/app: overlay
+                    paddingBottom: 0,
                 }}
             >
                 {/* 
@@ -21712,7 +27181,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 remoteAppMutation={remoteAppMutation}
                                 remoteAppInitialState={remoteAppInitialState}
                                 onAppInitialState={handleAppInitialState}
-                                onRequestInitialState={handleRequestInitialState}
+                                onRequestInitialState={
+                                    handleRequestInitialState
+                                }
                                 amIHost={amIHost}
                                 debugMode={debugMode}
                                 onDownload={() => {
@@ -21756,7 +27227,16 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 isMobileLayout={isMobileLayout}
                                 remoteCursors={remoteCursors}
                                 onCursorMove={handleDocPointerMove}
-                                onClose={() => setIsDocOpen(false)}
+                                onClose={handleDocClose}
+                                docType={docType}
+                                hideContent={resumeAnimPhase === "landing" || resumeAnimPhase === "orbiting"}
+                                docCompany={
+                                    (docType === "resume" ||
+                                        docType === "cover_letter") &&
+                                    selectedJob
+                                        ? selectedJob.company.name
+                                        : ""
+                                }
                             />
                         </div>
                     ) : null}
@@ -21878,8 +27358,13 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             log("Tldraw editor mounted")
                                             setEditor(e)
                                             // Rename the default "Page 1" to "Whiteboard"
-                                            const currentPage = e.getCurrentPage?.()
-                                            if (currentPage) e.renamePage(currentPage.id, "Whiteboard")
+                                            const currentPage =
+                                                e.getCurrentPage?.()
+                                            if (currentPage)
+                                                e.renamePage(
+                                                    currentPage.id,
+                                                    "Whiteboard"
+                                                )
                                             e.setCurrentTool("draw")
                                             const defaultColor =
                                                 role === "volunteer"
@@ -21895,42 +27380,181 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             )
 
                                             // Drain tool calls that arrived before the editor mounted
-                                            if (pendingWhiteboardUpdates.current.length > 0) {
+                                            if (
+                                                pendingWhiteboardUpdates.current
+                                                    .length > 0
+                                            ) {
                                                 try {
                                                     e.batch(() => {
-                                                        while (pendingWhiteboardUpdates.current.length > 0) {
-                                                            const { toolName: tn, args } = pendingWhiteboardUpdates.current.shift()
-                                                            if (tn === "erase_whiteboard") {
-                                                                ;(args.ids || []).forEach((id: string) => {
-                                                                    try {
-                                                                        const sid = wbSanitizeId(id)
-                                                                        if (e.getShape(sid)) e.deleteShapes([sid])
-                                                                    } catch (err) { console.error("[Whiteboard] pending erase failed:", id, err) }
-                                                                })
-                                                            } else if (tn === "draw_whiteboard") {
-                                                                ;(args.shapes || []).map(wbValidateShape).filter(Boolean).forEach((s: any) => {
-                                                                    try {
-                                                                        if (e.getShape(s.id)) e.updateShapes([s])
-                                                                        else e.createShapes([s])
-                                                                    } catch (err) { console.error("[Whiteboard] pending draw failed:", s.id, err) }
-                                                                })
-                                                            } else if (tn === "edit_whiteboard") {
-                                                                ;(args.patches || []).filter((s: any) => s?.id).map(wbApplyToPatch).forEach((s: any) => {
-                                                                    try {
-                                                                        if (e.getShape(s.id)) e.updateShapes([s])
-                                                                    } catch (err) { console.error("[Whiteboard] pending patch failed:", s.id, err) }
-                                                                })
-                                                                ;(args.remove || []).forEach((id: string) => {
-                                                                    try {
-                                                                        const sid = wbSanitizeId(id)
-                                                                        if (e.getShape(sid)) e.deleteShapes([sid])
-                                                                    } catch (err) { console.error("[Whiteboard] pending remove failed:", id, err) }
-                                                                })
+                                                        while (
+                                                            pendingWhiteboardUpdates
+                                                                .current
+                                                                .length > 0
+                                                        ) {
+                                                            const {
+                                                                toolName: tn,
+                                                                args,
+                                                            } =
+                                                                pendingWhiteboardUpdates.current.shift()
+                                                            if (
+                                                                tn ===
+                                                                "erase_whiteboard"
+                                                            ) {
+                                                                ;(
+                                                                    args.ids ||
+                                                                    []
+                                                                ).forEach(
+                                                                    (
+                                                                        id: string
+                                                                    ) => {
+                                                                        try {
+                                                                            const sid =
+                                                                                wbSanitizeId(
+                                                                                    id
+                                                                                )
+                                                                            if (
+                                                                                e.getShape(
+                                                                                    sid
+                                                                                )
+                                                                            )
+                                                                                e.deleteShapes(
+                                                                                    [
+                                                                                        sid,
+                                                                                    ]
+                                                                                )
+                                                                        } catch (err) {
+                                                                            console.error(
+                                                                                "[Whiteboard] pending erase failed:",
+                                                                                id,
+                                                                                err
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                )
+                                                            } else if (
+                                                                tn ===
+                                                                "draw_whiteboard"
+                                                            ) {
+                                                                ;(
+                                                                    args.shapes ||
+                                                                    []
+                                                                )
+                                                                    .map(
+                                                                        wbValidateShape
+                                                                    )
+                                                                    .filter(
+                                                                        Boolean
+                                                                    )
+                                                                    .forEach(
+                                                                        (
+                                                                            s: any
+                                                                        ) => {
+                                                                            try {
+                                                                                if (
+                                                                                    e.getShape(
+                                                                                        s.id
+                                                                                    )
+                                                                                )
+                                                                                    e.updateShapes(
+                                                                                        [
+                                                                                            s,
+                                                                                        ]
+                                                                                    )
+                                                                                else
+                                                                                    e.createShapes(
+                                                                                        [
+                                                                                            s,
+                                                                                        ]
+                                                                                    )
+                                                                            } catch (err) {
+                                                                                console.error(
+                                                                                    "[Whiteboard] pending draw failed:",
+                                                                                    s.id,
+                                                                                    err
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                    )
+                                                            } else if (
+                                                                tn ===
+                                                                "edit_whiteboard"
+                                                            ) {
+                                                                ;(
+                                                                    args.patches ||
+                                                                    []
+                                                                )
+                                                                    .filter(
+                                                                        (
+                                                                            s: any
+                                                                        ) =>
+                                                                            s?.id
+                                                                    )
+                                                                    .map(
+                                                                        wbApplyToPatch
+                                                                    )
+                                                                    .forEach(
+                                                                        (
+                                                                            s: any
+                                                                        ) => {
+                                                                            try {
+                                                                                if (
+                                                                                    e.getShape(
+                                                                                        s.id
+                                                                                    )
+                                                                                )
+                                                                                    e.updateShapes(
+                                                                                        [
+                                                                                            s,
+                                                                                        ]
+                                                                                    )
+                                                                            } catch (err) {
+                                                                                console.error(
+                                                                                    "[Whiteboard] pending patch failed:",
+                                                                                    s.id,
+                                                                                    err
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                    )
+                                                                ;(
+                                                                    args.remove ||
+                                                                    []
+                                                                ).forEach(
+                                                                    (
+                                                                        id: string
+                                                                    ) => {
+                                                                        try {
+                                                                            const sid =
+                                                                                wbSanitizeId(
+                                                                                    id
+                                                                                )
+                                                                            if (
+                                                                                e.getShape(
+                                                                                    sid
+                                                                                )
+                                                                            )
+                                                                                e.deleteShapes(
+                                                                                    [
+                                                                                        sid,
+                                                                                    ]
+                                                                                )
+                                                                        } catch (err) {
+                                                                            console.error(
+                                                                                "[Whiteboard] pending remove failed:",
+                                                                                id,
+                                                                                err
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                )
                                                             }
                                                         }
                                                     })
                                                 } catch (err) {
-                                                    console.error("[Whiteboard] Failed to drain pending updates", err)
+                                                    console.error(
+                                                        "[Whiteboard] Failed to drain pending updates",
+                                                        err
+                                                    )
                                                 }
                                             }
 
@@ -21967,42 +27591,36 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             </div>
                         )}
                 </div>
-                {isMobileLayout && (
+                {isMobileLayout && isWhiteboardOpen && (
                     <div
                         ref={mobileInputRef}
                         style={{
-                            position: "absolute",
-                            bottom: 0,
-                            left: 0,
-                            right: 0,
-                            zIndex: 2002,
+                            flexShrink: 0,
                             paddingBottom: "env(safe-area-inset-bottom)",
-                            pointerEvents: "none",
+                            display: "flex",
+                            justifyContent: "center",
                         }}
                     >
                         <ChatInput
-                            showAddPeopleOverlay={showAddPeopleOverlay}
-                            setShowAddPeopleOverlay={setShowAddPeopleOverlay}
-                            hideGradient={
-                                aiGeneratedSuggestions.length > 0 ||
-                                ((isDocOpen || isWhiteboardOpen) &&
-                                    isMobileLayout)
+                            showAddPeopleOverlay={
+                                showAddPeopleOverlay &&
+                                !(isMobileLayout && isToolOpen)
                             }
+                            setShowAddPeopleOverlay={setShowAddPeopleOverlay}
+                            hideGradient={true}
                             value={inputText}
                             onChange={(e) => {
                                 const newValue = sanitizeMessage(e.target.value)
                                 inputTextRef.current = newValue
                                 setInputText(newValue)
-                                const now = Date.now()
-                                const interval = 50
-                                const timeSinceLastSend =
-                                    now - lastInputSendTimeRef.current
-
-                                if (inputTimeoutRef.current)
-                                    clearTimeout(inputTimeoutRef.current)
-
-                                const broadcast = () => {
-                                    if (dataConnectionsRef.current.size > 0) {
+                                if (dataConnectionsRef.current.size > 0) {
+                                    const now = Date.now()
+                                    const interval = 50
+                                    const timeSinceLastSend =
+                                        now - lastInputSendTimeRef.current
+                                    if (inputTimeoutRef.current)
+                                        clearTimeout(inputTimeoutRef.current)
+                                    const broadcast = () => {
                                         broadcastData({
                                             type: "input-sync",
                                             payload: {
@@ -22015,16 +27633,22 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         })
                                         lastInputSendTimeRef.current = Date.now()
                                     }
-                                }
-
-                                if (timeSinceLastSend > interval) {
-                                    broadcast()
-                                } else {
-                                    inputTimeoutRef.current = setTimeout(broadcast, interval - timeSinceLastSend)
+                                    if (timeSinceLastSend > interval) {
+                                        broadcast()
+                                    } else {
+                                        inputTimeoutRef.current = setTimeout(
+                                            broadcast,
+                                            interval - timeSinceLastSend
+                                        )
+                                    }
                                 }
                             }}
-                            onHtmlChange={(html) => { inputHtmlRef.current = html }}
-                            onCursorChange={(offset) => { inputCursorRef.current = offset }}
+                            onHtmlChange={(html) => {
+                                inputHtmlRef.current = html
+                            }}
+                            onCursorChange={(offset) => {
+                                inputCursorRef.current = offset
+                            }}
                             peerSync={peerSyncState}
                             onSend={handleSendMessage}
                             onConnectWithAI={handleConnectWithAI}
@@ -22033,15 +27657,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             onFileSelect={handleFileSelect}
                             onScreenShare={toggleScreenShare}
                             onReport={handleReport}
-                            placeholder={
-                                isLoading
-                                    ? "Thinking..."
-                                    : isDocOpen
-                                      ? "Edit docs"
-                                      : isAppOpen
-                                        ? "Edit app"
-                                        : "Edit whiteboard"
-                            }
+                            placeholder="Edit whiteboard"
                             showEndCall={status !== "idle"}
                             showAiLiveButton={
                                 status === "searching" && role === "student"
@@ -22056,6 +27672,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             toggleDoc={toggleDoc}
                             isAppOpen={isAppOpen}
                             toggleApp={toggleApp}
+                            isJobOpen={isJobOpen}
                             isConnected={status === "connected" && !isLiveMode}
                             status={status}
                             isMobileLayout={isMobileLayout}
@@ -22079,13 +27696,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     prev.filter((s) => s.id !== id)
                                 )
                             }
-                            onHtmlChange={(html) => { inputHtmlRef.current = html }}
-                            onCursorChange={(offset) => { inputCursorRef.current = offset }}
-                            peerSync={peerSyncState}
-                            rootStyle={{ pointerEvents: "none" }}
+                            rootStyle={{ maxWidth: 816 }}
                         />
                     </div>
                 )}
+            </div>
+            {mobileOverlayInput}
             </div>
         )
     }
@@ -22096,11 +27712,22 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
         let lastDocCallIdx = -1
         let lastWhiteboardCallIdx = -1
         let lastAppCallIdx = -1
+        let lastDocCallType: "doc" | "resume" | "cover_letter" = "doc"
 
         messages.forEach((msg, idx) => {
             if (msg.functionCall) {
-                if (msg.functionCall.name === "update_doc") {
+                if (
+                    msg.functionCall.name === "update_doc" ||
+                    msg.functionCall.name === "create_resume" ||
+                    msg.functionCall.name === "create_cover_letter"
+                ) {
                     lastDocCallIdx = idx
+                    lastDocCallType =
+                        msg.functionCall.name === "create_resume"
+                            ? "resume"
+                            : msg.functionCall.name === "create_cover_letter"
+                              ? "cover_letter"
+                              : "doc"
                 }
                 if (
                     msg.functionCall.name === "draw_whiteboard" ||
@@ -22116,7 +27743,19 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             // Delimiter-streamed tools don't produce a functionCall, so we check
             // the toolUsed field that is stamped on the message post-stream.
             if (msg.toolUsed === "app") lastAppCallIdx = idx
-            if (msg.toolUsed === "doc") lastDocCallIdx = idx
+            if (
+                msg.toolUsed === "doc" ||
+                msg.toolUsed === "resume" ||
+                msg.toolUsed === "cover_letter"
+            ) {
+                lastDocCallIdx = idx
+                lastDocCallType =
+                    msg.toolUsed === "resume"
+                        ? "resume"
+                        : msg.toolUsed === "cover_letter"
+                          ? "cover_letter"
+                          : "doc"
+            }
         })
 
         // Use a memoized set of indices where ads should appear to ensure stability during renders
@@ -22178,16 +27817,20 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 >
                     {/* Homepage — shown when no messages and not in/waiting for a call or Gemini Live session.
                         Visible regardless of which right sidebar is open (jobs, docs, whiteboard, apps). */}
-                    {!hasMessages && status === "idle" && !isLiveMode && !role && jobsApiUrl && (
-                        <HomepageJobs
-                            jobsApiUrl={jobsApiUrl}
-                            userQuery={youWork}
-                            isMobileLayout={isMobileLayout}
-                            themeColors={themeColors}
-                            onOpenSettings={() => setShowYouSettings(true)}
-                            onJobClick={openJobDetail}
-                        />
-                    )}
+                    {!hasMessages &&
+                        status === "idle" &&
+                        !isLiveMode &&
+                        !role &&
+                        jobsApiUrl && (
+                            <HomepageJobs
+                                jobsApiUrl={jobsApiUrl}
+                                userQuery={youWork}
+                                isMobileLayout={isMobileLayout}
+                                themeColors={themeColors}
+                                onOpenSettings={() => setShowYouSettings(true)}
+                                onJobClick={openJobDetail}
+                            />
+                        )}
                     {messages.map((msg, idx) => {
                         const isModelMessage = msg.role === "model"
                         const shouldShowAd =
@@ -22218,9 +27861,13 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         idx === lastWhiteboardCallIdx
                                     }
                                     showAppButton={idx === lastAppCallIdx}
-                                    onToggleDoc={() =>
-                                        setIsDocOpen((prev) => !prev)
-                                    }
+                                    docCallType={idx === lastDocCallIdx ? lastDocCallType : undefined}
+                                    onToggleDoc={() => {
+                                        setIsDocOpen((prev) => {
+                                            if (!prev) setDocType(lastDocCallType)
+                                            return !prev
+                                        })
+                                    }}
                                     onToggleWhiteboard={() =>
                                         setIsWhiteboardOpen((prev) => !prev)
                                     }
@@ -22228,6 +27875,28 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     isDocOpen={isDocOpen}
                                     isWhiteboardOpen={isWhiteboardOpen}
                                     isAppOpen={isAppOpen}
+                                    onJobClick={(job) => {
+                                        // Convert JobSnippet → HomepageJob and open right sidebar
+                                        openJobDetail({
+                                            id: job.id,
+                                            title: job.title,
+                                            company: {
+                                                name: job.company,
+                                                logo_url: job.company_logo ?? null,
+                                                description: null,
+                                                website_url: null,
+                                                linkedin_url: null,
+                                                x_url: null,
+                                            },
+                                            posted_at: job.posted_at ?? null,
+                                            apply_url: job.apply_url ?? "",
+                                            location: job.location ?? null,
+                                            employment_type: job.employment_type ?? null,
+                                            workplace_type: job.workplace_type ?? null,
+                                            salary: null,
+                                            job_summary: job.summary ?? null,
+                                        })
+                                    }}
                                 />
                                 {shouldShowAd && (
                                     <AdCarousel
@@ -22310,19 +27979,24 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         flexDirection: "column",
                         justifyContent: "flex-end",
                         alignItems: "center",
-                        zIndex: 1000,
+                        zIndex:
+                            isMobileLayout && (isDocOpen || isJobOpen)
+                                ? 10001
+                                : 1000,
                         pointerEvents: "none",
                         paddingTop: aiGeneratedSuggestions.length > 0 ? 36 : 0,
                         // touchAction: "none", // Removed to fix mobile tap accuracy issues
                     }}
                 >
                     <ChatInput
-                        showAddPeopleOverlay={showAddPeopleOverlay}
+                        showAddPeopleOverlay={
+                            showAddPeopleOverlay &&
+                            !(isMobileLayout && isToolOpen)
+                        }
                         setShowAddPeopleOverlay={setShowAddPeopleOverlay}
                         hideGradient={
                             aiGeneratedSuggestions.length > 0 ||
-                            ((isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) &&
-                                isMobileLayout)
+                            (isMobileLayout && isWhiteboardOpen)
                         }
                         value={inputText}
                         onChange={(e) => {
@@ -22346,7 +28020,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             html: inputHtmlRef.current,
                                             skills: selectedSkillsRef.current,
                                             seq: Date.now(),
-                                            cursorOffset: inputCursorRef.current,
+                                            cursorOffset:
+                                                inputCursorRef.current,
                                         },
                                     })
                                     lastInputSendTimeRef.current = Date.now()
@@ -22356,11 +28031,18 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             if (timeSinceLastSend > interval) {
                                 broadcast()
                             } else {
-                                inputTimeoutRef.current = setTimeout(broadcast, interval - timeSinceLastSend)
+                                inputTimeoutRef.current = setTimeout(
+                                    broadcast,
+                                    interval - timeSinceLastSend
+                                )
                             }
                         }}
-                        onHtmlChange={(html) => { inputHtmlRef.current = html }}
-                        onCursorChange={(offset) => { inputCursorRef.current = offset }}
+                        onHtmlChange={(html) => {
+                            inputHtmlRef.current = html
+                        }}
+                        onCursorChange={(offset) => {
+                            inputCursorRef.current = offset
+                        }}
                         peerSync={peerSyncState}
                         onSend={handleSendMessage}
                         onConnectWithAI={handleConnectWithAI}
@@ -22384,6 +28066,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                         toggleDoc={toggleDoc}
                         isAppOpen={isAppOpen}
                         toggleApp={toggleApp}
+                        isJobOpen={isJobOpen}
                         isConnected={status === "connected" && !isLiveMode}
                         status={status}
                         isMobileLayout={isMobileLayout}
@@ -22472,9 +28155,14 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                                 handleSendMessage(suggestion)
                                             }
                                             onKeyDown={(e) => {
-                                                if (e.key === "Enter" || e.key === " ") {
+                                                if (
+                                                    e.key === "Enter" ||
+                                                    e.key === " "
+                                                ) {
                                                     e.preventDefault()
-                                                    handleSendMessage(suggestion)
+                                                    handleSendMessage(
+                                                        suggestion
+                                                    )
                                                 }
                                             }}
                                             className={`Suggestion${index + 1}`}
@@ -22529,7 +28217,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                                         )
                                                     ) {
                                                         e.currentTarget.style.outline = `1px solid ${themeColors.semantic.accent}`
-                                                        e.currentTarget.style.outlineOffset = "2px"
+                                                        e.currentTarget.style.outlineOffset =
+                                                            "2px"
                                                         e.currentTarget.style.boxShadow = `0 0 0 1px ${themeColors.text.primary}`
                                                     }
                                                 })
@@ -22619,6 +28308,10 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
         // Note: isSidebar means we are in the sidebar context (width ~400px)
         // isMobileLayout means we are on a small screen (width < 768px)
         const isSidebarOrMobile = isMobileLayout || isSidebar
+        const isContentCompact =
+            isScreenSharing ||
+            !!remoteScreenStream ||
+            (isToolOpen && !isSidebar)
 
         // Use calculateHeightConstraints to get the 'ideal' dimensions based on the *current* layout context
         // If isSidebar, we pass the sidebar width (chatWidth) instead of full container width
@@ -22652,8 +28345,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
         const availableHeight = Math.max(0, effectiveH - chatHeight - 40)
         // If isSidebar is true, effectiveW is ALREADY the panel width. We don't subtract the left sidebar (260) from it.
         // If isSidebar is false, effectiveW is the container width (window), so we MUST subtract the left sidebar if open.
-        const leftSidebarOffset =
-            !isSidebar && !isMobileLayout && isSidebarOpen ? 260 : 0
+        const leftSidebarOffset = isSidebar ? 0 : leftSidebarWidth
         const availableWidth = Math.max(0, effectiveW - 32 - leftSidebarOffset) // -32 for padding (16px * 2)
 
         // Determine aspect ratio
@@ -22773,13 +28465,10 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     width: "100%",
                     boxSizing: "border-box",
                     justifyContent: "center",
-                    ...(isScreenSharing ||
-                    !!remoteScreenStream ||
-                    ((isWhiteboardOpen || isDocOpen || isAppOpen) && !isSidebar)
+                    ...(isContentCompact
                         ? {
                               // If content is open, tiles are small strip
-                              height:
-                                  isMobileLayout || isSidebar ? "auto" : 140,
+                              height: isSidebarOrMobile ? "auto" : 140,
                               flex: "0 0 auto",
                               flexShrink: 0,
                               paddingLeft: 0,
@@ -22794,20 +28483,17 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                   ? "row"
                                   : "column",
                               flexWrap:
-                                  (isMobileLayout || isSidebar) &&
-                                  numTiles === 4
+                                  isSidebarOrMobile && numTiles === 4
                                       ? "wrap"
                                       : "nowrap",
                               alignItems:
-                                  (isMobileLayout || isSidebar) &&
-                                  numTiles === 4
+                                  isSidebarOrMobile && numTiles === 4
                                       ? "flex-start"
-                                      : !(isMobileLayout || isSidebar)
+                                      : !isSidebarOrMobile
                                         ? "flex-end"
                                         : "center",
                               alignContent:
-                                  (isMobileLayout || isSidebar) &&
-                                  numTiles === 4
+                                  isSidebarOrMobile && numTiles === 4
                                       ? "center"
                                       : "stretch",
                           }),
@@ -22895,32 +28581,18 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 initial={false}
                                 animate={{
                                     flex: "0 0 auto",
-                                    width:
-                                        isScreenSharing ||
-                                        !!remoteScreenStream ||
-                                        ((isWhiteboardOpen || isDocOpen) &&
-                                            !isSidebar)
+                                    width: isContentCompact
+                                        ? "auto"
+                                        : fitWidth,
+                                    height: isContentCompact
+                                        ? isSidebarOrMobile
                                             ? "auto"
-                                            : fitWidth,
-                                    height:
-                                        isScreenSharing ||
-                                        !!remoteScreenStream ||
-                                        ((isWhiteboardOpen || isDocOpen) &&
-                                            !isSidebar)
-                                            ? isMobileLayout || isSidebar
-                                                ? "auto"
-                                                : "100%"
-                                            : fitHeight,
-                                    borderRadius:
-                                        isScreenSharing ||
-                                        !!remoteScreenStream ||
-                                        ((isWhiteboardOpen || isDocOpen) &&
-                                            !isSidebar)
-                                            ? 24
-                                            : fitHeight <
-                                                (isMobileLayout || isSidebar
-                                                    ? 164
-                                                    : 224)
+                                            : "100%"
+                                        : fitHeight,
+                                    borderRadius: isContentCompact
+                                        ? 24
+                                        : fitHeight <
+                                              (isSidebarOrMobile ? 164 : 224)
                                               ? 28
                                               : 36,
                                 }}
@@ -22940,17 +28612,11 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             : "default",
                                     display: "flex",
                                     flexDirection: "column",
-                                    aspectRatio:
-                                        isMobileLayout || isSidebar
-                                            ? targetRatio
-                                            : targetRatio,
+                                    aspectRatio: targetRatio,
                                     minWidth: 0,
                                     flexShrink:
-                                        (isScreenSharing ||
-                                            !!remoteScreenStream ||
-                                            ((isWhiteboardOpen || isDocOpen) &&
-                                                !isSidebar)) &&
-                                        !(isMobileLayout || isSidebar)
+                                        isContentCompact &&
+                                        !isSidebarOrMobile
                                             ? 0
                                             : 1,
                                 }}
@@ -23165,148 +28831,145 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
             >
                 {/* 1. Tiles & Main Content Area + 2. Drag Handle — animate in from bottom */}
                 <AnimatePresence>
-                    {(isContentActive || !isBanned) &&
-                        !isIdleNoRole && (
-                            <motion.div
-                                key="tiles-and-drag"
-                                data-layer="video-tiles-and-dragbar"
-                                className="VideoTilesAndDragbar"
-                                initial={{ y: 248, opacity: 0 }}
-                                animate={{ y: 0, opacity: 1 }}
-                                exit={{ opacity: 0, transition: { duration: 0 } }}
-                                transition={{
-                                    duration: 0.3,
-                                    ease: [0.4, 0, 0.2, 1],
-                                }}
+                    {(isContentActive || !isBanned) && !isIdleNoRole && (
+                        <motion.div
+                            key="tiles-and-drag"
+                            data-layer="video-tiles-and-dragbar"
+                            className="VideoTilesAndDragbar"
+                            initial={{ y: 248, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            exit={{ opacity: 0, transition: { duration: 0 } }}
+                            transition={{
+                                duration: 0.3,
+                                ease: [0.4, 0, 0.2, 1],
+                            }}
+                            style={{
+                                flex: "1 1 0",
+                                minHeight: 0,
+                                width: "100%",
+                                display: "flex",
+                                flexDirection: "column",
+                                position: "relative",
+                            }}
+                        >
+                            <div
+                                data-layer="tiles-main-content-area"
+                                className="TilesMainContentArea"
                                 style={{
                                     flex: "1 1 0",
-                                    minHeight: 0,
                                     width: "100%",
                                     display: "flex",
-                                    flexDirection: "column",
+                                    flexDirection: isSidebarContext
+                                        ? "column"
+                                        : isContentActive
+                                          ? "column"
+                                          : shouldUseHorizontalLayout
+                                            ? "row"
+                                            : "column",
+                                    gap: 8,
+                                    paddingTop: 16,
+                                    paddingLeft: 16,
+                                    paddingRight: 16,
+                                    paddingBottom: 0,
+                                    alignItems: isSidebarContext
+                                        ? "center"
+                                        : isContentActive
+                                          ? "center"
+                                          : !isMobileLayout
+                                            ? "center"
+                                            : "center",
+                                    justifyContent: isSidebarContext
+                                        ? "flex-start"
+                                        : isContentActive
+                                          ? "flex-start"
+                                          : "center",
+                                    boxSizing: "border-box",
+                                    minHeight: 0,
+                                    position: "relative",
+                                    overflow: "hidden",
+                                }}
+                            >
+                                {renderTilesSection(isSidebarContext)}
+                                {(isScreenSharing || !!remoteScreenStream) && (
+                                    <div
+                                        data-layer="screen-share-section"
+                                        className="ScreenShareSection"
+                                        style={{
+                                            flex: 1,
+                                            width: "100%",
+                                            overflow: "hidden",
+                                            background: "transparent",
+                                            position: "relative",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                        }}
+                                    >
+                                        {renderScreenShareSection()}
+                                    </div>
+                                )}
+                            </div>
+                            <motion.div
+                                data-layer="drag-handle-container"
+                                className="DragHandleContainer"
+                                onPointerDown={(e) => {
+                                    setIsDragBarHovered(false)
+                                    handlePointerDown(e)
+                                }}
+                                onPointerEnter={() => {
+                                    hoverTimeoutRef.current = window.setTimeout(
+                                        () => {
+                                            setIsDragBarHovered(true)
+                                        },
+                                        50
+                                    )
+                                }}
+                                onPointerLeave={() => {
+                                    if (hoverTimeoutRef.current) {
+                                        clearTimeout(hoverTimeoutRef.current)
+                                        hoverTimeoutRef.current = null
+                                    }
+                                    setIsDragBarHovered(false)
+                                }}
+                                style={{
+                                    height: 24,
+                                    width: "100%",
+                                    background: "transparent",
+                                    ...styles.flexCenter,
+                                    cursor: "ns-resize",
+                                    flexShrink: 0,
+                                    touchAction: "none",
+                                    zIndex: 20,
                                     position: "relative",
                                 }}
                             >
                                 <div
-                                    data-layer="tiles-main-content-area"
-                                    className="TilesMainContentArea"
+                                    data-layer="drag-indicator"
                                     style={{
-                                        flex: "1 1 0",
-                                        width: "100%",
-                                        display: "flex",
-                                        flexDirection: isSidebarContext
-                                            ? "column"
-                                            : isContentActive
-                                              ? "column"
-                                              : shouldUseHorizontalLayout
-                                                ? "row"
-                                                : "column",
-                                        gap: 8,
-                                        paddingTop: 16,
-                                        paddingLeft: 16,
-                                        paddingRight: 16,
-                                        paddingBottom: 0,
-                                        alignItems: isSidebarContext
-                                            ? "center"
-                                            : isContentActive
-                                              ? "center"
-                                              : !isMobileLayout
-                                                ? "center"
-                                                : "center",
-                                        justifyContent: isSidebarContext
-                                            ? "flex-start"
-                                            : isContentActive
-                                              ? "flex-start"
-                                              : "center",
-                                        boxSizing: "border-box",
-                                        minHeight: 0,
-                                        position: "relative",
-                                        overflow: "hidden",
+                                        width: 48,
+                                        height: 5,
+                                        borderRadius: 4,
+                                        background: themeColors.misc.graySolid,
                                     }}
-                                >
-                                    {renderTilesSection(isSidebarContext)}
-                                    {(isScreenSharing ||
-                                        !!remoteScreenStream) && (
-                                        <div
-                                            data-layer="screen-share-section"
-                                            className="ScreenShareSection"
-                                            style={{
-                                                flex: 1,
-                                                width: "100%",
-                                                overflow: "hidden",
-                                                background: "transparent",
-                                                position: "relative",
-                                                display: "flex",
-                                                alignItems: "center",
-                                                justifyContent: "center",
-                                            }}
-                                        >
-                                            {renderScreenShareSection()}
-                                        </div>
-                                    )}
-                                </div>
-                                <motion.div
-                                        data-layer="drag-handle-container"
-                                        className="DragHandleContainer"
-                                        onPointerDown={handlePointerDown}
-                                        onPointerEnter={() => {
-                                            hoverTimeoutRef.current =
-                                                window.setTimeout(() => {
-                                                    setIsDragBarHovered(true)
-                                                }, 50)
-                                        }}
-                                        onPointerLeave={() => {
-                                            if (hoverTimeoutRef.current) {
-                                                clearTimeout(
-                                                    hoverTimeoutRef.current
-                                                )
-                                                hoverTimeoutRef.current = null
-                                            }
-                                            setIsDragBarHovered(false)
-                                        }}
+                                />
+                                {isDragBarHovered && !isDragging.current && (
+                                    <Tooltip
                                         style={{
-                                            height: 24,
-                                            width: "100%",
-                                            background: "transparent",
-                                            ...styles.flexCenter,
-                                            cursor: "ns-resize",
-                                            flexShrink: 0,
-                                            touchAction: "none",
-                                            zIndex: 20,
-                                            position: "relative",
+                                            top: "100%",
+                                            left: "50%",
+                                            transform: "translate(-50%, 4px)",
+                                            whiteSpace: "nowrap",
                                         }}
                                     >
-                                        <div
-                                            data-layer="drag-indicator"
-                                            style={{
-                                                width: 48,
-                                                height: 5,
-                                                borderRadius: 4,
-                                                background:
-                                                    themeColors.misc.graySolid,
-                                            }}
-                                        />
-                                        {isDragBarHovered &&
-                                            !isDragging.current && (
-                                                <Tooltip
-                                                    style={{
-                                                        top: "100%",
-                                                        left: "50%",
-                                                        transform:
-                                                            "translate(-50%, 4px)",
-                                                        whiteSpace: "nowrap",
-                                                    }}
-                                                >
-                                                    {chatHeight <
-                                                    currentConstraints
-                                                        .maxHeight - 5
-                                                        ? "Click to expand chat"
-                                                        : "Click to minimize chat"}
-                                                </Tooltip>
-                                            )}
-                                </motion.div>
+                                        {chatHeight <
+                                        currentConstraints.maxHeight - 5
+                                            ? "Click to expand chat"
+                                            : "Click to minimize chat"}
+                                    </Tooltip>
+                                )}
                             </motion.div>
-                        )}
+                        </motion.div>
+                    )}
                 </AnimatePresence>
 
                 {/* 3. Chat History (Drawer) */}
@@ -23400,7 +29063,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 // touchAction: "none", // Removed to fix mobile tap accuracy issues
             }}
         >
-                            {/* --- SIDEBAR & BUTTON --- */}
+            {/* --- SIDEBAR & BUTTON --- */}
             <button
                 data-svg-wrapper
                 data-layer="open sidebar (6% white fill on hover)"
@@ -23430,6 +29093,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 onClick={(e) => {
                     e.stopPropagation()
                     haptic.light()
+                    setIsSidebarBtnHovered(false)
                     setIsSidebarOpen(true)
                 }}
             >
@@ -23529,7 +29193,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             x: sidebarX,
                             width: 260,
                             height: "100%",
-                            paddingTop: 262,
+                            paddingTop: 222,
                             position: "absolute",
                             top: 0,
                             left: 0,
@@ -23677,7 +29341,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             data-layer="Your stuff title"
                                             className="ChatTitle"
                                             tabIndex={
-                                                isSidebarOpen && canExpand ? 12 + suggestionCount : undefined
+                                                isSidebarOpen && canExpand
+                                                    ? 12 + suggestionCount
+                                                    : undefined
                                             }
                                             onClick={(e) => {
                                                 e.stopPropagation()
@@ -23862,7 +29528,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                                     className="StuffItem"
                                                     tabIndex={
                                                         isSidebarOpen
-                                                            ? 13 + suggestionCount + stuffIndex
+                                                            ? 13 +
+                                                              suggestionCount +
+                                                              stuffIndex
                                                             : undefined
                                                     }
                                                     onClick={(e) => {
@@ -24125,11 +29793,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                                             </div>
                                                         </div>
                                                     )}
-                                        </div>
+                                                </div>
                                             )
                                         })}
                                     </div>
-                                )})()}
+                                )
+                            })()}
 
                             <div
                                 data-layer="your-chats-container"
@@ -24203,11 +29872,22 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         // Calculate stuff items count for tabIndex offset
                                         const visibleStuffItemsCount = Math.min(
                                             savedChats.reduce((count, c) => {
-                                                if (searchQuery && !c.title.toLowerCase().includes(searchQuery.toLowerCase())) return count
+                                                if (
+                                                    searchQuery &&
+                                                    !c.title
+                                                        .toLowerCase()
+                                                        .includes(
+                                                            searchQuery.toLowerCase()
+                                                        )
+                                                )
+                                                    return count
                                                 let itemCount = 0
-                                                if (c.miniIdeLastEdited) itemCount++
-                                                if (c.docEditorLastEdited) itemCount++
-                                                if (c.whiteboardLastEdited) itemCount++
+                                                if (c.miniIdeLastEdited)
+                                                    itemCount++
+                                                if (c.docEditorLastEdited)
+                                                    itemCount++
+                                                if (c.whiteboardLastEdited)
+                                                    itemCount++
                                                 return count + itemCount
                                             }, 0),
                                             isYourStuffExpanded ? Infinity : 3
@@ -24217,304 +29897,333 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                                 key={chat.id}
                                                 tabIndex={
                                                     isSidebarOpen
-                                                        ? 13 + suggestionCount + visibleStuffItemsCount + chatIndex
+                                                        ? 13 +
+                                                          suggestionCount +
+                                                          visibleStuffItemsCount +
+                                                          chatIndex
                                                         : undefined
                                                 }
                                                 aria-label={`Open chat: ${chat.title}`}
                                                 onClick={() => {
-                                                if (editingChatId === chat.id)
-                                                    return
-                                                setCurrentChatId(chat.id)
-                                                setMessages(chat.messages)
-                                                setDocContent(chat.notes || "")
-                                                setAiGeneratedSuggestions(
-                                                    chat.suggestions || []
-                                                )
-                                                if (
-                                                    chat.whiteboard &&
-                                                    editorRef.current
-                                                ) {
-                                                    try {
-                                                        editorRef.current.store.loadSnapshot(
-                                                            chat.whiteboard
-                                                        )
-                                                    } catch (e) {
-                                                        console.error(e)
-                                                    }
-                                                }
-                                                // Restore app state
-                                                if (chat.app) {
-                                                    setAppCode(
-                                                        chat.app.code || ""
-                                                    )
-                                                    // If code exists and is valid HTML, auto-open in player mode
                                                     if (
-                                                        chat.app.code &&
-                                                        chat.app.code.trim()
-                                                            .length > 0
+                                                        editingChatId ===
+                                                        chat.id
+                                                    )
+                                                        return
+                                                    setCurrentChatId(chat.id)
+                                                    setMessages(chat.messages)
+                                                    setDocContent(
+                                                        chat.notes || ""
+                                                    )
+                                                    setAiGeneratedSuggestions(
+                                                        chat.suggestions || []
+                                                    )
+                                                    if (
+                                                        chat.whiteboard &&
+                                                        editorRef.current
                                                     ) {
-                                                        setAppMode("player")
-                                                    } else {
-                                                        setAppMode(
-                                                            chat.app.mode ||
-                                                                "editor"
-                                                        )
-                                                    }
-                                                } else {
-                                                    setAppCode("")
-                                                    setAppMode("editor")
-                                                }
-                                                if (isMobileLayout)
-                                                    setIsSidebarOpen(false)
-                                            }}
-                                            onMouseEnter={() =>
-                                                setHoveredChatId(chat.id)
-                                            }
-                                            onMouseLeave={() =>
-                                                setHoveredChatId(null)
-                                            }
-                                            data-layer="chat item"
-                                            style={{
-                                                alignSelf: "stretch",
-                                                minHeight: 36,
-                                                paddingLeft: 10,
-                                                paddingRight: 10,
-                                                borderRadius: 28,
-                                                justifyContent: "flex-start",
-                                                alignItems: "center",
-                                                gap: 8,
-                                                display: "inline-flex",
-                                                cursor: "pointer",
-                                                marginBottom: 2,
-                                                position: "relative",
-                                                background:
-                                                    hoveredChatId === chat.id ||
-                                                    currentChatId === chat.id ||
-                                                    menuOpenChatId === chat.id
-                                                        ? hoveredChatId ===
-                                                          chat.id
-                                                            ? themeColors.hover
-                                                                  .strong
-                                                            : themeColors.hover
-                                                                  .medium
-                                                        : "transparent",
-                                            }}
-                                        >
-                                            {editingChatId === chat.id ? (
-                                                <input
-                                                    ref={renameInputRef}
-                                                    value={editingTitle}
-                                                    onChange={(e) =>
-                                                        setEditingTitle(
-                                                            e.target.value
-                                                        )
-                                                    }
-                                                    onBlur={handleFinishRename}
-                                                    onKeyDown={(e) => {
-                                                        if (e.key === "Enter")
-                                                            handleFinishRename()
-                                                        if (
-                                                            e.key === "Escape"
-                                                        ) {
-                                                            setEditingChatId(
-                                                                null
+                                                        try {
+                                                            editorRef.current.store.loadSnapshot(
+                                                                chat.whiteboard
                                                             )
-                                                            setEditingTitle("")
+                                                        } catch (e) {
+                                                            console.error(e)
                                                         }
-                                                    }}
-                                                    onClick={(e) =>
-                                                        e.stopPropagation()
                                                     }
-                                                    style={{
-                                                        flex: "1 1 0",
-                                                        background:
-                                                            "transparent",
-                                                        border: "none",
-                                                        color: chatThemeColors
-                                                            .text.primary,
-                                                        fontSize: 14,
-                                                        fontFamily: "Inter",
-                                                        fontWeight: "400",
-                                                        lineHeight: "19.32px",
-                                                        outline: "none",
-                                                        padding: 0,
-                                                        width: "100%",
-                                                    }}
-                                                />
-                                            ) : (
-                                                <div
-                                                    style={{
-                                                        flex: "1 1 0",
-                                                        color: chatThemeColors
-                                                            .text.primary,
-                                                        fontSize: 14,
-                                                        fontFamily: "Inter",
-                                                        fontWeight: "400",
-                                                        lineHeight: "19.32px",
-                                                        overflow: "hidden",
-                                                        whiteSpace: "nowrap",
-                                                        textOverflow:
-                                                            "ellipsis",
-                                                    }}
-                                                >
-                                                    {chat.title}
-                                                </div>
-                                            )}
+                                                    // Restore app state
+                                                    if (chat.app) {
+                                                        setAppCode(
+                                                            chat.app.code || ""
+                                                        )
+                                                        // If code exists and is valid HTML, auto-open in player mode
+                                                        if (
+                                                            chat.app.code &&
+                                                            chat.app.code.trim()
+                                                                .length > 0
+                                                        ) {
+                                                            setAppMode("player")
+                                                        } else {
+                                                            setAppMode(
+                                                                chat.app.mode ||
+                                                                    "editor"
+                                                            )
+                                                        }
+                                                    } else {
+                                                        setAppCode("")
+                                                        setAppMode("editor")
+                                                    }
+                                                    if (isMobileLayout)
+                                                        setIsSidebarOpen(false)
+                                                }}
+                                                onMouseEnter={() =>
+                                                    setHoveredChatId(chat.id)
+                                                }
+                                                onMouseLeave={() =>
+                                                    setHoveredChatId(null)
+                                                }
+                                                data-layer="chat item"
+                                                style={{
+                                                    alignSelf: "stretch",
+                                                    minHeight: 36,
+                                                    paddingLeft: 10,
+                                                    paddingRight: 10,
+                                                    borderRadius: 28,
+                                                    justifyContent:
+                                                        "flex-start",
+                                                    alignItems: "center",
+                                                    gap: 8,
+                                                    display: "inline-flex",
+                                                    cursor: "pointer",
+                                                    marginBottom: 2,
+                                                    position: "relative",
+                                                    background:
+                                                        hoveredChatId ===
+                                                            chat.id ||
+                                                        currentChatId ===
+                                                            chat.id ||
+                                                        menuOpenChatId ===
+                                                            chat.id
+                                                            ? hoveredChatId ===
+                                                              chat.id
+                                                                ? themeColors
+                                                                      .hover
+                                                                      .strong
+                                                                : themeColors
+                                                                      .hover
+                                                                      .medium
+                                                            : "transparent",
+                                                }}
+                                            >
+                                                {editingChatId === chat.id ? (
+                                                    <input
+                                                        ref={renameInputRef}
+                                                        value={editingTitle}
+                                                        onChange={(e) =>
+                                                            setEditingTitle(
+                                                                e.target.value
+                                                            )
+                                                        }
+                                                        onBlur={
+                                                            handleFinishRename
+                                                        }
+                                                        onKeyDown={(e) => {
+                                                            if (
+                                                                e.key ===
+                                                                "Enter"
+                                                            )
+                                                                handleFinishRename()
+                                                            if (
+                                                                e.key ===
+                                                                "Escape"
+                                                            ) {
+                                                                setEditingChatId(
+                                                                    null
+                                                                )
+                                                                setEditingTitle(
+                                                                    ""
+                                                                )
+                                                            }
+                                                        }}
+                                                        onClick={(e) =>
+                                                            e.stopPropagation()
+                                                        }
+                                                        style={{
+                                                            flex: "1 1 0",
+                                                            background:
+                                                                "transparent",
+                                                            border: "none",
+                                                            color: chatThemeColors
+                                                                .text.primary,
+                                                            fontSize: 14,
+                                                            fontFamily: "Inter",
+                                                            fontWeight: "400",
+                                                            lineHeight:
+                                                                "19.32px",
+                                                            outline: "none",
+                                                            padding: 0,
+                                                            width: "100%",
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div
+                                                        style={{
+                                                            flex: "1 1 0",
+                                                            color: chatThemeColors
+                                                                .text.primary,
+                                                            fontSize: 14,
+                                                            fontFamily: "Inter",
+                                                            fontWeight: "400",
+                                                            lineHeight:
+                                                                "19.32px",
+                                                            overflow: "hidden",
+                                                            whiteSpace:
+                                                                "nowrap",
+                                                            textOverflow:
+                                                                "ellipsis",
+                                                        }}
+                                                    >
+                                                        {chat.title}
+                                                    </div>
+                                                )}
 
-                                            {!editingChatId && (
-                                                <div
-                                                    style={{
-                                                        display: "flex",
-                                                        alignItems: "center",
-                                                        gap: 12,
-                                                    }}
-                                                >
-                                                    {/* Show pinned icon: on mobile when pinned, or on desktop when not showing menu */}
-                                                    {chat.isPinned &&
-                                                        (isMobileLayout ||
-                                                            !(
-                                                                hoveredChatId ===
-                                                                    chat.id ||
-                                                                menuOpenChatId ===
-                                                                    chat.id
-                                                            )) && (
+                                                {!editingChatId && (
+                                                    <div
+                                                        style={{
+                                                            display: "flex",
+                                                            alignItems:
+                                                                "center",
+                                                            gap: 12,
+                                                        }}
+                                                    >
+                                                        {/* Show pinned icon: on mobile when pinned, or on desktop when not showing menu */}
+                                                        {chat.isPinned &&
+                                                            (isMobileLayout ||
+                                                                !(
+                                                                    hoveredChatId ===
+                                                                        chat.id ||
+                                                                    menuOpenChatId ===
+                                                                        chat.id
+                                                                )) && (
+                                                                <div
+                                                                    data-svg-wrapper
+                                                                    data-layer="16x24 to make sure its centered and good"
+                                                                    style={{
+                                                                        width: 16,
+                                                                        height: 24,
+                                                                        display:
+                                                                            "flex",
+                                                                        alignItems:
+                                                                            "center",
+                                                                        justifyContent:
+                                                                            "center",
+                                                                    }}
+                                                                >
+                                                                    <svg
+                                                                        width="16"
+                                                                        height="24"
+                                                                        viewBox="0 0 16 24"
+                                                                        fill="none"
+                                                                        xmlns="http://www.w3.org/2000/svg"
+                                                                    >
+                                                                        <path
+                                                                            d="M9.5138 5.29789C9.96421 4.99953 10.7273 4.78652 11.3032 5.36244L14.6361 8.69604C15.2142 9.27268 15.0005 10.0358 14.7014 10.4855C14.5394 10.7293 14.3287 10.9369 14.0824 11.0951C13.8429 11.2479 13.5402 11.3633 13.2139 11.3461C13.056 11.3351 12.8986 11.3182 12.742 11.2952L12.6932 11.288C12.525 11.2637 12.3558 11.2463 12.1861 11.2357C11.8247 11.2178 11.6855 11.2787 11.6411 11.3217L9.8552 13.1083C9.79782 13.1657 9.7261 13.2934 9.67159 13.5386C9.61923 13.7753 9.59628 14.0665 9.59054 14.3893C9.58552 14.6991 9.59628 15.0161 9.60776 15.3216L9.60848 15.3553C9.61923 15.6587 9.62999 15.9686 9.61493 16.2117C9.56831 16.9511 8.99239 17.4955 8.42579 17.7472C7.8592 17.9983 7.0509 18.0607 6.48932 17.4984L4.8756 15.8846L1.93145 18.8288C1.8822 18.8816 1.82282 18.924 1.75683 18.9534C1.69085 18.9828 1.61962 18.9986 1.5474 18.9999C1.47517 19.0012 1.40343 18.9879 1.33645 18.9609C1.26947 18.9338 1.20863 18.8935 1.15755 18.8425C1.10647 18.7914 1.0662 18.7305 1.03915 18.6635C1.0121 18.5966 0.998809 18.5248 1.00008 18.4526C1.00136 18.3804 1.01717 18.3091 1.04657 18.2432C1.07597 18.1772 1.11836 18.1178 1.1712 18.0686L4.11464 15.1244L2.50091 13.5107C1.93934 12.9484 2.00102 12.1408 2.25276 11.5742C2.50378 11.0076 3.04886 10.4317 3.78759 10.3851C4.03144 10.37 4.34128 10.3808 4.64466 10.3915L4.67837 10.3922C4.9839 10.403 5.30091 10.4145 5.61074 10.4095C5.93349 10.4037 6.22467 10.3808 6.46135 10.3284C6.70664 10.2739 6.8343 10.2015 6.89168 10.1441L8.67754 8.35823C8.72129 8.31448 8.78225 8.17463 8.7636 7.81315C8.75301 7.64349 8.73555 7.47433 8.71124 7.30608L8.70479 7.25731C8.68175 7.10072 8.66476 6.94329 8.65387 6.78539C8.63594 6.45906 8.75141 6.15639 8.90346 5.91685C9.05837 5.67299 9.27282 5.45783 9.5138 5.29789Z"
+                                                                            fill={
+                                                                                themeColors
+                                                                                    .text
+                                                                                    .primary
+                                                                            }
+                                                                            fillOpacity="0.45"
+                                                                        />
+                                                                    </svg>
+                                                                </div>
+                                                            )}
+
+                                                        {/* Show menu button: always on mobile, or on desktop when hovered/menuOpen */}
+                                                        {(hoveredChatId ===
+                                                            chat.id ||
+                                                            menuOpenChatId ===
+                                                                chat.id ||
+                                                            isMobileLayout) && (
                                                             <div
-                                                                data-svg-wrapper
-                                                                data-layer="16x24 to make sure its centered and good"
+                                                                aria-label={`Open menu for ${chat.title}`}
+                                                                onClick={(
+                                                                    e
+                                                                ) => {
+                                                                    e.stopPropagation()
+                                                                    if (
+                                                                        menuOpenChatId ===
+                                                                        chat.id
+                                                                    ) {
+                                                                        setMenuOpenChatId(
+                                                                            null
+                                                                        )
+                                                                        setMenuPosition(
+                                                                            null
+                                                                        )
+                                                                    } else {
+                                                                        const rect =
+                                                                            e.currentTarget.getBoundingClientRect()
+                                                                        setMenuOpenChatId(
+                                                                            chat.id
+                                                                        )
+                                                                        setMenuPosition(
+                                                                            {
+                                                                                top:
+                                                                                    rect.bottom +
+                                                                                    4,
+                                                                                left:
+                                                                                    rect.right -
+                                                                                    36, // Position menu to the right of the button
+                                                                            }
+                                                                        )
+                                                                    }
+                                                                }}
                                                                 style={{
                                                                     width: 16,
                                                                     height: 24,
+                                                                    borderRadius: 12,
                                                                     display:
                                                                         "flex",
                                                                     alignItems:
                                                                         "center",
                                                                     justifyContent:
                                                                         "center",
+                                                                    color: themeColors
+                                                                        .text
+                                                                        .secondary,
+                                                                    cursor: "pointer",
                                                                 }}
                                                             >
-                                                                <svg
-                                                                    width="16"
-                                                                    height="24"
-                                                                    viewBox="0 0 16 24"
-                                                                    fill="none"
-                                                                    xmlns="http://www.w3.org/2000/svg"
+                                                                <div
+                                                                    data-svg-wrapper
+                                                                    data-layer="open actions menu button"
+                                                                    className="OpenActionsMenuButton"
+                                                                    style={{
+                                                                        position:
+                                                                            "relative",
+                                                                    }}
                                                                 >
-                                                                    <path
-                                                                        d="M9.5138 5.29789C9.96421 4.99953 10.7273 4.78652 11.3032 5.36244L14.6361 8.69604C15.2142 9.27268 15.0005 10.0358 14.7014 10.4855C14.5394 10.7293 14.3287 10.9369 14.0824 11.0951C13.8429 11.2479 13.5402 11.3633 13.2139 11.3461C13.056 11.3351 12.8986 11.3182 12.742 11.2952L12.6932 11.288C12.525 11.2637 12.3558 11.2463 12.1861 11.2357C11.8247 11.2178 11.6855 11.2787 11.6411 11.3217L9.8552 13.1083C9.79782 13.1657 9.7261 13.2934 9.67159 13.5386C9.61923 13.7753 9.59628 14.0665 9.59054 14.3893C9.58552 14.6991 9.59628 15.0161 9.60776 15.3216L9.60848 15.3553C9.61923 15.6587 9.62999 15.9686 9.61493 16.2117C9.56831 16.9511 8.99239 17.4955 8.42579 17.7472C7.8592 17.9983 7.0509 18.0607 6.48932 17.4984L4.8756 15.8846L1.93145 18.8288C1.8822 18.8816 1.82282 18.924 1.75683 18.9534C1.69085 18.9828 1.61962 18.9986 1.5474 18.9999C1.47517 19.0012 1.40343 18.9879 1.33645 18.9609C1.26947 18.9338 1.20863 18.8935 1.15755 18.8425C1.10647 18.7914 1.0662 18.7305 1.03915 18.6635C1.0121 18.5966 0.998809 18.5248 1.00008 18.4526C1.00136 18.3804 1.01717 18.3091 1.04657 18.2432C1.07597 18.1772 1.11836 18.1178 1.1712 18.0686L4.11464 15.1244L2.50091 13.5107C1.93934 12.9484 2.00102 12.1408 2.25276 11.5742C2.50378 11.0076 3.04886 10.4317 3.78759 10.3851C4.03144 10.37 4.34128 10.3808 4.64466 10.3915L4.67837 10.3922C4.9839 10.403 5.30091 10.4145 5.61074 10.4095C5.93349 10.4037 6.22467 10.3808 6.46135 10.3284C6.70664 10.2739 6.8343 10.2015 6.89168 10.1441L8.67754 8.35823C8.72129 8.31448 8.78225 8.17463 8.7636 7.81315C8.75301 7.64349 8.73555 7.47433 8.71124 7.30608L8.70479 7.25731C8.68175 7.10072 8.66476 6.94329 8.65387 6.78539C8.63594 6.45906 8.75141 6.15639 8.90346 5.91685C9.05837 5.67299 9.27282 5.45783 9.5138 5.29789Z"
-                                                                        fill={
-                                                                            themeColors
-                                                                                .text
-                                                                                .primary
-                                                                        }
-                                                                        fillOpacity="0.45"
-                                                                    />
-                                                                </svg>
+                                                                    <svg
+                                                                        width="16"
+                                                                        height="24"
+                                                                        viewBox="0 0 16 24"
+                                                                        fill="none"
+                                                                        xmlns="http://www.w3.org/2000/svg"
+                                                                    >
+                                                                        <path
+                                                                            d="M13.498 10.5016C14.3254 10.5016 14.9959 11.1723 14.9961 11.9996C14.9961 12.8271 14.3256 13.4987 13.498 13.4987C12.6705 13.4987 12 12.8271 12 11.9996C12.0002 11.1723 12.6706 10.5016 13.498 10.5016Z"
+                                                                            fill={
+                                                                                themeColors
+                                                                                    .text
+                                                                                    .primary
+                                                                            }
+                                                                            fillOpacity="0.95"
+                                                                        />
+                                                                        <path
+                                                                            d="M2.49805 10.5016C3.32544 10.5016 3.99689 11.1723 3.99707 11.9996C3.99707 12.8271 3.32555 13.4987 2.49805 13.4987C1.67069 13.4985 1 12.827 1 11.9996C1.00018 11.1724 1.6708 10.5018 2.49805 10.5016Z"
+                                                                            fill={
+                                                                                themeColors
+                                                                                    .text
+                                                                                    .primary
+                                                                            }
+                                                                            fillOpacity="0.95"
+                                                                        />
+                                                                        <path
+                                                                            d="M8.0003 10.5016C8.8276 10.5018 9.4982 11.1724 9.4984 11.9996C9.4984 12.827 8.8277 13.4985 8.0003 13.4987C7.17283 13.4987 6.50131 12.8271 6.50131 11.9996C6.50149 11.1723 7.17294 10.5016 8.0003 10.5016Z"
+                                                                            fill={
+                                                                                themeColors
+                                                                                    .text
+                                                                                    .primary
+                                                                            }
+                                                                            fillOpacity="0.95"
+                                                                        />
+                                                                    </svg>
+                                                                </div>
                                                             </div>
                                                         )}
-
-                                                    {/* Show menu button: always on mobile, or on desktop when hovered/menuOpen */}
-                                                    {(hoveredChatId ===
-                                                        chat.id ||
-                                                        menuOpenChatId ===
-                                                            chat.id ||
-                                                        isMobileLayout) && (
-                                                        <div
-                                                            aria-label={`Open menu for ${chat.title}`}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation()
-                                                                if (
-                                                                    menuOpenChatId ===
-                                                                    chat.id
-                                                                ) {
-                                                                    setMenuOpenChatId(
-                                                                        null
-                                                                    )
-                                                                    setMenuPosition(
-                                                                        null
-                                                                    )
-                                                                } else {
-                                                                    const rect =
-                                                                        e.currentTarget.getBoundingClientRect()
-                                                                    setMenuOpenChatId(
-                                                                        chat.id
-                                                                    )
-                                                                    setMenuPosition(
-                                                                        {
-                                                                            top:
-                                                                                rect.bottom +
-                                                                                4,
-                                                                            left:
-                                                                                rect.right -
-                                                                                36, // Position menu to the right of the button
-                                                                        }
-                                                                    )
-                                                                }
-                                                            }}
-                                                            style={{
-                                                                width: 16,
-                                                                height: 24,
-                                                                borderRadius: 12,
-                                                                display: "flex",
-                                                                alignItems:
-                                                                    "center",
-                                                                justifyContent:
-                                                                    "center",
-                                                                color: themeColors
-                                                                    .text
-                                                                    .secondary,
-                                                                cursor: "pointer",
-                                                            }}
-                                                        >
-                                                            <div
-                                                                data-svg-wrapper
-                                                                data-layer="open actions menu button"
-                                                                className="OpenActionsMenuButton"
-                                                                style={{
-                                                                    position:
-                                                                        "relative",
-                                                                }}
-                                                            >
-                                                                <svg
-                                                                    width="16"
-                                                                    height="24"
-                                                                    viewBox="0 0 16 24"
-                                                                    fill="none"
-                                                                    xmlns="http://www.w3.org/2000/svg"
-                                                                >
-                                                                    <path
-                                                                        d="M13.498 10.5016C14.3254 10.5016 14.9959 11.1723 14.9961 11.9996C14.9961 12.8271 14.3256 13.4987 13.498 13.4987C12.6705 13.4987 12 12.8271 12 11.9996C12.0002 11.1723 12.6706 10.5016 13.498 10.5016Z"
-                                                                        fill={
-                                                                            themeColors
-                                                                                .text
-                                                                                .primary
-                                                                        }
-                                                                        fillOpacity="0.95"
-                                                                    />
-                                                                    <path
-                                                                        d="M2.49805 10.5016C3.32544 10.5016 3.99689 11.1723 3.99707 11.9996C3.99707 12.8271 3.32555 13.4987 2.49805 13.4987C1.67069 13.4985 1 12.827 1 11.9996C1.00018 11.1724 1.6708 10.5018 2.49805 10.5016Z"
-                                                                        fill={
-                                                                            themeColors
-                                                                                .text
-                                                                                .primary
-                                                                        }
-                                                                        fillOpacity="0.95"
-                                                                    />
-                                                                    <path
-                                                                        d="M8.0003 10.5016C8.8276 10.5018 9.4982 11.1724 9.4984 11.9996C9.4984 12.827 8.8277 13.4985 8.0003 13.4987C7.17283 13.4987 6.50131 12.8271 6.50131 11.9996C6.50149 11.1723 7.17294 10.5016 8.0003 10.5016Z"
-                                                                        fill={
-                                                                            themeColors
-                                                                                .text
-                                                                                .primary
-                                                                        }
-                                                                        fillOpacity="0.95"
-                                                                    />
-                                                                </svg>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                         )
                                     })}
                             </div>
@@ -24551,7 +30260,11 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     data-layer="close sidebar button (6% white fill on HOVER)"
                                     className="CloseSidebarButton6WhiteFillOnHover"
                                     role="button"
-                                    tabIndex={isSidebarOpen ? 6 + suggestionCount : undefined}
+                                    tabIndex={
+                                        isSidebarOpen
+                                            ? 6 + suggestionCount
+                                            : undefined
+                                    }
                                     aria-label="Close navigation sidebar"
                                     onClick={(e) => {
                                         e.stopPropagation()
@@ -24652,7 +30365,11 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     type="search"
                                     aria-label="Search chats and content"
                                     role="searchbox"
-                                    tabIndex={isSidebarOpen ? 8 + suggestionCount : undefined}
+                                    tabIndex={
+                                        isSidebarOpen
+                                            ? 8 + suggestionCount
+                                            : undefined
+                                    }
                                     style={{
                                         flex: "1 1 0",
                                         color: themeColors.text.primary,
@@ -24683,7 +30400,11 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 <div
                                     data-layer="new chat"
                                     className="NewChat"
-                                    tabIndex={isSidebarOpen ? 9 + suggestionCount : undefined}
+                                    tabIndex={
+                                        isSidebarOpen
+                                            ? 9 + suggestionCount
+                                            : undefined
+                                    }
                                     aria-label="Start new chat"
                                     onClick={(e) => {
                                         e.stopPropagation()
@@ -24767,7 +30488,11 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 <div
                                     data-layer="you"
                                     className="You"
-                                    tabIndex={isSidebarOpen ? 10 + suggestionCount : undefined}
+                                    tabIndex={
+                                        isSidebarOpen
+                                            ? 10 + suggestionCount
+                                            : undefined
+                                    }
                                     aria-label="Open your profile settings"
                                     onClick={(e) => {
                                         e.stopPropagation()
@@ -24816,7 +30541,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         >
                                             <path
                                                 d="M0.820312 16.6C1.07206 11.6536 5.31492 9.45122 9.12084 9.99276M6.88031 9.99276C10.6862 9.45122 14.9291 11.6536 15.1808 16.6M11.4487 4.0622C11.4487 2.17646 9.8722 0.600006 7.98646 0.600006C6.10072 0.600006 4.52427 2.17646 4.52427 4.0622C4.52427 5.94794 6.10072 7.52439 7.98646 7.52439C9.8722 7.52439 11.4487 5.94794 11.4487 4.0622Z"
-                                                stroke={themeColors.text.primary}
+                                                stroke={
+                                                    themeColors.text.primary
+                                                }
                                                 strokeOpacity="0.95"
                                                 strokeWidth="1.2"
                                                 strokeLinecap="round"
@@ -24843,134 +30570,16 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         You
                                     </div>
                                 </div>
-                                <div
-                                    data-layer="group call"
-                                    className="GroupCall"
-                                    tabIndex={isSidebarOpen ? 11 + suggestionCount : undefined}
-                                    aria-label={
-                                        isMobileLayout
-                                            ? "Share call link"
-                                            : "Add people to call"
-                                    }
-                                    onClick={(e) => {
-                                        e.stopPropagation()
-                                        if (!isMobileLayout) {
-                                            setShowAddPeopleOverlay(true)
-                                            return
-                                        }
-
-                                        const url =
-                                            typeof window !== "undefined"
-                                                ? window.location.href
-                                                : ""
-                                        const callId =
-                                            typeof window !== "undefined" &&
-                                            window.location.hash
-                                                ? window.location.hash.replace(
-                                                      "#",
-                                                      ""
-                                                  )
-                                                : ""
-                                        const shareTitle = callId
-                                            ? `Join my call (${callId}) | #1 free mentorship`
-                                            : "Join my call | #1 free mentorship"
-
-                                        if (typeof document !== "undefined") {
-                                            document.title = shareTitle
-                                        }
-
-                                        if (typeof navigator !== "undefined") {
-                                            navigator.clipboard
-                                                .writeText(url)
-                                                .catch(console.error)
-                                            // @ts-ignore
-                                            if (navigator.share) {
-                                                // @ts-ignore
-                                                navigator
-                                                    .share({
-                                                        title: shareTitle,
-                                                        url: url,
-                                                    })
-                                                    .catch(console.error)
-                                            }
-                                        }
-                                    }}
-                                    onMouseEnter={() =>
-                                        setIsAddPeopleHovered(true)
-                                    }
-                                    onMouseLeave={() =>
-                                        setIsAddPeopleHovered(false)
-                                    }
-                                    style={{
-                                        alignSelf: "stretch",
-                                        height: 36,
-                                        paddingLeft: 10,
-                                        paddingRight: 10,
-                                        borderRadius: 28,
-                                        justifyContent: "flex-start",
-                                        alignItems: "center",
-                                        gap: 8,
-                                        display: "inline-flex",
-                                        cursor: "pointer",
-                                        background: isAddPeopleHovered
-                                            ? themeColors.hover.strong
-                                            : "transparent",
-                                    }}
-                                >
-                                    <div
-                                        data-svg-wrapper
-                                        data-layer="group call icon"
-                                        className="GroupCallIcon"
-                                        style={{
-                                            width: 16,
-                                            minWidth: 16,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                        }}
-                                    >
-                                        <svg
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 17 16"
-                                            fill="none"
-                                            xmlns="http://www.w3.org/2000/svg"
-                                        >
-                                            <path
-                                                d="M0.601562 11.75V4.25C0.601562 3.71957 0.812276 3.21086 1.18735 2.83579C1.56242 2.46071 2.07113 2.25 2.60156 2.25H8.10156C8.632 2.25 9.1407 2.46071 9.51578 2.83579C9.89085 3.21086 10.1016 3.71957 10.1016 4.25V11.75C10.1016 12.2804 9.89085 12.7891 9.51578 13.1642C9.1407 13.5393 8.632 13.75 8.10156 13.75H2.60156C2.07113 13.75 1.56242 13.5393 1.18735 13.1642C0.812276 12.7891 0.601562 12.2804 0.601562 11.75ZM14.7696 2.991L10.7696 6.554C10.7168 6.60081 10.6746 6.65825 10.6457 6.72253C10.6167 6.78682 10.6017 6.8565 10.6016 6.927V8.705C10.6017 8.7755 10.6167 8.84518 10.6457 8.90947C10.6746 8.97375 10.7168 9.03119 10.7696 9.078L14.7696 12.641C14.8416 12.705 14.9307 12.7468 15.0259 12.7614C15.1212 12.776 15.2187 12.7627 15.3066 12.7232C15.3945 12.6837 15.4691 12.6196 15.5214 12.5386C15.5738 12.4577 15.6016 12.3634 15.6016 12.267V3.365C15.6016 3.26862 15.5738 3.17429 15.5214 3.09335C15.4691 3.01242 15.3945 2.94834 15.3066 2.90882C15.2187 2.86931 15.1212 2.85604 15.0259 2.87062C14.9307 2.8852 14.8416 2.927 14.7696 2.991Z"
-                                                stroke={themeColors.text.primary}
-                                                strokeOpacity="0.95"
-                                                strokeWidth="1.2"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                            />
-                                        </svg>
-                                    </div>
-                                    <div
-                                        data-layer="group call label"
-                                        className="GroupCallLabel"
-                                        style={{
-                                            flex: "1 1 0",
-                                            justifyContent: "center",
-                                            display: "flex",
-                                            flexDirection: "column",
-                                            color: themeColors.text.primary,
-                                            fontSize: 14,
-                                            fontFamily: "Inter",
-                                            fontWeight: "400",
-                                            lineHeight: "19.32px",
-                                            wordWrap: "break-word",
-                                        }}
-                                    >
-                                        Group call
-                                    </div>
-                                </div>
                                 {/* Curastem.org link button */}
                                 <div
                                     data-layer="curastem.org button"
                                     className="CurastemOrgButton"
                                     role="link"
-                                    tabIndex={isSidebarOpen ? 12 + suggestionCount : undefined}
+                                    tabIndex={
+                                        isSidebarOpen
+                                            ? 11 + suggestionCount
+                                            : undefined
+                                    }
                                     aria-label="Learn more about Curastem (opens in new tab)"
                                     onClick={(e) => {
                                         e.stopPropagation()
@@ -24981,8 +30590,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             )
                                         }
                                     }}
-                                    onMouseEnter={() => setIsOpenCurastemHovered(true)}
-                                    onMouseLeave={() => setIsOpenCurastemHovered(false)}
+                                    onMouseEnter={() =>
+                                        setIsOpenCurastemHovered(true)
+                                    }
+                                    onMouseLeave={() =>
+                                        setIsOpenCurastemHovered(false)
+                                    }
                                     style={{
                                         alignSelf: "stretch",
                                         height: 36,
@@ -25019,7 +30632,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         >
                                             <path
                                                 d="M2.5 13.5L13.2317 2.76829M13.2317 2.76829L4.91463 2.5M13.2317 2.76829L13.5 11.0854"
-                                                stroke={themeColors.text.primary}
+                                                stroke={
+                                                    themeColors.text.primary
+                                                }
                                                 strokeOpacity="0.95"
                                                 strokeWidth="1.2"
                                                 strokeLinecap="round"
@@ -25610,7 +31225,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 className="MainContentLayout"
                 aria-label="Main content area"
                 animate={{
-                    paddingLeft: !isMobileLayout && isSidebarOpen ? 260 : 0,
+                    paddingLeft: leftSidebarWidth,
                 }}
                 transition={{
                     type: "spring",
@@ -25674,12 +31289,18 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     animate={{
                         width:
                             !isMobileLayout &&
-                            (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen)
+                            (isDocOpen ||
+                                isWhiteboardOpen ||
+                                isAppOpen ||
+                                isJobOpen)
                                 ? chatWidth
                                 : "100%",
                         flexGrow:
                             !isMobileLayout &&
-                            (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen)
+                            (isDocOpen ||
+                                isWhiteboardOpen ||
+                                isAppOpen ||
+                                isJobOpen)
                                 ? 0
                                 : 1,
                     }}
@@ -25700,13 +31321,19 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 >
                     {renderStandardLayout(
                         !isMobileLayout &&
-                            (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen)
+                            (isDocOpen ||
+                                isWhiteboardOpen ||
+                                isAppOpen ||
+                                isJobOpen)
                     )}
 
                     {/* Video Call Icon — same position as new chat button, shown when idle with no messages */}
-                    {status === "idle" && !role && !isLiveMode && messages.length === 0 && (
-                        <>
-                            <style>{`
+                    {status === "idle" &&
+                        !role &&
+                        !isLiveMode &&
+                        messages.length === 0 && (
+                            <>
+                                <style>{`
                                 [data-layer="video-call-icon"] {
                                     background: transparent;
                                 }
@@ -25714,63 +31341,69 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     background: ${themeColors.hover.medium};
                                 }
                             `}</style>
-                            <div
-                                data-svg-wrapper
-                                data-layer="video-call-icon"
-                                aria-label="Join video call"
-                                onMouseEnter={() => setIsVideoCallIconHovered(true)}
-                                onMouseLeave={() => setIsVideoCallIconHovered(false)}
-                                onClick={(e) => {
-                                    e.stopPropagation()
-                                    haptic.light()
-                                    setShowJoinCallOverlay(true)
-                                }}
-                                style={{
-                                    position: "absolute",
-                                    right: 8,
-                                    top: 8,
-                                    zIndex: 100,
-                                    width: 36,
-                                    height: 36,
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    cursor: "pointer",
-                                    borderRadius: "50%",
-                                }}
-                            >
-                                {isVideoCallIconHovered && (
-                                    <Tooltip
-                                        style={{
-                                            right: "100%",
-                                            top: "50%",
-                                            transform: "translate(-8px, -50%)",
-                                            whiteSpace: "nowrap",
-                                        }}
-                                    >
-                                        Video call
-                                    </Tooltip>
-                                )}
-                                <svg
-                                    width="20"
-                                    height="13"
-                                    viewBox="0 0 20 13"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    style={{ pointerEvents: "none" }}
+                                <div
+                                    data-svg-wrapper
+                                    data-layer="video-call-icon"
+                                    aria-label="Join video call"
+                                    onMouseEnter={() =>
+                                        setIsVideoCallIconHovered(true)
+                                    }
+                                    onMouseLeave={() =>
+                                        setIsVideoCallIconHovered(false)
+                                    }
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        haptic.light()
+                                        setIsVideoCallIconHovered(false)
+                                        setShowJoinCallOverlay(true)
+                                    }}
+                                    style={{
+                                        position: "absolute",
+                                        right: 8,
+                                        top: 8,
+                                        zIndex: 100,
+                                        width: 36,
+                                        height: 36,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        cursor: "pointer",
+                                        borderRadius: "50%",
+                                    }}
                                 >
-                                    <path
-                                        d="M0.601562 10.1V2.6C0.601562 2.06957 0.812276 1.56086 1.18735 1.18579C1.56242 0.810714 2.07113 0.6 2.60156 0.6H11.1016C11.632 0.6 12.1407 0.810714 12.5158 1.18579C12.8908 1.56086 13.1016 2.06957 13.1016 2.6V10.1C13.1016 10.6304 12.8908 11.1391 12.5158 11.5142C12.1407 11.8893 11.632 12.1 11.1016 12.1H2.60156C2.07113 12.1 1.56242 11.8893 1.18735 11.5142C0.812276 11.1391 0.601562 10.6304 0.601562 10.1ZM17.7696 1.341L13.7696 4.904C13.7168 4.95081 13.6746 5.00825 13.6457 5.07253C13.6167 5.13682 13.6017 5.2065 13.6016 5.277V7.055C13.6017 7.1255 13.6167 7.19518 13.6457 7.25947C13.6746 7.32375 13.7168 7.38119 13.7696 7.428L17.7696 10.991C17.8416 11.055 17.9307 11.0968 18.0259 11.1114C18.1212 11.126 18.2187 11.1127 18.3066 11.0732C18.3945 11.0337 18.4691 10.9696 18.5214 10.8886C18.5738 10.8077 18.6016 10.7134 18.6016 10.617V1.715C18.6016 1.61862 18.5738 1.52429 18.5214 1.44335C18.4691 1.36242 18.3945 1.29834 18.3066 1.25882C18.2187 1.21931 18.1212 1.20604 18.0259 1.22062C17.9307 1.2352 17.8416 1.277 17.7696 1.341Z"
-                                        stroke={themeColors.text.primary}
-                                        strokeOpacity="0.95"
-                                        strokeWidth="1.2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                    />
-                                </svg>
-                            </div>
-                        </>
-                    )}
+                                    {isVideoCallIconHovered && (
+                                        <Tooltip
+                                            style={{
+                                                right: "100%",
+                                                top: "50%",
+                                                transform:
+                                                    "translate(-8px, -50%)",
+                                                whiteSpace: "nowrap",
+                                            }}
+                                        >
+                                            Video call
+                                        </Tooltip>
+                                    )}
+                                    <svg
+                                        width="20"
+                                        height="13"
+                                        viewBox="0 0 20 13"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        style={{ pointerEvents: "none" }}
+                                    >
+                                        <path
+                                            d="M0.601562 10.1V2.6C0.601562 2.06957 0.812276 1.56086 1.18735 1.18579C1.56242 0.810714 2.07113 0.6 2.60156 0.6H11.1016C11.632 0.6 12.1407 0.810714 12.5158 1.18579C12.8908 1.56086 13.1016 2.06957 13.1016 2.6V10.1C13.1016 10.6304 12.8908 11.1391 12.5158 11.5142C12.1407 11.8893 11.632 12.1 11.1016 12.1H2.60156C2.07113 12.1 1.56242 11.8893 1.18735 11.5142C0.812276 11.1391 0.601562 10.6304 0.601562 10.1ZM17.7696 1.341L13.7696 4.904C13.7168 4.95081 13.6746 5.00825 13.6457 5.07253C13.6167 5.13682 13.6017 5.2065 13.6016 5.277V7.055C13.6017 7.1255 13.6167 7.19518 13.6457 7.25947C13.6746 7.32375 13.7168 7.38119 13.7696 7.428L17.7696 10.991C17.8416 11.055 17.9307 11.0968 18.0259 11.1114C18.1212 11.126 18.2187 11.1127 18.3066 11.0732C18.3945 11.0337 18.4691 10.9696 18.5214 10.8886C18.5738 10.8077 18.6016 10.7134 18.6016 10.617V1.715C18.6016 1.61862 18.5738 1.52429 18.5214 1.44335C18.4691 1.36242 18.3945 1.29834 18.3066 1.25882C18.2187 1.21931 18.1212 1.20604 18.0259 1.22062C17.9307 1.2352 17.8416 1.277 17.7696 1.341Z"
+                                            stroke={themeColors.text.primary}
+                                            strokeOpacity="0.95"
+                                            strokeWidth="1.2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    </svg>
+                                </div>
+                            </>
+                        )}
 
                     {/* New Chat Button (Top Right of RightContentPanel) */}
                     {messages.length > 0 && (
@@ -25787,8 +31420,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 data-svg-wrapper
                                 data-layer="new chat"
                                 aria-label="Start new chat"
-                                onMouseEnter={() => setIsNewChatTopRightHovered(true)}
-                                onMouseLeave={() => setIsNewChatTopRightHovered(false)}
+                                onMouseEnter={() =>
+                                    setIsNewChatTopRightHovered(true)
+                                }
+                                onMouseLeave={() =>
+                                    setIsNewChatTopRightHovered(false)
+                                }
                                 style={{
                                     right: 8,
                                     top: 8,
@@ -25805,6 +31442,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                 onClick={(e) => {
                                     e.stopPropagation()
                                     haptic.medium()
+                                    setIsNewChatTopRightHovered(false)
                                     handleClearMessages()
                                 }}
                             >
@@ -25828,23 +31466,26 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     xmlns="http://www.w3.org/2000/svg"
                                     style={{ pointerEvents: "none" }}
                                 >
-                                <path
-                                    d="M24.9998 18.0001C24.9998 21.1823 24.9998 22.773 23.9747 23.7615C22.9496 24.75 21.2992 24.75 17.9999 24.75C14.6998 24.75 13.0502 24.75 12.0251 23.7615C11 22.773 11 21.1816 11 18.0001C11 14.8179 11 13.2272 12.0251 12.2387C13.0502 11.2502 14.7006 11.2502 17.9999 11.2502M16.0811 17.3626C15.8157 17.619 15.6666 17.9664 15.6666 18.3286V20.2501H17.6717C18.0473 20.2501 18.4082 20.1061 18.6742 19.8496L24.5852 14.1467C24.7168 14.0198 24.8213 13.8691 24.8925 13.7033C24.9637 13.5375 25.0004 13.3598 25.0004 13.1803C25.0004 13.0008 24.9637 12.8231 24.8925 12.6573C24.8213 12.4915 24.7168 12.3409 24.5852 12.214L24.0011 11.6507C23.8695 11.5237 23.7132 11.4229 23.5412 11.3541C23.3692 11.2854 23.1848 11.25 22.9986 11.25C22.8124 11.25 22.628 11.2854 22.4559 11.3541C22.2839 11.4229 22.1276 11.5237 21.996 11.6507L16.0811 17.3626Z"
-                                    stroke={themeColors.text.primary}
-                                    strokeOpacity="0.95"
-                                    strokeWidth="1.2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                />
-                            </svg>
-                        </div>
+                                    <path
+                                        d="M24.9998 18.0001C24.9998 21.1823 24.9998 22.773 23.9747 23.7615C22.9496 24.75 21.2992 24.75 17.9999 24.75C14.6998 24.75 13.0502 24.75 12.0251 23.7615C11 22.773 11 21.1816 11 18.0001C11 14.8179 11 13.2272 12.0251 12.2387C13.0502 11.2502 14.7006 11.2502 17.9999 11.2502M16.0811 17.3626C15.8157 17.619 15.6666 17.9664 15.6666 18.3286V20.2501H17.6717C18.0473 20.2501 18.4082 20.1061 18.6742 19.8496L24.5852 14.1467C24.7168 14.0198 24.8213 13.8691 24.8925 13.7033C24.9637 13.5375 25.0004 13.3598 25.0004 13.1803C25.0004 13.0008 24.9637 12.8231 24.8925 12.6573C24.8213 12.4915 24.7168 12.3409 24.5852 12.214L24.0011 11.6507C23.8695 11.5237 23.7132 11.4229 23.5412 11.3541C23.3692 11.2854 23.1848 11.25 22.9986 11.25C22.8124 11.25 22.628 11.2854 22.4559 11.3541C22.2839 11.4229 22.1276 11.5237 21.996 11.6507L16.0811 17.3626Z"
+                                        stroke={themeColors.text.primary}
+                                        strokeOpacity="0.95"
+                                        strokeWidth="1.2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                            </div>
                         </>
                     )}
                 </motion.div>
 
                 {/* Resize Handle */}
                 {!isMobileLayout &&
-                    (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) && (
+                    (isDocOpen ||
+                        isWhiteboardOpen ||
+                        isAppOpen ||
+                        isJobOpen) && (
                         <div
                             onPointerDown={(e) =>
                                 handlePointerDown(e, "horizontal-sidebar")
@@ -25863,7 +31504,10 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                 {/* Left: Tool (Desktop only) */}
                 <AnimatePresence>
                     {!isMobileLayout &&
-                        (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) && (
+                        (isDocOpen ||
+                            isWhiteboardOpen ||
+                            isAppOpen ||
+                            isJobOpen) && (
                             <motion.div
                                 data-layer="desktop-tool-panel"
                                 className="DesktopToolPanel"
@@ -26410,6 +32054,20 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                     </>,
                     document.body
                 )}
+            {/* Resume keyword animation — position:fixed pills that orbit the
+                right sidebar then land in the generated resume in DocEditor */}
+            <KeywordOrbitOverlay
+                phase={resumeAnimPhase}
+                capturedItems={resumeCapturedItems}
+                usedKeywords={resumeUsedKeywords}
+                textColor={themeColors.text.primary}
+                dimColor={themeColors.text.tertiary}
+                onAllSettled={() =>
+                    // 1s settle window so keywords visibly sit in place
+                    // before the resume content fades in beneath them
+                    setTimeout(() => setResumeAnimPhase("done"), 1000)
+                }
+            />
         </div>
     )
 }
@@ -26428,20 +32086,21 @@ addPropertyControls(OmegleMentorshipUI, {
         title: "Skills API URL",
         description:
             "URL of the Agent Skills API (Cloudflare Worker). Returns a catalog of mentorship skills for the slash-command menu. See agent-skills-api/README.md.",
-        defaultValue:
-            "https://agent-skills-api.logangarcia102.workers.dev",
+        defaultValue: "https://agent-skills-api.logangarcia102.workers.dev",
     },
     jobsApiUrl: {
         type: ControlType.String,
         title: "Jobs Proxy URL",
-        description: "URL of the Curastem Jobs proxy Worker. No API key needed — the key is stored server-side.",
+        description:
+            "URL of the Curastem Jobs proxy Worker. No API key needed — the key is stored server-side.",
         defaultValue: "https://jobs-proxy.curastem.org",
     },
     model: {
         type: ControlType.String,
         title: "AI Model",
         defaultValue: "gemini-3.1-flash-lite-preview",
-        description: "Model ID for main chat (e.g., gemini-3.1-flash-lite-preview). Moderation and Gemini Live use separate fixed models.",
+        description:
+            "Model ID for main chat (e.g., gemini-3.1-flash-lite-preview). Moderation and Gemini Live use separate fixed models.",
     },
     systemPrompt: {
         type: ControlType.String,

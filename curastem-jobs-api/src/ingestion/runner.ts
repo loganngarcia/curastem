@@ -18,10 +18,11 @@
  * All source failures are isolated — one bad source never blocks others.
  */
 
-import { batchCheckCrossSourceDups, batchGetExistingJobs, batchMarkJobsEmbedded, batchUpsertJobs, getJobsNeedingEmbedding, getSourceById, listEnabledSources, updateSourceFetchResult, upsertCompany } from "../db/queries.ts";
+import { batchCheckCrossSourceDups, batchGetExistingJobs, batchMarkJobsEmbedded, batchUpsertJobs, getJobsNeedingEmbedding, getLocationsNeedingGeocode, getSourceById, listEnabledSources, updateJobsWithCoords, updateSourceFetchResult, upsertCompany } from "../db/queries.ts";
 import { embedJob } from "../enrichment/ai.ts";
 import { runCompanyEnrichment } from "../enrichment/company.ts";
 import { getFetcher } from "./registry.ts";
+import { geocode } from "../utils/geocode.ts";
 import type { Env, IngestionResult, SourceRow } from "../types.ts";
 import { buildDedupKey, buildJobId, slugify, uuidv4 } from "../utils/normalize.ts";
 import { logger } from "../utils/logger.ts";
@@ -140,17 +141,41 @@ async function processSource(
     nonDupMetas.map((m) => m.normalized.external_id)
   );
 
+  // ── Phase 4b: Inline geocode unique locations (at insert time, not later backfill)
+  // KV cache makes repeat locations instant; Nominatim 1 req/sec for cache misses.
+  const INLINE_GEOCODE_CAP = 20; // cap per source to bound cron time
+  const uniqueLocations = [...new Set(
+    nonDupMetas.map((m) => m.normalized.location).filter((l): l is string => Boolean(l?.trim()))
+  )].slice(0, INLINE_GEOCODE_CAP);
+  const locationToCoords = new Map<string, { lat: number; lng: number }>();
+  for (const loc of uniqueLocations) {
+    try {
+      const result = await geocode(loc, env.RATE_LIMIT_KV);
+      if (result) {
+        locationToCoords.set(loc, { lat: result.lat, lng: result.lng });
+        if (!result.fromCache) await new Promise((r) => setTimeout(r, 1100)); // Nominatim 1 req/sec
+      }
+    } catch (err) {
+      logger.warn("geocode_inline_failed", { location: loc, error: String(err) });
+    }
+  }
+
   // ── Phase 5: Batch INSERT new + UPDATE existing — 2 D1 subrequests total ──
-  const upsertInputs = nonDupMetas.map(({ jobId, companyId, dedupKey, normalized }) => ({
-    id:           jobId,
-    company_id:   companyId,
-    source_id:    source.id,
-    external_id:  normalized.external_id,
-    source_name:  source.source_type,
-    dedup_key:    dedupKey,
-    normalized,
-    now,
-  }));
+  const upsertInputs = nonDupMetas.map(({ jobId, companyId, dedupKey, normalized }) => {
+    const coords = normalized.location ? locationToCoords.get(normalized.location) : null;
+    return {
+      id:           jobId,
+      company_id:   companyId,
+      source_id:    source.id,
+      external_id:  normalized.external_id,
+      source_name:  source.source_type,
+      dedup_key:    dedupKey,
+      normalized,
+      now,
+      location_lat: coords?.lat ?? null,
+      location_lng: coords?.lng ?? null,
+    };
+  });
 
   let upsertResults: Array<{ inserted: boolean; needsEmbedding: boolean }>;
   try {
@@ -161,14 +186,19 @@ async function processSource(
     upsertResults = [];
   }
 
-  // ── Phase 6: Embed new/changed jobs ───────────────────────────────────────
+  // ── Phase 6: Embed new/changed jobs at insert time ─────────────────────────
   // skipEmbeddings=true for single-source admin triggers (30s request limit).
-  // The hourly cron backfill handles those instead.
+  // No cap — embed all jobs that need it. Backfill catches any that fail or timeout.
   for (let i = 0; i < upsertResults.length; i++) {
     const { inserted, needsEmbedding } = upsertResults[i];
     if (inserted) result.inserted++; else result.updated++;
 
-    if (!skipEmbeddings && needsEmbedding && env.JOBS_VECTORS && env.GEMINI_API_KEY) {
+    if (
+      !skipEmbeddings &&
+      needsEmbedding &&
+      env.JOBS_VECTORS &&
+      env.GEMINI_API_KEY
+    ) {
       const { jobId, normalized } = nonDupMetas[i];
       try {
         const vector = await embedJob(
@@ -218,12 +248,10 @@ async function processSource(
  * Increase this number if you want the backfill to complete faster.
  * Each embedding takes ~200–400ms, so 500 ≈ 100–200 seconds of wall clock time.
  */
-// 200 Gemini calls + ~2 D1 batch calls = ~202 subrequests per backfill pass.
-// Stays safely under the 1,000 subrequest limit even after ingestion has
-// consumed ~150 × 6 = ~900 subrequests for the source-processing phase.
-// At 24 cron runs/day × 200 = 4,800 embeddings/day — the initial 525-job
-// backfill completes in a single run; steady-state keeps up easily.
-const EMBEDDING_BACKFILL_BATCH = 200;
+// Workers Paid: 10K subrequests. Ingestion ≈ 600. Backfill 500 ≈ 1,100 total.
+// 500 × 24/day = 12,000 embeddings/day. Backlog of 22K clears in ~2 days.
+// Each embed ~250ms sequential → 500 ≈ 125s, well within the 15-min cron CPU budget.
+const EMBEDDING_BACKFILL_BATCH = 500;
 
 /**
  * Backfill Vectorize embeddings for jobs that were ingested but never embedded.
@@ -296,6 +324,29 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
   return { succeeded: vectors.length, failed, total: jobs.length };
 }
 
+const GEOCODE_BACKFILL_BATCH = 50; // Nominatim: 1 req/sec; 50 ≈ 55s (within Workers CPU budget)
+
+async function backfillGeocode(env: Env): Promise<void> {
+  const locations = await getLocationsNeedingGeocode(env.JOBS_DB, GEOCODE_BACKFILL_BATCH);
+  if (locations.length === 0) return;
+  let updated = 0;
+  for (const { location } of locations) {
+    try {
+      const result = await geocode(location, env.RATE_LIMIT_KV);
+      if (result) {
+        const n = await updateJobsWithCoords(env.JOBS_DB, location, result.lat, result.lng);
+        updated += n;
+      }
+      await new Promise((r) => setTimeout(r, 1100)); // Nominatim: 1 req/sec
+    } catch (err) {
+      logger.warn("geocode_backfill_location_failed", { location, error: String(err) });
+    }
+  }
+  if (updated > 0) {
+    logger.info("geocode_backfill_completed", { locations_processed: locations.length, jobs_updated: updated });
+  }
+}
+
 /**
  * Run ingestion for a single source by ID.
  * Used by the POST /admin/trigger?source=<id> endpoint for synchronous,
@@ -323,22 +374,18 @@ export async function runIngestion(env: Env): Promise<void> {
   const overallStart = Date.now();
   logger.info("ingestion_started");
 
-  // Process 25 sources per cron run (oldest-first rotation via last_fetched_at ASC).
-  // Cloudflare Workers cap subrequests at 1,000 per invocation; each source
-  // can make dozens of subrequests, so 25 keeps us safely under that limit.
-  // A full rotation through all sources takes ~8 hourly runs (~8 hours).
-  const sources = await listEnabledSources(env.JOBS_DB, 25);
+  // Process 6 sources per cron run (oldest-first via last_fetched_at ASC).
+  // Workers Paid: 10K subrequests. 6 sources + backfill ≈ 800 subrequests. See BILLING_AUDIT.md.
+  const sources = await listEnabledSources(env.JOBS_DB, 6);
   logger.info("ingestion_sources_loaded", { count: sources.length });
 
   const results: IngestionResult[] = [];
 
   for (const source of sources) {
     logger.info("ingestion_source_started", { source_id: source.id, source_name: source.name });
-    // Always skip inline embeddings during the main ingestion pass — each Gemini
-    // call consumes a subrequest and 150 sources × N jobs would blow the 1,000
-    // subrequest limit. The dedicated backfill pass at the end of this function
-    // handles embedding generation safely within its own subrequest budget.
-    const result = await processSource(env, source, true);
+    // Inline embedding: each new job gets embedded during ingestion (up to 50/source).
+    // Excess jobs go to backfill. Backfill still runs at end for any missed embeddings.
+    const result = await processSource(env, source, false);
     logger.ingestionResult(result);
     results.push(result);
   }
@@ -376,5 +423,13 @@ export async function runIngestion(env: Env): Promise<void> {
     await backfillEmbeddings(env);
   } catch (err) {
     logger.error("embedding_backfill_cron_failed", { error: String(err) });
+  }
+
+  // Geocode backfill — populates location_lat/lng for distance-based "jobs near you".
+  // Nominatim: 1 req/sec. We do 10 locations per run.
+  try {
+    await backfillGeocode(env);
+  } catch (err) {
+    logger.error("geocode_backfill_cron_failed", { error: String(err) });
   }
 }

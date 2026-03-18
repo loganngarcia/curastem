@@ -59,6 +59,8 @@ export interface Job {
   salary: JobSalary | null;
   job_summary: string | null;
   job_description: JobDescription | null;
+  /** Skill/technology keywords extracted from the description. Present on detail endpoint only. */
+  keywords?: string[];
 }
 
 export interface JobsListResponse {

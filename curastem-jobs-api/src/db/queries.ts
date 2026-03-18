@@ -55,6 +55,31 @@ export async function getCompanyById(
 }
 
 /**
+ * Resolve a search query to a company when it matches a company name or slug.
+ * Used to route company-specific queries (e.g. "alo yoga") to SQL path instead
+ * of vector search, since unembedded jobs would otherwise be invisible.
+ */
+export async function findCompanyByQuery(
+  db: D1Database,
+  q: string
+): Promise<{ slug: string } | null> {
+  const trimmed = q.trim();
+  if (!trimmed || trimmed.length > 80) return null;
+  const slugForm = trimmed.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+  if (!slugForm) return null;
+
+  const qLower = trimmed.toLowerCase();
+  const likePattern = `%${qLower.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+
+  // Try exact slug match first, then case-insensitive name match
+  const result = await db
+    .prepare("SELECT slug FROM companies WHERE slug = ? OR LOWER(name) LIKE ? ESCAPE '\\' LIMIT 1")
+    .bind(slugForm, likePattern)
+    .first<{ slug: string }>();
+  return result ?? null;
+}
+
+/**
  * Insert or update a company. Returns the company id.
  * Logo and website URL are only written when the source provides one AND the
  * company doesn't already have a value stored — prevents lower-trust sources
@@ -148,13 +173,18 @@ export async function listUnenrichedCompanies(
 ): Promise<CompanyRow[]> {
   const result = await db
     .prepare(
-      `SELECT * FROM companies
-       WHERE description_enriched_at IS NULL
-          OR description_enriched_at < ?
+      `SELECT c.* FROM companies c
+       LEFT JOIN (
+         SELECT company_id, MAX(COALESCE(posted_at, first_seen_at)) AS newest_job
+         FROM jobs GROUP BY company_id
+       ) j ON j.company_id = c.id
+       WHERE c.description_enriched_at IS NULL
+          OR c.description_enriched_at < ?
           OR (
-               (logo_url IS NULL OR linkedin_url IS NULL)
-               AND description_enriched_at < ?
+               (c.logo_url IS NULL OR c.linkedin_url IS NULL)
+               AND c.description_enriched_at < ?
              )
+       ORDER BY j.newest_job DESC NULLS LAST
        LIMIT 50`
     )
     .bind(staleBefore, retryMissingBefore)
@@ -229,6 +259,9 @@ export interface UpsertJobInput {
   dedup_key: string;
   normalized: NormalizedJob;
   now: number;
+  /** Geocoded coords — set at insert time when available. */
+  location_lat?: number | null;
+  location_lng?: number | null;
 }
 
 /**
@@ -252,7 +285,7 @@ export async function upsertJob(
   db: D1Database,
   input: UpsertJobInput
 ): Promise<{ inserted: boolean; needsEmbedding: boolean }> {
-  const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now } = input;
+  const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now, location_lat, location_lng } = input;
   const {
     title,
     location,
@@ -280,19 +313,19 @@ export async function upsertJob(
           id, company_id, source_id, external_id, title, location,
           employment_type, workplace_type, apply_url, source_url, source_name,
           description_raw, salary_min, salary_max, salary_currency, salary_period,
-          posted_at, first_seen_at, dedup_key, created_at, updated_at
+          posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?
+          ?, ?, ?, ?, ?, ?, ?
         )`
       )
       .bind(
         id, company_id, source_id, external_id, title, location,
         employment_type, workplace_type, apply_url, source_url, source_name,
         description_raw, salary_min, salary_max, salary_currency, salary_period,
-        posted_at, now, dedup_key, now, now
+        posted_at, now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
       )
       .run();
     return { inserted: true, needsEmbedding: true };
@@ -319,6 +352,8 @@ export async function upsertJob(
         salary_period          = ?,
         posted_at              = ?,
         dedup_key              = ?,
+        location_lat           = COALESCE(?, location_lat),
+        location_lng           = COALESCE(?, location_lng),
         updated_at             = ?,
         -- Only update description_raw if it has actually changed
         description_raw        = CASE WHEN ? = 1 THEN ? ELSE description_raw END,
@@ -341,6 +376,8 @@ export async function upsertJob(
       salary_period,
       posted_at,
       dedup_key,
+      location_lat ?? null,
+      location_lng ?? null,
       now,
       descriptionChanged ? 1 : 0, description_raw,
       descriptionChanged ? 1 : 0,
@@ -432,21 +469,24 @@ export async function batchUpsertJobs(
     id, company_id, source_id, external_id, title, location,
     employment_type, workplace_type, apply_url, source_url, source_name,
     description_raw, salary_min, salary_max, salary_currency, salary_period,
-    posted_at, first_seen_at, dedup_key, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const UPDATE_SQL = `UPDATE jobs SET
     company_id = ?, title = ?, location = ?, employment_type = ?,
     workplace_type = ?, apply_url = ?, source_url = ?,
     salary_min = ?, salary_max = ?, salary_currency = ?, salary_period = ?,
-    posted_at = ?, dedup_key = ?, updated_at = ?,
+    posted_at = ?, dedup_key = ?,
+    location_lat           = COALESCE(?, location_lat),
+    location_lng           = COALESCE(?, location_lng),
+    updated_at = ?,
     description_raw        = CASE WHEN ? = 1 THEN ? ELSE description_raw END,
     ai_generated_at        = CASE WHEN ? = 1 THEN NULL ELSE ai_generated_at END,
     embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END
   WHERE source_id = ? AND external_id = ?`;
 
   for (let i = 0; i < inputs.length; i++) {
-    const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now } = inputs[i];
+    const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now, location_lat, location_lng } = inputs[i];
     const {
       title, location, employment_type, workplace_type, apply_url, source_url,
       description_raw, salary_min, salary_max, salary_currency, salary_period, posted_at,
@@ -460,7 +500,7 @@ export async function batchUpsertJobs(
           id, company_id, source_id, external_id, title, location,
           employment_type, workplace_type, apply_url, source_url, source_name,
           description_raw, salary_min, salary_max, salary_currency, salary_period,
-          posted_at, now, dedup_key, now, now
+          posted_at, now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
         )
       );
       insertIndices.push(i);
@@ -472,7 +512,7 @@ export async function batchUpsertJobs(
           company_id, title, location, employment_type,
           workplace_type, apply_url, source_url,
           salary_min, salary_max, salary_currency, salary_period,
-          posted_at, dedup_key, now,
+          posted_at, dedup_key, location_lat ?? null, location_lng ?? null, now,
           descChanged ? 1 : 0, description_raw,
           descChanged ? 1 : 0,
           descChanged ? 1 : 0,
@@ -503,8 +543,8 @@ export async function batchUpsertJobs(
  *   - The Gemini API was temporarily unavailable at ingest time.
  *   - The job was inserted before Vectorize was configured.
  *
- * Results are ordered newest-first so that the most recently posted jobs
- * become searchable before older ones during the multi-run backfill period.
+ * Results are ordered: YC first, then Alo/Primark, then others, USAJOBS last.
+ * USAJOBS has ~10K jobs; deprioritizing avoids blocking YC/Alo/Primark for days.
  */
 export async function getJobsNeedingEmbedding(
   db: D1Database,
@@ -522,7 +562,11 @@ export async function getJobsNeedingEmbedding(
       FROM jobs j
       JOIN companies c ON j.company_id = c.id
       WHERE j.embedding_generated_at IS NULL
-      ORDER BY j.first_seen_at DESC
+      ORDER BY
+        -- USAJOBS last — 10K govt jobs should never block recent tech/retail jobs
+        CASE WHEN j.source_id = 'usajobs' THEN 1 ELSE 0 END,
+        -- Within each tier: newest first so jobs posted today beat old backlog
+        j.first_seen_at DESC
       LIMIT ?
     `)
     .bind(limit)
@@ -593,7 +637,7 @@ const D1_IN_CHUNK = 90;
 export async function listJobsByIds(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "employment_type" | "workplace_type" | "company" | "posted_since">
+  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since">
 ): Promise<ListJobsRow[]> {
   if (ids.length === 0) return [];
 
@@ -617,7 +661,7 @@ export async function listJobsByIds(
 async function listJobsByIdsChunk(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "employment_type" | "workplace_type" | "company" | "posted_since">
+  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since">
 ): Promise<ListJobsRow[]> {
   const placeholders = ids.map(() => "?").join(", ");
   const conditions: string[] = [`j.id IN (${placeholders})`];
@@ -626,6 +670,26 @@ async function listJobsByIdsChunk(
   if (filter.location) {
     conditions.push("j.location LIKE ?");
     bindings.push(`%${filter.location}%`);
+  }
+  if (filter.location_region) {
+    conditions.push("j.location LIKE ?");
+    bindings.push(`%${filter.location_region}%`);
+  }
+  if (filter.location_or && filter.location_or.length > 0) {
+    const orParts = filter.location_or
+      .slice(0, 12)
+      .map(() => "j.location LIKE ?");
+    conditions.push(`(${orParts.join(" OR ")})`);
+    filter.location_or.slice(0, 12).forEach((t) => bindings.push(`%${t}%`));
+  }
+  if (filter.exclude_ids && filter.exclude_ids.length > 0) {
+    const valid = filter.exclude_ids.filter(
+      (id) => typeof id === "string" && id.length >= 32 && id.length <= 40
+    );
+    if (valid.length > 0) {
+      conditions.push(`j.id NOT IN (${valid.map(() => "?").join(", ")})`);
+      bindings.push(...valid);
+    }
   }
   if (filter.employment_type) {
     conditions.push("j.employment_type = ?");
@@ -673,6 +737,9 @@ async function listJobsByIdsChunk(
 export interface ListJobsFilter {
   q?: string;
   location?: string;
+  location_region?: string; // e.g. "CA" — requires location to contain this; disambiguates "San Francisco, CA" from "San Francisco, Philippines"
+  location_or?: string[]; // OR of location terms — e.g. ["San Francisco", "Oakland", "San Jose"] for Bay Area
+  exclude_ids?: string[]; // job IDs to exclude (e.g. already shown on homepage)
   employment_type?: string;
   workplace_type?: string;
   company?: string;
@@ -741,6 +808,26 @@ export async function listJobs(
   if (filter.location) {
     conditions.push("j.location LIKE ?");
     bindings.push(`%${filter.location}%`);
+  }
+  if (filter.location_region) {
+    conditions.push("j.location LIKE ?");
+    bindings.push(`%${filter.location_region}%`);
+  }
+  if (filter.location_or && filter.location_or.length > 0) {
+    const orParts = filter.location_or
+      .slice(0, 12)
+      .map(() => "j.location LIKE ?");
+    conditions.push(`(${orParts.join(" OR ")})`);
+    filter.location_or.slice(0, 12).forEach((t) => bindings.push(`%${t}%`));
+  }
+  if (filter.exclude_ids && filter.exclude_ids.length > 0) {
+    const valid = filter.exclude_ids.filter(
+      (id) => typeof id === "string" && id.length >= 32 && id.length <= 40
+    );
+    if (valid.length > 0) {
+      conditions.push(`j.id NOT IN (${valid.map(() => "?").join(", ")})`);
+      bindings.push(...valid);
+    }
   }
   if (filter.employment_type) {
     conditions.push("j.employment_type = ?");
@@ -823,6 +910,126 @@ export async function listJobs(
     rows: dataResult.results ?? [],
     total: countResult?.n ?? 0,
   };
+}
+
+/** Fetch distinct location strings that need geocoding (no lat/lng yet). */
+export async function getLocationsNeedingGeocode(
+  db: D1Database,
+  limit: number
+): Promise<Array<{ location: string }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT location, MAX(COALESCE(posted_at, first_seen_at)) AS newest
+       FROM jobs
+       WHERE location IS NOT NULL AND location != ''
+         AND location_lat IS NULL AND location_lng IS NULL
+       GROUP BY location
+       ORDER BY newest DESC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ location: string }>();
+  return results ?? [];
+}
+
+/** Update location_lat, location_lng for all jobs with the given location string. */
+export async function updateJobsWithCoords(
+  db: D1Database,
+  location: string,
+  lat: number,
+  lng: number
+): Promise<number> {
+  const result = await db
+    .prepare(
+      `UPDATE jobs SET location_lat = ?, location_lng = ? WHERE location = ?`
+    )
+    .bind(lat, lng, location)
+    .run();
+  return result.meta.changes ?? 0;
+}
+
+/** Earth radius in km for Haversine. */
+const EARTH_RADIUS_KM = 6371;
+
+/**
+ * Jobs near a point, ordered by distance (km). Excludes remote-only jobs.
+ * Requires location_lat, location_lng to be populated (geocoding backfill).
+ * Returns empty when no jobs have coordinates.
+ */
+export async function listJobsNear(
+  db: D1Database,
+  filter: {
+    lat: number;
+    lng: number;
+    radius_km: number;
+    exclude_remote: boolean;
+    limit: number;
+    exclude_ids?: string[];
+    q?: string;
+    posted_since?: number;
+  }
+): Promise<{ rows: ListJobsRow[] }> {
+  const { lat, lng, radius_km, exclude_remote, limit, exclude_ids, q, posted_since } = filter;
+  const conditions: string[] = [
+    "j.location_lat IS NOT NULL",
+    "j.location_lng IS NOT NULL",
+  ];
+  const bindings: unknown[] = [];
+
+  if (posted_since) {
+    conditions.push("COALESCE(j.posted_at, j.first_seen_at) >= ?");
+    bindings.push(posted_since);
+  }
+  if (exclude_remote) {
+    conditions.push("(j.workplace_type IS NULL OR j.workplace_type != 'remote')");
+  }
+  if (q && q.trim()) {
+    conditions.push("(j.title LIKE ? OR c.name LIKE ?)");
+    const pattern = `%${q.trim()}%`;
+    bindings.push(pattern, pattern);
+  }
+  if (exclude_ids && exclude_ids.length > 0) {
+    const valid = exclude_ids.filter(
+      (id) => typeof id === "string" && id.length >= 32 && id.length <= 40
+    );
+    if (valid.length > 0) {
+      conditions.push(`j.id NOT IN (${valid.map(() => "?").join(", ")})`);
+      bindings.push(...valid);
+    }
+  }
+
+  const where = conditions.join(" AND ");
+  const hav = `(${EARTH_RADIUS_KM} * acos(least(1, greatest(-1,
+    sin(radians(?)) * sin(radians(j.location_lat)) +
+    cos(radians(?)) * cos(radians(j.location_lat)) * cos(radians(j.location_lng) - radians(?))
+  ))))`;
+  const orderBy = `ORDER BY ${hav} ASC`;
+
+  const selectCols = `
+    j.id, j.company_id, j.source_id, j.external_id,
+    j.title, j.location, j.employment_type, j.workplace_type,
+    j.apply_url, j.source_url, j.source_name,
+    j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
+    j.job_summary, j.ai_generated_at, j.embedding_generated_at,
+    j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
+    c.name AS company_name, c.logo_url AS company_logo_url,
+    c.description AS company_description, c.website_url AS company_website_url,
+    c.linkedin_url AS company_linkedin_url, c.glassdoor_url AS company_glassdoor_url,
+    c.x_url AS company_x_url`;
+
+  const sql = `
+    SELECT ${selectCols}
+    FROM jobs j
+    JOIN companies c ON c.id = j.company_id
+    WHERE ${where}
+    AND ${hav} <= ?
+    ${orderBy}
+    LIMIT ?
+  `;
+
+  const allBindings = [...bindings, lat, lat, lng, radius_km, limit];
+  const { results } = await db.prepare(sql).bind(...allBindings).all<ListJobsRow>();
+  return { rows: results ?? [] };
 }
 
 /** Full job row including the heavy description_raw and job_description fields. */

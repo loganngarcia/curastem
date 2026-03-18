@@ -25,6 +25,8 @@ import { amazonFetcher } from "./sources/amazon.ts";
 import { appleFetcher } from "./sources/apple.ts";
 import { ycombinatorFetcher } from "./sources/ycombinator.ts";
 import { browserFetcher } from "./sources/browser.ts";
+import { rssFetcher } from "./sources/rss.ts";
+import { usajobsFetcher } from "./sources/usajobs.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -40,6 +42,8 @@ const REGISTRY: Record<SourceType, JobSource> = {
   apple: appleFetcher,
   ycombinator: ycombinatorFetcher,
   browser: browserFetcher,
+  rss: rssFetcher,
+  usajobs: usajobsFetcher,
 };
 
 /**
@@ -78,6 +82,10 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   // Browser-scraped career pages — high trust (direct from the company's own site)
   // Lower than direct ATS only because DOM extraction is less reliable than structured APIs
   browser: 85,
+  // Sector job boards with RSS — moderate trust (curated aggregators)
+  rss: 45,
+  // Federal government job board — official US source
+  usajobs: 75,
 };
 
 export function getSourcePriority(sourceType: string): number {

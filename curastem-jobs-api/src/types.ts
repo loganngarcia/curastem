@@ -59,6 +59,11 @@ export interface Env {
    * Optional: enrichment falls back to Clearbit logo + slug inference if unset.
    */
   BRANDFETCH_CLIENT_ID?: string;
+  /**
+   * USAJOBS API key for federal government job listings.
+   * Free at developer.usajobs.gov. Set via wrangler secret put USAJOBS_API_KEY.
+   */
+  USAJOBS_API_KEY?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,7 +156,11 @@ export type SourceType =
   | "apple"
   | "ycombinator"
   /** Career pages that load jobs client-side only — scraped via Cloudflare Browser Rendering */
-  | "browser";
+  | "browser"
+  /** Job boards with public RSS/Atom feeds (e.g. HigherEdJobs, Chronicle Jobs) */
+  | "rss"
+  /** USAJOBS federal government job board — requires USAJOBS_API_KEY secret */
+  | "usajobs";
 
 export type EmploymentType =
   | "full_time"
@@ -220,6 +229,14 @@ export interface PublicJob {
   salary: PublicSalary | null;
   job_summary: string | null;
   job_description: JobDescriptionExtracted | null;
+
+  /**
+   * Skill and technology keywords extracted from the job description.
+   * Matched against the canonical phrase list in enrichment/keywords.ts.
+   * Present (possibly empty) on the detail endpoint; absent on the list endpoint.
+   * No AI or extra DB calls — computed on-the-fly from stored description fields.
+   */
+  keywords?: string[];
 }
 
 /** Paginated list response envelope */

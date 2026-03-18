@@ -14,7 +14,7 @@
  * JSON-RPC 2.0 over HTTP POST — no vendor-specific extensions.
  *
  * ──────────────────────────────────────────────────────────────────────────
- * AVAILABLE TOOLS (6 total)
+ * AVAILABLE TOOLS (7 total)
  * ──────────────────────────────────────────────────────────────────────────
  *
  * Discovery & search:
@@ -24,6 +24,7 @@
  *
  * Detail & comparison:
  *   get_job_details      — full job with AI-enriched structured description
+ *   get_job_keywords     — skill/tech keywords extracted from a job description
  *   suggest_similar_jobs — jobs similar to one the user is viewing
  *
  * Market context:
@@ -61,6 +62,7 @@ import { searchJobsTool } from "./tools/searchJobs.ts";
 import { getJobsByCompanyTool } from "./tools/getJobsByCompany.ts";
 import { suggestSimilarJobsTool } from "./tools/suggestSimilarJobs.ts";
 import { getMarketOverviewTool } from "./tools/getMarketOverview.ts";
+import { getJobKeywordsTool } from "./tools/getJobKeywords.ts";
 
 // Tool runners (called on tools/call)
 import { runGetJobDetails, type GetJobDetailsArgs } from "./tools/getJobDetails.ts";
@@ -69,6 +71,7 @@ import { runSearchJobs, type SearchJobsArgs } from "./tools/searchJobs.ts";
 import { runGetJobsByCompany, type GetJobsByCompanyArgs } from "./tools/getJobsByCompany.ts";
 import { runSuggestSimilarJobs, type SuggestSimilarJobsArgs } from "./tools/suggestSimilarJobs.ts";
 import { runGetMarketOverview } from "./tools/getMarketOverview.ts";
+import { runGetJobKeywords, type GetJobKeywordsArgs } from "./tools/getJobKeywords.ts";
 
 import type {
   Env,
@@ -92,6 +95,7 @@ const ALL_TOOLS = [
   getRecentJobsTool,
   getJobsByCompanyTool,
   getJobDetailsTool,
+  getJobKeywordsTool,
   suggestSimilarJobsTool,
   getMarketOverviewTool,
 ];
@@ -180,6 +184,15 @@ async function handleToolCall(
           return rpcError(req.id, McpErrorCode.InvalidParams, "job_id is required");
         }
         result = await runSuggestSimilarJobs(client, similarArgs);
+        break;
+      }
+
+      case "get_job_keywords": {
+        const kwArgs = args as unknown as GetJobKeywordsArgs;
+        if (!kwArgs.job_id) {
+          return rpcError(req.id, McpErrorCode.InvalidParams, "job_id is required");
+        }
+        result = await runGetJobKeywords(client, kwArgs);
         break;
       }
 

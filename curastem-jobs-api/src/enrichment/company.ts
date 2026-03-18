@@ -162,16 +162,12 @@ async function enrichCompany(
         (domain ? getGoogleFaviconUrl(domain) : null);
     }
 
-    if (!company.linkedin_url) {
-      fields.linkedin_url =
-        brandfetch?.linkedin_url ??
-        `https://www.linkedin.com/company/${company.slug}`;
+    if (!company.linkedin_url && brandfetch?.linkedin_url) {
+      fields.linkedin_url = brandfetch.linkedin_url;
     }
 
-    if (!company.x_url) {
-      fields.x_url =
-        brandfetch?.x_url ??
-        `https://x.com/${company.slug}`;
+    if (!company.x_url && brandfetch?.x_url) {
+      fields.x_url = brandfetch.x_url;
     }
 
     if (!company.glassdoor_url && brandfetch?.glassdoor_url) {

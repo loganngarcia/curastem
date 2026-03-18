@@ -40,6 +40,7 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "gh-airbnb",   name: "Airbnb (Greenhouse)",    source_type: "greenhouse", company_handle: "airbnb",    base_url: "https://boards-api.greenhouse.io/v1/boards/airbnb/jobs" },
   { id: "gh-discord",  name: "Discord (Greenhouse)",   source_type: "greenhouse", company_handle: "discord",   base_url: "https://boards-api.greenhouse.io/v1/boards/discord/jobs" },
   { id: "gh-figma",    name: "Figma (Greenhouse)",     source_type: "greenhouse", company_handle: "figma",     base_url: "https://boards-api.greenhouse.io/v1/boards/figma/jobs" },
+  { id: "gh-ada",      name: "Ada (Greenhouse)",       source_type: "greenhouse", company_handle: "ada18",     base_url: "https://boards-api.greenhouse.io/v1/boards/ada18/jobs" },
   { id: "gh-airtable", name: "Airtable (Greenhouse)",  source_type: "greenhouse", company_handle: "airtable",  base_url: "https://boards-api.greenhouse.io/v1/boards/airtable/jobs" },
   { id: "gh-vercel",   name: "Vercel (Greenhouse)",    source_type: "greenhouse", company_handle: "vercel",    base_url: "https://boards-api.greenhouse.io/v1/boards/vercel/jobs" },
   { id: "gh-instacart",  name: "Instacart (Greenhouse)",  source_type: "greenhouse", company_handle: "instacart",  base_url: "https://boards-api.greenhouse.io/v1/boards/instacart/jobs" },
@@ -450,13 +451,40 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "wd-kyndryl",     name: "Kyndryl",                    source_type: "workday", company_handle: "kyndryl",         base_url: "https://kyndryl.wd5.myworkdayjobs.com/wday/cxs/kyndryl/KyndrylProfessionalCareers/jobs" },
 
   // ─── Proprietary scrapers (Amazon & Apple) ────────────────────────────
-  // Custom first-party fetchers — see ingestion/sources/amazon.ts and apple.ts
+  // Custom first-party fetchers — see ingestion/sources/amazon.ts
   { id: "amz-global",      name: "Amazon",                    source_type: "amazon",    company_handle: "amazon",        base_url: "https://www.amazon.jobs/en/search.json" },
+  // Apple: POST api/role/search returns 301→apple.com/pagenotfound (API deprecated/broken)
   { id: "apl-global",      name: "Apple",                     source_type: "apple",     company_handle: "apple",         base_url: "https://jobs.apple.com/api/role/search" },
 
   // ─── Y Combinator Job Board ───────────────────────────────────────────
   // Inertia.js protocol — see ingestion/sources/ycombinator.ts
   { id: "yc-board", name: "Y Combinator Job Board", source_type: "ycombinator", company_handle: "ycombinator", base_url: "https://www.workatastartup.com/jobs" },
+
+  // ─── USAJOBS (federal government) ────────────────────────────────────────
+  // Requires USAJOBS_API_KEY secret. Free key at developer.usajobs.gov
+  { id: "usajobs", name: "USAJOBS (Federal)", source_type: "usajobs", company_handle: "usajobs", base_url: "https://data.usajobs.gov/api/Search" },
+
+  // ─── Sector job boards (RSS) ─────────────────────────────────────────────
+  // Higher education — HigherEdJobs has public RSS feeds per category
+  // Format: https://www.higheredjobs.com/rss/categoryFeed.cfm?catID={id}
+  // Note: HigherEdJobs may use Incapsula; if fetches fail, try from Workers.
+  { id: "rss-he-main",     name: "HigherEdJobs (Higher Education)", source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=68" },
+  { id: "rss-he-faculty",  name: "HigherEdJobs (Faculty)",          source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=26" },
+  { id: "rss-he-admin",    name: "HigherEdJobs (Administrative)",   source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=24" },
+  { id: "rss-he-it",       name: "HigherEdJobs (IT)",               source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=160" },
+
+  // ─── Sector job boards — roadmap ────────────────────────────────────────
+  // These boards have no public API or RSS. Custom fetchers would require
+  // browser scraping or reverse-engineering their internal APIs.
+  // Healthcare: Vivian Health, Health eCareers, PracticeLink (physicians)
+  // K–12: EDJOIN, SchoolSpring
+  // Higher ed: Chronicle Jobs (no public RSS; email alerts only)
+  // { id: "vivian",        name: "Vivian Health",           source_type: "browser", company_handle: "vivian",        base_url: "https://www.vivian.com/jobs" },
+  // { id: "healthecareers",name: "Health eCareers",         source_type: "browser", company_handle: "healthecareers",base_url: "https://www.healthecareers.com/jobs" },
+  // { id: "practicelink",  name: "PracticeLink (Physicians)",source_type: "browser",company_handle: "practicelink", base_url: "https://jobs.practicelink.com/jobs/physician/" },
+  // { id: "edjoin",        name: "EDJOIN (K–12)",          source_type: "browser", company_handle: "edjoin",        base_url: "https://www.edjoin.org/Home/Jobs" },
+  // { id: "schoolspring",  name: "SchoolSpring (K–12)",    source_type: "browser", company_handle: "schoolspring",  base_url: "https://www.schoolspring.com/jobs/" },
+  // { id: "chronicle",     name: "Chronicle Jobs",         source_type: "browser", company_handle: "chronicle",     base_url: "https://jobs.chronicle.com/jobs/" },
 
   // ─── Browser fallback ─────────────────────────────────────────────────────
   // Cloudflare Browser Rendering — for career pages with no public ATS API.
@@ -631,9 +659,27 @@ export async function seedCompanyWebsites(db: D1Database): Promise<void> {
   }
 }
 
+/** Source IDs that consistently 404 or fail — disabled to avoid cron noise. */
+const DISABLED_SOURCE_IDS = [
+  "apl-global",       // Apple API 301→pagenotfound (endpoint deprecated)
+  "wb-taxfix",        // Workable 404; no public ATS API found
+  "gh-notion",        // Greenhouse 404; Notion uses Ashby (ab-notion)
+  "gh-linear",        // Greenhouse 404; Linear uses Ashby (ab-linear)
+  "gh-shopify",       // Greenhouse 404; Shopify uses Ashby but handle unknown
+  "wb-papayaglobal",  // Workable 404; no public ATS API found
+  "wb-shopify",       // Workable returns empty; no working API
+  "br-augment",       // Browser 429 rate limit; no public ATS
+  "br-figma",         // Browser 429; use gh-figma (Greenhouse) instead
+  "br-linear",        // Browser 429; use ab-linear (Ashby) instead
+  "br-ada",           // Browser 429; use gh-ada (Greenhouse) instead
+  "br-hippocratic",   // Browser 429; Ashby handle unknown
+  "ps-n26",           // Personio 429 rate limit (temporary)
+];
+
 /**
  * Seed the sources table with the initial set of ingestion sources.
  * Safe to re-run — uses INSERT OR IGNORE so existing rows are not touched.
+ * Also disables known-broken sources.
  */
 export async function seedSources(db: D1Database): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -648,4 +694,8 @@ export async function seedSources(db: D1Database): Promise<void> {
   );
 
   await db.batch(batch);
+
+  for (const id of DISABLED_SOURCE_IDS) {
+    await db.prepare("UPDATE sources SET enabled = 0 WHERE id = ?").bind(id).run();
+  }
 }

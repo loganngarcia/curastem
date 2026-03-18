@@ -6,15 +6,11 @@
  *
  * API format: https://{handle}.jobs.personio.de/xml
  *
- * Response format: XML with a standard feed structure. We use DOMParser — 
- * available natively in Cloudflare Workers — to parse it without any
- * third-party library.
- *
- * Personio is the dominant HR platform in the German-speaking DACH region
- * (Germany, Austria, Switzerland) and expanding across Europe. Covers a wide
- * variety of roles including non-tech, operations, retail, and finance.
+ * Response format: XML with <workzag-jobs><position> or <job> elements.
+ * Uses fast-xml-parser (Workers-compatible) instead of DOMParser.
  */
 
+import { XMLParser } from "fast-xml-parser";
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
 import {
   normalizeEmploymentType,
@@ -23,50 +19,82 @@ import {
   parseEpochSeconds,
 } from "../../utils/normalize.ts";
 
-/**
- * Extract text content from the first matching XML element.
- * Returns null if the element is missing or empty.
- */
-function getText(parent: XmlElement, tagName: string): string | null {
-  const el = parent.getElementsByTagName(tagName)[0];
-  const text = el?.textContent?.trim() ?? null;
-  return text || null;
+type XmlObject = Record<string, unknown>;
+
+function getText(obj: XmlObject | null | undefined, key: string): string | null {
+  if (!obj || typeof obj !== "object") return null;
+  const val = obj[key];
+  if (val == null) return null;
+  if (typeof val === "object" && !Array.isArray(val) && "#text" in val) {
+    const t = (val as XmlObject)["#text"];
+    return typeof t === "string" ? t.trim() || null : null;
+  }
+  const s = String(val).trim();
+  return s || null;
+}
+
+function getTextAlt(obj: XmlObject | null | undefined, ...keys: string[]): string | null {
+  for (const k of keys) {
+    const v = getText(obj, k);
+    if (v) return v;
+  }
+  return null;
 }
 
 /**
- * Parse a Personio XML job entry (<job> element) into a NormalizedJob.
- * The XML schema varies slightly by account; we defensively handle missing fields.
+ * Extract job/position elements from parsed XML. Personio uses <position> or <job>.
  */
-function parseJobElement(el: XmlElement, companyName: string): NormalizedJob | null {
-  const externalId = getText(el, "id");
-  const title = getText(el, "name");
-  const applyUrl = getText(el, "apply_url") ?? getText(el, "applicationUrl");
+function extractJobElements(parsed: XmlObject): XmlObject[] {
+  const root = parsed;
+  if (!root || typeof root !== "object") return [];
+
+  const candidates: XmlObject[] = [];
+  for (const key of ["position", "job", "positions", "jobs"]) {
+    const val = root[key];
+    if (Array.isArray(val)) candidates.push(...val.filter((v): v is XmlObject => v && typeof v === "object"));
+    else if (val && typeof val === "object" && !Array.isArray(val)) candidates.push(val as XmlObject);
+  }
+  // Nested: workzag-jobs.position, etc.
+  for (const v of Object.values(root)) {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const nested = extractJobElements(v as XmlObject);
+      if (nested.length) return nested;
+    }
+  }
+  return candidates;
+}
+
+function parseJobElement(el: XmlObject, companyName: string): NormalizedJob | null {
+  const externalId = getTextAlt(el, "id");
+  const title = getTextAlt(el, "name", "title");
+  const applyUrl = getTextAlt(el, "apply_url", "applicationUrl", "url");
 
   if (!externalId || !title || !applyUrl) return null;
 
-  const location = getText(el, "office") ?? getText(el, "location");
-  const department = getText(el, "department");
-  const employmentTypeRaw = getText(el, "schedule") ?? getText(el, "employment_type");
-  const remoteHint = getText(el, "remote") ?? getText(el, "workplace");
-  const createdAt = getText(el, "created_at") ?? getText(el, "createdAt");
+  const location = getTextAlt(el, "office", "location");
+  const department = getTextAlt(el, "department");
+  const employmentTypeRaw = getTextAlt(el, "schedule", "employment_type", "employmentType");
+  const remoteHint = getTextAlt(el, "remote", "workplace");
+  const createdAt = getTextAlt(el, "created_at", "createdAt");
 
-  // Build description from all description-like fields
   const descriptionParts: string[] = [];
-  const descEl = el.getElementsByTagName("jobDescriptions")[0];
-  if (descEl) {
-    const sections = descEl.getElementsByTagName("jobDescription");
-    for (const section of sections) {
-      const name = getText(section, "name");
-      const value = getText(section, "value");
-      if (value) {
-        if (name) descriptionParts.push(`<h3>${name}</h3>\n${value}`);
-        else descriptionParts.push(value);
+  const descEl = el["jobDescriptions"];
+  if (descEl && typeof descEl === "object" && !Array.isArray(descEl)) {
+    const sections = (descEl as XmlObject)["jobDescription"];
+    const arr = Array.isArray(sections) ? sections : sections ? [sections] : [];
+    for (const section of arr) {
+      if (section && typeof section === "object" && !Array.isArray(section)) {
+        const name = getText(section as XmlObject, "name");
+        const value = getText(section as XmlObject, "value");
+        if (value) {
+          if (name) descriptionParts.push(`<h3>${name}</h3>\n${value}`);
+          else descriptionParts.push(value);
+        }
       }
     }
   }
-  // Fallback: look for a top-level description or summary field
   if (descriptionParts.length === 0) {
-    const rawDesc = getText(el, "description") ?? getText(el, "summary");
+    const rawDesc = getTextAlt(el, "description", "summary");
     if (rawDesc) descriptionParts.push(rawDesc);
   }
 
@@ -76,7 +104,7 @@ function parseJobElement(el: XmlElement, companyName: string): NormalizedJob | n
     external_id: externalId,
     title,
     location: normalizeLocation(
-      department && location ? `${location} (${department})` : location
+      department && location ? `${location} (${department})` : location ?? undefined
     ),
     employment_type: normalizeEmploymentType(employmentTypeRaw),
     workplace_type: normalizeWorkplaceType(locationHint),
@@ -108,17 +136,15 @@ export const personioFetcher: JobSource = {
     }
 
     const xmlText = await res.text();
-    const parser = new DOMParser();
-    const doc: XmlDocument = parser.parseFromString(xmlText, "application/xml");
+    const parser = new XMLParser({ ignoreAttributes: true });
+    const parsed = parser.parse(xmlText) as XmlObject;
 
-    // Check for XML parse errors
-    const parserError = doc.querySelector("parsererror");
-    if (parserError) {
-      throw new Error(`Personio XML parse error for ${source.company_handle}: ${parserError.textContent}`);
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error(`Personio XML parse error for ${source.company_handle}: invalid structure`);
     }
 
     const companyName = source.name.replace(/\s*\(Personio\)\s*/i, "").trim();
-    const jobElements = doc.getElementsByTagName("job");
+    const jobElements = extractJobElements(parsed);
     const jobs: NormalizedJob[] = [];
 
     for (const el of jobElements) {

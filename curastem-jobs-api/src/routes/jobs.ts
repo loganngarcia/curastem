@@ -4,9 +4,17 @@
  * Supports filtering by:
  *   q               — semantic search (uses Vectorize when available; falls back to SQL LIKE)
  *   location        — partial match on location string
+ *   location_region — AND with location (e.g. "CA" disambiguates San Francisco, CA from Philippines)
+ *   location_or     — comma-separated; match if location contains ANY term (e.g. Bay Area cities)
+ *   exclude_ids     — comma-separated job IDs to exclude (e.g. already shown on homepage)
+ *   near_lat        — latitude for distance-based "jobs near you" (with near_lng, radius_km)
+ *   near_lng        — longitude
+ *   radius_km       — max distance in km (default 50)
+ *   exclude_remote  — when using near_*, exclude remote-only jobs (default true)
  *   employment_type — exact match: full_time | part_time | contract | internship | temporary
  *   workplace_type  — exact match: remote | hybrid | on_site
  *   company         — exact match on company slug
+ *   since           — unix timestamp; only jobs posted/seen at or after this time
  *   limit           — max results per page (default 20, max 50)
  *   cursor          — opaque cursor for pagination
  *
@@ -33,7 +41,7 @@
  * Clients do not need to distinguish between these formats.
  */
 
-import { listJobs, listJobsByIds, type ListJobsRow } from "../db/queries.ts";
+import { listJobs, listJobsByIds, listJobsNear, findCompanyByQuery, type ListJobsRow } from "../db/queries.ts";
 import { embedQuery, formatSalaryDisplay } from "../enrichment/ai.ts";
 import type { Env, PublicJob, PublicSalary } from "../types.ts";
 import { jsonOk } from "../utils/errors.ts";
@@ -153,17 +161,74 @@ export async function handleListJobs(
 
   const q = params.get("q") ?? undefined;
   const location = params.get("location") ?? undefined;
+  const location_region = params.get("location_region") ?? undefined;
+  const location_orRaw = params.get("location_or") ?? undefined;
+  const location_or =
+    location_orRaw?.split(",").map((t) => t.trim()).filter(Boolean) ?? undefined;
+  const exclude_idsRaw = params.get("exclude_ids") ?? undefined;
+  const exclude_ids =
+    exclude_idsRaw?.split(",").map((t) => t.trim()).filter(Boolean) ?? undefined;
   const employment_type = params.get("employment_type") ?? undefined;
   const workplace_type = params.get("workplace_type") ?? undefined;
-  const company = params.get("company") ?? undefined;
+  let company = params.get("company") ?? undefined;
   const cursor = params.get("cursor") ?? undefined;
   const sinceRaw = params.get("since");
   const posted_since = sinceRaw ? parseInt(sinceRaw, 10) || undefined : undefined;
 
+  const nearLatRaw = params.get("near_lat");
+  const nearLngRaw = params.get("near_lng");
+  const nearLat = nearLatRaw ? parseFloat(nearLatRaw) : NaN;
+  const nearLng = nearLngRaw ? parseFloat(nearLngRaw) : NaN;
+  const radiusKmRaw = params.get("radius_km");
+  const radius_km = radiusKmRaw ? parseFloat(radiusKmRaw) || 50 : 50;
+  const exclude_remote = params.get("exclude_remote") !== "false";
+
+  // ── Distance-based "jobs near you" path ────────────────────────────────────
+  // When near_lat + near_lng are provided, return jobs ordered by distance (km).
+  // Excludes remote-only jobs. Requires location_lat/lng to be populated (geocode backfill).
+  if (!isNaN(nearLat) && !isNaN(nearLng) && nearLat >= -90 && nearLat <= 90 && nearLng >= -180 && nearLng <= 180) {
+    try {
+      const { rows } = await listJobsNear(env.JOBS_DB, {
+        lat: nearLat,
+        lng: nearLng,
+        radius_km: Math.min(Math.max(radius_km, 1), 500),
+        exclude_remote,
+        limit,
+        exclude_ids,
+        q,
+        posted_since,
+      });
+      return jsonOk({
+        data: rows.map(rowToPublicJob),
+        meta: { total: rows.length, limit, next_cursor: null },
+      });
+    } catch {
+      // Columns may not exist yet (migration not run) — fall through to standard path
+    }
+  }
+
+  // When q matches a company name/slug, use SQL path. Vector search only covers
+  // embedded jobs; Alo Yoga has 0 embeddings, so "alo yoga" would return AbbVie
+  // (semantically adjacent) instead. SQL path uses company filter and finds all jobs.
+  //
+  // Skip this check for short/generic queries (< 4 words, no spaces after 2nd word)
+  // like "software engineer" or "data analyst" — they're almost never company names
+  // and the extra D1 round-trip adds ~20ms of latency to every homepage load.
+  let qForSearch: string | undefined = q;
+  const looksLikeCompanyQuery = q && q.trim().split(/\s+/).length >= 2 && q.trim().length > 6;
+  if (q && !company && looksLikeCompanyQuery) {
+    const resolved = await findCompanyByQuery(env.JOBS_DB, q);
+    if (resolved) {
+      company = resolved.slug;
+      qForSearch = undefined; // Return all jobs at company, not title-filtered
+    }
+  }
+
   // ── Vector search path ─────────────────────────────────────────────────────
   // Use Vectorize when a query is provided and the binding is configured.
+  // Skip when we resolved to a company — SQL path handles company queries.
   // Wrapped in try-catch so any Gemini/Vectorize failure falls through to SQL.
-  if (q && env.JOBS_VECTORS && env.GEMINI_API_KEY) {
+  if (q && !company && env.JOBS_VECTORS && env.GEMINI_API_KEY) {
     try {
       // Determine offset for paginated vector results
       const vectorOffset = cursor ? (decodeVectorCursor(cursor) ?? 0) : 0;
@@ -200,15 +265,21 @@ export async function handleListJobs(
         // Hydrate from D1, applying secondary filters (location, type, company, recency)
         const filteredRows = await listJobsByIds(env.JOBS_DB, rankedIds, {
           location,
+          location_region,
+          location_or,
+          exclude_ids,
           employment_type,
           workplace_type,
           company,
           posted_since,
         });
 
-        // If posted_since filtered out ALL vector results, fall through to the SQL
-        // LIKE path which can find recent jobs by title text match.
-        if (!(filteredRows.length === 0 && vectorOffset === 0 && posted_since)) {
+        // When posted_since is set, vector results are biased toward old similar jobs.
+        // Fall through to SQL if we have too few results so SQL can find recent
+        // jobs by title text match (SQL applies posted_since efficiently).
+        const tooFewForRecency =
+          posted_since && vectorOffset === 0 && filteredRows.length < limit;
+        if (!(filteredRows.length === 0 && vectorOffset === 0 && posted_since) && !tooFewForRecency) {
           // Paginate within the filtered similarity-ranked result set
           const page = filteredRows.slice(vectorOffset, vectorOffset + limit);
           const nextCursor = buildVectorCursor(vectorOffset, page.length, filteredRows.length);
@@ -233,8 +304,11 @@ export async function handleListJobs(
   // ── SQL fallback path ──────────────────────────────────────────────────────
   // Standard keyset pagination used when q= is absent or Vectorize is not set up.
   const { rows, total } = await listJobs(env.JOBS_DB, {
-    q,
+    q: qForSearch,
     location,
+    location_region,
+    location_or,
+    exclude_ids,
     employment_type,
     workplace_type,
     company,

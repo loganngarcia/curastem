@@ -27,6 +27,7 @@
   //   GEMINI_API_KEY        — Google Gemini API key for AI extraction + embeddings
   //   BRANDFETCH_CLIENT_ID  — Brandfetch API key for company logo/social enrichment
   //                           Free tier: 500 req/day — get one at brandfetch.com/developers
+  //   USAJOBS_API_KEY       — USAJOBS API key for federal jobs (free at developer.usajobs.gov)
   "vars": {},
 
   // Vectorize index for semantic job search (768-dimensional cosine similarity)

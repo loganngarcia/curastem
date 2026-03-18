@@ -48,6 +48,7 @@ import { seedSources, seedCompanyWebsites } from "./db/migrate.ts";
 import type { Env } from "./types.ts";
 import { Errors, jsonOk } from "./utils/errors.ts";
 import { logger } from "./utils/logger.ts";
+import { recordCronFailure, recordCronSuccess, shouldSkipCron } from "./utils/cronCircuit.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Route dispatch
@@ -178,19 +179,24 @@ export default {
   /**
    * Scheduled cron handler — runs every hour (cron: "0 * * * *").
    *
-   * On first run we seed the sources table so the cron has records to process.
-   * seedSources uses INSERT OR IGNORE so re-running is always safe.
+   * Circuit breaker: after 3 consecutive failures, skip runs for 6 hours to
+   * avoid burning Cloudflare/Gemini costs on repeated failing invocations.
    */
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       (async () => {
+        if (await shouldSkipCron(env.RATE_LIMIT_KV)) {
+          logger.info("scheduled_handler_skipped", { reason: "circuit_open" });
+          return;
+        }
         try {
-          // Ensure seed sources and company website hints exist (both idempotent)
           await seedSources(env.JOBS_DB);
           await seedCompanyWebsites(env.JOBS_DB);
           await runIngestion(env);
+          await recordCronSuccess(env.RATE_LIMIT_KV);
         } catch (err) {
           logger.error("scheduled_handler_failed", { error: String(err) });
+          await recordCronFailure(env.RATE_LIMIT_KV);
         }
       })()
     );
