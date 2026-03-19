@@ -78,7 +78,7 @@ function formatCompanyJob(job: Job): Record<string, unknown> {
   return {
     id: job.id,
     title: job.title,
-    location: job.location ?? "Not specified",
+    location: job.locations?.[0] ?? "Not specified",
     employment_type: job.employment_type ?? null,
     workplace_type: job.workplace_type ?? null,
     posted_at: job.posted_at,

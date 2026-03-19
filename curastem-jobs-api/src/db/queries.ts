@@ -288,7 +288,7 @@ export async function upsertJob(
   const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now, location_lat, location_lng } = input;
   const {
     title,
-    location,
+    location: locationRaw,
     employment_type,
     workplace_type,
     apply_url,
@@ -301,6 +301,10 @@ export async function upsertJob(
     posted_at,
   } = normalized;
 
+  const { normalizeLocation } = await import("../utils/normalize.ts");
+  const locNorm = normalizeLocation(locationRaw);
+  const locationsJson = locNorm ? JSON.stringify([locNorm]) : null;
+
   const existing = await db
     .prepare("SELECT id, description_raw FROM jobs WHERE source_id = ? AND external_id = ?")
     .bind(source_id, external_id)
@@ -310,7 +314,7 @@ export async function upsertJob(
     await db
       .prepare(
         `INSERT INTO jobs (
-          id, company_id, source_id, external_id, title, location,
+          id, company_id, source_id, external_id, title, locations,
           employment_type, workplace_type, apply_url, source_url, source_name,
           description_raw, salary_min, salary_max, salary_currency, salary_period,
           posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
@@ -322,7 +326,7 @@ export async function upsertJob(
         )`
       )
       .bind(
-        id, company_id, source_id, external_id, title, location,
+        id, company_id, source_id, external_id, title, locationsJson,
         employment_type, workplace_type, apply_url, source_url, source_name,
         description_raw, salary_min, salary_max, salary_currency, salary_period,
         posted_at, now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
@@ -331,7 +335,6 @@ export async function upsertJob(
     return { inserted: true, needsEmbedding: true };
   }
 
-  // Detect if description changed so we can invalidate AI cache and embedding
   const descriptionChanged =
     description_raw !== null &&
     existing.description_raw !== description_raw;
@@ -341,7 +344,8 @@ export async function upsertJob(
       `UPDATE jobs SET
         company_id             = ?,
         title                  = ?,
-        location               = ?,
+        -- Only fill locations when AI hasn't set it yet; once AI populates it, ingest doesn't overwrite
+        locations              = CASE WHEN locations IS NULL THEN ? ELSE locations END,
         employment_type        = ?,
         workplace_type         = ?,
         apply_url              = ?,
@@ -355,9 +359,7 @@ export async function upsertJob(
         location_lat           = COALESCE(?, location_lat),
         location_lng           = COALESCE(?, location_lng),
         updated_at             = ?,
-        -- Only update description_raw if it has actually changed
         description_raw        = CASE WHEN ? = 1 THEN ? ELSE description_raw END,
-        -- Invalidate AI cache and embedding when description changed
         ai_generated_at        = CASE WHEN ? = 1 THEN NULL ELSE ai_generated_at END,
         embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END
       WHERE source_id = ? AND external_id = ?`
@@ -365,7 +367,7 @@ export async function upsertJob(
     .bind(
       company_id,
       title,
-      location,
+      locationsJson,
       employment_type,
       workplace_type,
       apply_url,
@@ -466,14 +468,16 @@ export async function batchUpsertJobs(
   const descChangedFlags: boolean[] = new Array(inputs.length).fill(false);
 
   const INSERT_SQL = `INSERT INTO jobs (
-    id, company_id, source_id, external_id, title, location,
+    id, company_id, source_id, external_id, title, locations,
     employment_type, workplace_type, apply_url, source_url, source_name,
     description_raw, salary_min, salary_max, salary_currency, salary_period,
     posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const UPDATE_SQL = `UPDATE jobs SET
-    company_id = ?, title = ?, location = ?, employment_type = ?,
+    company_id = ?, title = ?,
+    locations = CASE WHEN locations IS NULL THEN ? ELSE locations END,
+    employment_type = ?,
     workplace_type = ?, apply_url = ?, source_url = ?,
     salary_min = ?, salary_max = ?, salary_currency = ?, salary_period = ?,
     posted_at = ?, dedup_key = ?,
@@ -485,19 +489,23 @@ export async function batchUpsertJobs(
     embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END
   WHERE source_id = ? AND external_id = ?`;
 
+  const { normalizeLocation } = await import("../utils/normalize.ts");
+
   for (let i = 0; i < inputs.length; i++) {
     const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now, location_lat, location_lng } = inputs[i];
     const {
-      title, location, employment_type, workplace_type, apply_url, source_url,
+      title, location: locationRaw, employment_type, workplace_type, apply_url, source_url,
       description_raw, salary_min, salary_max, salary_currency, salary_period, posted_at,
     } = normalized;
 
+    const locNorm = normalizeLocation(locationRaw);
+    const locationsJson = locNorm ? JSON.stringify([locNorm]) : null;
     const existing = existingMap.get(external_id);
 
     if (!existing) {
       inserts.push(
         db.prepare(INSERT_SQL).bind(
-          id, company_id, source_id, external_id, title, location,
+          id, company_id, source_id, external_id, title, locationsJson,
           employment_type, workplace_type, apply_url, source_url, source_name,
           description_raw, salary_min, salary_max, salary_currency, salary_period,
           posted_at, now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
@@ -509,7 +517,9 @@ export async function batchUpsertJobs(
       descChangedFlags[i] = descChanged;
       updates.push(
         db.prepare(UPDATE_SQL).bind(
-          company_id, title, location, employment_type,
+          company_id, title,
+          locationsJson,
+          employment_type,
           workplace_type, apply_url, source_url,
           salary_min, salary_max, salary_currency, salary_period,
           posted_at, dedup_key, location_lat ?? null, location_lng ?? null, now,
@@ -558,7 +568,9 @@ export async function getJobsNeedingEmbedding(
 }>> {
   const { results } = await db
     .prepare(`
-      SELECT j.id, j.title, c.name AS company_name, j.location, j.description_raw
+      SELECT j.id, j.title, c.name AS company_name,
+             json_extract(j.locations, '$[0]') AS location,
+             j.description_raw
       FROM jobs j
       JOIN companies c ON j.company_id = c.id
       WHERE j.embedding_generated_at IS NULL
@@ -668,19 +680,18 @@ async function listJobsByIdsChunk(
   const bindings: unknown[] = [...ids];
 
   if (filter.location) {
-    conditions.push("j.location LIKE ?");
+    conditions.push("j.locations LIKE ?");
     bindings.push(`%${filter.location}%`);
   }
   if (filter.location_region) {
-    conditions.push("j.location LIKE ?");
+    conditions.push("j.locations LIKE ?");
     bindings.push(`%${filter.location_region}%`);
   }
   if (filter.location_or && filter.location_or.length > 0) {
-    const orParts = filter.location_or
-      .slice(0, 12)
-      .map(() => "j.location LIKE ?");
+    const terms = filter.location_or.slice(0, 12);
+    const orParts = terms.map(() => "j.locations LIKE ?");
     conditions.push(`(${orParts.join(" OR ")})`);
-    filter.location_or.slice(0, 12).forEach((t) => bindings.push(`%${t}%`));
+    terms.forEach((t) => bindings.push(`%${t}%`));
   }
   if (filter.exclude_ids && filter.exclude_ids.length > 0) {
     const valid = filter.exclude_ids.filter(
@@ -713,7 +724,7 @@ async function listJobsByIdsChunk(
   const sql = `
     SELECT
       j.id, j.company_id, j.source_id, j.external_id,
-      j.title, j.location, j.employment_type, j.workplace_type,
+      j.title, j.locations, j.employment_type, j.workplace_type,
       j.apply_url, j.source_url, j.source_name,
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
       j.job_summary, j.ai_generated_at, j.embedding_generated_at,
@@ -765,7 +776,7 @@ export interface ListJobsRow {
   source_id: string;
   external_id: string;
   title: string;
-  location: string | null;
+  locations: string | null;  // serialized JSON array; locations[0] is primary display value
   employment_type: import("../types.ts").EmploymentType | null;
   workplace_type: import("../types.ts").WorkplaceType | null;
   apply_url: string;
@@ -806,19 +817,18 @@ export async function listJobs(
     bindings.push(pattern, pattern);
   }
   if (filter.location) {
-    conditions.push("j.location LIKE ?");
+    conditions.push("j.locations LIKE ?");
     bindings.push(`%${filter.location}%`);
   }
   if (filter.location_region) {
-    conditions.push("j.location LIKE ?");
+    conditions.push("j.locations LIKE ?");
     bindings.push(`%${filter.location_region}%`);
   }
   if (filter.location_or && filter.location_or.length > 0) {
-    const orParts = filter.location_or
-      .slice(0, 12)
-      .map(() => "j.location LIKE ?");
+    const terms = filter.location_or.slice(0, 12);
+    const orParts = terms.map(() => "j.locations LIKE ?");
     conditions.push(`(${orParts.join(" OR ")})`);
-    filter.location_or.slice(0, 12).forEach((t) => bindings.push(`%${t}%`));
+    terms.forEach((t) => bindings.push(`%${t}%`));
   }
   if (filter.exclude_ids && filter.exclude_ids.length > 0) {
     const valid = filter.exclude_ids.filter(
@@ -867,7 +877,7 @@ export async function listJobs(
   const selectJoined = `
     SELECT
       j.id, j.company_id, j.source_id, j.external_id,
-      j.title, j.location, j.employment_type, j.workplace_type,
+      j.title, j.locations, j.employment_type, j.workplace_type,
       j.apply_url, j.source_url, j.source_name,
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
       j.job_summary, j.ai_generated_at, j.embedding_generated_at,
@@ -912,18 +922,24 @@ export async function listJobs(
   };
 }
 
-/** Fetch distinct location strings that need geocoding (no lat/lng yet). */
+/**
+ * Fetch distinct primary locations (locations[0]) that need geocoding.
+ * Keys off the first entry of the JSON array since that is the canonical display value.
+ */
 export async function getLocationsNeedingGeocode(
   db: D1Database,
   limit: number
 ): Promise<Array<{ location: string }>> {
   const { results } = await db
     .prepare(
-      `SELECT location, MAX(COALESCE(posted_at, first_seen_at)) AS newest
+      `SELECT json_extract(locations, '$[0]') AS location,
+              MAX(COALESCE(posted_at, first_seen_at)) AS newest
        FROM jobs
-       WHERE location IS NOT NULL AND location != ''
+       WHERE locations IS NOT NULL
+         AND json_extract(locations, '$[0]') IS NOT NULL
+         AND json_extract(locations, '$[0]') != ''
          AND location_lat IS NULL AND location_lng IS NULL
-       GROUP BY location
+       GROUP BY json_extract(locations, '$[0]')
        ORDER BY newest DESC
        LIMIT ?`
     )
@@ -932,7 +948,10 @@ export async function getLocationsNeedingGeocode(
   return results ?? [];
 }
 
-/** Update location_lat, location_lng for all jobs with the given location string. */
+/**
+ * Update location_lat, location_lng for all jobs whose primary location (locations[0])
+ * matches the given string.
+ */
 export async function updateJobsWithCoords(
   db: D1Database,
   location: string,
@@ -941,7 +960,8 @@ export async function updateJobsWithCoords(
 ): Promise<number> {
   const result = await db
     .prepare(
-      `UPDATE jobs SET location_lat = ?, location_lng = ? WHERE location = ?`
+      `UPDATE jobs SET location_lat = ?, location_lng = ?
+       WHERE json_extract(locations, '$[0]') = ?`
     )
     .bind(lat, lng, location)
     .run();
@@ -973,6 +993,7 @@ export async function listJobsNear(
   const conditions: string[] = [
     "j.location_lat IS NOT NULL",
     "j.location_lng IS NOT NULL",
+    "j.locations IS NOT NULL",  // exclude jobs with stale coords but no locations array
   ];
   const bindings: unknown[] = [];
 
@@ -999,15 +1020,19 @@ export async function listJobsNear(
   }
 
   const where = conditions.join(" AND ");
-  const hav = `(${EARTH_RADIUS_KM} * acos(least(1, greatest(-1,
-    sin(radians(?)) * sin(radians(j.location_lat)) +
-    cos(radians(?)) * cos(radians(j.location_lat)) * cos(radians(j.location_lng) - radians(?))
-  ))))`;
-  const orderBy = `ORDER BY ${hav} ASC`;
+
+  // Inline lat/lng as numeric literals in the Haversine expression — D1/SQLite does not
+  // reliably support bound parameters inside expressions used in both WHERE and ORDER BY.
+  const latLit = lat.toFixed(8);
+  const lngLit = lng.toFixed(8);
+  const hav = `(${EARTH_RADIUS_KM} * acos(
+    sin(radians(${latLit})) * sin(radians(j.location_lat)) +
+    cos(radians(${latLit})) * cos(radians(j.location_lat)) * cos(radians(j.location_lng) - radians(${lngLit}))
+  ))`;
 
   const selectCols = `
     j.id, j.company_id, j.source_id, j.external_id,
-    j.title, j.location, j.employment_type, j.workplace_type,
+    j.title, j.locations, j.employment_type, j.workplace_type,
     j.apply_url, j.source_url, j.source_name,
     j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
     j.job_summary, j.ai_generated_at, j.embedding_generated_at,
@@ -1023,11 +1048,11 @@ export async function listJobsNear(
     JOIN companies c ON c.id = j.company_id
     WHERE ${where}
     AND ${hav} <= ?
-    ${orderBy}
+    ORDER BY ${hav} ASC
     LIMIT ?
   `;
 
-  const allBindings = [...bindings, lat, lat, lng, radius_km, limit];
+  const allBindings = [...bindings, radius_km, limit];
   const { results } = await db.prepare(sql).bind(...allBindings).all<ListJobsRow>();
   return { rows: results ?? [] };
 }
@@ -1036,6 +1061,7 @@ export async function listJobsNear(
 export interface FullJobRow extends ListJobsRow {
   description_raw: string | null;
   job_description: string | null;
+  visa_sponsorship: import("../types.ts").VisaSponsorship | null;
 }
 
 export async function getJobById(
@@ -1084,29 +1110,55 @@ export async function updateJobAiFields(
   jobSummary: string,
   jobDescription: string, // serialized JSON
   now: number,
-  salary?: { min: number; currency: string; period: string } | null
+  extras?: {
+    salary?: { min: number; currency: string; period: string } | null;
+    workplace_type?: string | null;
+    employment_type?: string | null;
+    visa_sponsorship?: string | null;
+    /**
+     * AI-extracted normalized locations array, e.g. ["San Francisco, CA", "Remote"].
+     * Written to `locations` (JSON) and used to set/override `location` (best single value)
+     * unless the DB already has an exact match for the best value.
+     */
+    locations?: string[] | null;
+  } | null
 ): Promise<void> {
-  if (salary) {
-    // Write salary only when the model explicitly found it — never overwrite with null
-    await db
-      .prepare(
-        `UPDATE jobs
-         SET job_summary = ?, job_description = ?, ai_generated_at = ?,
-             salary_min = ?, salary_currency = ?, salary_period = ?
-         WHERE id = ?`
-      )
-      .bind(jobSummary, jobDescription, now, salary.min, salary.currency, salary.period, id)
-      .run();
-  } else {
-    await db
-      .prepare(
-        `UPDATE jobs
-         SET job_summary = ?, job_description = ?, ai_generated_at = ?
-         WHERE id = ?`
-      )
-      .bind(jobSummary, jobDescription, now, id)
-      .run();
-  }
+  const { salary, workplace_type, employment_type, visa_sponsorship, locations } = extras ?? {};
+
+  const locationsJson = locations && locations.length > 0 ? JSON.stringify(locations) : null;
+
+  // AI always overrides locations — it has full posting context, so its array is more accurate
+  // than the single-string normalization done at ingest time.
+  // COALESCE fills gaps for other extracted fields — AI never overwrites source-provided data.
+  await db
+    .prepare(
+      `UPDATE jobs
+       SET job_summary       = ?,
+           job_description   = ?,
+           ai_generated_at   = ?,
+           locations         = COALESCE(?, locations),
+           workplace_type    = COALESCE(workplace_type, ?),
+           employment_type   = COALESCE(employment_type, ?),
+           visa_sponsorship  = COALESCE(visa_sponsorship, ?),
+           salary_min        = COALESCE(salary_min, ?),
+           salary_currency   = COALESCE(salary_currency, ?),
+           salary_period     = COALESCE(salary_period, ?)
+       WHERE id = ?`
+    )
+    .bind(
+      jobSummary,
+      jobDescription,
+      now,
+      locationsJson,
+      workplace_type ?? null,
+      employment_type ?? null,
+      visa_sponsorship ?? null,
+      salary?.min ?? null,
+      salary?.currency ?? null,
+      salary?.period ?? null,
+      id
+    )
+    .run();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

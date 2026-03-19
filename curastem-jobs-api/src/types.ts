@@ -104,7 +104,7 @@ export interface JobRow {
   source_id: string;
   external_id: string;
   title: string;
-  location: string | null;
+  locations: string | null;  // serialized JSON array, e.g. '["San Francisco, CA"]'; locations[0] is primary
   employment_type: EmploymentType | null;
   workplace_type: WorkplaceType | null;
   apply_url: string;
@@ -173,6 +173,9 @@ export type WorkplaceType = "remote" | "hybrid" | "on_site";
 
 export type SalaryPeriod = "year" | "month" | "hour";
 
+/** "yes" / "no" only when the posting explicitly mentions visa sponsorship. null = not stated. */
+export type VisaSponsorship = "yes" | "no";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AI-extracted job description structure
 // ─────────────────────────────────────────────────────────────────────────────
@@ -219,7 +222,12 @@ export interface PublicJob {
   company: PublicCompany;
   posted_at: string;         // ISO 8601; best-available posting time
   apply_url: string;
-  location: string | null;
+  /**
+   * Normalized work locations. null = unknown.
+   * locations[0] is the primary display value; multi-city roles have multiple entries.
+   * e.g. ["San Francisco, CA"] | ["New York, NY", "Remote"] | null
+   */
+  locations: string[] | null;
   employment_type: EmploymentType | null;
   workplace_type: WorkplaceType | null;
   source_name: string;
@@ -229,6 +237,7 @@ export interface PublicJob {
   salary: PublicSalary | null;
   job_summary: string | null;
   job_description: JobDescriptionExtracted | null;
+  visa_sponsorship: VisaSponsorship | null;
 
   /**
    * Skill and technology keywords extracted from the job description.
@@ -261,6 +270,7 @@ export interface ListResponse<T> {
 export interface NormalizedJob {
   external_id: string;
   title: string;
+  /** Raw, unmodified location string from the ATS source. */
   location: string | null;
   employment_type: EmploymentType | null;
   workplace_type: WorkplaceType | null;

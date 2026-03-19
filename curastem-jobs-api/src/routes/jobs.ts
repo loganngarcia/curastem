@@ -109,12 +109,21 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
     };
   }
 
+  let locations: string[] | null = null;
+  if (row.locations) {
+    try {
+      locations = JSON.parse(row.locations) as string[];
+    } catch {
+      // Malformed JSON — treat as no location
+    }
+  }
+
   return {
     id: row.id,
     title: row.title,
     posted_at: postedAtIso,
     apply_url: row.apply_url,
-    location: row.location,
+    locations,
     employment_type: row.employment_type,
     workplace_type: row.workplace_type,
     source_name: row.source_name,
@@ -202,8 +211,9 @@ export async function handleListJobs(
         data: rows.map(rowToPublicJob),
         meta: { total: rows.length, limit, next_cursor: null },
       });
-    } catch {
-      // Columns may not exist yet (migration not run) — fall through to standard path
+    } catch (err) {
+      console.error("[listJobsNear] failed:", err instanceof Error ? err.message : String(err));
+      // fall through to standard path
     }
   }
 
@@ -274,20 +284,41 @@ export async function handleListJobs(
           posted_since,
         });
 
+        // Re-rank: blend similarity position with recency so newer jobs surface first
+        // when semantically equivalent. Formula: combined = sim_rank + recency_penalty
+        // where recency_penalty = days_old * RECENCY_WEIGHT (capped at MAX_RECENCY_PENALTY).
+        // A job posted today has 0 penalty; one posted 30 days ago has ~30 * 0.5 = 15 penalty.
+        // This means a job needs to be ~15 positions more relevant to beat a 30-day-old job.
+        const RECENCY_WEIGHT = 0.5;          // penalty points per day old
+        const MAX_RECENCY_PENALTY = 40;      // cap so very old jobs aren't infinitely deprioritised
+        const nowSec = Math.floor(Date.now() / 1000);
+        const simOrder = new Map(filteredRows.map((r, i) => [r.id, i]));
+        const reranked = [...filteredRows].sort((a, b) => {
+          const aPosted = a.posted_at ?? a.first_seen_at;
+          const bPosted = b.posted_at ?? b.first_seen_at;
+          const aDaysOld = Math.max(0, (nowSec - aPosted) / 86400);
+          const bDaysOld = Math.max(0, (nowSec - bPosted) / 86400);
+          const aPenalty = Math.min(MAX_RECENCY_PENALTY, aDaysOld * RECENCY_WEIGHT);
+          const bPenalty = Math.min(MAX_RECENCY_PENALTY, bDaysOld * RECENCY_WEIGHT);
+          const aScore = (simOrder.get(a.id) ?? 999) + aPenalty;
+          const bScore = (simOrder.get(b.id) ?? 999) + bPenalty;
+          return aScore - bScore;
+        });
+
         // When posted_since is set, vector results are biased toward old similar jobs.
         // Fall through to SQL if we have too few results so SQL can find recent
         // jobs by title text match (SQL applies posted_since efficiently).
         const tooFewForRecency =
-          posted_since && vectorOffset === 0 && filteredRows.length < limit;
-        if (!(filteredRows.length === 0 && vectorOffset === 0 && posted_since) && !tooFewForRecency) {
-          // Paginate within the filtered similarity-ranked result set
-          const page = filteredRows.slice(vectorOffset, vectorOffset + limit);
-          const nextCursor = buildVectorCursor(vectorOffset, page.length, filteredRows.length);
+          posted_since && vectorOffset === 0 && reranked.length < limit;
+        if (!(reranked.length === 0 && vectorOffset === 0 && posted_since) && !tooFewForRecency) {
+          // Paginate within the re-ranked result set
+          const page = reranked.slice(vectorOffset, vectorOffset + limit);
+          const nextCursor = buildVectorCursor(vectorOffset, page.length, reranked.length);
 
           return jsonOk({
             data: page.map(rowToPublicJob),
             meta: {
-              total: filteredRows.length,
+              total: reranked.length,
               limit,
               next_cursor: nextCursor,
             },

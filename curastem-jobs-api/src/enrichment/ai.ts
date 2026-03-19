@@ -150,56 +150,29 @@ export async function embedQuery(
  */
 const MODEL = "gemini-3.1-flash-lite-preview";
 
-interface GeminiContent {
-  parts: Array<{ text: string }>;
-}
-
-interface FunctionDeclaration {
-  name: string;
-  description: string;
-  parameters: {
-    type: string;
-    properties: Record<string, { type: string; description?: string; enum?: string[] }>;
-    required: string[];
-  };
-}
-
 interface GeminiRequest {
-  contents: GeminiContent[];
-  tools?: Array<{ functionDeclarations: FunctionDeclaration[] }>;
-  toolConfig?: {
-    functionCallingConfig: { mode: "AUTO" | "NONE" | "ANY" };
-  };
+  contents: Array<{ parts: Array<{ text: string }> }>;
   generationConfig?: {
-    // responseMimeType is intentionally omitted — incompatible with function calling
     temperature?: number;
     maxOutputTokens?: number;
-  };
-}
-
-interface GeminiResponsePart {
-  text?: string;
-  functionCall?: {
-    name: string;
-    args: Record<string, unknown>;
   };
 }
 
 interface GeminiResponse {
   candidates?: Array<{
     content?: {
-      parts?: GeminiResponsePart[];
+      parts?: Array<{ text?: string }>;
     };
   }>;
 }
 
-async function callGemini(apiKey: string, prompt: string): Promise<string> {
+async function callGemini(apiKey: string, prompt: string, maxOutputTokens = 2048): Promise<string> {
   const url = `${GEMINI_API_BASE}/models/${MODEL}:generateContent?key=${apiKey}`;
   const body: GeminiRequest = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.1,
-      maxOutputTokens: 1024,
+      maxOutputTokens,
     },
   };
 
@@ -220,84 +193,12 @@ async function callGemini(apiKey: string, prompt: string): Promise<string> {
   return text;
 }
 
-// ─── Salary extraction tool ───────────────────────────────────────────────────
-
-const SALARY_TOOL: FunctionDeclaration = {
-  name: "report_salary",
-  description:
-    "Call this ONLY when the job description contains explicit salary or compensation figures. " +
-    "Convert any non-USD currency to USD using current exchange rates. " +
-    "If a range is given (e.g. $100k–$150k), report only the minimum.",
-  parameters: {
-    type: "object",
-    properties: {
-      minimum_usd: {
-        type: "number",
-        description: "The minimum salary amount in USD. For hourly/monthly keep the per-period amount, do not annualize.",
-      },
-      period: {
-        type: "string",
-        enum: ["year", "month", "hour"],
-        description: "The pay period that minimum_usd represents.",
-      },
-    },
-    required: ["minimum_usd", "period"],
-  },
-};
-
-interface SalaryToolArgs {
-  minimum_usd: number;
-  period: "year" | "month" | "hour";
-}
-
-interface GeminiWithToolsResult {
-  text: string;
-  salaryArgs: SalaryToolArgs | null;
-}
-
-async function callGeminiWithTools(
-  apiKey: string,
-  prompt: string
-): Promise<GeminiWithToolsResult> {
-  const url = `${GEMINI_API_BASE}/models/${MODEL}:generateContent?key=${apiKey}`;
-  const body: GeminiRequest = {
-    contents: [{ parts: [{ text: prompt }] }],
-    tools: [{ functionDeclarations: [SALARY_TOOL] }],
-    toolConfig: { functionCallingConfig: { mode: "AUTO" } },
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 2048,
-    },
-  };
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${err}`);
-  }
-
-  const data = (await res.json()) as GeminiResponse;
-  const parts = data.candidates?.[0]?.content?.parts ?? [];
-
-  const textPart = parts.find((p) => p.text);
-  const funcPart = parts.find((p) => p.functionCall?.name === "report_salary");
-
-  if (!textPart?.text) throw new Error("Gemini returned no text content");
-
-  const salaryArgs = funcPart?.functionCall
-    ? (funcPart.functionCall.args as unknown as SalaryToolArgs)
-    : null;
-
-  return { text: textPart.text, salaryArgs };
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Job description extraction
+// Job description extraction — single plain-JSON call, no function calling.
+//
+// Salary is included as optional fields in the same JSON blob. This avoids
+// the Gemini function-calling edge case where the model returns a functionCall
+// part with no text part, causing the extraction to silently fail.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const JOB_EXTRACTION_PROMPT = (companyName: string, jobTitle: string, descriptionText: string) => `
@@ -313,30 +214,42 @@ ${descriptionText.slice(0, 8000)}
 
 Return ONLY valid JSON (no markdown fences) with exactly this shape:
 {
-  "job_summary": "<one sentence: what the company does> <one sentence: what this role involves>",
+  "job_summary": "<two sentences>",
   "responsibilities": ["<bullet>", ...],
   "minimum_qualifications": ["<bullet>", ...],
-  "preferred_qualifications": ["<bullet>", ...]
+  "preferred_qualifications": ["<bullet>", ...],
+  "workplace_type": "<remote|hybrid|on_site|null>",
+  "employment_type": "<full_time|part_time|contract|internship|temporary|null>",
+  "visa_sponsorship": "<yes|no|null>",
+  "salary_min": <number or null>,
+  "salary_period": "<year|month|hour|null>",
+  "locations": ["<City, ST or City, Country>", ...]
 }
 
 Rules:
-- job_summary must be exactly two sentences: sentence 1 describes the company, sentence 2 describes the role.
+- job_summary: exactly two sentences. Sentence 1 describes the company. Sentence 2 describes this role.
 - Each array item must be a concise, standalone point. No raw HTML.
 - Return empty arrays [] for any section not clearly present in the source text.
+- workplace_type: "remote" if fully remote, "hybrid" if hybrid/flexible, "on_site" if in-office only. null if not mentioned.
+- employment_type: "full_time", "part_time", "contract", "internship", or "temporary". null if not mentioned.
+- visa_sponsorship: "yes" if the posting explicitly states visa sponsorship is available, "no" if it explicitly states sponsorship is NOT available or requires existing work authorization. null if not mentioned at all.
+- salary_min: the minimum salary amount in USD if explicitly stated, otherwise null. Keep per-period amount as-is (do not annualize hourly/monthly).
+- salary_period: "year", "month", or "hour" matching salary_min. null if no salary.
+- locations: array of all work locations extracted from the posting. Use canonical format "City, ST" for US cities (e.g. "San Francisco, CA") or "City, Country" for international. Include "Remote" as a location if the role is remote. Return [] if no location is mentioned. First entry should be the primary/most specific location.
 - Do NOT invent information not present in the text.
-
-Additionally: if the description contains explicit salary or compensation figures,
-call the report_salary tool with the minimum amount converted to USD.
-If no salary figures appear anywhere in the text, do not call the tool.
 `.trim();
 
 export interface ExtractedJobFields {
   job_summary: string;
   job_description: JobDescriptionExtracted;
-  /** Populated only when the model finds explicit salary figures in the description. */
+  workplace_type: import("../types.ts").WorkplaceType | null;
+  employment_type: import("../types.ts").EmploymentType | null;
+  visa_sponsorship: import("../types.ts").VisaSponsorship | null;
   salary_min: number | null;
   salary_currency: string | null;
   salary_period: import("../types.ts").SalaryPeriod | null;
+  /** Normalized locations extracted from the posting; first entry is primary. */
+  locations: string[] | null;
 }
 
 /** Format a salary for display, e.g. "$120,000" or "$45/hour" */
@@ -351,8 +264,7 @@ export function formatSalaryDisplay(amount: number, period: "year" | "month" | "
 
 /**
  * Extract job_summary, job_description, and optionally salary from raw description text.
- * Uses Gemini function calling — the model calls report_salary only when salary data
- * is explicitly present in the text. Single API call covers all three fields.
+ * Single Gemini call returning flat JSON — no function calling.
  */
 export async function extractJobFields(
   apiKey: string,
@@ -362,15 +274,21 @@ export async function extractJobFields(
 ): Promise<ExtractedJobFields> {
   const descriptionText = htmlToText(descriptionRaw);
   const prompt = JOB_EXTRACTION_PROMPT(companyName, jobTitle, descriptionText);
-  const { text, salaryArgs } = await callGeminiWithTools(apiKey, prompt);
+  const raw = await callGemini(apiKey, prompt, 2048);
 
-  const cleaned = text.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+  const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
 
   let parsed: {
     job_summary?: string;
     responsibilities?: unknown[];
     minimum_qualifications?: unknown[];
     preferred_qualifications?: unknown[];
+    workplace_type?: unknown;
+    employment_type?: unknown;
+    visa_sponsorship?: unknown;
+    salary_min?: unknown;
+    salary_period?: unknown;
+    locations?: unknown[];
   };
 
   try {
@@ -384,6 +302,28 @@ export async function extractJobFields(
     return val.filter((v): v is string => typeof v === "string");
   };
 
+  const WORKPLACE_TYPES = ["remote", "hybrid", "on_site"] as const;
+  const EMPLOYMENT_TYPES = ["full_time", "part_time", "contract", "internship", "temporary"] as const;
+
+  const workplaceType = WORKPLACE_TYPES.includes(parsed.workplace_type as never)
+    ? (parsed.workplace_type as import("../types.ts").WorkplaceType)
+    : null;
+  const employmentType = EMPLOYMENT_TYPES.includes(parsed.employment_type as never)
+    ? (parsed.employment_type as import("../types.ts").EmploymentType)
+    : null;
+  const visaSponsorship = (parsed.visa_sponsorship === "yes" || parsed.visa_sponsorship === "no")
+    ? (parsed.visa_sponsorship as import("../types.ts").VisaSponsorship)
+    : null;
+
+  const salaryMin = typeof parsed.salary_min === "number" && parsed.salary_min > 0
+    ? parsed.salary_min
+    : null;
+  const salaryPeriod = salaryMin !== null && (parsed.salary_period === "year" || parsed.salary_period === "month" || parsed.salary_period === "hour")
+    ? parsed.salary_period
+    : null;
+
+  const locations = ensureStringArray(parsed.locations);
+
   return {
     job_summary: typeof parsed.job_summary === "string" ? parsed.job_summary : "",
     job_description: {
@@ -391,9 +331,13 @@ export async function extractJobFields(
       minimum_qualifications: ensureStringArray(parsed.minimum_qualifications),
       preferred_qualifications: ensureStringArray(parsed.preferred_qualifications),
     },
-    salary_min: salaryArgs?.minimum_usd ?? null,
-    salary_currency: salaryArgs ? "USD" : null,
-    salary_period: salaryArgs?.period ?? null,
+    workplace_type: workplaceType,
+    employment_type: employmentType,
+    visa_sponsorship: visaSponsorship,
+    salary_min: salaryMin,
+    salary_currency: salaryMin !== null ? "USD" : null,
+    salary_period: salaryPeriod,
+    locations: locations.length > 0 ? locations : null,
   };
 }
 

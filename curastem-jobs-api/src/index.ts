@@ -82,6 +82,18 @@ async function handleRequest(
     return jsonOk({ status: "ok", version: "1.0.0" });
   }
 
+  // GET /geo — unauthenticated, returns the caller's lat/lng from Cloudflare's edge geolocation.
+  // Used by web.tsx instead of a third-party IP geolocation service.
+  if (path === "/geo" && method === "GET") {
+    const cf = (request as Request & { cf?: { latitude?: string; longitude?: string; city?: string; country?: string; region?: string } }).cf;
+    const lat = cf?.latitude ? parseFloat(cf.latitude) : null;
+    const lng = cf?.longitude ? parseFloat(cf.longitude) : null;
+    return new Response(
+      JSON.stringify({ lat, lng, city: cf?.city ?? null, region: cf?.region ?? null, country: cf?.country ?? null }),
+      { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" } }
+    );
+  }
+
   // GET /stats — aggregate market overview (job counts, top companies, etc.)
   if (path === "/stats" && method === "GET") {
     return handleGetStats(request, env, ctx);

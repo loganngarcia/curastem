@@ -24,7 +24,7 @@ import { runCompanyEnrichment } from "../enrichment/company.ts";
 import { getFetcher } from "./registry.ts";
 import { geocode } from "../utils/geocode.ts";
 import type { Env, IngestionResult, SourceRow } from "../types.ts";
-import { buildDedupKey, buildJobId, slugify, uuidv4 } from "../utils/normalize.ts";
+import { buildDedupKey, buildJobId, normalizeLocation, slugify, uuidv4 } from "../utils/normalize.ts";
 import { logger } from "../utils/logger.ts";
 
 /**
@@ -141,11 +141,13 @@ async function processSource(
     nonDupMetas.map((m) => m.normalized.external_id)
   );
 
-  // ── Phase 4b: Inline geocode unique locations (at insert time, not later backfill)
-  // KV cache makes repeat locations instant; Nominatim 1 req/sec for cache misses.
-  const INLINE_GEOCODE_CAP = 20; // cap per source to bound cron time
+  // ── Phase 4b: Inline geocode unique primary locations (locations[0] = normalizeLocation(raw))
+  // Coords are keyed off the normalized string, which is what ends up in locations[0] in the DB.
+  const INLINE_GEOCODE_CAP = 50;
   const uniqueLocations = [...new Set(
-    nonDupMetas.map((m) => m.normalized.location).filter((l): l is string => Boolean(l?.trim()))
+    nonDupMetas
+      .map((m) => normalizeLocation(m.normalized.location))
+      .filter((l): l is string => Boolean(l?.trim()))
   )].slice(0, INLINE_GEOCODE_CAP);
   const locationToCoords = new Map<string, { lat: number; lng: number }>();
   for (const loc of uniqueLocations) {
@@ -153,7 +155,7 @@ async function processSource(
       const result = await geocode(loc, env.RATE_LIMIT_KV);
       if (result) {
         locationToCoords.set(loc, { lat: result.lat, lng: result.lng });
-        if (!result.fromCache) await new Promise((r) => setTimeout(r, 1100)); // Nominatim 1 req/sec
+        if (result.usedNominatim) await new Promise((r) => setTimeout(r, 1100)); // Nominatim 1 req/sec
       }
     } catch (err) {
       logger.warn("geocode_inline_failed", { location: loc, error: String(err) });
@@ -162,7 +164,8 @@ async function processSource(
 
   // ── Phase 5: Batch INSERT new + UPDATE existing — 2 D1 subrequests total ──
   const upsertInputs = nonDupMetas.map(({ jobId, companyId, dedupKey, normalized }) => {
-    const coords = normalized.location ? locationToCoords.get(normalized.location) : null;
+    const normLoc = normalizeLocation(normalized.location);
+    const coords = normLoc ? locationToCoords.get(normLoc) : null;
     return {
       id:           jobId,
       company_id:   companyId,
@@ -324,7 +327,10 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
   return { succeeded: vectors.length, failed, total: jobs.length };
 }
 
-const GEOCODE_BACKFILL_BATCH = 50; // Nominatim: 1 req/sec; 50 ≈ 55s (within Workers CPU budget)
+// Photon has no rate limit so we can process many more per run.
+// Only Nominatim fallbacks need the 1.1s delay; at ~150 locations/run
+// worst-case (all Nominatim) is ~165s — safe within Workers CPU budget.
+const GEOCODE_BACKFILL_BATCH = 150;
 
 async function backfillGeocode(env: Env): Promise<void> {
   const locations = await getLocationsNeedingGeocode(env.JOBS_DB, GEOCODE_BACKFILL_BATCH);
@@ -336,8 +342,9 @@ async function backfillGeocode(env: Env): Promise<void> {
       if (result) {
         const n = await updateJobsWithCoords(env.JOBS_DB, location, result.lat, result.lng);
         updated += n;
+        // Only Nominatim fallback is rate-limited; Photon needs no delay
+        if (result.usedNominatim) await new Promise((r) => setTimeout(r, 1100));
       }
-      await new Promise((r) => setTimeout(r, 1100)); // Nominatim: 1 req/sec
     } catch (err) {
       logger.warn("geocode_backfill_location_failed", { location, error: String(err) });
     }

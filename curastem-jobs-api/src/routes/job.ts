@@ -55,12 +55,21 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
   // Uses the canonical phrase list from enrichment/keywords.ts.
   const keywords = extractKeywords(row.description_raw, row.job_description);
 
+  let locations: string[] | null = null;
+  if (row.locations) {
+    try {
+      locations = JSON.parse(row.locations) as string[];
+    } catch {
+      // Malformed JSON — treat as no location
+    }
+  }
+
   return {
     id: row.id,
     title: row.title,
     posted_at: postedAtIso,
     apply_url: row.apply_url,
-    location: row.location,
+    locations,
     employment_type: row.employment_type,
     workplace_type: row.workplace_type,
     source_name: row.source_name,
@@ -68,6 +77,7 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
     salary,
     job_summary: row.job_summary,
     job_description: jobDescription,
+    visa_sponsorship: row.visa_sponsorship ?? null,
     keywords,
     company: {
       name: row.company_name,
@@ -144,17 +154,36 @@ export async function handleGetJob(
 
       // Cache results — fire-and-forget so we don't block the response
       ctx.waitUntil(
-        updateJobAiFields(env.JOBS_DB, row.id, extracted.job_summary, jobDescJson, now, salaryPayload)
+        updateJobAiFields(env.JOBS_DB, row.id, extracted.job_summary, jobDescJson, now, {
+          salary: salaryPayload,
+          workplace_type: extracted.workplace_type,
+          employment_type: extracted.employment_type,
+          visa_sponsorship: extracted.visa_sponsorship,
+          locations: extracted.locations,
+        })
       );
 
       // Patch the in-memory row so this response includes freshly generated fields
       row.job_summary = extracted.job_summary;
       row.job_description = jobDescJson;
       row.ai_generated_at = now;
+      if (row.workplace_type === null && extracted.workplace_type) {
+        row.workplace_type = extracted.workplace_type;
+      }
+      if (row.employment_type === null && extracted.employment_type) {
+        row.employment_type = extracted.employment_type;
+      }
+      if (row.visa_sponsorship === null && extracted.visa_sponsorship) {
+        row.visa_sponsorship = extracted.visa_sponsorship;
+      }
       if (salaryPayload && row.salary_min === null) {
         row.salary_min = salaryPayload.min;
         row.salary_currency = salaryPayload.currency;
         row.salary_period = salaryPayload.period as import("../types.ts").SalaryPeriod;
+      }
+      // Patch in-memory locations so this response reflects AI-enhanced values immediately
+      if (extracted.locations && extracted.locations.length > 0) {
+        row.locations = JSON.stringify(extracted.locations);
       }
 
       // Also cache company description if missing (uses the same job context)

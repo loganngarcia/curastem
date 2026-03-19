@@ -77,7 +77,7 @@ function formatSimilarJob(job: Job): Record<string, unknown> {
     id: job.id,
     title: job.title,
     company: job.company.name,
-    location: job.location ?? "Not specified",
+    location: job.locations?.[0] ?? "Not specified",
     employment_type: job.employment_type ?? null,
     workplace_type: job.workplace_type ?? null,
     posted_at: job.posted_at,

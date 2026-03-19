@@ -51,7 +51,8 @@ export interface Job {
   company: JobCompany;
   posted_at: string;
   apply_url: string;
-  location: string | null;
+  /** Normalized location array. locations[0] is the primary display value. */
+  locations: string[] | null;
   employment_type: string | null;
   workplace_type: string | null;
   source_name: string;

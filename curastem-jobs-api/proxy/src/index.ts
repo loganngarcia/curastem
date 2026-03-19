@@ -28,7 +28,7 @@ interface Env {
 const UPSTREAM = "https://api.curastem.org";
 
 // Only these path prefixes are allowed through
-const ALLOWED_PATHS = ["/jobs", "/stats", "/health"];
+const ALLOWED_PATHS = ["/jobs", "/stats", "/health", "/geo"];
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",

@@ -50,7 +50,7 @@ export async function runGetJobDetails(
     title: job.title,
     posted_at: job.posted_at,
     apply_url: job.apply_url,
-    location: job.location ?? "Not specified",
+    location: job.locations?.[0] ?? "Not specified",
     employment_type: job.employment_type ?? null,
     workplace_type: job.workplace_type ?? null,
     source_name: job.source_name,

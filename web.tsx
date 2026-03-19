@@ -2047,7 +2047,7 @@ interface JobSnippet {
     title: string
     company: string
     company_logo?: string | null
-    location?: string | null
+    locations?: string[] | null
     employment_type?: string | null
     workplace_type?: string | null
     posted_at?: string | null
@@ -10121,11 +10121,12 @@ interface HomepageJob {
     }
     posted_at: string | null
     apply_url: string
-    location: string | null
+    locations: string[] | null
     employment_type: string | null
     workplace_type: string | null
     salary: { display: string } | null
     job_summary: string | null
+    visa_sponsorship?: string | null
 }
 
 interface JobDescriptionDetail {
@@ -10293,10 +10294,10 @@ const ChatJobCards = React.memo(function ChatJobCards({
                             </>
                         )}
                         {/* Location */}
-                        {job.location && (
+                        {job.locations?.[0] && (
                             <>
                                 <span style={metaStyle}>•</span>
-                                <span style={metaStyle}>{job.location}</span>
+                                <span style={metaStyle}>{job.locations[0]}</span>
                             </>
                         )}
                         {/* Salary */}
@@ -10304,6 +10305,13 @@ const ChatJobCards = React.memo(function ChatJobCards({
                             <>
                                 <span style={metaStyle}>•</span>
                                 <span style={metaStyle}>{job.salary}</span>
+                            </>
+                        )}
+                        {/* Visa sponsorship — only shown when explicitly confirmed */}
+                        {job.visa_sponsorship === "yes" && (
+                            <>
+                                <span style={metaStyle}>•</span>
+                                <span style={metaStyle}>Sponsors visa</span>
                             </>
                         )}
                     </div>
@@ -11163,6 +11171,9 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     const [detailCompanyDesc, setDetailCompanyDesc] = React.useState<
         string | null
     >(null)
+    const [detailVisaSponsorship, setDetailVisaSponsorship] = React.useState<
+        string | null
+    >(null)
     const [loadingDesc, setLoadingDesc] = React.useState(true)
     // Keywords come from the API detail endpoint — no hardcoded list in the client.
     const [apiKeywords, setApiKeywords] = React.useState<string[]>([])
@@ -11174,6 +11185,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         setDesc(null)
         setDetailSummary(null)
         setDetailCompanyDesc(null)
+        setDetailVisaSponsorship(null)
         setApiKeywords([])
         setLoadingDesc(true)
         const ctrl = new AbortController()
@@ -11185,6 +11197,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                     d: {
                         job_description?: JobDescriptionDetail | null
                         job_summary?: string | null
+                        visa_sponsorship?: string | null
                         company?: { description?: string | null }
                         keywords?: string[]
                     } | null
@@ -11193,6 +11206,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                         setDesc(d?.job_description ?? null)
                         setDetailSummary(d?.job_summary ?? null)
                         setDetailCompanyDesc(d?.company?.description ?? null)
+                        setDetailVisaSponsorship(d?.visa_sponsorship ?? null)
                         setApiKeywords(d?.keywords ?? [])
                         setLoadingDesc(false)
                     }
@@ -11265,10 +11279,11 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
 
     const metaItems = [
         jobTimeAgo(job.posted_at),
-        job.location,
+        job.locations?.[0] ?? null,
         formatEmploymentType(job.employment_type),
         formatWorkplace(job.workplace_type),
         job.salary?.display,
+        detailVisaSponsorship === "yes" ? "Sponsors visa" : null,
     ].filter(Boolean)
 
     const sectionSkeleton = (
@@ -12214,21 +12229,19 @@ const HomepageJobs = React.memo(function HomepageJobs({
 
         const altPromise = api(`q=${encodeURIComponent(altQuery)}`)
 
+        // Use the jobs-proxy /geo endpoint (Cloudflare edge geolocation — no third-party needed)
         const ipCtrl = new AbortController()
-        const ipTimer = setTimeout(() => ipCtrl.abort(), 3000)
-        const ipPromise = fetch("https://ipwho.is/", {
+        const ipTimer = setTimeout(() => ipCtrl.abort(), 4000)
+        const ipPromise = fetch(`${jobsApiUrl}/geo`, {
             signal: ipCtrl.signal,
         })
             .finally(() => clearTimeout(ipTimer))
             .then((r) => (r.ok ? r.json() : {}))
             .then(
-                ({
-                    latitude,
-                    longitude,
-                }: { latitude?: number; longitude?: number }) =>
+                ({ lat, lng }: { lat?: number | null; lng?: number | null }) =>
                     ({
-                        lat: typeof latitude === "number" ? latitude : NaN,
-                        lng: typeof longitude === "number" ? longitude : NaN,
+                        lat: typeof lat === "number" ? lat : NaN,
+                        lng: typeof lng === "number" ? lng : NaN,
                     }) as { lat: number; lng: number }
             )
             .catch(() => ({ lat: NaN, lng: NaN }))
@@ -12265,6 +12278,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
                         near_lng: String(lng),
                         radius_km: "75",
                         exclude_remote: "true",
+                        since: String(since3Days),
                     })
                     if (excludeIds.length > 0)
                         params.set("exclude_ids", excludeIds.join(","))
@@ -12280,7 +12294,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
             }
         )
 
-        const safetyTimer = setTimeout(() => {
+        const safetyTimer = setTimeout(() => { 
             if (!cancelled) {
                 setLoadingPicks(false)
                 setLoadingNear(false)
@@ -19115,25 +19129,25 @@ Do not include markdown formatting or explanations.`
                                         if (jobsRes.ok) {
                                             const jobsData = await jobsRes.json()
                                             const snippets: JobSnippet[] = (
-                                                jobsData.data ?? []
-                                            ).map((j: any): JobSnippet => ({
-                                                id: j.id,
-                                                title: j.title,
-                                                company: j.company?.name ?? "",
-                                                company_logo:
-                                                    j.company?.logo_url ?? null,
-                                                location: j.location ?? null,
-                                                employment_type:
-                                                    j.employment_type ?? null,
-                                                workplace_type:
-                                                    j.workplace_type ?? null,
-                                                posted_at: j.posted_at ?? null,
-                                                apply_url: j.apply_url ?? null,
-                                                summary: j.job_summary ?? null,
-                                                salary: j.salary
-                                                    ? `${j.salary.currency} ${[j.salary.min, j.salary.max].filter(Boolean).join("–")}/${j.salary.period}`
-                                                    : null,
-                                            }))
+                                            jobsData.data ?? []
+                                        ).map((j: any): JobSnippet => ({
+                                            id: j.id,
+                                            title: j.title,
+                                            company: j.company?.name ?? "",
+                                            company_logo:
+                                                j.company?.logo_url ?? null,
+                                            locations: j.locations ?? null,
+                                            employment_type:
+                                                j.employment_type ?? null,
+                                            workplace_type:
+                                                j.workplace_type ?? null,
+                                            posted_at: j.posted_at ?? null,
+                                            apply_url: j.apply_url ?? null,
+                                            summary: j.job_summary ?? null,
+                                            salary: j.salary
+                                                ? `${j.salary.currency} ${[j.salary.min, j.salary.max].filter(Boolean).join("–")}/${j.salary.period}`
+                                                : null,
+                                        }))
                                             // Show cards in chat
                                             if (snippets.length > 0) {
                                                 setMessages((prev) => [
@@ -19150,7 +19164,7 @@ Do not include markdown formatting or explanations.`
                                                     .slice(0, 6)
                                                     .map(
                                                         (j, i) =>
-                                                            `${i + 1}. ${j.title} at ${j.company}${j.location ? ` — ${j.location}` : ""}`
+                                                            `${i + 1}. ${j.title} at ${j.company}${j.locations?.[0] ? ` — ${j.locations[0]}` : ""}`
                                                     )
                                                     .join("\n"),
                                                 total: snippets.length,
@@ -19180,11 +19194,11 @@ Do not include markdown formatting or explanations.`
                                                 responsePayload = {
                                                     title: j.title,
                                                     company: j.company?.name,
-                                                    location: j.location,
-                                                    employment_type:
-                                                        j.employment_type,
-                                                    workplace_type:
-                                                        j.workplace_type,
+                                            locations: j.locations ?? null,
+                                            employment_type:
+                                                j.employment_type,
+                                            workplace_type:
+                                                j.workplace_type,
                                                     summary: j.job_summary,
                                                     salary: j.salary,
                                                     responsibilities:
@@ -25469,7 +25483,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         company: j.company?.name ?? "",
                                         company_logo:
                                             j.company?.logo_url ?? null,
-                                        location: j.location ?? null,
+                                        locations: j.locations ?? null,
                                         employment_type:
                                             j.employment_type ?? null,
                                         workplace_type:
@@ -25622,7 +25636,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                   id: jobDetail.id,
                                   title: jobDetail.title,
                                   company: jobDetail.company?.name,
-                                  location: jobDetail.location,
+                                  locations: jobDetail.locations ?? null,
                                   employment_type: jobDetail.employment_type,
                                   workplace_type: jobDetail.workplace_type,
                                   summary: jobDetail.job_summary,
@@ -28164,7 +28178,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                             },
                                             posted_at: job.posted_at ?? null,
                                             apply_url: job.apply_url ?? "",
-                                            location: job.location ?? null,
+                                            locations: job.locations ?? null,
                                             employment_type: job.employment_type ?? null,
                                             workplace_type: job.workplace_type ?? null,
                                             salary: null,

@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   external_id     TEXT NOT NULL,      -- original ID from the source ATS
 
   title           TEXT NOT NULL,
-  location        TEXT,               -- free-text location string from source
+  locations       TEXT,               -- JSON array of normalized city strings, e.g. '["San Francisco, CA","New York, NY"]'
+                                      -- null = unknown; locations[0] is the primary display value
   employment_type TEXT,               -- "full_time" | "part_time" | "contract" | "internship" | "temporary" | null
   workplace_type  TEXT,               -- "remote" | "hybrid" | "on_site" | null
 
@@ -89,9 +90,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   salary_period   TEXT,               -- "year" | "month" | "hour" | null
 
   -- AI-generated fields (lazy; populated on first GET /jobs/:id request, then cached)
-  job_summary     TEXT,               -- two-sentence summary (company + role)
-  job_description TEXT,               -- JSON: {responsibilities, minimum_qualifications, preferred_qualifications}
-  ai_generated_at INTEGER,            -- epoch; NULL = not generated; cleared when description_raw changes
+  job_summary        TEXT,            -- two-sentence summary (company + role)
+  job_description    TEXT,            -- JSON: {responsibilities, minimum_qualifications, preferred_qualifications}
+  visa_sponsorship   TEXT,            -- "yes" | "no" | null (null = not mentioned in posting)
+  ai_generated_at    INTEGER,         -- epoch; NULL = not generated; cleared when description_raw changes
 
   -- Semantic search embedding (generated at ingestion time via Gemini Embedding API)
   -- The actual vector lives in the Vectorize index (keyed by job id).
@@ -115,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_posted_at ON jobs (posted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_first_seen ON jobs (first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_dedup_key ON jobs (dedup_key);
 CREATE INDEX IF NOT EXISTS idx_jobs_title ON jobs (title);
-CREATE INDEX IF NOT EXISTS idx_jobs_location ON jobs (location);
+-- No scalar location index needed; geocoding uses json_extract(locations, '$[0]')
 CREATE INDEX IF NOT EXISTS idx_jobs_employment_type ON jobs (employment_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_workplace_type ON jobs (workplace_type);
 
