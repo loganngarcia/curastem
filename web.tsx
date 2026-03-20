@@ -21,6 +21,7 @@ import {
     useMotionValue,
     useTransform,
     animate,
+    type PanInfo,
 } from "framer-motion"
 // @ts-ignore
 import {
@@ -1708,6 +1709,14 @@ function extractTextFromGeminiResponse(data: unknown): string {
         .trim()
 }
 
+// Substrings like "AI" must not match case-insensitively inside "email", etc.
+const KEYWORDS_REQUIRE_EXACT_CASE = new Set<string>(["AI"])
+
+function keywordIndexInText(txt: string, kw: string): number {
+    if (KEYWORDS_REQUIRE_EXACT_CASE.has(kw)) return txt.indexOf(kw)
+    return txt.toLowerCase().indexOf(kw.toLowerCase())
+}
+
 // Inject `data-keyword-land` marker spans into resume HTML so the landing
 // animation can locate each keyword's exact DOM position via a direct query
 // instead of fragile TreeWalker + Range offset arithmetic.
@@ -1720,6 +1729,10 @@ function markKeywordsInHtml(html: string, keywords: string[]): string {
     tmp.innerHTML = html
 
     const claimed = new Set<string>()
+    // Longer phrases first so e.g. "JavaScript" wins over "Java" in shared text.
+    const sortedKw = [...keywords].sort(
+        (a, b) => b.length - a.length || a.localeCompare(b)
+    )
 
     const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT)
     const hits: Array<{
@@ -1733,10 +1746,9 @@ function markKeywordsInHtml(html: string, keywords: string[]): string {
     while ((node = walker.nextNode())) {
         const textNode = node as Text
         const txt = textNode.textContent ?? ""
-        for (const kw of keywords) {
+        for (const kw of sortedKw) {
             if (claimed.has(kw)) continue
-            // Exact case match — only mark if the resume uses the same casing
-            const idx = txt.indexOf(kw)
+            const idx = keywordIndexInText(txt, kw)
             if (idx !== -1) {
                 hits.push({ node: textNode, start: idx, end: idx + kw.length, kw })
                 claimed.add(kw)
@@ -1764,6 +1776,46 @@ function markKeywordsInHtml(html: string, keywords: string[]): string {
 
     return tmp.innerHTML
 }
+
+/** Orbit pill strings captured from the job UI that appear in the resume body.
+ * Uses case-insensitive matching so resume casing matches landing targets to
+ * `item.word` (API / DOM capture may differ from model output), except tokens
+ * in KEYWORDS_REQUIRE_EXACT_CASE (e.g. "AI" vs "email"). */
+function capturedOrbitWordsInHtml(
+    html: string,
+    capturedWords: string[]
+): string[] {
+    if (!html) return []
+    const lowerHtml = html.toLowerCase()
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const w of capturedWords) {
+        if (!w || seen.has(w)) continue
+        const present = KEYWORDS_REQUIRE_EXACT_CASE.has(w)
+            ? html.includes(w)
+            : lowerHtml.includes(w.toLowerCase())
+        if (present) {
+            out.push(w)
+            seen.add(w)
+        }
+    }
+    return out
+}
+
+/** Map getComputedStyle().fontWeight to 100–900 for variable-font Motion interpolation. */
+function parseCssFontWeight(raw: string): number {
+    const s = (raw ?? "").trim().toLowerCase()
+    if (s === "normal" || s === "regular") return 400
+    if (s === "medium") return 500
+    if (s === "semibold" || s === "demibold") return 600
+    if (s === "bold") return 700
+    const n = parseFloat(s)
+    if (Number.isFinite(n)) return Math.min(900, Math.max(100, Math.round(n)))
+    return 400
+}
+
+// DocEditor resume reveal uses 0.4s — orbit pills must stay until this finishes.
+const RESUME_DOC_REVEAL_MS = 400
 
 // --- INTERFACES ---
 
@@ -6036,6 +6088,7 @@ const DocEditor = React.memo(function DocEditor({
             {/* Content Area */}
             <div
                 data-doc-scroll="true"
+                {...(isMobileLayout ? { "data-pull-scroll": "1" } : {})}
                 style={{
                     flex: 1,
                     overflowY: "auto",
@@ -6190,6 +6243,11 @@ interface ChatInputProps {
     onHtmlChange?: (html: string) => void
     /** Called whenever the local caret position changes (character offset in plain text). Used to broadcast cursor to peer. */
     onCursorChange?: (offset: number) => void
+    /**
+     * Mobile agent tool sheet embeds this composer above the tool; keep it editable even while
+     * a job/doc/app is open (the default is to disable contentEditable to avoid double-keyboard UX).
+     */
+    overlayToolComposer?: boolean
     /**
      * Applied from peer: sets the contenteditable HTML + extracts skills. seq increments each sync.
      * cursorOffset is the partner's caret position (character offset). When present and the local
@@ -6513,6 +6571,7 @@ const ChatInput = React.memo(function ChatInput({
     onRemoveSkill,
     onHtmlChange,
     onCursorChange,
+    overlayToolComposer = false,
     peerSync,
 }: ChatInputProps) {
     const editableRef = React.useRef<HTMLDivElement | null>(null)
@@ -7299,17 +7358,21 @@ const ChatInput = React.memo(function ChatInput({
         if (text) document.execCommand("insertText", false, text)
     }
 
-    // On mobile, suppress keyboard when the agent sidebar (jobs/whiteboard/docs/apps) is covering the UI
-    const mobileToolOpen = isMobileLayout && (isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen)
+    // On mobile, suppress the main composer when a full-screen tool is open — unless this instance
+    // is the overlay-embedded bar (`overlayToolComposer`), which exists precisely to type over the tool.
+    const mobileToolSuppressEditor =
+        isMobileLayout &&
+        (isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen) &&
+        !overlayToolComposer
 
     // The contenteditable element shared between both layout branches
     const editableJSX = (
         <div
             ref={setEditableRef}
-            contentEditable={mobileToolOpen ? false : true}
+            contentEditable={!mobileToolSuppressEditor}
             suppressContentEditableWarning
-            tabIndex={mobileToolOpen ? -1 : 1}
-            inputMode={mobileToolOpen ? "none" : undefined}
+            tabIndex={mobileToolSuppressEditor ? -1 : 1}
+            inputMode={mobileToolSuppressEditor ? "none" : undefined}
             data-placeholder={placeholder}
             className="ChatTextInput"
             onInput={handleEditableInput}
@@ -7346,40 +7409,51 @@ const ChatInput = React.memo(function ChatInput({
     )
 
     React.useEffect(() => {
-        // Focus cursor on mount if not in canvas
-        if (RenderTarget.current() !== RenderTarget.canvas) {
-            editableRef.current?.focus()
+        if (RenderTarget.current() === RenderTarget.canvas) return
+        // Overlay-embedded composer: never autofocus on mount (Safari pops keyboard over the tool).
+        if (overlayToolComposer) return
+        // Main composer hidden behind agent tools: no focus or global key steal.
+        if (mobileToolSuppressEditor) return
+        // Mobile: never programmatically focus here — closing an agent overlay was re-running this
+        // effect and opening the keyboard; composer is tap-to-focus only on phone.
+        if (isMobileLayout) return
 
-            // Global key listener for typing
-            const handleGlobalKeyDown = (e: KeyboardEvent) => {
-                // Ignore if focus is already on an input or textarea
-                const active = document.activeElement
-                const target = e.target as HTMLElement
-                const isInputActive =
-                    active?.tagName === "INPUT" ||
-                    active?.tagName === "TEXTAREA" ||
-                    active?.getAttribute("contenteditable") === "true" ||
-                    (target &&
-                        (target.tagName === "INPUT" ||
-                            target.tagName === "TEXTAREA" ||
-                            target.isContentEditable))
+        editableRef.current?.focus()
 
-                if (
-                    !isInputActive &&
-                    e.key.length === 1 &&
-                    !e.metaKey &&
-                    !e.ctrlKey &&
-                    !e.altKey
-                ) {
-                    editableRef.current?.focus()
-                }
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
+            const active = document.activeElement
+            const target = e.target as HTMLElement
+            const isInputActive =
+                active?.tagName === "INPUT" ||
+                active?.tagName === "TEXTAREA" ||
+                active?.getAttribute("contenteditable") === "true" ||
+                (target &&
+                    (target.tagName === "INPUT" ||
+                        target.tagName === "TEXTAREA" ||
+                        target.isContentEditable))
+
+            if (
+                !isInputActive &&
+                e.key.length === 1 &&
+                !e.metaKey &&
+                !e.ctrlKey &&
+                !e.altKey
+            ) {
+                editableRef.current?.focus()
             }
-
-            window.addEventListener("keydown", handleGlobalKeyDown)
-            return () =>
-                window.removeEventListener("keydown", handleGlobalKeyDown)
         }
-    }, [])
+
+        window.addEventListener("keydown", handleGlobalKeyDown)
+        return () => window.removeEventListener("keydown", handleGlobalKeyDown)
+    }, [overlayToolComposer, mobileToolSuppressEditor, isMobileLayout])
+
+    React.useEffect(() => {
+        if (!mobileToolSuppressEditor) return
+        const el = editableRef.current
+        if (el && document.activeElement === el) {
+            el.blur()
+        }
+    }, [mobileToolSuppressEditor])
 
     React.useEffect(() => {
         // Check if screen sharing is supported
@@ -9811,111 +9885,30 @@ function ReportModal({
     if (!isOpen) return null
 
     return (
-        <AnimatePresence>
-            {isOpen && (
-                <div
-                    style={{
-                        position: "fixed",
-                        inset: 0,
-                        zIndex: 10000,
-                        display: "flex",
-                        justifyContent: isMobileLayout ? "flex-end" : "center",
-                        alignItems: isMobileLayout ? "flex-end" : "center",
-                        pointerEvents: "auto",
-                    }}
-                >
-                    {/* Background Dimmer */}
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{
-                            opacity: 1,
-                            transition: isMobileLayout
-                                ? { duration: 0.2 }
-                                : { duration: 0.1, delay: 0.1 },
-                        }}
-                        exit={{
-                            opacity: 0,
-                            transition: isMobileLayout
-                                ? { duration: 0.2 }
-                                : { duration: 0, delay: 0 },
-                        }}
-                        style={{
-                            position: "absolute",
-                            inset: 0,
-                            background: themeColors.overlay.black,
-                        }}
-                        onClick={handleBackdropClick}
-                    />
-
-                    {/* Content Card */}
-                    <motion.div
-                        data-layer="report overlay"
-                        className="ReportOverlay"
-                        initial={
-                            isMobileLayout
-                                ? { y: "100%", scale: 0, opacity: 0 }
-                                : { opacity: 0 }
-                        }
-                        animate={
-                            isMobileLayout
-                                ? {
-                                      y: "0%",
-                                      scale: 1,
-                                      opacity: 1,
-                                      transition: {
-                                          duration: 0.25,
-                                          ease: "easeInOut",
-                                      },
-                                  }
-                                : {
-                                      opacity: 1,
-                                      transition: { duration: 0, delay: 0.1 },
-                                  }
-                        }
-                        exit={
-                            isMobileLayout
-                                ? {
-                                      y: "100%",
-                                      scale: 0,
-                                      opacity: 0,
-                                      transition: {
-                                          duration: 0.25,
-                                          ease: "easeInOut",
-                                      },
-                                  }
-                                : {
-                                      opacity: 0,
-                                      transition: { duration: 0, delay: 0 },
-                                  }
-                        }
-                        style={{
-                            flex: isMobileLayout ? "none" : "none",
-                            width: isMobileLayout ? "100%" : 400,
-                            height: isMobileLayout
-                                ? "calc(100% - 16px)"
-                                : "auto",
-                            maxWidth: isMobileLayout ? "none" : 400,
-                            maxHeight: isMobileLayout ? "none" : 600,
-                            paddingTop: 24,
-                            paddingBottom: 28,
-                            paddingLeft: isMobileLayout ? 16 : 28,
-                            paddingRight: isMobileLayout ? 16 : 28,
-                            background: themeColors.background,
-                            boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.04)",
-                            overflow: isMobileLayout ? "hidden" : "visible",
-                            borderRadius: isMobileLayout ? "24px 24px 0 0" : 48,
-                            outline: `0.33px ${themeColors.hover.strong} solid`,
-                            outlineOffset: "-0.33px",
-                            flexDirection: "column",
-                            justifyContent: "flex-start",
-                            alignItems: "flex-start",
-                            gap: 24,
-                            display: "inline-flex",
-                            position: "relative",
-                            zIndex: 1,
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                    >
+        <ModalSheet
+            isOpen={isOpen}
+            onClose={onClose}
+            themeColors={themeColors}
+            zIndex={10000}
+            className="ReportOverlay"
+            sheetStyle={{
+                width: isMobileLayout ? "100%" : 400,
+                height: isMobileLayout ? "calc(100% - 16px)" : "auto",
+                maxWidth: isMobileLayout ? "none" : 400,
+                maxHeight: isMobileLayout ? "none" : 600,
+                paddingTop: 24,
+                paddingBottom: 28,
+                paddingLeft: isMobileLayout ? 16 : 28,
+                paddingRight: isMobileLayout ? 16 : 28,
+                boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.04)",
+                borderRadius: isMobileLayout ? "24px 24px 0 0" : 48,
+                outline: `0.33px ${themeColors.hover.strong} solid`,
+                outlineOffset: "-0.33px",
+                justifyContent: "flex-start",
+                alignItems: "flex-start",
+                gap: 24,
+            }}
+        >
                         {/* Header */}
                         <div
                             style={{
@@ -10098,10 +10091,7 @@ function ReportModal({
                                 Submit
                             </button>
                         </div>
-                    </motion.div>
-                </div>
-            )}
-        </AnimatePresence>
+        </ModalSheet>
     )
 }
 
@@ -10135,6 +10125,136 @@ interface JobDescriptionDetail {
     preferred_qualifications: string[]
 }
 
+/** Persist opened job detail so swiping away and back does not refetch. */
+const JOB_DETAIL_CACHE_STORAGE_KEY = "curastem_job_detail_cache_v1"
+const JOB_DETAIL_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const JOB_DETAIL_CACHE_MAX_JOBS = 48
+
+type JobDetailCacheEntry = {
+    t: number
+    /** jobsApiUrl used for fetch — ignore entry if it changed */
+    u: string
+    desc: JobDescriptionDetail | null
+    detailSummary: string | null
+    detailCompanyDesc: string | null
+    detailVisaSponsorship: string | null
+    apiKeywords: string[]
+}
+
+type JobDetailCacheRoot = Record<string, JobDetailCacheEntry>
+
+function readJobDetailCache(
+    jobId: string,
+    jobsApiUrl: string
+): JobDetailCacheEntry | null {
+    if (typeof localStorage === "undefined") return null
+    try {
+        const raw = localStorage.getItem(JOB_DETAIL_CACHE_STORAGE_KEY)
+        if (!raw) return null
+        const root = JSON.parse(raw) as JobDetailCacheRoot
+        const e = root[jobId]
+        if (!e || typeof e.t !== "number") return null
+        if (e.u !== jobsApiUrl) return null
+        if (Date.now() - e.t > JOB_DETAIL_CACHE_TTL_MS) return null
+        return e
+    } catch {
+        return null
+    }
+}
+
+function writeJobDetailCache(
+    jobId: string,
+    jobsApiUrl: string,
+    payload: Omit<JobDetailCacheEntry, "t" | "u">
+): void {
+    if (typeof localStorage === "undefined") return
+    try {
+        let root: JobDetailCacheRoot = {}
+        const raw = localStorage.getItem(JOB_DETAIL_CACHE_STORAGE_KEY)
+        if (raw) root = JSON.parse(raw) as JobDetailCacheRoot
+        root[jobId] = {
+            t: Date.now(),
+            u: jobsApiUrl,
+            desc: payload.desc,
+            detailSummary: payload.detailSummary,
+            detailCompanyDesc: payload.detailCompanyDesc,
+            detailVisaSponsorship: payload.detailVisaSponsorship,
+            apiKeywords: Array.isArray(payload.apiKeywords)
+                ? payload.apiKeywords
+                : [],
+        }
+        const ids = Object.keys(root)
+        if (ids.length > JOB_DETAIL_CACHE_MAX_JOBS) {
+            ids.sort((a, b) => root[a]!.t - root[b]!.t)
+            const drop = ids.length - JOB_DETAIL_CACHE_MAX_JOBS
+            for (let i = 0; i < drop; i++) delete root[ids[i]!]
+        }
+        localStorage.setItem(
+            JOB_DETAIL_CACHE_STORAGE_KEY,
+            JSON.stringify(root)
+        )
+    } catch {
+        // Quota, private mode, or parse errors — ignore.
+    }
+}
+
+/** In-memory + first-paint state for JobDetailScrollBody (sync hydrate from cache). */
+type JobDetailHydrationState = {
+    desc: JobDescriptionDetail | null
+    detailSummary: string | null
+    detailCompanyDesc: string | null
+    detailVisaSponsorship: string | null
+    loadingDesc: boolean
+    apiKeywords: string[]
+}
+
+function jobDetailFetchPendingState(): JobDetailHydrationState {
+    return {
+        desc: null,
+        detailSummary: null,
+        detailCompanyDesc: null,
+        detailVisaSponsorship: null,
+        apiKeywords: [],
+        loadingDesc: true,
+    }
+}
+
+function jobDetailStateFromCacheEntry(
+    c: JobDetailCacheEntry
+): JobDetailHydrationState {
+    return {
+        desc: c.desc,
+        detailSummary: c.detailSummary,
+        detailCompanyDesc: c.detailCompanyDesc,
+        detailVisaSponsorship: c.detailVisaSponsorship,
+        apiKeywords: Array.isArray(c.apiKeywords) ? c.apiKeywords : [],
+        loadingDesc: false,
+    }
+}
+
+/** No cache and fetch not allowed yet (swipe preview) — avoid perpetual loadingDesc. */
+function jobDetailDeferredState(): JobDetailHydrationState {
+    return {
+        desc: null,
+        detailSummary: null,
+        detailCompanyDesc: null,
+        detailVisaSponsorship: null,
+        apiKeywords: [],
+        loadingDesc: false,
+    }
+}
+
+function jobDetailInitialState(
+    jobId: string,
+    jobsApiUrl: string,
+    fetchEnabled: boolean
+): JobDetailHydrationState {
+    const c = readJobDetailCache(jobId, jobsApiUrl)
+    if (c) return jobDetailStateFromCacheEntry(c)
+    if (!fetchEnabled) return jobDetailDeferredState()
+    return jobDetailFetchPendingState()
+}
+
 const FALLBACK_QUERIES = [
     "software engineer",
     "sales associate",
@@ -10163,6 +10283,28 @@ function jobTimeAgo(iso: string | null): string {
     if (h < 24) return `${h}h ago`
     const d = Math.floor(h / 24)
     return `${d}d ago`
+}
+
+function jobSnippetToHomepageJob(job: JobSnippet): HomepageJob {
+    return {
+        id: job.id,
+        title: job.title,
+        company: {
+            name: job.company,
+            logo_url: job.company_logo ?? null,
+            description: null,
+            website_url: null,
+            linkedin_url: null,
+            x_url: null,
+        },
+        posted_at: job.posted_at ?? null,
+        apply_url: job.apply_url ?? "",
+        locations: job.locations ?? null,
+        employment_type: job.employment_type ?? null,
+        workplace_type: job.workplace_type ?? null,
+        salary: null,
+        job_summary: job.summary ?? null,
+    }
 }
 
 /** Job cards rendered inside the chat bubble after a search_jobs tool call. */
@@ -10807,6 +10949,7 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
     textColor,
     dimColor,
     onAllSettled,
+    onRevealComplete,
 }: {
     phase: "idle" | "fading" | "orbiting" | "landing" | "done"
     capturedItems: CapturedKeyword[]
@@ -10814,15 +10957,38 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
     textColor: string
     dimColor: string
     onAllSettled: () => void
+    onRevealComplete: () => void
 }) {
     const settledCountRef = React.useRef(0)
     const [landPositions, setLandPositions] = React.useState<
-        Record<string, { x: number; y: number }>
+        Record<string, { x: number; y: number; targetFontWeight: number }>
     >({})
+    // After DOM scan — used keywords must not take the "unused" fade while
+    // landPositions is still empty (that caused a brief opacity dip).
+    const [landingScanDone, setLandingScanDone] = React.useState(false)
     const usedSet = React.useMemo(
         () => new Set(usedKeywords),
         [usedKeywords]
     )
+    const usedItemCount = React.useMemo(
+        () => capturedItems.filter((i) => usedSet.has(i.word)).length,
+        [capturedItems, usedKeywords]
+    )
+    const usedFadeDoneRef = React.useRef(0)
+    const handleUsedFadeDone = React.useCallback(() => {
+        usedFadeDoneRef.current += 1
+        if (usedFadeDoneRef.current >= usedItemCount) onRevealComplete()
+    }, [usedItemCount, onRevealComplete])
+
+    React.useEffect(() => {
+        if (phase !== "done") {
+            usedFadeDoneRef.current = 0
+            return
+        }
+        if (usedItemCount > 0) return
+        const t = setTimeout(onRevealComplete, RESUME_DOC_REVEAL_MS)
+        return () => clearTimeout(t)
+    }, [phase, usedItemCount, onRevealComplete])
 
     // Shared mutable orbit geometry — updated by ResizeObserver so the RAF
     // spin loop always reads the panel's current size, not a stale snapshot.
@@ -10875,15 +11041,22 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
     // pixel-perfect and immune to the TreeWalker + Range offset fragility.
     React.useEffect(() => {
         if (phase !== "landing" || capturedItems.length === 0) return
-        const t = setTimeout(() => {
+        setLandingScanDone(false)
+        let cancelled = false
+        // Double rAF: run after React commit and layout so markers have real
+        // rects — avoids the old 500ms pause after the orbit stops.
+        const id = requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-                // Scroll to top so every marker is on-screen when measured
+                if (cancelled) return
                 const scrollEl = document.querySelector(
                     "[data-doc-scroll]"
                 ) as HTMLElement | null
                 if (scrollEl) scrollEl.scrollTop = 0
 
-                const positions: Record<string, { x: number; y: number }> = {}
+                const positions: Record<
+                    string,
+                    { x: number; y: number; targetFontWeight: number }
+                > = {}
                 const markers = document.querySelectorAll(
                     "[data-keyword-land]"
                 )
@@ -10892,18 +11065,23 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
                     if (!kw || positions[kw]) return
                     const r = el.getBoundingClientRect()
                     if (r.width > 0 && r.height > 0) {
+                        const w = getComputedStyle(el).fontWeight
                         positions[kw] = {
                             x: r.left + r.width / 2,
                             y: r.top + r.height / 2,
+                            targetFontWeight: parseCssFontWeight(w),
                         }
                     }
                 })
 
-                settledCountRef.current = 0
                 setLandPositions(positions)
+                setLandingScanDone(true)
             })
-        }, 500)
-        return () => clearTimeout(t)
+        })
+        return () => {
+            cancelled = true
+            cancelAnimationFrame(id)
+        }
     }, [phase, capturedItems])
 
     const handleSettled = React.useCallback(() => {
@@ -10912,18 +11090,25 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
     }, [capturedItems.length, onAllSettled])
 
     React.useEffect(() => {
-        if (phase === "idle" || phase === "done") setLandPositions({})
+        if (phase === "landing") settledCountRef.current = 0
     }, [phase])
 
-    if (phase === "idle" || phase === "done" || capturedItems.length === 0)
-        return null
+    React.useEffect(() => {
+        if (phase === "idle") {
+            setLandPositions({})
+            setLandingScanDone(false)
+        }
+    }, [phase])
+
+    if (phase === "idle" || capturedItems.length === 0) return null
 
     return (
         <div
             style={{
                 position: "fixed",
                 inset: 0,
-                zIndex: 9999,
+                // Above mobile ModalSheet (30000) so resume keyword orbit is visible on phone.
+                zIndex: 35000,
                 pointerEvents: "none",
             }}
         >
@@ -10940,6 +11125,8 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
                     textColor={textColor}
                     dimColor={dimColor}
                     onSettled={handleSettled}
+                    onUsedFadeDone={handleUsedFadeDone}
+                    landingScanDone={landingScanDone}
                 />
             ))}
         </div>
@@ -10957,17 +11144,25 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
     textColor,
     dimColor,
     onSettled,
+    onUsedFadeDone,
+    landingScanDone,
 }: {
     item: CapturedKeyword
     phase: "fading" | "orbiting" | "landing" | "done"
     isUsed: boolean
-    landPos: { x: number; y: number } | null
+    landPos: {
+        x: number
+        y: number
+        targetFontWeight: number
+    } | null
     orbitRef: React.MutableRefObject<{ x: number; y: number; r: number }>
     orbitIndex: number
     totalOrbitItems: number
     textColor: string
     dimColor: string
     onSettled: () => void
+    onUsedFadeDone: () => void
+    landingScanDone: boolean
 }) {
     const x = useMotionValue(item.startX)
     const y = useMotionValue(item.startY)
@@ -10984,12 +11179,17 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
     )
     const baseKeywordSize = 14 // px — orbit size; animates to 16 when landed
     const fontSizeMv = useMotionValue(baseKeywordSize)
-    // fontWeight transitions via a 0→1 progress value mapped to 600→400
-    const fontWeightProgress = useMotionValue(0)
+    // Orbit uses semibold; landing eases to resume computed weight (400 vs 700, etc.)
+    const orbitFontWeight = 600
+    const fontWeightMv = useMotionValue(orbitFontWeight)
     const fontSizeStyle = useTransform(fontSizeMv, (v) => `${v}px`)
-    const fontWeightStyle = useTransform(fontWeightProgress, [0, 1], [600, 400])
+    const fontWeightStyle = useTransform(fontWeightMv, (w) => Math.round(w))
     const hasSettledRef = React.useRef(false)
     const rafRef = React.useRef<number | null>(null)
+
+    React.useEffect(() => {
+        if (phase !== "landing") hasSettledRef.current = false
+    }, [phase])
 
     // Fading phase: appear in-place at the keyword's original position.
     // The job detail non-keyword content is fading out beneath — keywords
@@ -10999,7 +11199,7 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
         x.set(item.startX)
         y.set(item.startY)
         fontSizeMv.set(baseKeywordSize)
-        fontWeightProgress.set(0)
+        fontWeightMv.set(orbitFontWeight)
         animate(opacity, 1, { duration: 0.25 })
         animate(scale, 1, { duration: 0.25 })
     }, [phase])
@@ -11014,7 +11214,6 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
         let cancelled = false
 
         animate(scale, 1, { duration: 0.2 })
-        // Fade in quickly, then the RAF drives opacity for the spotlight effect
         animate(opacity, 1, { duration: 0.15 })
 
         // Snapshot start position (may have moved during fading phase)
@@ -11047,7 +11246,6 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
             const fwd = ((orbitIndex - floatIdx) % totalOrbitItems + totalOrbitItems) % totalOrbitItems
             const dist = Math.min(fwd, totalOrbitItems - fwd)
             const brightness = Math.max(0, 1.5 - dist / .8)
-            const targetOpacity = 0.65 + 0.35 * brightness
 
             if (elapsed < flyDuration) {
                 const t = elapsed / flyDuration
@@ -11105,20 +11303,35 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
             animate(opacity, 1, { duration: 0.15 })
             // Grow to 16px and ease to normal weight when placed in resume
             animate(fontSizeMv, 16, { duration: 0.35, delay, ease })
-            animate(fontWeightProgress, 1, { duration: 0.35, delay, ease })
-        } else {
+            animate(fontWeightMv, landPos.targetFontWeight, {
+                duration: 0.35,
+                delay,
+                ease,
+            })
+        } else if (!isUsed) {
             // Unused: quick scatter-fade so only the resume keywords dominate
             animate(scale, 0.5, { duration: 0.3 })
             animate(opacity, 0, { duration: 0.3, ease: "easeOut" }).then(settle)
+        } else if (landingScanDone) {
+            // In resume text but no DOM marker (e.g. duplicate word) — same exit
+            animate(scale, 0.5, { duration: 0.3 })
+            animate(opacity, 0, { duration: 0.3, ease: "easeOut" }).then(settle)
         }
-    }, [phase, isUsed, landPos])
+        // isUsed && !landPos && !landingScanDone: hold last orbit pose until scan
+    }, [phase, isUsed, landPos, landingScanDone])
 
-    // Done phase: resume content fades in underneath — dissolve keywords into
-    // the page so the content "materializes" from where they landed.
+    // Done phase: DocEditor content fades in first (RESUME_DOC_REVEAL_MS); only
+    // keywords that landed on the resume then dissolve. Unused pills are already gone.
     React.useEffect(() => {
         if (phase !== "done") return
-        animate(opacity, 0, { duration: 0.45, ease: "easeIn" })
-    }, [phase])
+        if (!isUsed) return
+        const t = setTimeout(() => {
+            animate(opacity, 0, { duration: 0.45, ease: "easeIn" }).then(() =>
+                onUsedFadeDone()
+            )
+        }, RESUME_DOC_REVEAL_MS)
+        return () => clearTimeout(t)
+    }, [phase, isUsed, onUsedFadeDone])
 
     return (
         <motion.div
@@ -11133,7 +11346,7 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
                 translateX: "-50%",
                 translateY: "-50%",
                 fontSize: fontSizeStyle,
-                fontFamily: "Inter",
+                fontFamily: "Inter, system-ui, sans-serif",
                 fontWeight: fontWeightStyle,
                 // Color drives the highlight; opacity only used for appear/fade
                 color: interpolatedColor,
@@ -11147,6 +11360,304 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
     )
 })
 
+/** Scrollable content for one job — hydrates from cache; fetches only when fetchEnabled=true. */
+const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
+    job,
+    jobsApiUrl,
+    themeColors,
+    isMobile = false,
+    resumeAnimPhase = "idle",
+    onCreateResume,
+    previewOnly = false,
+    fetchEnabled = true,
+}: {
+    job: HomepageJob
+    jobsApiUrl: string
+    themeColors: typeof darkColors
+    isMobile?: boolean
+    resumeAnimPhase?: "idle" | "fading" | "orbiting" | "landing" | "done"
+    onCreateResume?: (job: HomepageJob, keywords: string[]) => void
+    previewOnly?: boolean
+    /** When false, skip the network fetch (swipe preview slots until they become the active job). */
+    fetchEnabled?: boolean
+}) {
+    // Compute the correct detail state synchronously on every render so that
+    // when `job.id` changes (prop update, no remount) we never show stale or
+    // empty content for a frame before the effect fires.
+    const desiredState = React.useMemo(
+        () => jobDetailInitialState(job.id, jobsApiUrl, fetchEnabled),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [job.id, jobsApiUrl, fetchEnabled]
+    )
+    const [detail, setDetail] = React.useState<JobDetailHydrationState>(desiredState)
+
+    // Keep detail in sync when the job changes without unmounting.
+    const lastJobIdRef = React.useRef(job.id)
+    if (lastJobIdRef.current !== job.id) {
+        lastJobIdRef.current = job.id
+        // Synchronous state update during render — safe in React 18 because it
+        // re-renders immediately and never shows the stale frame.
+        setDetail(desiredState)
+    }
+
+    const { desc, detailSummary, detailCompanyDesc, detailVisaSponsorship, loadingDesc, apiKeywords } = detail
+
+    React.useEffect(() => {
+        if (!fetchEnabled) return
+        const cached = readJobDetailCache(job.id, jobsApiUrl)
+        if (cached) return // already hydrated synchronously above
+        let cancelled = false
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), 8000)
+        fetch(`${jobsApiUrl}/jobs/${job.id}`, { signal: ctrl.signal })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d: {
+                job_description?: JobDescriptionDetail | null
+                job_summary?: string | null
+                visa_sponsorship?: string | null
+                company?: { description?: string | null }
+                keywords?: string[]
+            } | null) => {
+                if (cancelled) return
+                const descVal = d?.job_description ?? null
+                const sumVal = d?.job_summary ?? null
+                const coVal = d?.company?.description ?? null
+                const visaVal = d?.visa_sponsorship ?? null
+                const kwVal = d?.keywords ?? []
+                setDetail({ desc: descVal, detailSummary: sumVal, detailCompanyDesc: coVal, detailVisaSponsorship: visaVal, apiKeywords: kwVal, loadingDesc: false })
+                if (d) writeJobDetailCache(job.id, jobsApiUrl, { desc: descVal, detailSummary: sumVal, detailCompanyDesc: coVal, detailVisaSponsorship: visaVal, apiKeywords: kwVal })
+            })
+            .catch(() => { if (!cancelled) setDetail((p) => ({ ...p, loadingDesc: false })) })
+            .finally(() => clearTimeout(timer))
+        return () => { cancelled = true; ctrl.abort() }
+    }, [job.id, jobsApiUrl, fetchEnabled])
+
+    const openUrl = (url: string | null | undefined) => {
+        if (url && typeof window !== "undefined") window.open(url, "_blank")
+    }
+
+    const effectiveSummary = job.job_summary || detailSummary
+    const effectiveCompanyDesc = job.company.description || detailCompanyDesc
+
+    const hasCachedDetail = readJobDetailCache(job.id, jobsApiUrl) !== null
+    const showLazyDetailBody =
+        !loadingDesc && (fetchEnabled || hasCachedDetail)
+
+    const highlightedPhrases = React.useRef(new Set<string>())
+    React.useEffect(() => { highlightedPhrases.current.clear() }, [job.id])
+    const highlightText = (text: string) => {
+        if (!text || !apiKeywords.length) return text
+        const sorted = [...apiKeywords].sort((a, b) => b.length - a.length)
+        const regex = new RegExp(`(\\b(?:${sorted.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b)`, "gi")
+        return text.split(regex).map((part, i) => {
+            const matched = sorted.find((p) => p.toLowerCase() === part.toLowerCase())
+            if (matched) {
+                const key = matched.toLowerCase()
+                if (highlightedPhrases.current.has(key)) return part
+                highlightedPhrases.current.add(key)
+                return <span key={i} data-keyword={matched} style={{ fontWeight: 600 }}>{part}</span>
+            }
+            return part
+        })
+    }
+
+    const fmtType = (t: string | null) => t ? t.replace(/_/g, "-").replace(/\b\w/g, (c) => c.toUpperCase()) : null
+    const fmtPlace = (t: string | null) => t ? (t === "on_site" ? "On-site" : t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())) : null
+    const metaItems = [
+        jobTimeAgo(job.posted_at),
+        job.locations?.[0] ?? null,
+        fmtType(job.employment_type),
+        fmtPlace(job.workplace_type),
+        job.salary?.display,
+        detailVisaSponsorship === "yes" ? "Sponsors visa" : null,
+    ].filter(Boolean)
+
+    const detailLoadingSkeleton = (
+        <div
+            style={{ display: "flex", flexDirection: "column", gap: 8 }}
+            aria-busy="true"
+            aria-label="Loading job details"
+        >
+            {[80, 95, 70, 88].map((w, i) => (
+                <JobSkeleton
+                    key={i}
+                    themeColors={themeColors}
+                    style={{ height: 14, width: `${w}%`, borderRadius: 6 }}
+                />
+            ))}
+        </div>
+    )
+
+    const SectionBlock = ({ title, items }: { title: string; items: string[] }) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 500, lineHeight: "21px" }}>{title}</div>
+            <ul style={{ listStyleType: "disc", listStylePosition: "outside", paddingLeft: 20, margin: 0, color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
+                {items.map((item, i) => <li key={i} style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}>{highlightText(item)}</li>)}
+            </ul>
+        </div>
+    )
+
+    const CompanyLogo = ({ size }: { size: number }) => (
+        <div style={{ width: size, height: size, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {job.company.logo_url
+                ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                : <div style={{ width: size, height: size, background: themeColors.surfaceHighlight, borderRadius: "50%" }} />}
+        </div>
+    )
+
+    const Chevron = () => (
+        <svg width="6" height="10" viewBox="0 0 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+            <path d="M0.601562 8.6L4.60156 4.6L0.601562 0.599998" stroke={themeColors.text.primary} strokeOpacity={0.65} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+    )
+
+    return (
+        <motion.div
+            animate={{
+                opacity: previewOnly || resumeAnimPhase !== "fading" ? 1 : 0,
+                filter: !previewOnly && resumeAnimPhase === "fading" ? "blur(4px)" : "blur(0px)",
+            }}
+            transition={{ duration: 0.25, ease: "easeInOut" }}
+            style={{ display: "flex", flexDirection: "column", gap: 32 }}
+        >
+            {/* Header */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                {/* Company */}
+                <div onClick={() => openUrl(job.company.website_url)} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: job.company.website_url ? "pointer" : "default" }}>
+                    <CompanyLogo size={32} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                        <span data-company-name style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{job.company.name}</span>
+                        <div data-company-chevron className="CompanyChevron" style={{ flexShrink: 0, marginTop: 2 }}><Chevron /></div>
+                    </div>
+                </div>
+
+                {/* Title + meta + CTA row */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                    <div data-job-title style={{ color: themeColors.text.primary, fontSize: 24, fontFamily: "Inter", fontWeight: 600, lineHeight: "1.2" }}>{job.title}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {metaItems.map((item, i) => (
+                            <React.Fragment key={i}>
+                                {i > 0 && <span style={{ color: themeColors.text.primary, fontSize: 14 }}>•</span>}
+                                <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{item}</span>
+                            </React.Fragment>
+                        ))}
+                    </div>
+                    <div style={{
+                        display: "flex", alignItems: "center", gap: 8,
+                        flexWrap: isMobile ? "nowrap" : "wrap",
+                        ...(isMobile ? { marginLeft: -24, marginRight: -24, paddingLeft: 24, paddingRight: 24, overflowX: "auto", overflowY: "visible", scrollbarWidth: "none", WebkitOverflowScrolling: "touch", paddingBottom: 6, marginBottom: -6 } : {}),
+                    }}>
+                        <motion.div onClick={() => openUrl(job.apply_url)} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} transition={{ type: "spring", stiffness: 400, damping: 20 }} style={{ height: 40, paddingLeft: 20, paddingRight: 20, background: "#0099FF", borderRadius: 31, display: "inline-flex", alignItems: "center", cursor: "pointer", flex: isMobile ? 1 : undefined, minWidth: isMobile ? 148 : undefined, maxWidth: isMobile ? "50%" : undefined, justifyContent: isMobile ? "center" : undefined, flexShrink: 0 }}>
+                            <span style={{ color: "rgba(255,255,255,0.95)", fontSize: 15, fontFamily: "Inter", fontWeight: 500, lineHeight: "22.5px" }}>Apply</span>
+                        </motion.div>
+                        {onCreateResume && (
+                            <motion.div
+                                role="button"
+                                aria-hidden={previewOnly}
+                                tabIndex={previewOnly ? -1 : 0}
+                                onClick={() =>
+                                    !previewOnly &&
+                                    resumeAnimPhase === "idle" &&
+                                    onCreateResume(job, apiKeywords)
+                                }
+                                whileHover={
+                                    previewOnly ? undefined : { scale: 1.02 }
+                                }
+                                whileTap={
+                                    previewOnly ? undefined : { scale: 0.97 }
+                                }
+                                transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                                style={{
+                                    height: 40,
+                                    paddingLeft: 20,
+                                    paddingRight: 20,
+                                    background: themeColors.surface,
+                                    borderRadius: 28,
+                                    display: "inline-flex",
+                                    justifyContent: "center",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    cursor: previewOnly ? "default" : "pointer",
+                                    flex: isMobile ? 1 : undefined,
+                                    minWidth: isMobile ? 170 : undefined,
+                                    maxWidth: isMobile ? "50%" : undefined,
+                                    flexShrink: 0,
+                                    pointerEvents: previewOnly ? "none" : "auto",
+                                }}
+                            >
+                                <svg width="15" height="14" viewBox="0 0 15 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                                    <path d="M11.3289 1.09214C10.3915 1.09214 9.54907 1.50477 8.96289 2.14171L3.16814 7.93728C2.63599 8.46943 2.26266 9.1555 2.1112 9.91443L1.61261 12.8413C1.50864 13.4594 1.89588 14.057 2.54265 13.9956L5.60049 13.4881C6.28574 13.3718 6.90386 13.0378 7.39672 12.5032L13.5599 6.33918C14.178 5.74726 14.4916 4.98833 14.4523 4.17208C14.3753 2.6403 13.085 1.09214 11.3289 1.09214ZM6.65088 11.6943C6.25954 12.1069 5.98774 12.2485 5.4081 12.3468L2.79973 12.8126L3.30159 10.1445C3.41784 9.5714 3.6962 9.11866 4.09572 8.71913L8.70499 4.03454L11.6523 6.8918L6.65088 11.6943ZM12.4849 6.03544L9.56463 3.19047C10.0575 2.65586 10.5233 2.30955 11.3289 2.30955C12.4399 2.30955 13.302 3.2576 13.302 4.2736C13.302 5.0047 12.9884 5.53931 12.4849 6.03544Z" fill={themeColors.text.primary} />
+                                    <path d="M0.203947 2.18429C-0.00236458 2.26779 -0.11862 2.62065 0.185117 2.73036C0.307922 2.77539 0.479848 2.76311 0.631308 2.78849C1.4934 2.9465 2.02801 3.63175 2.18602 4.51348C2.23104 4.7198 2.37595 4.89991 2.45946 4.89991C2.60437 4.89991 2.75583 4.72962 2.80741 4.51348C3.02518 3.60637 3.57944 3.00053 4.55369 2.79422C4.77146 2.74264 4.94912 2.65258 4.94257 2.44627C4.92947 2.23914 4.73626 2.17774 4.56024 2.15891C3.744 2.06066 3.18401 1.40734 2.87045 0.57882C2.85735 0.244791 2.74764 0.0450284 2.47256 0C2.24824 0 2.12543 0.25789 2.0804 0.57882C1.82824 1.31647 1.12989 2.0754 0.404528 2.14253C0.35295 2.14253 0.262894 2.15563 0.203947 2.18429Z" fill={themeColors.text.primary} />
+                                </svg>
+                                <span style={{ color: themeColors.text.primary, fontSize: 15, fontFamily: "Inter", fontWeight: 500, lineHeight: "22.5px" }}>Create resume</span>
+                            </motion.div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {loadingDesc ? (
+                detailLoadingSkeleton
+            ) : showLazyDetailBody ? (
+                <>
+                    {effectiveSummary && (
+                        <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{effectiveSummary}</div>
+                    )}
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+                        <div style={{ color: themeColors.text.primary, fontSize: 17, fontFamily: "Inter", fontWeight: 600, lineHeight: "17px" }}>About the job</div>
+                        {desc ? (
+                            <>
+                                {desc.responsibilities.length > 0 && <SectionBlock title="Responsibilities" items={desc.responsibilities} />}
+                                {desc.minimum_qualifications.length > 0 && <SectionBlock title="Minimum Qualifications" items={desc.minimum_qualifications} />}
+                                {desc.preferred_qualifications.length > 0 && <SectionBlock title="Preferred Qualifications" items={desc.preferred_qualifications} />}
+                            </>
+                        ) : (
+                            <div style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Apply to learn more about this role.</div>
+                        )}
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+                        <div style={{ color: themeColors.text.primary, fontSize: 17, fontFamily: "Inter", fontWeight: 600, lineHeight: "17px" }}>About the company</div>
+                        <div onClick={() => openUrl(job.company.website_url)} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: job.company.website_url ? "pointer" : "default" }}>
+                            <CompanyLogo size={40} />
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{job.company.name}</span>
+                                <div data-company-chevron className="CompanyChevron" style={{ flexShrink: 0, marginTop: 1.5 }}><Chevron /></div>
+                            </div>
+                        </div>
+                        {(job.company.website_url || job.company.linkedin_url || job.company.x_url) && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                {job.company.website_url && (
+                                    <div onClick={() => openUrl(job.company.website_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", cursor: "pointer" }}>
+                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Website</span>
+                                    </div>
+                                )}
+                                {job.company.linkedin_url && (
+                                    <div onClick={() => openUrl(job.company.linkedin_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287-0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603-0.00831011 14.8147 0.000101367" fill={themeColors.text.primary} /></svg>
+                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>LinkedIn</span>
+                                    </div>
+                                )}
+                                {job.company.x_url && (
+                                    <div onClick={() => openUrl(job.company.x_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>X/Twitter</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {effectiveCompanyDesc ? (
+                            <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{effectiveCompanyDesc}</div>
+                        ) : null}
+                    </div>
+                </>
+            ) : null}
+        </motion.div>
+    )
+})
+
+/** Shell + toolbar + swipe carousel. On desktop renders a single column. */
 const JobDetailPanel = React.memo(function JobDetailPanel({
     job,
     jobsApiUrl,
@@ -11155,6 +11666,9 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     isMobile = false,
     resumeAnimPhase = "idle",
     onCreateResume,
+    onSwipeCycleJob,
+    jobSwipeDeck,
+    mobileToolGestureAxis = null,
 }: {
     job: HomepageJob
     jobsApiUrl: string
@@ -11163,982 +11677,199 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     isMobile?: boolean
     resumeAnimPhase?: "idle" | "fading" | "orbiting" | "landing" | "done"
     onCreateResume?: (job: HomepageJob, keywords: string[]) => void
+    onSwipeCycleJob?: (delta: number) => void
+    jobSwipeDeck?: HomepageJob[]
+    /** When 'y', pull-to-dismiss owns the gesture — disable job carousel drag. */
+    mobileToolGestureAxis?: null | "x" | "y"
 }) {
-    const [desc, setDesc] = React.useState<JobDescriptionDetail | null>(null)
-    const [detailSummary, setDetailSummary] = React.useState<string | null>(
-        null
-    )
-    const [detailCompanyDesc, setDetailCompanyDesc] = React.useState<
-        string | null
-    >(null)
-    const [detailVisaSponsorship, setDetailVisaSponsorship] = React.useState<
-        string | null
-    >(null)
-    const [loadingDesc, setLoadingDesc] = React.useState(true)
-    // Keywords come from the API detail endpoint — no hardcoded list in the client.
-    const [apiKeywords, setApiKeywords] = React.useState<string[]>([])
     const [isShareHovered, setIsShareHovered] = React.useState(false)
     const [isCloseHovered, setIsCloseHovered] = React.useState(false)
+    const clipRef = React.useRef<HTMLDivElement>(null)
+    const swipeColPrevRef = React.useRef<HTMLDivElement>(null)
+    const swipeColCenterRef = React.useRef<HTMLDivElement>(null)
+    const swipeColNextRef = React.useRef<HTMLDivElement>(null)
+    const [colW, setColW] = React.useState(0)
+    const trackX = useMotionValue(0)
+    const committingRef = React.useRef(false)
+    const [committing, setCommitting] = React.useState(false)
+    // Track which job IDs have been the active center at least once so we only
+    // fetch their detail after they've been swiped into view.
+    const fetchedIdsRef = React.useRef(new Set<string>())
 
-    React.useEffect(() => {
-        let cancelled = false
-        setDesc(null)
-        setDetailSummary(null)
-        setDetailCompanyDesc(null)
-        setDetailVisaSponsorship(null)
-        setApiKeywords([])
-        setLoadingDesc(true)
-        const ctrl = new AbortController()
-        const timer = setTimeout(() => ctrl.abort(), 8000)
-        fetch(`${jobsApiUrl}/jobs/${job.id}`, { signal: ctrl.signal })
-            .then((r) => (r.ok ? r.json() : null))
-            .then(
-                (
-                    d: {
-                        job_description?: JobDescriptionDetail | null
-                        job_summary?: string | null
-                        visa_sponsorship?: string | null
-                        company?: { description?: string | null }
-                        keywords?: string[]
-                    } | null
-                ) => {
-                    if (!cancelled) {
-                        setDesc(d?.job_description ?? null)
-                        setDetailSummary(d?.job_summary ?? null)
-                        setDetailCompanyDesc(d?.company?.description ?? null)
-                        setDetailVisaSponsorship(d?.visa_sponsorship ?? null)
-                        setApiKeywords(d?.keywords ?? [])
-                        setLoadingDesc(false)
-                    }
-                }
-            )
-            .catch(() => {
-                if (!cancelled) setLoadingDesc(false)
-            })
-            .finally(() => clearTimeout(timer))
-        return () => {
-            cancelled = true
-            ctrl.abort()
+    const deck = jobSwipeDeck ?? []
+    const idx = deck.findIndex((j) => j.id === job.id)
+    const n = deck.length
+    const swipeMode = isMobile && !!onSwipeCycleJob && n > 1 && idx >= 0
+
+    const prevJob = swipeMode ? deck[(idx - 1 + n) % n]! : job
+    const nextJob = swipeMode ? deck[(idx + 1) % n]! : job
+
+    // Mark the active job as fetch-eligible whenever it changes.
+    fetchedIdsRef.current.add(job.id)
+
+    React.useLayoutEffect(() => {
+        const el = clipRef.current
+        if (!el || !swipeMode) return
+        const apply = () => setColW(el.clientWidth)
+        apply()
+        const ro = new ResizeObserver(apply)
+        ro.observe(el)
+        return () => ro.disconnect()
+    }, [swipeMode])
+
+    // Snap track to center whenever the active job changes.
+    React.useLayoutEffect(() => {
+        if (swipeMode && colW > 0) trackX.set(-colW)
+    }, [job.id, colW, swipeMode, trackX])
+
+    // Columns keep the same DOM across swipes — reset scroll so each job starts at the top.
+    React.useLayoutEffect(() => {
+        if (!swipeMode) return
+        for (const r of [swipeColPrevRef, swipeColCenterRef, swipeColNextRef]) {
+            const el = r.current
+            if (el) el.scrollTop = 0
         }
-    }, [job.id, jobsApiUrl])
+    }, [job.id, swipeMode])
 
-    const effectiveSummary = job.job_summary || detailSummary
-    const effectiveCompanyDesc = job.company.description || detailCompanyDesc
-
-    // Highlight phrases come from the API detail response (keywords field).
-    // The phrase list lives in curastem-jobs-api/src/enrichment/keywords.ts —
-    // no duplication in the client.
-    const highlightedPhrases = React.useRef(new Set<string>())
-    React.useEffect(() => {
-        highlightedPhrases.current.clear()
-    }, [job.id])
-    const highlightText = (text: string) => {
-        if (!text || !apiKeywords.length) return text
-        const sorted = [...apiKeywords].sort((a, b) => b.length - a.length)
-        const escaped = sorted.map((p) =>
-            p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-        )
-        const regex = new RegExp(`(\\b(?:${escaped.join("|")})\\b)`, "gi")
-        const parts = text.split(regex)
-        return parts.map((part, i) => {
-            const matched = sorted.find(
-                (p) => p.toLowerCase() === part.toLowerCase()
-            )
-            if (matched) {
-                const key = matched.toLowerCase()
-                if (highlightedPhrases.current.has(key)) return part
-                highlightedPhrases.current.add(key)
-                return (
-                    <span
-                        key={i}
-                        data-keyword={matched}
-                        style={{ fontWeight: 600 }}
-                    >
-                        {part}
-                    </span>
-                )
-            }
-            return part
+    const onDragEnd = React.useCallback((_e: unknown, info: PanInfo) => {
+        if (!swipeMode || colW <= 0 || committingRef.current) return
+        const W = colW
+        const rest = -W
+        const cur = trackX.get()
+        const vel = info.velocity.x
+        const threshold = W * 0.18
+        let delta: -1 | 0 | 1 = 0
+        let target = rest
+        if (cur > rest + threshold || vel > 380) { delta = -1; target = 0 }
+        else if (cur < rest - threshold || vel < -380) { delta = 1; target = -2 * W }
+        if (!delta) {
+            animate(trackX, rest, { type: "spring", stiffness: 420, damping: 36 })
+            return
+        }
+        committingRef.current = true
+        setCommitting(true)
+        animate(trackX, target, {
+            type: "spring", stiffness: 420, damping: 38,
+            onComplete: () => {
+                onSwipeCycleJob!(delta)
+                trackX.set(-W)
+                committingRef.current = false
+                setCommitting(false)
+            },
         })
+    }, [swipeMode, colW, trackX, onSwipeCycleJob])
+
+    const colStyle = {
+        flexShrink: 0,
+        width: colW,
+        height: "100%",
+        overflowY: "auto" as const,
+        // Don't clip x — the negative-margin CTA bleed row needs to paint outside column padding.
+        overflowX: "visible" as const,
+        padding: "24px 24px 48px",
+        boxSizing: "border-box" as const,
+        touchAction: "pan-y" as const,
     }
 
-    const openUrl = (url: string | null | undefined) => {
-        if (url && typeof window !== "undefined") window.open(url, "_blank")
+    const shareJob = async () => {
+        setIsShareHovered(false)
+        const url = job.apply_url || ""
+        const text = `${job.title} at ${job.company.name}`
+        if (typeof navigator === "undefined") return
+        if (navigator.share) {
+            try { await navigator.share({ title: text, url, text }) } catch (e) {
+                if ((e as Error).name !== "AbortError") navigator.clipboard?.writeText(url || text)
+            }
+        } else {
+            navigator.clipboard?.writeText(url || text)
+        }
     }
 
-    const formatEmploymentType = (t: string | null) => {
-        if (!t) return null
-        return t.replace(/_/g, "-").replace(/\b\w/g, (c) => c.toUpperCase())
-    }
-    const formatWorkplace = (t: string | null) => {
-        if (!t) return null
-        return t === "on_site"
-            ? "On-site"
-            : t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-    }
-
-    const metaItems = [
-        jobTimeAgo(job.posted_at),
-        job.locations?.[0] ?? null,
-        formatEmploymentType(job.employment_type),
-        formatWorkplace(job.workplace_type),
-        job.salary?.display,
-        detailVisaSponsorship === "yes" ? "Sponsors visa" : null,
-    ].filter(Boolean)
-
-    const sectionSkeleton = (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {[80, 95, 70, 88].map((w, i) => (
-                <div
-                    key={i}
-                    style={{
-                        height: 14,
-                        width: `${w}%`,
-                        background: themeColors.hover.default,
-                        borderRadius: 6,
-                        animation: "homepageSkeleton 1.4s ease-in-out infinite",
-                    }}
-                />
-            ))}
-        </div>
-    )
-
-    const SectionBlock = ({
-        title,
-        items,
-    }: {
-        title: string
-        items: string[]
-    }) => (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div
-                style={{
-                    color: themeColors.text.primary,
-                    fontSize: 14,
-                    fontFamily: "Inter",
-                    fontWeight: 500,
-                    lineHeight: "21px",
-                }}
-            >
-                {title}
-            </div>
-            <ul
-                style={{
-                    listStyleType: "disc",
-                    listStylePosition: "outside",
-                    paddingLeft: 20,
-                    margin: 0,
-                    color: themeColors.text.primary,
-                    fontSize: 14,
-                    fontFamily: "Inter",
-                    fontWeight: 400,
-                    lineHeight: "21px",
-                }}
-            >
-                {items.map((item, i) => (
-                    <li
-                        key={i}
-                        style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}
-                    >
-                        {highlightText(item)}
-                    </li>
-                ))}
-            </ul>
-        </div>
-    )
-
+    const jobPanelRadius = isMobile ? "28px 28px 0 0" : "28px 0 0 28px"
     return (
         <div
             style={{
                 width: "100%",
                 height: "100%",
                 background: themeColors.backgroundDark,
-                borderRadius: isMobile ? "28px 28px 0 0" : "28px 0 0 28px",
+                borderRadius: jobPanelRadius,
                 display: "flex",
                 flexDirection: "column",
-                overflow: "hidden",
+                overflow: "visible",
                 position: "relative",
-                boxShadow: isMobile
-                    ? "none"
-                    : "2px 0 24px 2px rgba(0,0,0,0.04)",
+                boxShadow:
+                    isMobile || themeColors.background !== lightColors.background
+                        ? "none"
+                        : "2px 0 24px 2px rgba(0,0,0,0.04)",
             }}
         >
-            {/* Toolbar — instantly hidden the moment resume animation starts.
-                The DocEditor right toolbar (X button) takes its place. */}
-            <div
-                style={{
-                    position: "absolute",
-                    top: 16,
-                    left: 0,
-                    right: 0,
-                    paddingLeft: 16,
-                    paddingRight: 16,
-                    display: "flex",
-                    justifyContent: "flex-end",
-                    alignItems: "center",
-                    gap: 8,
-                    zIndex: 10,
-                    opacity: resumeAnimPhase === "idle" ? 1 : 0,
-                    pointerEvents: "none",
-                }}
-            >
-                <div
-                    style={{
-                        paddingLeft: 4,
-                        paddingRight: 4,
-                        background: themeColors.surface,
-                        borderRadius: 31,
-                        display: "flex",
-                        alignItems: "center",
-                        pointerEvents: "auto",
-                    }}
-                >
-                    {/* Share — native share sheet if available, else copy link to clipboard */}
-                    <div
-                        onClick={async () => {
-                            setIsShareHovered(false)
-                            const shareUrl = job.apply_url || job.url || ""
-                            const shareText = `${job.title} at ${job.company.name}`
-                            if (
-                                typeof navigator !== "undefined" &&
-                                navigator.share
-                            ) {
-                                try {
-                                    await navigator.share({
-                                        title: shareText,
-                                        url: shareUrl,
-                                        text: shareText,
-                                    })
-                                } catch (e) {
-                                    if ((e as Error).name !== "AbortError") {
-                                        if (navigator.clipboard?.writeText) {
-                                            navigator.clipboard.writeText(
-                                                shareUrl || shareText
-                                            )
-                                        }
-                                    }
-                                }
-                            } else if (
-                                typeof navigator !== "undefined" &&
-                                navigator.clipboard?.writeText
-                            ) {
-                                navigator.clipboard.writeText(
-                                    shareUrl || shareText
-                                )
-                            }
-                        }}
-                        onMouseEnter={() => setIsShareHovered(true)}
-                        onMouseLeave={() => setIsShareHovered(false)}
-                        style={{
-                            width: 40,
-                            height: 40,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            cursor: "pointer",
-                            position: "relative",
-                        }}
-                        aria-label="Share"
-                    >
-                        {isShareHovered && (
-                            <Tooltip
-                                style={{
-                                    top: "100%",
-                                    left: "50%",
-                                    transform: "translate(-50%, 8px)",
-                                    zIndex: 100,
-                                }}
-                            >
-                                Share
-                            </Tooltip>
-                        )}
-                        <svg
-                            width="40"
-                            height="40"
-                            viewBox="0 0 40 40"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
-                        >
-                            <path
-                                d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
-                                stroke={themeColors.text.primary}
-                                strokeWidth="1.2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            />
-                        </svg>
+            {/* Toolbar */}
+            <div style={{ position: "absolute", top: 16, left: 0, right: 0, paddingLeft: 16, paddingRight: 16, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, zIndex: 10, opacity: resumeAnimPhase === "idle" ? 1 : 0, pointerEvents: "none" }}>
+                <div style={{ paddingLeft: 4, paddingRight: 4, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", pointerEvents: "auto" }}>
+                    <div onClick={shareJob} onMouseEnter={() => setIsShareHovered(true)} onMouseLeave={() => setIsShareHovered(false)} style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", position: "relative" }} aria-label="Share">
+                        {isShareHovered && <Tooltip style={{ top: "100%", left: "50%", transform: "translate(-50%, 8px)", zIndex: 100 }}>Share</Tooltip>}
+                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                     </div>
-                    {/* Close */}
-                    <div
-                        onClick={() => {
-                            setIsCloseHovered(false)
-                            onClose()
-                        }}
-                        onMouseEnter={() => setIsCloseHovered(true)}
-                        onMouseLeave={() => setIsCloseHovered(false)}
-                        style={{
-                            width: 40,
-                            height: 40,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            cursor: "pointer",
-                            position: "relative",
-                        }}
-                        aria-label="Close"
-                    >
-                        {isCloseHovered && (
-                            <Tooltip
-                                style={{
-                                    top: "100%",
-                                    left: "50%",
-                                    transform: "translate(-50%, 8px)",
-                                    zIndex: 100,
-                                }}
-                            >
-                                Close
-                            </Tooltip>
-                        )}
-                        <svg
-                            width="40"
-                            height="40"
-                            viewBox="0 0 40 40"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
-                        >
-                            <path
-                                d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25"
-                                stroke={themeColors.text.primary}
-                                strokeWidth="1.2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            />
-                        </svg>
+                    <div onClick={() => { setIsCloseHovered(false); onClose() }} onMouseEnter={() => setIsCloseHovered(true)} onMouseLeave={() => setIsCloseHovered(false)} style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", position: "relative" }} aria-label="Close">
+                        {isCloseHovered && <Tooltip style={{ top: "100%", left: "50%", transform: "translate(-50%, 8px)", zIndex: 100 }}>Close</Tooltip>}
+                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                     </div>
                 </div>
             </div>
 
-            {/* Scrollable content */}
             <div
                 style={{
                     flex: 1,
-                    overflowY: "auto",
-                    padding: "24px 24px 48px 24px",
-                    paddingTop: 24,
-                }}
-            >
-            {/* During fading phase: all content blurs/scales out while
-                keywords stay visible via KeywordOrbitOverlay (position:fixed).
-                Must be a real box (not display:contents) for framer-motion
-                to apply opacity/filter/scale transforms. */}
-            <motion.div
-                animate={{
-                    opacity: resumeAnimPhase === "fading" ? 0 : 1,
-                    filter:
-                        resumeAnimPhase === "fading"
-                            ? "blur(4px)"
-                            : "blur(0px)",
-                }}
-                transition={{ duration: 0.25, ease: "easeInOut" }}
-                style={{
+                    minHeight: 0,
                     display: "flex",
                     flexDirection: "column",
-                    gap: 32,
+                    overflow: "hidden",
+                    borderRadius: jobPanelRadius,
                 }}
             >
-                {/* Header: company + title + meta + apply */}
-                <div
-                    style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 20,
-                    }}
-                >
-                    {/* Company name + logo */}
-                    <div
-                        onClick={() => openUrl(job.company.website_url)}
-                        style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 12,
-                            flexWrap: "wrap",
-                            cursor: job.company.website_url
-                                ? "pointer"
-                                : "default",
-                        }}
-                    >
-                        <div
-                            style={{
-                                width: 32,
-                                height: 32,
-                                borderRadius: "50%",
-                                overflow: "hidden",
-                                flexShrink: 0,
-                                background: themeColors.surface,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                            }}
+            {swipeMode ? (
+                <div ref={clipRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+                    {colW > 0 && (
+                        <motion.div
+                            style={{ display: "flex", height: "100%", width: colW * 3, x: trackX }}
+                            drag={
+                                !committing && mobileToolGestureAxis !== "y"
+                                    ? "x"
+                                    : false
+                            }
+                            dragDirectionLock
+                            dragElastic={0.07}
+                            dragMomentum={false}
+                            dragConstraints={{ left: -2 * colW, right: 0 }}
+                            onDragEnd={onDragEnd}
                         >
-                            {job.company.logo_url ? (
-                                <img
-                                    src={job.company.logo_url}
-                                    style={{
-                                        width: "100%",
-                                        height: "100%",
-                                        objectFit: "contain",
-                                    }}
-                                />
-                            ) : (
-                                <div
-                                    style={{
-                                        width: 32,
-                                        height: 32,
-                                        background:
-                                            themeColors.surfaceHighlight,
-                                        borderRadius: "50%",
-                                    }}
-                                />
-                            )}
-                        </div>
-                        <div
-                            style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 5,
-                            }}
-                        >
-                            <span
-                                data-company-name
-                                style={{
-                                    color: themeColors.text.primary,
-                                    fontSize: 14,
-                                    fontFamily: "Inter",
-                                    fontWeight: 400,
-                                    lineHeight: "21px",
-                                }}
-                            >
-                                {job.company.name}
-                            </span>
-                            <div
-                                data-company-chevron
-                                className="CompanyChevron"
-                                style={{ flexShrink: 0, marginTop: 2 }}
-                            >
-                                <svg width="6" height="10" viewBox="0 0 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                                    <path d="M0.601562 8.6L4.60156 4.6L0.601562 0.599998" stroke={themeColors.text.primary} strokeOpacity={0.65} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                </svg>
+                            {/* Prev slot — permanently mounted, job prop updates on each swipe commit */}
+                            <div ref={swipeColPrevRef} style={colStyle}>
+                                <JobDetailScrollBody job={prevJob} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} previewOnly onCreateResume={onCreateResume} fetchEnabled={fetchedIdsRef.current.has(prevJob.id)} />
                             </div>
-                        </div>
-                    </div>
-
-                    {/* Title + meta + apply */}
-                    <div
-                        style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 16,
-                        }}
-                    >
-                        <div
-                            data-job-title
-                            style={{
-                                color: themeColors.text.primary,
-                                fontSize: 24,
-                                fontFamily: "Inter",
-                                fontWeight: 600,
-                                lineHeight: "1.2",
-                            }}
-                        >
-                            {job.title}
-                        </div>
-                        <div
-                            style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 6,
-                                flexWrap: "wrap",
-                            }}
-                        >
-                            {metaItems.map((item, i) => (
-                                <React.Fragment key={i}>
-                                    {i > 0 && (
-                                        <span
-                                            style={{
-                                                color: themeColors.text.primary,
-                                                fontSize: 14,
-                                            }}
-                                        >
-                                            •
-                                        </span>
-                                    )}
-                                    <span
-                                        style={{
-                                            color: themeColors.text.primary,
-                                            fontSize: 14,
-                                            fontFamily: "Inter",
-                                            fontWeight: 400,
-                                            lineHeight: "21px",
-                                        }}
-                                    >
-                                        {item}
-                                    </span>
-                                </React.Fragment>
-                            ))}
-                        </div>
-                        <div
-                            style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 8,
-                                flexWrap: isMobile ? "nowrap" : "wrap",
-                                // Bleed edge-to-edge so scroll doesn't show side gaps,
-                                // and overflow visible so scale animations aren't clipped
-                                ...(isMobile ? {
-                                    marginLeft: -24,
-                                    marginRight: -24,
-                                    paddingLeft: 24,
-                                    paddingRight: 24,
-                                    overflowX: "auto",
-                                    overflowY: "visible",
-                                    // Hide scrollbar visually but keep scrollable
-                                    scrollbarWidth: "none",
-                                    WebkitOverflowScrolling: "touch",
-                                    paddingBottom: 6,
-                                    marginBottom: -6,
-                                } : {}),
-                            }}
-                        >
-                            {/* Apply button */}
-                            <motion.div
-                                onClick={() => openUrl(job.apply_url)}
-                                whileHover={{ scale: 1.02 }}
-                                whileTap={{ scale: 0.97 }}
-                                transition={{
-                                    type: "spring",
-                                    stiffness: 400,
-                                    damping: 20,
-                                }}
-                                style={{
-                                    height: 40,
-                                    paddingLeft: 20,
-                                    paddingRight: 20,
-                                    background: "#0099FF",
-                                    borderRadius: 31,
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    cursor: "pointer",
-                                    flex: isMobile ? 1 : undefined,
-                                    minWidth: isMobile ? 148 : undefined,
-                                    justifyContent: isMobile ? "center" : undefined,
-                                }}
+                            {/* Center slot */}
+                            <div
+                                ref={swipeColCenterRef}
+                                style={colStyle}
+                                {...(isMobile ? { "data-pull-scroll": "1" } : {})}
                             >
-                                <span
-                                    style={{
-                                        color: "rgba(255,255,255,0.95)",
-                                        fontSize: 15,
-                                        fontFamily: "Inter",
-                                        fontWeight: 500,
-                                        lineHeight: "22.5px",
-                                    }}
-                                >
-                                    Apply
-                                </span>
-                            </motion.div>
-                            {/* Create Resume button */}
-                            {onCreateResume && (
-                                <motion.div
-                                    onClick={() =>
-                                        resumeAnimPhase === "idle" &&
-                                        onCreateResume(job, apiKeywords)
-                                    }
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.97 }}
-                                    transition={{
-                                        type: "spring",
-                                        stiffness: 400,
-                                        damping: 20,
-                                    }}
-                                    style={{
-                                        height: 40,
-                                        paddingLeft: 20,
-                                        paddingRight: 20,
-                                        background: themeColors.surface,
-                                        borderRadius: 28,
-                                        display: "inline-flex",
-                                        justifyContent: "center",
-                                        alignItems: "center",
-                                        gap: 6,
-                                        cursor: "pointer",
-                                        flexWrap: "wrap",
-                                        alignContent: "center",
-                                        flex: isMobile ? 1 : undefined,
-                                        minWidth: isMobile ? 170 : undefined,
-                                    }}
-                                >
-                                    <svg
-                                        width="15"
-                                        height="14"
-                                        viewBox="0 0 15 14"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                    >
-                                        <path
-                                            d="M11.3289 1.09214C10.3915 1.09214 9.54907 1.50477 8.96289 2.14171L3.16814 7.93728C2.63599 8.46943 2.26266 9.1555 2.1112 9.91443L1.61261 12.8413C1.50864 13.4594 1.89588 14.057 2.54265 13.9956L5.60049 13.4881C6.28574 13.3718 6.90386 13.0378 7.39672 12.5032L13.5599 6.33918C14.178 5.74726 14.4916 4.98833 14.4523 4.17208C14.3753 2.6403 13.085 1.09214 11.3289 1.09214ZM6.65088 11.6943C6.25954 12.1069 5.98774 12.2485 5.4081 12.3468L2.79973 12.8126L3.30159 10.1445C3.41784 9.5714 3.6962 9.11866 4.09572 8.71913L8.70499 4.03454L11.6523 6.8918L6.65088 11.6943ZM12.4849 6.03544L9.56463 3.19047C10.0575 2.65586 10.5233 2.30955 11.3289 2.30955C12.4399 2.30955 13.302 3.2576 13.302 4.2736C13.302 5.0047 12.9884 5.53931 12.4849 6.03544Z"
-                                            fill={themeColors.text.primary}
-                                        />
-                                        <path
-                                            d="M0.203947 2.18429C-0.00236458 2.26779 -0.11862 2.62065 0.185117 2.73036C0.307922 2.77539 0.479848 2.76311 0.631308 2.78849C1.4934 2.9465 2.02801 3.63175 2.18602 4.51348C2.23104 4.7198 2.37595 4.89991 2.45946 4.89991C2.60437 4.89991 2.75583 4.72962 2.80741 4.51348C3.02518 3.60637 3.57944 3.00053 4.55369 2.79422C4.77146 2.74264 4.94912 2.65258 4.94257 2.44627C4.92947 2.23914 4.73626 2.17774 4.56024 2.15891C3.744 2.06066 3.18401 1.40734 2.87045 0.57882C2.85735 0.244791 2.74764 0.0450284 2.47256 0C2.24824 0 2.12543 0.25789 2.0804 0.57882C1.82824 1.31647 1.12989 2.0754 0.404528 2.14253C0.35295 2.14253 0.262894 2.15563 0.203947 2.18429Z"
-                                            fill={themeColors.text.primary}
-                                        />
-                                    </svg>
-                                    <span
-                                        style={{
-                                            justifyContent: "center",
-                                            display: "flex",
-                                            flexDirection: "column",
-                                            color: themeColors.text.primary,
-                                            fontSize: 15,
-                                            fontFamily: "Inter",
-                                            fontWeight: 500,
-                                            lineHeight: "22.5px",
-                                            wordWrap: "break-word",
-                                        }}
-                                    >
-                                        Create resume
-                                    </span>
-                                </motion.div>
-                            )}
-                        </div>
-                    </div>
+                                <JobDetailScrollBody job={job} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} onCreateResume={onCreateResume} fetchEnabled />
+                            </div>
+                            {/* Next slot */}
+                            <div ref={swipeColNextRef} style={colStyle}>
+                                <JobDetailScrollBody job={nextJob} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} previewOnly onCreateResume={onCreateResume} fetchEnabled={fetchedIdsRef.current.has(nextJob.id)} />
+                            </div>
+                        </motion.div>
+                    )}
                 </div>
-
-                {/* Job summary — shown once detail load completes (detail endpoint triggers lazy AI enrichment). No keyword highlights here. */}
-                {!loadingDesc && effectiveSummary && (
-                    <div
-                        style={{
-                            color: themeColors.text.primary,
-                            fontSize: 14,
-                            fontFamily: "Inter",
-                            fontWeight: 400,
-                            lineHeight: "21px",
-                        }}
-                    >
-                        {effectiveSummary}
-                    </div>
-                )}
-
-                {/* About the job */}
-                {loadingDesc ? (
-                    <div
-                        style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 24,
-                        }}
-                    >
-                        {sectionSkeleton}
-                        {sectionSkeleton}
-                        {sectionSkeleton}
-                    </div>
-                ) : (
-                    <div
-                        style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 24,
-                        }}
-                    >
-                        <div
-                            style={{
-                                color: themeColors.text.primary,
-                                fontSize: 17,
-                                fontFamily: "Inter",
-                                fontWeight: 600,
-                                lineHeight: "17px",
-                            }}
-                        >
-                            About the job
-                        </div>
-                        {desc ? (
-                            <>
-                                {desc.responsibilities.length > 0 && (
-                                    <SectionBlock
-                                        title="Responsibilities"
-                                        items={desc.responsibilities}
-                                    />
-                                )}
-                                {desc.minimum_qualifications.length > 0 && (
-                                    <SectionBlock
-                                        title="Minimum Qualifications"
-                                        items={desc.minimum_qualifications}
-                                    />
-                                )}
-                                {desc.preferred_qualifications.length > 0 && (
-                                    <SectionBlock
-                                        title="Preferred Qualifications"
-                                        items={desc.preferred_qualifications}
-                                    />
-                                )}
-                            </>
-                        ) : (
-                            <div
-                                style={{
-                                    color: themeColors.text.secondary,
-                                    fontSize: 14,
-                                    fontFamily: "Inter",
-                                    fontWeight: 400,
-                                }}
-                            >
-                                Apply to learn more about this role.
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {/* About the company — shown only after detail loads so enriched company description is available */}
-                {!loadingDesc && (
-                    <div
-                        style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 24,
-                        }}
-                    >
-                        <div
-                            style={{
-                                color: themeColors.text.primary,
-                                fontSize: 17,
-                                fontFamily: "Inter",
-                                fontWeight: 600,
-                                lineHeight: "17px",
-                            }}
-                        >
-                            About the company
-                        </div>
-
-                        <div
-                            onClick={() => openUrl(job.company.website_url)}
-                            style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 12,
-                                flexWrap: "wrap",
-                                cursor: job.company.website_url
-                                    ? "pointer"
-                                    : "default",
-                            }}
-                        >
-                            <div
-                                style={{
-                                    width: 40,
-                                    height: 40,
-                                    borderRadius: "50%",
-                                    overflow: "hidden",
-                                    flexShrink: 0,
-                                    background: themeColors.surface,
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                }}
-                            >
-                                {job.company.logo_url ? (
-                                    <img
-                                        src={job.company.logo_url}
-                                        style={{
-                                            width: "100%",
-                                            height: "100%",
-                                            objectFit: "contain",
-                                        }}
-                                    />
-                                ) : (
-                                    <div
-                                        style={{
-                                            width: 40,
-                                            height: 40,
-                                            background:
-                                                themeColors.surfaceHighlight,
-                                            borderRadius: "50%",
-                                        }}
-                                    />
-                                )}
-                            </div>
-                            <div
-                                style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: 6,
-                                }}
-                            >
-                                <span
-                                    style={{
-                                        color: themeColors.text.primary,
-                                        fontSize: 14,
-                                        fontFamily: "Inter",
-                                        fontWeight: 400,
-                                        lineHeight: "21px",
-                                    }}
-                                >
-                                    {job.company.name}
-                                </span>
-                                <div
-                                    data-company-chevron
-                                    className="CompanyChevron"
-                                    style={{ flexShrink: 0, marginTop: 1.5 }}
-                                >
-                                    <svg width="6" height="10" viewBox="0 0 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                                        <path d="M0.601562 8.6L4.60156 4.6L0.601562 0.599998" stroke={themeColors.text.primary} strokeOpacity={0.65} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                    </svg>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Social links — only rendered when at least one link exists to avoid empty gap */}
-                        {(job.company.website_url ||
-                            job.company.linkedin_url ||
-                            job.company.x_url) && (
-                            <div
-                                style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: 8,
-                                    flexWrap: "wrap",
-                                }}
-                            >
-                                {job.company.website_url && (
-                                    <div
-                                        onClick={() =>
-                                            openUrl(job.company.website_url)
-                                        }
-                                        style={{
-                                            height: 36,
-                                            paddingLeft: 16,
-                                            paddingRight: 16,
-                                            background: themeColors.surface,
-                                            borderRadius: 31,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            cursor: "pointer",
-                                        }}
-                                    >
-                                        <span
-                                            style={{
-                                                color: themeColors.text.primary,
-                                                fontSize: 14,
-                                                fontFamily: "Inter",
-                                                fontWeight: 400,
-                                            }}
-                                        >
-                                            Website
-                                        </span>
-                                    </div>
-                                )}
-                                {job.company.linkedin_url && (
-                                    <div
-                                        onClick={() =>
-                                            openUrl(job.company.linkedin_url)
-                                        }
-                                        style={{
-                                            height: 36,
-                                            paddingLeft: 16,
-                                            paddingRight: 16,
-                                            background: themeColors.surface,
-                                            borderRadius: 31,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: 8,
-                                            cursor: "pointer",
-                                        }}
-                                    >
-                                        <svg
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 16 16"
-                                            fill="none"
-                                            xmlns="http://www.w3.org/2000/svg"
-                                        >
-                                            <path
-                                                d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287-0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603-0.00831011 14.8147 0.000101367"
-                                                fill={themeColors.text.primary}
-                                            />
-                                        </svg>
-                                        <span
-                                            style={{
-                                                color: themeColors.text.primary,
-                                                fontSize: 14,
-                                                fontFamily: "Inter",
-                                                fontWeight: 400,
-                                            }}
-                                        >
-                                            LinkedIn
-                                        </span>
-                                    </div>
-                                )}
-                                {job.company.x_url && (
-                                    <div
-                                        onClick={() =>
-                                            openUrl(job.company.x_url)
-                                        }
-                                        style={{
-                                            height: 36,
-                                            paddingLeft: 16,
-                                            paddingRight: 16,
-                                            background: themeColors.surface,
-                                            borderRadius: 31,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: 8,
-                                            cursor: "pointer",
-                                        }}
-                                    >
-                                        <svg
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 16 16"
-                                            fill="none"
-                                            xmlns="http://www.w3.org/2000/svg"
-                                        >
-                                            <path
-                                                d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623"
-                                                stroke={
-                                                    themeColors.text.primary
-                                                }
-                                                strokeWidth="1.2"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                            />
-                                        </svg>
-                                        <span
-                                            style={{
-                                                color: themeColors.text.primary,
-                                                fontSize: 14,
-                                                fontFamily: "Inter",
-                                                fontWeight: 400,
-                                            }}
-                                        >
-                                            X/Twitter
-                                        </span>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {effectiveCompanyDesc && (
-                            <div
-                                style={{
-                                    color: themeColors.text.primary,
-                                    fontSize: 14,
-                                    fontFamily: "Inter",
-                                    fontWeight: 400,
-                                    lineHeight: "21px",
-                                }}
-                            >
-                                {effectiveCompanyDesc}
-                            </div>
-                        )}
-                    </div>
-                )}
-            </motion.div>
+            ) : (
+                <div
+                    style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px 24px 48px" }}
+                    {...(isMobile ? { "data-pull-scroll": "1" } : {})}
+                >
+                    <JobDetailScrollBody job={job} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} onCreateResume={onCreateResume} />
+                </div>
+            )}
             </div>
         </div>
     )
@@ -12151,6 +11882,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
     themeColors,
     onOpenSettings,
     onJobClick,
+    onHomepageDeckJobs,
 }: {
     jobsApiUrl: string
     userQuery: string
@@ -12158,6 +11890,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
     themeColors: typeof darkColors
     onOpenSettings: () => void
     onJobClick?: (job: HomepageJob) => void
+    /** Flat order: next → near → top, for job panel cycling with chat results */
+    onHomepageDeckJobs?: (jobs: HomepageJob[]) => void
 }) {
     const [nextJobs, setNextJobs] = React.useState<HomepageJob[]>([])
     const [nearJobs, setNearJobs] = React.useState<HomepageJob[]>([])
@@ -12197,29 +11931,33 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 .catch(() => [] as HomepageJob[])
         }
 
-        const baseQuery =
+        const primaryQuery =
             userQuery.trim() ||
-            FALLBACK_QUERIES[
-                Math.floor(Math.random() * FALLBACK_QUERIES.length)
-            ]
-        const altQuery =
-            FALLBACK_QUERIES[
-                Math.floor(Math.random() * FALLBACK_QUERIES.length)
-            ]
+            FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
+        const fallbackQuery =
+            FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
 
-        const picksPromise = api(`q=${encodeURIComponent(baseQuery)}`).then(
+        // Lazy fallback fetch — only materialises when picks returns fewer than 6 results.
+        let fallbackPromise: Promise<HomepageJob[]> | null = null
+        const getFallback = (): Promise<HomepageJob[]> => {
+            if (!fallbackPromise)
+                fallbackPromise = api(`q=${encodeURIComponent(fallbackQuery)}`)
+            return fallbackPromise
+        }
+
+        const picksPromise = api(`q=${encodeURIComponent(primaryQuery)}`).then(
             (picks) => {
                 if (cancelled) return []
                 setNextJobs(picks.slice(0, 3))
-                const top3 = picks.slice(3, 6)
-                if (top3.length >= 3) {
-                    setTopJobs(top3)
+                if (picks.length >= 6) {
+                    setTopJobs(picks.slice(3, 6))
                     setLoadingPicks(false)
                 } else {
-                    altPromise.then((alt) => {
+                    // Fewer than 6 picks — pull fallback results to fill the top row.
+                    getFallback().then((fallback) => {
                         if (cancelled) return
-                        if (picks.length === 0) setNextJobs(alt.slice(0, 3))
-                        setTopJobs(alt.slice(0, 3))
+                        if (picks.length === 0) setNextJobs(fallback.slice(0, 3))
+                        setTopJobs(fallback.slice(0, 3))
                         setLoadingPicks(false)
                     })
                 }
@@ -12227,48 +11965,35 @@ const HomepageJobs = React.memo(function HomepageJobs({
             }
         )
 
-        const altPromise = api(`q=${encodeURIComponent(altQuery)}`)
-
-        // Use the jobs-proxy /geo endpoint (Cloudflare edge geolocation — no third-party needed)
-        const ipCtrl = new AbortController()
-        const ipTimer = setTimeout(() => ipCtrl.abort(), 4000)
-        const ipPromise = fetch(`${jobsApiUrl}/geo`, {
-            signal: ipCtrl.signal,
-        })
-            .finally(() => clearTimeout(ipTimer))
+        // Geo lookup via the jobs-proxy edge endpoint (no third-party needed).
+        const geoCtrl = new AbortController()
+        const geoTimer = setTimeout(() => geoCtrl.abort(), 4000)
+        const geoPromise = fetch(`${jobsApiUrl}/geo`, { signal: geoCtrl.signal })
+            .finally(() => clearTimeout(geoTimer))
             .then((r) => (r.ok ? r.json() : {}))
-            .then(
-                ({ lat, lng }: { lat?: number | null; lng?: number | null }) =>
-                    ({
-                        lat: typeof lat === "number" ? lat : NaN,
-                        lng: typeof lng === "number" ? lng : NaN,
-                    }) as { lat: number; lng: number }
-            )
+            .then(({ lat, lng }: { lat?: number | null; lng?: number | null }) => ({
+                lat: typeof lat === "number" ? lat : NaN,
+                lng: typeof lng === "number" ? lng : NaN,
+            }))
             .catch(() => ({ lat: NaN, lng: NaN }))
 
-        const nearPromise = Promise.all([
-            picksPromise,
-            altPromise,
-            ipPromise,
-        ]).then(async ([picks, alt, { lat, lng }]) => {
+        const nearPromise = Promise.all([picksPromise, geoPromise]).then(
+            async ([picks, { lat, lng }]) => {
                 const next3 = picks.slice(0, 3)
-                const top3 =
-                    picks.length >= 6 ? picks.slice(3, 6) : alt.slice(0, 3)
-                const excludeIds = [...next3, ...top3]
-                    .map((j) => j.id)
-                    .filter((id, i, arr) => arr.indexOf(id) === i)
+                // Use fallback results for top row only if already fetched (picks < 6 path above).
+                const fallback = fallbackPromise ? await fallbackPromise : []
+                const top3 = picks.length >= 6 ? picks.slice(3, 6) : fallback.slice(0, 3)
+                const excludeIds = [...new Set([...next3, ...top3].map((j) => j.id))]
 
                 const hasCoords =
-                    !isNaN(lat) &&
-                    !isNaN(lng) &&
-                    lat >= -90 &&
-                    lat <= 90 &&
-                    lng >= -180 &&
-                    lng <= 180
+                    !isNaN(lat) && !isNaN(lng) &&
+                    lat >= -90 && lat <= 90 &&
+                    lng >= -180 && lng <= 180
 
                 if (!hasCoords) {
                     setNearbyBasedOnLocation(false)
-                    return api(`q=${encodeURIComponent(altQuery)}&limit=5`)
+                    // Reuse already-in-flight fallback fetch rather than making a new request.
+                    return getFallback()
                 }
 
                 const buildNearParams = (withQ: boolean) => {
@@ -12287,9 +12012,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     return params.toString()
                 }
 
-                const withTitle = api(buildNearParams(true))
-                const near = await withTitle
-                if (near.length >= 5 || !userQuery.trim()) return near
+                const nearResults = await api(buildNearParams(true))
+                if (nearResults.length >= 5 || !userQuery.trim()) return nearResults
                 return api(buildNearParams(false))
             }
         )
@@ -12319,9 +12043,13 @@ const HomepageJobs = React.memo(function HomepageJobs({
         return () => {
             cancelled = true
             clearTimeout(safetyTimer)
-            clearTimeout(ipTimer)
+            clearTimeout(geoTimer)
         }
     }, [jobsApiUrl, userQuery])
+
+    React.useEffect(() => {
+        onHomepageDeckJobs?.([...nextJobs, ...nearJobs, ...topJobs])
+    }, [nextJobs, nearJobs, topJobs, onHomepageDeckJobs])
 
     const openJob = (job: HomepageJob) => {
         if (onJobClick) {
@@ -12350,12 +12078,19 @@ const HomepageJobs = React.memo(function HomepageJobs({
     // Measure the actual rendered container width so layout adapts when the
     // sidebar is resized on desktop, not just when the window hits 768px.
     const containerRef = React.useRef<HTMLDivElement>(null)
-    const [containerWidth, setContainerWidth] = React.useState<number>(9999)
-    React.useEffect(() => {
+    const [containerWidth, setContainerWidth] = React.useState<number | null>(
+        null
+    )
+    React.useLayoutEffect(() => {
         const el = containerRef.current
         if (!el) return
+        const apply = (w: number) => {
+            if (w > 0) setContainerWidth(w)
+        }
+        apply(el.getBoundingClientRect().width)
         const ro = new ResizeObserver((entries) => {
-            setContainerWidth(entries[0]?.contentRect.width ?? 9999)
+            const w = entries[0]?.contentRect.width
+            if (typeof w === "number") apply(w)
         })
         ro.observe(el)
         return () => ro.disconnect()
@@ -12363,7 +12098,13 @@ const HomepageJobs = React.memo(function HomepageJobs({
 
     // Switch to mobile card layout when the container is narrower than 600px,
     // regardless of whether we're on a small device or just a narrow sidebar.
-    const m = isMobileLayout || containerWidth < 600
+    // Until we have a real width (>0), follow window-level isMobileLayout only
+    // so 0px RO frames do not force mobile skeletons on desktop.
+    const m =
+        isMobileLayout ||
+        (typeof containerWidth === "number" &&
+            containerWidth > 0 &&
+            containerWidth < 600)
     const sectionTitleStyle: React.CSSProperties = {
         alignSelf: "stretch",
         textAlign: "center",
@@ -12375,14 +12116,6 @@ const HomepageJobs = React.memo(function HomepageJobs({
     }
 
     return (
-        <>
-            <style>{`
-                @keyframes homepageSkeleton {
-                    0%, 100% { opacity: 0.5; }
-                    50% { opacity: 1; }
-                }
-            `}</style>
-
             <div
                 ref={containerRef}
                 data-layer="homepage"
@@ -12742,9 +12475,12 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     </div>
                 </div>
             </div>
-        </>
     )
 })
+
+// Welcome hero — preloaded when overlay may show so the card doesn’t lag on first paint.
+const WELCOME_MODAL_IMAGE_URL =
+    "https://framerusercontent.com/images/iDGXsLUjWFYougkKQaiObRc6vng.jpg?scale-down-to=2048&width=2720&height=1568"
 
 // --- SHARED MODAL OVERLAY BASE ---
 // Handles the backdrop, sheet animation, and image header shared by all full-screen overlays.
@@ -12754,13 +12490,30 @@ const BaseModalOverlay = ({
     themeColors,
     imageSrc,
     children,
+    instantEnter = false,
+    imageFetchPriority,
 }: {
     isMobile: boolean
     onClose: () => void
     themeColors: typeof darkColors
     imageSrc: string
     children: React.ReactNode
-}) => (
+    /** Skip scale/opacity entrance; exit animation unchanged */
+    instantEnter?: boolean
+    imageFetchPriority?: "high" | "low" | "auto"
+}) => {
+    const openState =
+        isMobile
+            ? { y: "0%", scale: 1, opacity: 1 }
+            : { scale: 1, opacity: 1 }
+    const closedState =
+        isMobile
+            ? { y: "100%", scale: 0, opacity: 0 }
+            : { scale: 0.95, opacity: 0 }
+    const moveTransition = isMobile
+        ? { duration: 0.25, ease: "easeInOut" as const }
+        : { duration: 0.2, ease: [0.4, 0, 0.2, 1] as const }
+    return (
     <div
         style={{
             width: "100%",
@@ -12779,26 +12532,14 @@ const BaseModalOverlay = ({
         onClick={onClose}
     >
         <motion.div
-            initial={
-                isMobile
-                    ? { y: "100%", scale: 0, opacity: 0 }
-                    : { scale: 0.95, opacity: 0 }
-            }
-            animate={
-                isMobile
-                    ? { y: "0%", scale: 1, opacity: 1 }
-                    : { scale: 1, opacity: 1 }
-            }
+            initial={instantEnter ? openState : closedState}
+            animate={openState}
             exit={
-                isMobile
-                    ? { y: "100%", scale: 0, opacity: 0 }
-                    : { scale: 0.95, opacity: 0 }
+                instantEnter
+                    ? { ...closedState, transition: moveTransition }
+                    : closedState
             }
-            transition={
-                isMobile
-                    ? { duration: 0.25, ease: "easeInOut" }
-                    : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }
-            }
+            transition={instantEnter ? { duration: 0 } : moveTransition}
             onClick={(e) => e.stopPropagation()}
             style={{
                 flex: isMobile ? "none" : "1 1 0",
@@ -12835,12 +12576,145 @@ const BaseModalOverlay = ({
                         display: "block",
                     }}
                     src={imageSrc}
+                    {...(imageFetchPriority
+                        ? { fetchPriority: imageFetchPriority }
+                        : {})}
                 />
             </div>
             {children}
         </motion.div>
     </div>
-)
+    )
+}
+
+// --- MODAL SHEET ---
+// Shared dimmer + animated bottom-sheet (or centered card on desktop) used by
+// SettingsOverlay, ReportModal, and MobileToolOverlay. Pass `mobileOnly` to
+// always use the mobile slide-up animation regardless of isMobile.
+const ModalSheet = ({
+    isOpen,
+    onClose,
+    themeColors,
+    zIndex = 30000,
+    children,
+    className,
+    sheetStyle,
+    mobileOnly = false,
+    dragY,
+    anchorDataLayer,
+}: {
+    isOpen: boolean
+    onClose: () => void
+    themeColors: typeof darkColors
+    zIndex?: number
+    children: React.ReactNode
+    className?: string
+    sheetStyle?: React.CSSProperties
+    mobileOnly?: boolean
+    /** Pull-to-dismiss offset (px). Outer layer handles % slide; inner applies this so exit runs from the dragged pose. */
+    dragY?: ReturnType<typeof useMotionValue<number>>
+    /** e.g. `mobile-tool-overlay` — KeywordOrbitOverlay measures this rect for resume animation. */
+    anchorDataLayer?: string
+}) => {
+    const isMobile = mobileOnly || (typeof window !== "undefined" && window.innerWidth < 768)
+    const openState   = isMobile ? { y: "0%", scale: 1, opacity: 1 } : { scale: 1, opacity: 1 }
+    const closedState = isMobile ? { y: "100%", scale: 0, opacity: 0 } : { scale: 0.95, opacity: 0 }
+    const moveTrans = isMobile
+        ? { duration: 0.25, ease: "easeInOut" as const }
+        : { duration: 0.2, ease: [0.4, 0, 0.2, 1] as const }
+
+    // Radius on the same layer as dragY so rounded corners track the sheet while pulling.
+    const sheet = { ...(sheetStyle ?? {}) } as React.CSSProperties
+    const { borderRadius: sheetBorderRadius, ...outerSheetStyle } = sheet
+
+    return (
+        <AnimatePresence
+            onExitComplete={() => {
+                dragY?.set(0)
+            }}
+        >
+            {isOpen && (
+                <div
+                    style={{
+                        position: "fixed",
+                        inset: 0,
+                        zIndex,
+                        display: "flex",
+                        justifyContent: isMobile ? "flex-end" : "center",
+                        alignItems: isMobile ? "flex-end" : "center",
+                        pointerEvents: "auto",
+                        ...(isMobile
+                            ? { overscrollBehavior: "none" as const }
+                            : {}),
+                    }}
+                >
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1, transition: { duration: 0.2 } }}
+                        exit={{ opacity: 0, transition: { duration: 0.2 } }}
+                        style={{ position: "absolute", inset: 0, background: themeColors.overlay.black }}
+                        onClick={onClose}
+                        aria-hidden
+                    />
+                    {/* Outer: slide % only. Inner: drag px only — avoids Framer fighting one motion value with animate.y */}
+                    <motion.div
+                        initial={closedState}
+                        animate={{ ...openState, transition: moveTrans }}
+                        exit={{ ...closedState, transition: moveTrans }}
+                        {...(anchorDataLayer
+                            ? { "data-layer": anchorDataLayer }
+                            : {})}
+                        style={{
+                            position: "relative",
+                            zIndex: 1,
+                            display: "flex",
+                            flexDirection: "column",
+                            transformOrigin: isMobile ? "bottom center" : "center",
+                            overflow: "hidden",
+                            ...(dragY ? outerSheetStyle : sheet),
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {dragY ? (
+                            <motion.div
+                                className={className}
+                                style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    overflow: "hidden",
+                                    background: themeColors.background,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    y: dragY,
+                                    overscrollBehavior: "none",
+                                    ...(sheetBorderRadius != null
+                                        ? { borderRadius: sheetBorderRadius }
+                                        : {}),
+                                }}
+                            >
+                                {children}
+                            </motion.div>
+                        ) : (
+                            <div
+                                className={className}
+                                style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    overflow: "hidden",
+                                    background: themeColors.background,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                }}
+                            >
+                                {children}
+                            </div>
+                        )}
+                    </motion.div>
+                </div>
+            )}
+        </AnimatePresence>
+    )
+}
 
 // --- WELCOME OVERLAY COMPONENT ---
 const WelcomeOverlay = ({
@@ -12856,7 +12730,9 @@ const WelcomeOverlay = ({
         isMobile={isMobile}
         onClose={onClose}
         themeColors={themeColors}
-        imageSrc="https://framerusercontent.com/images/iDGXsLUjWFYougkKQaiObRc6vng.jpg?scale-down-to=2048&width=2720&height=1568"
+        instantEnter
+        imageFetchPriority="high"
+        imageSrc={WELCOME_MODAL_IMAGE_URL}
     >
         <div
             style={{
@@ -12887,7 +12763,19 @@ const WelcomeOverlay = ({
             >
                 Curastem is the best way to get a job
             </h1>
-            <div style={{ alignSelf: "stretch" }}>
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    ...(isMobile
+                        ? {}
+                        : {
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "flex-start",
+                              gap: 0,
+                          }),
+                }}
+            >
                 <span
                     style={{
                         color: themeColors.text.secondary,
@@ -12898,9 +12786,10 @@ const WelcomeOverlay = ({
                         wordWrap: "break-word",
                     }}
                 >
-                    Chat with AI or video call with mentors to create resumes, 
-                    practice for interviews, and make apps.{" "}
+                    Find thousands of jobs or create AI resumes, practice for
+                    interviews, and get help with school.
                 </span>
+                {isMobile ? " " : null}
                 <span
                     onClick={() =>
                         window.open("https://curastem.org/about", "_blank")
@@ -16102,6 +15991,7 @@ const MiniIDE = React.memo(
                 <div
                     data-layer="text area"
                     className="TextArea"
+                    {...(isMobileLayout ? { "data-pull-scroll": "1" } : {})}
                     style={{
                         width: "100%",
                         height: "100%",
@@ -16387,6 +16277,7 @@ const MiniIDE = React.memo(
                 {/* App Player (iframe) */}
                 {mode === "player" && (
                     <div
+                        {...(isMobileLayout ? { "data-pull-scroll": "1" } : {})}
                         style={{
                             alignSelf: "stretch",
                             flex: "1 1 0",
@@ -16977,6 +16868,35 @@ const MiniIDE = React.memo(
     })
 )
 
+// Blocks document-level pull-to-refresh / rubber-band (esp. iOS Safari) while Curastem is mounted.
+let curastemDocumentOverscrollGuardCount = 0
+let curastemDocumentOverscrollStyleEl: HTMLStyleElement | null = null
+function mountCurastemDocumentOverscrollGuard(): () => void {
+    if (typeof document === "undefined") return () => {}
+    curastemDocumentOverscrollGuardCount++
+    if (curastemDocumentOverscrollGuardCount === 1) {
+        const el = document.createElement("style")
+        el.setAttribute("data-curastem-document-overscroll", "1")
+        el.textContent =
+            "html,body{overscroll-behavior:none!important;overscroll-behavior-y:none!important;overscroll-behavior-x:none!important}"
+        document.head.appendChild(el)
+        curastemDocumentOverscrollStyleEl = el
+    }
+    return () => {
+        curastemDocumentOverscrollGuardCount = Math.max(
+            0,
+            curastemDocumentOverscrollGuardCount - 1
+        )
+        if (
+            curastemDocumentOverscrollGuardCount === 0 &&
+            curastemDocumentOverscrollStyleEl
+        ) {
+            curastemDocumentOverscrollStyleEl.remove()
+            curastemDocumentOverscrollStyleEl = null
+        }
+    }
+}
+
 export default function OmegleMentorshipUI(props: Props) {
     const {
         geminiApiKey,
@@ -16998,62 +16918,72 @@ export default function OmegleMentorshipUI(props: Props) {
     // REF for Direct Mutation Access (Fixes P2P App Sync Lag)
     const miniIDERef = React.useRef<MiniIDEHandle>(null)
 
-    // Welcome Overlay State
-    const [showWelcome, setShowWelcome] = React.useState(false)
+    // Welcome overlay: show on first client paint when eligible (no useEffect delay).
+    const [showWelcome, setShowWelcome] = React.useState(() => {
+        if (typeof window === "undefined") return false
+        try {
+            if (
+                localStorage.getItem("should_never_show_welcome_overlay") ===
+                "true"
+            )
+                return false
+            if (localStorage.getItem("has_seen_welcome_overlay") === "true")
+                return false
+            return true
+        } catch {
+            return false
+        }
+    })
     const [showJoinCallOverlay, setShowJoinCallOverlay] = React.useState(false)
-    const hasInteractedRef = React.useRef(false)
-    const interactionTimeoutRef = React.useRef<any>(null)
 
     React.useEffect(() => {
         if (typeof window === "undefined") return
-
-        // Check if user should never see the welcome overlay (they interacted before 2 seconds on a previous visit)
-        const shouldNeverShow = localStorage.getItem(
-            "should_never_show_welcome_overlay"
-        )
-        if (shouldNeverShow === "true") {
+        if (localStorage.getItem("should_never_show_welcome_overlay") === "true")
             return
-        }
+        if (localStorage.getItem("has_seen_welcome_overlay") === "true") return
 
-        // Check if user has already seen it
-        const hasSeen = localStorage.getItem("has_seen_welcome_overlay")
-        if (hasSeen === "true") {
-            return
-        }
-
-        // Track user interactions
         const handleInteraction = () => {
-            hasInteractedRef.current = true
-            // If they interact before 2 seconds, mark them to never show the welcome overlay
             localStorage.setItem("should_never_show_welcome_overlay", "true")
-            // Clear the timer since they interacted
-            if (interactionTimeoutRef.current) {
-                clearTimeout(interactionTimeoutRef.current)
-            }
         }
 
-        // Listen for various interaction types (excluding mousemove to avoid accidental triggers)
         const events = ["click", "keydown", "scroll", "touchstart"]
         events.forEach((event) => {
             window.addEventListener(event, handleInteraction, { passive: true })
         })
 
-        // Set 2-second timer
-        interactionTimeoutRef.current = setTimeout(() => {
-            // Only show if no interaction occurred
-            if (!hasInteractedRef.current) {
-                setShowWelcome(true)
-            }
-        }, 2000)
-
         return () => {
-            if (interactionTimeoutRef.current) {
-                clearTimeout(interactionTimeoutRef.current)
-            }
             events.forEach((event) => {
                 window.removeEventListener(event, handleInteraction)
             })
         }
+    }, [])
+
+    React.useEffect(() => {
+        if (RenderTarget.current() === RenderTarget.canvas) return
+        return mountCurastemDocumentOverscrollGuard()
+    }, [])
+
+    React.useLayoutEffect(() => {
+        if (typeof window === "undefined") return
+        try {
+            if (
+                localStorage.getItem("should_never_show_welcome_overlay") ===
+                "true"
+            )
+                return
+            if (localStorage.getItem("has_seen_welcome_overlay") === "true")
+                return
+        } catch {
+            return
+        }
+        if (document.querySelector("link[data-curastem-welcome-img-preload]"))
+            return
+        const link = document.createElement("link")
+        link.rel = "preload"
+        link.as = "image"
+        link.href = WELCOME_MODAL_IMAGE_URL
+        link.setAttribute("data-curastem-welcome-img-preload", "1")
+        document.head.appendChild(link)
     }, [])
 
     const handleCloseWelcome = () => {
@@ -17624,9 +17554,6 @@ Extract this structure:
     const [resumeAnimPhase, setResumeAnimPhase] = React.useState<
         "idle" | "fading" | "orbiting" | "landing" | "done"
     >("idle")
-    const [resumeAnimKeywords, setResumeAnimKeywords] = React.useState<
-        string[]
-    >([])
     const [resumeUsedKeywords, setResumeUsedKeywords] = React.useState<
         string[]
     >([])
@@ -17637,13 +17564,13 @@ Extract this structure:
     >([])
     // Refs so async tool handlers can read current values without stale closure
     const resumeAnimPhaseRef = React.useRef(resumeAnimPhase)
-    const resumeAnimKeywordsRef = React.useRef(resumeAnimKeywords)
+    const resumeCapturedItemsRef = React.useRef(resumeCapturedItems)
     React.useEffect(() => {
         resumeAnimPhaseRef.current = resumeAnimPhase
     }, [resumeAnimPhase])
     React.useEffect(() => {
-        resumeAnimKeywordsRef.current = resumeAnimKeywords
-    }, [resumeAnimKeywords])
+        resumeCapturedItemsRef.current = resumeCapturedItems
+    }, [resumeCapturedItems])
 
     // Per-job resume cache: jobId → generated HTML.
     // Skips the AI call on repeat clicks — same animation, instant result.
@@ -17659,29 +17586,25 @@ Extract this structure:
         setResumeUsedKeywords([])
     }, [selectedJob?.id])
 
-    const openJobDetail = React.useCallback((job: HomepageJob) => {
-        setSelectedJob(job)
-        setIsJobOpen(true)
-        setIsDocOpen(false)
-        setIsWhiteboardOpen(false)
-        setIsAppOpen(false)
-    }, [])
-
     const closeJobDetail = React.useCallback(() => {
         setIsJobOpen(false)
     }, [])
 
-    // Close the DocEditor — if a resume animation is active, also reset all
-    // animation state and close the job panel so the whole sidebar dismisses.
+    // Close the DocEditor — clear resume keyword state and dismiss the job
+    // panel when it was left open for the job→resume flow (phase is idle then).
     const handleDocClose = React.useCallback(() => {
         setIsDocOpen(false)
         isDocOpenRef.current = false
-        if (resumeAnimPhaseRef.current !== "idle") {
-            setResumeAnimPhase("idle")
-            setResumeCapturedItems([])
-            setResumeUsedKeywords([])
-            setIsJobOpen(false)
-        }
+        setResumeAnimPhase("idle")
+        setResumeCapturedItems([])
+        setResumeUsedKeywords([])
+        setIsJobOpen(false)
+    }, [])
+
+    const handleResumeKeywordRevealComplete = React.useCallback(() => {
+        setResumeAnimPhase("idle")
+        setResumeCapturedItems([])
+        setResumeUsedKeywords([])
     }, [])
 
     // Track pending connections (black tiles)
@@ -19186,45 +19109,39 @@ Do not include markdown formatting or explanations.`
                                         null
                                     if (jobId) {
                                         try {
-                                            const detailRes = await fetch(
-                                                `${jobsApiUrl}/jobs/${jobId}`
-                                            )
-                                            if (detailRes.ok) {
-                                                const j = await detailRes.json()
+                                            // Serve from cache when available — avoids a redundant round-trip
+                                            // for jobs the panel already loaded.
+                                            const cached = readJobDetailCache(jobId, jobsApiUrl)
+                                            const j: any = cached
+                                                ? {
+                                                    job_description: cached.desc,
+                                                    job_summary: cached.detailSummary,
+                                                    visa_sponsorship: cached.detailVisaSponsorship,
+                                                    company: { description: cached.detailCompanyDesc },
+                                                    keywords: cached.apiKeywords,
+                                                }
+                                                : await fetch(`${jobsApiUrl}/jobs/${jobId}`)
+                                                    .then((r) => (r.ok ? r.json() : null))
+                                            if (j) {
                                                 responsePayload = {
                                                     title: j.title,
                                                     company: j.company?.name,
-                                            locations: j.locations ?? null,
-                                            employment_type:
-                                                j.employment_type,
-                                            workplace_type:
-                                                j.workplace_type,
+                                                    locations: j.locations ?? null,
+                                                    employment_type: j.employment_type,
+                                                    workplace_type: j.workplace_type,
                                                     summary: j.job_summary,
                                                     salary: j.salary,
-                                                    responsibilities:
-                                                        j.job_description
-                                                            ?.responsibilities ??
-                                                        [],
-                                                    minimum_qualifications:
-                                                        j.job_description
-                                                            ?.minimum_qualifications ??
-                                                        [],
+                                                    responsibilities: j.job_description?.responsibilities ?? [],
+                                                    minimum_qualifications: j.job_description?.minimum_qualifications ?? [],
                                                     apply_url: j.apply_url,
                                                 }
                                             }
                                         } catch (err) {
-                                            console.error(
-                                                "live get_job_details fetch:",
-                                                err
-                                            )
-                                            responsePayload = {
-                                                error: "Could not retrieve job details.",
-                                            }
+                                            console.error("live get_job_details:", err)
+                                            responsePayload = { error: "Could not retrieve job details." }
                                         }
                                     } else {
-                                        responsePayload = {
-                                            error: "No job ID provided.",
-                                        }
+                                        responsePayload = { error: "No job ID provided." }
                                     }
                                 }
 
@@ -19807,6 +19724,83 @@ Do not include markdown formatting or explanations.`
     React.useEffect(() => {
         messagesRef.current = messages
     }, [messages])
+
+    const [homepageJobsForDeck, setHomepageJobsForDeck] = React.useState<
+        HomepageJob[]
+    >([])
+    const [jobDeckExtras, setJobDeckExtras] = React.useState<HomepageJob[]>([])
+
+    const jobCycleDeck = React.useMemo(() => {
+        const seen = new Set<string>()
+        const out: HomepageJob[] = []
+        const push = (j: HomepageJob | null | undefined) => {
+            if (!j?.id || seen.has(j.id)) return
+            seen.add(j.id)
+            out.push(j)
+        }
+        for (const j of homepageJobsForDeck) push(j)
+        for (const msg of messages) {
+            if (!msg.jobs?.length) continue
+            for (const s of msg.jobs) push(jobSnippetToHomepageJob(s))
+        }
+        for (const j of jobDeckExtras) push(j)
+        return out
+    }, [messages, homepageJobsForDeck, jobDeckExtras])
+
+    const handleHomepageDeckJobs = React.useCallback((jobs: HomepageJob[]) => {
+        setHomepageJobsForDeck(jobs)
+    }, [])
+
+    const cycleJobDetail = React.useCallback(
+        (delta: number) => {
+            if (jobCycleDeck.length === 0) return
+            const idx = jobCycleDeck.findIndex((j) => j.id === selectedJob?.id)
+            const n = jobCycleDeck.length
+            const base = idx >= 0 ? idx : 0
+            const next = ((base + delta) % n + n) % n
+            setSelectedJob(jobCycleDeck[next])
+            haptic.light()
+        },
+        [jobCycleDeck, selectedJob?.id]
+    )
+
+    const openJobDetail = React.useCallback(
+        (job: HomepageJob) => {
+            setJobDeckExtras((prev) => {
+                if (prev.some((j) => j.id === job.id)) return prev
+                const inHome = homepageJobsForDeck.some((j) => j.id === job.id)
+                const inMsg = messages.some((m) =>
+                    m.jobs?.some((s) => s.id === job.id)
+                )
+                if (inHome || inMsg) return prev
+                return [...prev, job]
+            })
+            setSelectedJob(job)
+            setIsJobOpen(true)
+            setIsDocOpen(false)
+            setIsWhiteboardOpen(false)
+            setIsAppOpen(false)
+        },
+        [homepageJobsForDeck, messages]
+    )
+
+    React.useEffect(() => {
+        if (!isJobOpen || jobCycleDeck.length < 2) return
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+            const el = document.activeElement as HTMLElement | null
+            if (
+                el?.closest(
+                    "input, textarea, select, [contenteditable=true]"
+                )
+            )
+                return
+            e.preventDefault()
+            cycleJobDetail(e.key === "ArrowRight" ? 1 : -1)
+        }
+        window.addEventListener("keydown", onKey)
+        return () => window.removeEventListener("keydown", onKey)
+    }, [isJobOpen, jobCycleDeck.length, cycleJobDetail])
 
     React.useEffect(() => {
         if (typeof window !== "undefined") {
@@ -20604,7 +20598,10 @@ Do not include markdown formatting or explanations.`
     const prevContainerSize = React.useRef({ width: 0, height: 0 })
     const hasSnappedForMessages = React.useRef(false)
     const chatHeightBeforeOverlay = React.useRef<number | null>(null)
-    const isMobileLayout = containerSize.width < 768
+    // Width 0 happens before first layout / SSR — do not treat as mobile or
+    // homepage job skeletons use the wrong (narrow) placeholder layout on desktop.
+    const isMobileLayout =
+        containerSize.width > 0 && containerSize.width < 768
     const leftSidebarWidth =
         !isMobileLayout && isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
 
@@ -21501,6 +21498,290 @@ Do not include markdown formatting or explanations.`
         appMode,
     ])
 
+    // Pull-to-dismiss for the mobile tool overlay (drives ModalSheet's dragY).
+    const overlayDragY = useMotionValue(0)
+    const overlayDragYRef = React.useRef(overlayDragY)
+    overlayDragYRef.current = overlayDragY
+    const prevMobileToolOverlayOpen = React.useRef(false)
+    React.useEffect(() => {
+        const open = isMobileLayout && isAgentOpen
+        // Reset drag only when the overlay opens — not when it closes (that would snap y to 0
+        // mid-exit). ModalSheet AnimatePresence onExitComplete clears dragY after exit.
+        if (open && !prevMobileToolOverlayOpen.current) {
+            overlayDragY.set(0)
+        }
+        prevMobileToolOverlayOpen.current = open
+    }, [isMobileLayout, isAgentOpen, overlayDragY])
+
+    const settingsOverlayDragY = useMotionValue(0)
+    const settingsOverlayDragYRef = React.useRef(settingsOverlayDragY)
+    settingsOverlayDragYRef.current = settingsOverlayDragY
+    const prevSettingsSheetOpen = React.useRef(false)
+    React.useEffect(() => {
+        const open = isMobileLayout && showYouSettings
+        if (open && !prevSettingsSheetOpen.current) {
+            settingsOverlayDragY.set(0)
+        }
+        prevSettingsSheetOpen.current = open
+    }, [isMobileLayout, showYouSettings, settingsOverlayDragY])
+
+    const closeSettingsSheetRef = React.useRef<() => void>(() => {})
+    closeSettingsSheetRef.current = () => setShowYouSettings(false)
+
+    const mobileToolGestureAxisRef = React.useRef<null | "x" | "y">(null)
+    const [mobileToolGestureAxis, setMobileToolGestureAxis] =
+        React.useState<null | "x" | "y">(null)
+    const lockMobileToolGesture = React.useCallback((axis: null | "x" | "y") => {
+        mobileToolGestureAxisRef.current = axis
+        setMobileToolGestureAxis(axis)
+    }, [])
+
+    /** Mobile full-screen tool sheet — same dismiss as toolbar (mutually exclusive tools). */
+    const dismissMobileToolOverlayRef = React.useRef<() => void>(() => {})
+    const dismissMobileToolOverlay = React.useCallback(() => {
+        if (isDocOpen) { toggleDoc(); return }
+        if (isWhiteboardOpen) { toggleWhiteboard(); return }
+        if (isAppOpen) { toggleApp(); return }
+        if (isJobOpen) closeJobDetail()
+    }, [isDocOpen, isWhiteboardOpen, isAppOpen, isJobOpen, toggleDoc, toggleWhiteboard, toggleApp, closeJobDetail])
+    dismissMobileToolOverlayRef.current = dismissMobileToolOverlay
+
+    // Pull-to-dismiss: listen on the sheet card itself so pointermove stays alive
+    // even when the cursor drifts outside the scroll container.
+    React.useEffect(() => {
+        if (!isMobileLayout) return
+        if (isWhiteboardOpen) return
+        const sheet = document.querySelector(".MobileToolOverlay") as HTMLElement | null
+        if (!sheet) return
+        const pullY = overlayDragYRef.current
+        let lastY = 0, lastX = 0, startX = 0, startY = 0, pressed = false
+        let activePointerId = -1
+        let pullCaptureActive = false
+        const scrollEl = () => sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
+        const GESTURE_MIN = 10
+        const AXIS_RATIO = 1.35
+        const releasePullCapture = () => {
+            if (!pullCaptureActive || activePointerId < 0) return
+            try {
+                if (sheet.hasPointerCapture(activePointerId)) {
+                    sheet.releasePointerCapture(activePointerId)
+                }
+            } catch {
+                /* released or lost */
+            }
+            pullCaptureActive = false
+            activePointerId = -1
+        }
+        const settle = () => {
+            releasePullCapture()
+            pressed = false
+            lockMobileToolGesture(null)
+            const py = pullY.get()
+            if (py < 88) {
+                animate(pullY, 0, { type: "spring", stiffness: 420, damping: 38 })
+            } else {
+                // Do not pullY.set(0) here — it would snap inner sheet up before exit runs.
+                // ModalSheet AnimatePresence onExitComplete resets dragY after exit.
+                dismissMobileToolOverlayRef.current()
+            }
+        }
+        const onDown = (e: PointerEvent) => {
+            if (e.pointerType === "mouse" && e.button !== 0) return
+            pressed = true
+            pullCaptureActive = false
+            activePointerId = e.pointerId
+            lockMobileToolGesture(null)
+            startX = e.clientX
+            startY = e.clientY
+            lastY = e.clientY
+            lastX = e.clientX
+            // Capture only after a real pull starts — capturing here steals pointerup from
+            // buttons and breaks clicks (pointerup is delivered to the capture target).
+        }
+        const onMove = (e: PointerEvent) => {
+            if (!pressed) return
+            let axis = mobileToolGestureAxisRef.current
+            if (axis === "x") return
+
+            const totalDx = e.clientX - startX
+            const totalDy = e.clientY - startY
+            const adx = Math.abs(totalDx)
+            const ady = Math.abs(totalDy)
+
+            if (axis === null) {
+                if (adx < GESTURE_MIN && ady < GESTURE_MIN) return
+                if (adx > ady * AXIS_RATIO) {
+                    lockMobileToolGesture("x")
+                    return
+                }
+                if (ady > adx * AXIS_RATIO) {
+                    lockMobileToolGesture("y")
+                } else if (Math.max(adx, ady) >= 22) {
+                    lockMobileToolGesture(adx >= ady ? "x" : "y")
+                } else {
+                    return
+                }
+                axis = mobileToolGestureAxisRef.current
+                if (axis === "x") return
+            }
+
+            const dy = e.clientY - lastY, dx = e.clientX - lastX
+            lastY = e.clientY
+            lastX = e.clientX
+            const py = pullY.get()
+            const sc = scrollEl()
+            const atTop = sc != null && sc.scrollTop <= 1
+            const pulling = py > 0 || (atTop && dy > 0 && dy >= Math.abs(dx))
+            if (!pulling) return
+            if (!pullCaptureActive) {
+                try {
+                    sheet.setPointerCapture(e.pointerId)
+                    pullCaptureActive = true
+                    activePointerId = e.pointerId
+                } catch {
+                    /* target may not support capture */
+                }
+            }
+            pullY.set(Math.max(0, py + dy))
+            if (e.pointerType === "touch" && e.cancelable) e.preventDefault()
+        }
+        const onTouchMove = (e: TouchEvent) => {
+            if (pullY.get() > 2 && e.cancelable) e.preventDefault()
+        }
+        sheet.addEventListener("pointerdown", onDown)
+        sheet.addEventListener("pointermove", onMove)
+        sheet.addEventListener("pointerup", settle)
+        sheet.addEventListener("pointercancel", settle)
+        sheet.addEventListener("touchmove", onTouchMove, { passive: false })
+        return () => {
+            releasePullCapture()
+            sheet.removeEventListener("pointerdown", onDown)
+            sheet.removeEventListener("pointermove", onMove)
+            sheet.removeEventListener("pointerup", settle)
+            sheet.removeEventListener("pointercancel", settle)
+            sheet.removeEventListener("touchmove", onTouchMove)
+        }
+    }, [
+        isMobileLayout,
+        isAgentOpen,
+        isJobOpen,
+        isDocOpen,
+        isWhiteboardOpen,
+        isAppOpen,
+        lockMobileToolGesture,
+    ])
+
+    // Pull-to-dismiss for mobile settings sheet (same rules as docs: only when scroll is at top).
+    React.useEffect(() => {
+        if (!isMobileLayout || !showYouSettings) return
+        const sheet = document.querySelector(".SettingsOverlay") as HTMLElement | null
+        if (!sheet) return
+        const pullY = settingsOverlayDragYRef.current
+        let lastY = 0, lastX = 0, startX = 0, startY = 0, pressed = false
+        let activePointerId = -1
+        let pullCaptureActive = false
+        const scrollEl = () => sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
+        const GESTURE_MIN = 10
+        const AXIS_RATIO = 1.35
+        const releasePullCapture = () => {
+            if (!pullCaptureActive || activePointerId < 0) return
+            try {
+                if (sheet.hasPointerCapture(activePointerId)) {
+                    sheet.releasePointerCapture(activePointerId)
+                }
+            } catch {
+                /* released or lost */
+            }
+            pullCaptureActive = false
+            activePointerId = -1
+        }
+        const settle = () => {
+            releasePullCapture()
+            pressed = false
+            lockMobileToolGesture(null)
+            const py = pullY.get()
+            if (py < 88) {
+                animate(pullY, 0, { type: "spring", stiffness: 420, damping: 38 })
+            } else {
+                closeSettingsSheetRef.current()
+            }
+        }
+        const onDown = (e: PointerEvent) => {
+            if (e.pointerType === "mouse" && e.button !== 0) return
+            pressed = true
+            pullCaptureActive = false
+            activePointerId = e.pointerId
+            lockMobileToolGesture(null)
+            startX = e.clientX
+            startY = e.clientY
+            lastY = e.clientY
+            lastX = e.clientX
+        }
+        const onMove = (e: PointerEvent) => {
+            if (!pressed) return
+            let axis = mobileToolGestureAxisRef.current
+            if (axis === "x") return
+
+            const totalDx = e.clientX - startX
+            const totalDy = e.clientY - startY
+            const adx = Math.abs(totalDx)
+            const ady = Math.abs(totalDy)
+
+            if (axis === null) {
+                if (adx < GESTURE_MIN && ady < GESTURE_MIN) return
+                if (adx > ady * AXIS_RATIO) {
+                    lockMobileToolGesture("x")
+                    return
+                }
+                if (ady > adx * AXIS_RATIO) {
+                    lockMobileToolGesture("y")
+                } else if (Math.max(adx, ady) >= 22) {
+                    lockMobileToolGesture(adx >= ady ? "x" : "y")
+                } else {
+                    return
+                }
+                axis = mobileToolGestureAxisRef.current
+                if (axis === "x") return
+            }
+
+            const dy = e.clientY - lastY, dx = e.clientX - lastX
+            lastY = e.clientY
+            lastX = e.clientX
+            const py = pullY.get()
+            const sc = scrollEl()
+            const atTop = sc != null && sc.scrollTop <= 1
+            const pulling = py > 0 || (atTop && dy > 0 && dy >= Math.abs(dx))
+            if (!pulling) return
+            if (!pullCaptureActive) {
+                try {
+                    sheet.setPointerCapture(e.pointerId)
+                    pullCaptureActive = true
+                    activePointerId = e.pointerId
+                } catch {
+                    /* target may not support capture */
+                }
+            }
+            pullY.set(Math.max(0, py + dy))
+            if (e.pointerType === "touch" && e.cancelable) e.preventDefault()
+        }
+        const onTouchMove = (e: TouchEvent) => {
+            if (pullY.get() > 2 && e.cancelable) e.preventDefault()
+        }
+        sheet.addEventListener("pointerdown", onDown)
+        sheet.addEventListener("pointermove", onMove)
+        sheet.addEventListener("pointerup", settle)
+        sheet.addEventListener("pointercancel", settle)
+        sheet.addEventListener("touchmove", onTouchMove, { passive: false })
+        return () => {
+            releasePullCapture()
+            sheet.removeEventListener("pointerdown", onDown)
+            sheet.removeEventListener("pointermove", onMove)
+            sheet.removeEventListener("pointerup", settle)
+            sheet.removeEventListener("pointercancel", settle)
+            sheet.removeEventListener("touchmove", onTouchMove)
+        }
+    }, [isMobileLayout, showYouSettings, lockMobileToolGesture])
+
     const handleAppChange = React.useCallback((code: string) => {
         setAppCode(code)
 
@@ -21796,6 +22077,7 @@ Do not include markdown formatting or explanations.`
         const newId = Date.now().toString()
         setCurrentChatId(newId)
         setMessages([])
+        setJobDeckExtras([])
         // setHasSentYouInfo(false)
 
         // Reset suggestions with default ones if available
@@ -23465,7 +23747,7 @@ Do not include markdown formatting or explanations.`
                         },
                     ])
                 }
-                return
+                return false
             }
 
             if (abortControllerRef.current) {
@@ -24197,7 +24479,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                             text: "Message not sent. Please try again. If this issue persists, please contact support@curastem.org",
                         },
                     ])
-                    return
+                    return false
                 }
 
                 // Start streaming response - append placeholder
@@ -24990,10 +25272,9 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                             resumeAnimPhaseRef.current !== "idle" &&
                             resumeAnimPhaseRef.current !== "done"
                         ) {
-                            // Exact case match — keyword must appear in the resume
-                            // with the same capitalisation to land on it.
-                            const used = resumeAnimKeywordsRef.current.filter(
-                                (k) => newContent.includes(k)
+                            const used = capturedOrbitWordsInHtml(
+                                newContent,
+                                resumeCapturedItemsRef.current.map((c) => c.word)
                             )
                             // Mark keyword positions in the HTML before setting
                             // content so getBoundingClientRect on the markers is
@@ -25606,10 +25887,10 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                         accumulatedFunctionCall.name === "get_job_details"
                     ) {
                         // ---------------------------------------------------------------------------
-                        // get_job_details — fetch full job from API, pass to model for follow-up
+                        // get_job_details — serve from cache when available, fetch otherwise
                         // ---------------------------------------------------------------------------
                         const args = accumulatedFunctionCall.args as any
-                        // Fall back to currently open job if the model omitted the ID
+                        // Fall back to currently open job if the model omitted the ID.
                         const jobId =
                             args.job_id ||
                             selectedJobRef.current?.id ||
@@ -25617,17 +25898,28 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
 
                         let jobDetail: any = null
                         if (jobId) {
-                            try {
-                                const detailRes = await fetch(
-                                    `${jobsApiUrl}/jobs/${jobId}`,
-                                    { signal: controller.signal }
-                                )
-                                if (detailRes.ok) {
-                                    jobDetail = await detailRes.json()
+                            const cached = readJobDetailCache(jobId, jobsApiUrl)
+                            if (cached) {
+                                // Reconstruct the shape the model expects from the cache entry.
+                                jobDetail = {
+                                    id: jobId,
+                                    job_description: cached.desc,
+                                    job_summary: cached.detailSummary,
+                                    visa_sponsorship: cached.detailVisaSponsorship,
+                                    company: { description: cached.detailCompanyDesc },
+                                    keywords: cached.apiKeywords,
                                 }
-                            } catch (err) {
-                                if ((err as Error).name !== "AbortError")
-                                    console.error("get_job_details fetch:", err)
+                            } else {
+                                try {
+                                    const detailRes = await fetch(
+                                        `${jobsApiUrl}/jobs/${jobId}`,
+                                        { signal: controller.signal }
+                                    )
+                                    if (detailRes.ok) jobDetail = await detailRes.json()
+                                } catch (err) {
+                                    if ((err as Error).name !== "AbortError")
+                                        console.error("get_job_details fetch:", err)
+                                }
                             }
                         }
 
@@ -25769,8 +26061,9 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 // Suggested replies are now parsed inline from the model's own
                 // ```curastem-suggestions delimiter block (see stream loop above),
                 // eliminating the extra round-trip API call per turn.
+                return true
             } catch (err: any) {
-                if (err.name === "AbortError") return
+                if (err.name === "AbortError") return false
                 console.error("AI Error:", err)
                 setMessages((prev) => {
                     const newArr = [...prev]
@@ -25786,6 +26079,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     }
                     return newArr
                 })
+                return false
             } finally {
                 setIsLoading(false)
                 if (dataConnectionsRef.current.size > 0) {
@@ -26048,7 +26342,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     localStorage.removeItem("curastem_ban_expiry")
                 }
                 setInputText("")
-                return
+                return true
             }
 
             // Clear whiteboard shortcut — intercept before hitting the AI.
@@ -26076,7 +26370,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     { role: "user", text: textToCheck.trim() },
                     { role: "model", text: "Whiteboard cleared." },
                 ])
-                return
+                return true
             }
 
             if (
@@ -26084,7 +26378,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 attachments.length === 0 &&
                 selectedSkills.length === 0
             )
-                return
+                return false
 
             // Clear AI suggestions when user sends a message
             setAiGeneratedSuggestions([])
@@ -26326,7 +26620,11 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 })
             }
 
-            await generateAIResponse(textToSend, attachmentsToSend, "user")
+            return await generateAIResponse(
+                textToSend,
+                attachmentsToSend,
+                "user"
+            )
         },
         [
             inputText,
@@ -26776,6 +27074,20 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
     const isAgentSidebarMode = !isMobileLayout && isAgentOpen
     const isMobileAgentMode = isMobileLayout && isAgentOpen
 
+    // Safari: dismiss main-chat composer focus when the agent sheet opens (keyboard over the tool).
+    React.useEffect(() => {
+        if (!isMobileAgentMode) return
+        const ae = document.activeElement as HTMLElement | null
+        if (!ae || ae.closest?.(".MobileToolOverlay")) return
+        if (
+            ae.isContentEditable ||
+            ae.closest?.(".ChatTextInput") ||
+            ae.closest?.(".ChatInputWrapper")
+        ) {
+            ae.blur()
+        }
+    }, [isMobileAgentMode])
+
     let finalWidth = 0
     let finalHeight = 0
     let shouldUseHorizontalLayout = !isMobileLayout && !isAgentSidebarMode
@@ -27102,45 +27414,38 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
             // written from inside the async create_resume tool handler.
             resumeJobIdRef.current = job.id
 
-            // Phase 1 — "fading": job detail content blurs out (keywords stay
-            // via overlay at startX/Y). Toolbar changes instantly to DocEditor.
-            setResumeCapturedItems(captured)
-            setResumeAnimKeywords(keywords)
-            setResumeUsedKeywords([])
-            setResumeAnimPhase("fading")
-            setDocContent("")
-            setDocType("resume")
-            setIsDocOpen(true)
-            isDocOpenRef.current = true
+            const startResumeOrbitAnimation = () => {
+                setResumeCapturedItems(captured)
+                setResumeUsedKeywords([])
+                setResumeAnimPhase("fading")
+                setDocContent("")
+                setDocType("resume")
+                setIsDocOpen(true)
+                isDocOpenRef.current = true
+                return setTimeout(() => {
+                    setResumeAnimPhase("orbiting")
+                }, 250)
+            }
 
-            // Phase 2 — "orbiting": effectively immediate after the fade.
-            const orbitTimer = setTimeout(() => {
-                setResumeAnimPhase("orbiting")
-            }, 250)
-
-            // Check if we already generated a resume for this job.
-            // If so: play the same animation but skip the AI call —
-            // load cached HTML, orbit briefly, then land.
+            // Cached resume — no API round-trip; safe to orbit immediately.
             const cachedHtml = resumeCache.current.get(job.id)
             if (cachedHtml) {
+                startResumeOrbitAnimation()
                 const landTimer = setTimeout(() => {
-                    const used = keywords.filter((k) =>
-                        cachedHtml.includes(k)
+                    const used = capturedOrbitWordsInHtml(
+                        cachedHtml,
+                        captured.map((c) => c.word)
                     )
-                    // Re-inject markers so the landing scan has direct targets
                     const markedContent = markKeywordsInHtml(cachedHtml, used)
                     setDocContent(markedContent)
                     setResumeUsedKeywords(used)
                     setResumeAnimPhase("landing")
-                }, 2200) // orbit for ~2 s before landing
+                }, 2200)
                 return () => {
-                    clearTimeout(orbitTimer)
                     clearTimeout(landTimer)
                 }
             }
 
-            // Fresh generation — pre-load all context client-side so the
-            // model only needs to call create_resume in a single hop.
             const savedResume = getResume()
             const favorites = getMemories()
 
@@ -27169,16 +27474,17 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 contextParts.join("\n\n") +
                 `\n\nWrite every section in full — do not ask questions, do not call any other tools first.`
 
-            const sent = await handleSendMessage(displayText, aiText)
-            if (sent === false) {
-                // Send was rejected (rate limit, daily limit, etc.) — roll back
-                // all animation state so the user stays on the job details page.
+            const orbitTimer = startResumeOrbitAnimation()
+            const sentOk = await handleSendMessage(displayText, aiText)
+            if (sentOk !== true) {
                 clearTimeout(orbitTimer)
+                resumeJobIdRef.current = null
                 setResumeAnimPhase("idle")
                 setResumeCapturedItems([])
                 setResumeUsedKeywords([])
                 setIsDocOpen(false)
                 isDocOpenRef.current = false
+                return
             }
         },
         [handleSendMessage]
@@ -27190,10 +27496,13 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
     const renderActiveTool = (isOverlay: boolean) => {
         // During fading: keep JobDetailPanel mounted so its content fades out.
         // From orbiting onwards: switch to DocEditor (already isDocOpen=true).
+        // After the keyword animation we reset phase to idle — if the doc is
+        // still open, do not bring the job panel back on top of the resume.
         const showJobPanel =
             isJobOpen &&
             selectedJob &&
-            (resumeAnimPhase === "idle" || resumeAnimPhase === "fading")
+            (resumeAnimPhase === "fading" ||
+                (resumeAnimPhase === "idle" && !isDocOpen))
         const showMobileOverlay =
             isMobileLayout &&
             (showJobPanel || isDocOpen || isAppOpen)
@@ -27320,7 +27629,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                             prev.filter((s) => s.id !== id)
                         )
                     }
-                    rootStyle={{ pointerEvents: "none" }}
+                    overlayToolComposer
                 />
             </div>
         )
@@ -27332,7 +27641,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                         width: "100%",
                         height: "100%",
                         position: "relative",
-                        overflow: "hidden",
+                        overflow: isMobileLayout ? "hidden" : "visible",
                     }}
                 >
                     <JobDetailPanel
@@ -27343,20 +27652,31 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                         isMobile={isMobileLayout}
                         resumeAnimPhase={resumeAnimPhase}
                         onCreateResume={handleCreateResume}
+                        jobSwipeDeck={jobCycleDeck}
+                        onSwipeCycleJob={
+                            isMobileLayout && jobCycleDeck.length > 1
+                                ? (d) => cycleJobDetail(d)
+                                : undefined
+                        }
+                        mobileToolGestureAxis={mobileToolGestureAxis}
                     />
                     {mobileOverlayInput}
                 </div>
             )
         }
+        const toolPanelRadius = isMobileLayout
+            ? "28px 28px 0 0"
+            : "28px 0 0 28px"
         return (
             <div
                 style={{
                     width: "100%",
                     height: "100%",
                     position: "relative",
-                    overflow: "hidden",
+                    overflow: isMobileLayout ? "hidden" : "visible",
                 }}
             >
+            {/* Shell draws shadow; inner clips scroll — overflow:hidden on the same node as box-shadow clips the shadow. */}
             <div
                 style={{
                     width: "100%",
@@ -27368,17 +27688,27 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                             : chatThemeColors.background,
                     display: "flex",
                     flexDirection: "column",
-                    overflow: "hidden",
-                    borderRadius: isMobileLayout
-                        ? "28px 28px 0 0"
-                        : "28px 0 0 28px",
+                    overflow: "visible",
+                    borderRadius: toolPanelRadius,
                     boxShadow:
-                        !isMobileLayout && !isWhiteboardOpen
+                        !isMobileLayout &&
+                        !isWhiteboardOpen &&
+                        themeColors.background === lightColors.background
                             ? "2px 0 24px 2px rgba(0,0,0,0.04)"
                             : "none",
                     border: "none",
-                    // Whiteboard: ChatInput in flow pushes content up; docs/app: overlay
                     paddingBottom: 0,
+                }}
+            >
+            <div
+                style={{
+                    width: "100%",
+                    minHeight: 0,
+                    flex: 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    overflow: "hidden",
+                    borderRadius: toolPanelRadius,
                 }}
             >
                 {/* 
@@ -27985,9 +28315,11 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                 )
                             }
                             rootStyle={{ maxWidth: 816 }}
+                            overlayToolComposer
                         />
                     </div>
                 )}
+            </div>
             </div>
             {mobileOverlayInput}
             </div>
@@ -28097,7 +28429,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                         display: "flex",
                         flexDirection: "column",
                         gap: 0,
-                        overscrollBehavior: "contain",
+                        overscrollBehavior: "none",
                         WebkitOverflowScrolling: "touch",
                         touchAction: "pan-y",
                         position: "relative",
@@ -28117,6 +28449,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                 themeColors={themeColors}
                                 onOpenSettings={() => setShowYouSettings(true)}
                                 onJobClick={openJobDetail}
+                                onHomepageDeckJobs={handleHomepageDeckJobs}
                             />
                         )}
                     {messages.map((msg, idx) => {
@@ -28163,28 +28496,11 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                     isDocOpen={isDocOpen}
                                     isWhiteboardOpen={isWhiteboardOpen}
                                     isAppOpen={isAppOpen}
-                                    onJobClick={(job) => {
-                                        // Convert JobSnippet → HomepageJob and open right sidebar
-                                        openJobDetail({
-                                            id: job.id,
-                                            title: job.title,
-                                            company: {
-                                                name: job.company,
-                                                logo_url: job.company_logo ?? null,
-                                                description: null,
-                                                website_url: null,
-                                                linkedin_url: null,
-                                                x_url: null,
-                                            },
-                                            posted_at: job.posted_at ?? null,
-                                            apply_url: job.apply_url ?? "",
-                                            locations: job.locations ?? null,
-                                            employment_type: job.employment_type ?? null,
-                                            workplace_type: job.workplace_type ?? null,
-                                            salary: null,
-                                            job_summary: job.summary ?? null,
-                                        })
-                                    }}
+                                    onJobClick={(job) =>
+                                        openJobDetail(
+                                            jobSnippetToHomepageJob(job)
+                                        )
+                                    }
                                 />
                                 {shouldShowAd && (
                                     <AdCarousel
@@ -29348,9 +29664,17 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 left: 0,
                 right: 0,
                 bottom: 0,
+                overscrollBehavior: "none",
                 // touchAction: "none", // Removed to fix mobile tap accuracy issues
             }}
         >
+            {/* JobSkeleton (homepage + job detail panel) — keyframes must live outside conditional homepage mount. */}
+            <style>{`
+                @keyframes homepageSkeleton {
+                    0%, 100% { opacity: 0.5; }
+                    50% { opacity: 1; }
+                }
+            `}</style>
             {/* --- SIDEBAR & BUTTON --- */}
             <button
                 data-svg-wrapper
@@ -30994,122 +31318,28 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
             )}
 
             {/* SETTINGS OVERLAY */}
-            <AnimatePresence>
-                {showYouSettings && (
-                    <div
-                        style={{
-                            position: "fixed",
-                            inset: 0,
-                            zIndex: 30000,
-                            display: "flex",
-                            justifyContent: isMobileLayout
-                                ? "flex-end"
-                                : "center",
-                            alignItems: isMobileLayout ? "flex-end" : "center",
-                            pointerEvents: "auto",
-                        }}
-                    >
-                        {/* Background Dimmer — matches video call overlay timing */}
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{
-                                opacity: 1,
-                                transition: isMobileLayout
-                                    ? { duration: 0.2 }
-                                    : { duration: 0.2 },
-                            }}
-                            exit={{
-                                opacity: 0,
-                                transition: isMobileLayout
-                                    ? { duration: 0.2 }
-                                    : { duration: 0.2 },
-                            }}
-                            style={{
-                                position: "absolute",
-                                inset: 0,
-                                background: themeColors.overlay.black,
-                            }}
-                            onClick={() => setShowYouSettings(false)}
-                        />
-
-                        {/* Content Card — desktop animation matches video call overlay (BaseModalOverlay) */}
-                        <motion.div
-                            data-layer="settings overlay"
-                            className="SettingsOverlay"
-                            aria-label="Your profile settings"
-                            initial={
-                                isMobileLayout
-                                    ? { y: "100%", scale: 0, opacity: 0 }
-                                    : { scale: 0.95, opacity: 0 }
-                            }
-                            animate={
-                                isMobileLayout
-                                    ? {
-                                          y: "0%",
-                                          scale: 1,
-                                          opacity: 1,
-                                          transition: {
-                                              duration: 0.25,
-                                              ease: "easeInOut",
-                                          },
-                                      }
-                                    : {
-                                          scale: 1,
-                                          opacity: 1,
-                                          transition: {
-                                              duration: 0.2,
-                                              ease: [0.4, 0, 0.2, 1],
-                                          },
-                                      }
-                            }
-                            exit={
-                                isMobileLayout
-                                    ? {
-                                          y: "100%",
-                                          scale: 0,
-                                          opacity: 0,
-                                          transition: {
-                                              duration: 0.25,
-                                              ease: "easeInOut",
-                                          },
-                                      }
-                                    : {
-                                          scale: 0.95,
-                                          opacity: 0,
-                                          transition: {
-                                              duration: 0.2,
-                                              ease: [0.4, 0, 0.2, 1],
-                                          },
-                                      }
-                            }
-                            style={{
-                                flex: isMobileLayout ? "none" : "1 1 0",
-                                width: isMobileLayout ? "100%" : undefined,
-                                height: isMobileLayout
-                                    ? "calc(100% - 16px)"
-                                    : "100%",
-                                maxWidth: isMobileLayout ? "none" : 400,
-                                maxHeight: isMobileLayout ? "none" : 600,
-                                background: themeColors.background,
-                                boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.04)",
-                                overflow: "hidden",
-                                borderRadius: isMobileLayout
-                                    ? "24px 24px 0 0"
-                                    : 48,
-                                outline:
-                                    "0.33px ${themeColors.hover.strong} solid",
-                                outlineOffset: "-0.33px",
-                                flexDirection: "column",
-                                justifyContent: "flex-start",
-                                alignItems: "flex-start",
-                                gap: 0,
-                                display: "flex",
-                                position: "relative",
-                                zIndex: 1,
-                                transformOrigin: "center",
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                        >
+            <ModalSheet
+                isOpen={showYouSettings}
+                onClose={() => setShowYouSettings(false)}
+                themeColors={themeColors}
+                zIndex={30000}
+                className="SettingsOverlay"
+                dragY={isMobileLayout ? settingsOverlayDragY : undefined}
+                sheetStyle={{
+                    flex: isMobileLayout ? "none" : "1 1 0",
+                    width: isMobileLayout ? "100%" : undefined,
+                    height: isMobileLayout ? "calc(100% - 16px)" : "100%",
+                    maxWidth: isMobileLayout ? "none" : 400,
+                    maxHeight: isMobileLayout ? "none" : 600,
+                    boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.04)",
+                    borderRadius: isMobileLayout ? "24px 24px 0 0" : 48,
+                    outline: `0.33px ${themeColors.hover.strong} solid`,
+                    outlineOffset: "-0.33px",
+                    justifyContent: "flex-start",
+                    alignItems: "flex-start",
+                }}
+                aria-label="Your profile settings"
+            >
                             {/* Floating gradient header — position:absolute over the scroll body */}
                             <div
                                 data-layer="settings header"
@@ -31222,6 +31452,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                             {/* Vertically scrollable inner wrapper — paddingTop accounts for floating header */}
                             <div
                                 className="SettingsScrollBody"
+                                {...(isMobileLayout ? { "data-pull-scroll": "1" } : {})}
                                 style={{
                                     width: "100%",
                                     flex: "1 1 0",
@@ -31842,10 +32073,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                 })()}
                             </div>
                             </div>{/* end SettingsScrollBody */}
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+            </ModalSheet>
 
             {/* Hidden file input — chat attachments */}
             <input
@@ -31895,6 +32123,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                     width: "100%",
                     height: "100%",
                     overflow: "hidden",
+                    overscrollBehavior: "none",
                     // Mobile: Slide content to the right when sidebar is open to reveal it
                     x: isMobileLayout ? contentX : 0,
                 }}
@@ -32186,27 +32415,26 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
             </motion.main>
 
             {/* MOBILE OVERLAY (For Tools) */}
-            <AnimatePresence>
-                {isMobileAgentMode && (
-                    <motion.div
-                        data-layer="mobile-tool-overlay"
-                        className="MobileToolOverlay"
-                        initial={{ y: "100%", scale: 0, opacity: 0 }}
-                        animate={{ y: "0%", scale: 1, opacity: 1 }}
-                        exit={{ y: "100%", scale: 0, opacity: 0 }}
-                        transition={{ duration: 0.25, ease: "easeInOut" }}
-                        style={{
-                            position: "fixed",
-                            inset: 0,
-                            zIndex: 2000,
-                            background: themeColors.background,
-                            transformOrigin: "bottom center",
-                        }}
-                    >
-                        {renderActiveTool(true)}
-                    </motion.div>
-                )}
-            </AnimatePresence>
+            <ModalSheet
+                isOpen={isMobileAgentMode}
+                onClose={dismissMobileToolOverlay}
+                themeColors={themeColors}
+                zIndex={30000}
+                mobileOnly
+                className="MobileToolOverlay"
+                dragY={overlayDragY}
+                anchorDataLayer="mobile-tool-overlay"
+                sheetStyle={{
+                    position: "absolute",
+                    top: "max(16px, env(safe-area-inset-top, 0px))",
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    borderRadius: "28px 28px 0 0",
+                }}
+            >
+                {renderActiveTool(true)}
+            </ModalSheet>
 
             {/* REPORT MODAL */}
             <ReportModal
@@ -32296,13 +32524,16 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
             </div>
 
             {/* WELCOME OVERLAY */}
-            <AnimatePresence>
+            <AnimatePresence initial={false}>
                 {showWelcome && (
                     <motion.div
-                        initial={{ opacity: 0 }}
+                        initial={{ opacity: 1 }}
                         animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ duration: 0.2 }}
+                        exit={{
+                            opacity: 0,
+                            transition: { duration: 0.2, ease: "easeIn" },
+                        }}
+                        transition={{ duration: 0 }}
                         style={{
                             position: "fixed",
                             zIndex: 100000,
@@ -32717,10 +32948,10 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                 textColor={themeColors.text.primary}
                 dimColor={themeColors.text.tertiary}
                 onAllSettled={() =>
-                    // 1s settle window so keywords visibly sit in place
-                    // before the resume content fades in beneath them
-                    setTimeout(() => setResumeAnimPhase("done"), 1000)
+                    // Brief hold so landed keywords read clearly before the doc fades in
+                    setTimeout(() => setResumeAnimPhase("done"), 50)
                 }
+                onRevealComplete={handleResumeKeywordRevealComplete}
             />
         </div>
     )
