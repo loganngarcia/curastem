@@ -9,6 +9,7 @@ import { cn, formatDate } from "@/lib/utils";
 import BlogEditor, { type BlogEditorRef } from "@/components/BlogEditor";
 import SettingsModal from "@/components/SettingsModal";
 import ErrorModal from "@/components/ErrorModal";
+import { ChatMarkdown } from "@/components/ChatMarkdown";
 
 interface Message {
   role: "user" | "assistant";
@@ -116,6 +117,13 @@ const BLOG_PANEL_MIN = 400;
 const BLOG_EDITOR_BG = "hsl(0, 0%, 100%)"; // curastem themeColors.background (light)
 const BLOG_EDITOR_SHADOW = "-2px 0 24px 2px rgba(0,0,0,0.04)"; // curastem-style shadow (left edge of right panel)
 
+/** Default chips above input — web.tsx `defaultSuggestions` pattern (light theme values). */
+const DEFAULT_CHAT_SUGGESTIONS = [
+  "Help with onboarding",
+  "Blog ideas",
+  "Image suggestions",
+] as const;
+
 export default function ChatPage() {
   const router = useRouter();
   const [isMobileLayout, setIsMobileLayout] = useState(false);
@@ -157,6 +165,7 @@ export default function ChatPage() {
   });
   const [isSidebarBtnHovered, setIsSidebarBtnHovered] = useState(false);
   const [isCloseSidebarHovered, setIsCloseSidebarHovered] = useState(false);
+  const [isNewChatTopRightHovered, setIsNewChatTopRightHovered] = useState(false);
 
   // Spring-animated sidebar motion values — matches web.tsx
   const sidebarX = useMotionValue(-260);
@@ -483,6 +492,10 @@ export default function ChatPage() {
   };
 
   const handleNewChat = () => {
+    readerDoneRef.current = true;
+    abortControllerRef.current?.abort();
+    setLoading(false);
+    setIsBlogStreaming(false);
     setSelectedBlog(null);
     setIsCreating(false);
     setStreamingBlogContent("");
@@ -495,7 +508,7 @@ export default function ChatPage() {
     setPendingEditImage(null);
     isBuildingBlogRef.current = false;
     buildingContentRef.current = "";
-    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
   };
 
   const handleSelectChat = (chat: SavedChat) => {
@@ -979,6 +992,14 @@ export default function ChatPage() {
     chat.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const userMessageCount = useMemo(
+    () => messages.filter((m) => m.role === "user").length,
+    [messages]
+  );
+  /** web.tsx: default suggestion row only before first user message in this chat. */
+  const showDefaultSuggestions =
+    userMessageCount === 0 && !isCreating && !streamingBlogContent;
+
   return (
     <div className="flex bg-white overflow-hidden text-black font-sans relative" style={{ height: "100dvh" }} role="main" aria-label="Curastem Blog Tool">
 
@@ -1393,8 +1414,8 @@ export default function ChatPage() {
                   return (
                     <div key={i} className="animate-fade-in" data-label={`message-${msg.role}-${i}`} role="article" style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", width: "100%", scrollMarginTop: 24, marginTop: msg.role === "user" ? 24 : 0, marginBottom: msg.role === "user" ? 8 : 0 }}>
                       <div style={{ maxWidth: msg.role === "user" ? "80%" : "100%", width: msg.role === "user" ? "auto" : "100%", display: "flex", flexDirection: "column", gap: 8, alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
-                        <div style={{ padding: msg.role === "user" ? "6px 16px" : 0, borderRadius: msg.role === "user" ? 20 : 0, background: msg.role === "user" ? "var(--cs-hover-message)" : "transparent", color: "var(--cs-text-primary)", fontSize: 16, lineHeight: 1.6, maxWidth: "100%", minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap", fontFamily: "Inter, system-ui, sans-serif" }}>
-                          {msg.content}
+                        <div style={{ padding: msg.role === "user" ? "6px 16px" : 0, borderRadius: msg.role === "user" ? 20 : 0, background: msg.role === "user" ? "var(--cs-hover-message)" : "transparent", color: "var(--cs-text-primary)", fontSize: 16, lineHeight: 1.6, maxWidth: "100%", minWidth: 0, fontFamily: "Inter, system-ui, sans-serif" }}>
+                          <ChatMarkdown content={msg.content} />
                         </div>
                       </div>
                     </div>
@@ -1426,12 +1447,238 @@ export default function ChatPage() {
             </div>
           )}
 
-        {/* Chat Input Bar — in chat panel (Publish moved to blog editor bottom right) */}
-        <div className={cn(
-          "absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-white via-white/80 to-transparent pt-16 md:pt-20 z-20",
-          selectedBlog && "px-4 md:px-12"
-        )} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
-          <form onSubmit={handleSend} className="w-full max-w-[816px] mx-auto" aria-label="Chat form" data-label="chat-form">
+        {/* New Chat (top right of chat panel) — same position and control as web.tsx RightContentPanel */}
+        {messages.length > 0 && (
+          <>
+            <style>{`
+              [data-layer="new chat"] { background: transparent; }
+              [data-layer="new chat"]:hover { background: var(--cs-hover-medium); }
+            `}</style>
+            <div
+              data-svg-wrapper
+              data-layer="new chat"
+              aria-label="Start new chat"
+              role="button"
+              tabIndex={0}
+              onMouseEnter={() => setIsNewChatTopRightHovered(true)}
+              onMouseLeave={() => setIsNewChatTopRightHovered(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setIsNewChatTopRightHovered(false);
+                  handleNewChat();
+                }
+              }}
+              style={{
+                right: 8,
+                top: 8,
+                position: "absolute",
+                zIndex: 100,
+                cursor: "pointer",
+                borderRadius: "50%",
+                width: 36,
+                height: 36,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsNewChatTopRightHovered(false);
+                handleNewChat();
+              }}
+            >
+              {isNewChatTopRightHovered && (
+                <div
+                  style={{
+                    position: "absolute",
+                    right: "100%",
+                    top: "50%",
+                    transform: "translate(-8px, -50%)",
+                    whiteSpace: "nowrap",
+                    background: "var(--cs-surface)",
+                    color: "var(--cs-text-primary)",
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontFamily: "Inter, system-ui, sans-serif",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  New chat
+                </div>
+              )}
+              <svg
+                width="36"
+                height="36"
+                viewBox="0 0 36 36"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                style={{ pointerEvents: "none" }}
+                aria-hidden
+              >
+                <path
+                  d="M24.9998 18.0001C24.9998 21.1823 24.9998 22.773 23.9747 23.7615C22.9496 24.75 21.2992 24.75 17.9999 24.75C14.6998 24.75 13.0502 24.75 12.0251 23.7615C11 22.773 11 21.1816 11 18.0001C11 14.8179 11 13.2272 12.0251 12.2387C13.0502 11.2502 14.7006 11.2502 17.9999 11.2502M16.0811 17.3626C15.8157 17.619 15.6666 17.9664 15.6666 18.3286V20.2501H17.6717C18.0473 20.2501 18.4082 20.1061 18.6742 19.8496L24.5852 14.1467C24.7168 14.0198 24.8213 13.8691 24.8925 13.7033C24.9637 13.5375 25.0004 13.3598 25.0004 13.1803C25.0004 13.0008 24.9637 12.8231 24.8925 12.6573C24.8213 12.4915 24.7168 12.3409 24.5852 12.214L24.0011 11.6507C23.8695 11.5237 23.7132 11.4229 23.5412 11.3541C23.3692 11.2854 23.1848 11.25 22.9986 11.25C22.8124 11.25 22.628 11.2854 22.4559 11.3541C22.2839 11.4229 22.1276 11.5237 21.996 11.6507L16.0811 17.3626Z"
+                  stroke="var(--cs-text-primary)"
+                  strokeOpacity={0.95}
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+          </>
+        )}
+
+        {/* Chat input area — web.tsx bottom stack: optional default suggestions, then input bar */}
+        <div
+          className={cn(
+            "absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center",
+            showDefaultSuggestions
+              ? cn("px-4", selectedBlog ? "md:px-12" : "md:px-6")
+              : cn(
+                  "bg-gradient-to-t from-white via-white/80 to-transparent p-4 md:p-6 pt-16 md:pt-20",
+                  selectedBlog && "md:px-12"
+                )
+          )}
+          style={{
+            width: "100%",
+            justifyContent: "flex-end",
+            pointerEvents: showDefaultSuggestions ? "none" : undefined,
+            paddingTop: showDefaultSuggestions ? 36 : undefined,
+            paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+          }}
+        >
+          <form
+            onSubmit={handleSend}
+            className="w-full max-w-[816px] mx-auto relative"
+            aria-label="Chat form"
+            data-label="chat-form"
+            style={{ pointerEvents: "auto" }}
+          >
+            {showDefaultSuggestions && (
+              <>
+                <div
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background:
+                      "linear-gradient(180deg, hsla(0, 0%, 98%, 0) 0%, hsl(0, 0%, 100%) 36px)",
+                    pointerEvents: "none",
+                    zIndex: -1,
+                  }}
+                />
+                <div
+                  data-layer="ai suggested replies"
+                  className="AiSuggestedReplies ai-suggested-replies-scroll"
+                  style={{
+                    width: "100%",
+                    maxWidth: 816,
+                    display: "flex",
+                    flexDirection: "row",
+                    justifyContent: "flex-start",
+                    alignItems: "center",
+                    gap: 8,
+                    paddingLeft: isMobileLayout ? 16 : 24,
+                    paddingRight: isMobileLayout ? 16 : 24,
+                    paddingBottom: 4,
+                    paddingTop: 1,
+                    overflowX: "auto",
+                    pointerEvents: "auto",
+                    whiteSpace: "nowrap",
+                  }}
+                  onPointerDownCapture={(e) => e.stopPropagation()}
+                  onTouchStartCapture={(e) => e.stopPropagation()}
+                  onTouchMoveCapture={(e) => e.stopPropagation()}
+                  onTouchEndCapture={(e) => e.stopPropagation()}
+                >
+                  {DEFAULT_CHAT_SUGGESTIONS.map((suggestion, index) => (
+                    <div
+                      key={suggestion}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={suggestion}
+                      data-label={`default-suggestion-${index + 1}`}
+                      className={`Suggestion${index + 1}`}
+                      onClick={() => {
+                        if (!loading) void sendMessage(suggestion);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          if (!loading) void sendMessage(suggestion);
+                        }
+                      }}
+                      style={{
+                        maxWidth: 380,
+                        paddingLeft: 12,
+                        paddingRight: 12,
+                        paddingTop: 8,
+                        paddingBottom: 8,
+                        overflow: "visible",
+                        borderRadius: 24,
+                        outline: "none",
+                        justifyContent: "flex-start",
+                        alignItems: "center",
+                        gap: 6,
+                        display: "inline-flex",
+                        cursor: loading ? "default" : "pointer",
+                        flexShrink: 0,
+                        background: "hsl(0, 0%, 100%)",
+                        border: "0.33px solid hsla(0, 0%, 0%, 0.2)",
+                        color: "var(--cs-text-secondary)",
+                        transition: "background-color 0.2s ease",
+                        pointerEvents: "auto",
+                        opacity: loading ? 0.5 : 1,
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!loading) {
+                          e.currentTarget.style.backgroundColor = "hsl(0, 0%, 96%)";
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = "hsl(0, 0%, 100%)";
+                      }}
+                      onFocus={(e) => {
+                        requestAnimationFrame(() => {
+                          if (e.currentTarget.matches(":focus-visible")) {
+                            e.currentTarget.style.outline = "1px solid hsl(204, 100%, 50%)";
+                            e.currentTarget.style.outlineOffset = "2px";
+                            e.currentTarget.style.boxShadow =
+                              "0 0 0 1px hsla(0, 0%, 10%, 1)";
+                          }
+                        });
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.outline = "none";
+                        e.currentTarget.style.boxShadow = "none";
+                      }}
+                    >
+                      <div
+                        style={{
+                          justifyContent: "center",
+                          display: "flex",
+                          flexDirection: "column",
+                          color: "var(--cs-text-secondary)",
+                          fontSize: 15,
+                          fontFamily: "Inter, system-ui, sans-serif",
+                          fontWeight: 400,
+                          lineHeight: "22.5px",
+                          wordWrap: "break-word",
+                        }}
+                      >
+                        {suggestion}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
             {/* Chat input bar — exact Curastem design (web.tsx ChatInputBar) */}
             <div
               data-layer="chat-input-bar"

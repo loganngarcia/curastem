@@ -220,3 +220,231 @@
   border-top: 1px solid #e5e7eb;
   margin: 2rem 0;
 }
+
+/* Chat panel — full GFM markdown (react-markdown + remark-gfm) */
+.chat-markdown {
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--cs-text-primary);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p {
+  margin: 0.45em 0;
+}
+
+.chat-markdown h1 {
+  font-size: 1.35em;
+  font-weight: 700;
+  margin: 0.65em 0 0.35em;
+  line-height: 1.25;
+}
+
+.chat-markdown h2 {
+  font-size: 1.22em;
+  font-weight: 650;
+  margin: 0.6em 0 0.3em;
+  line-height: 1.28;
+}
+
+.chat-markdown h3 {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin: 0.55em 0 0.28em;
+}
+
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 0.5em 0 0.25em;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0.45em 0;
+  padding-left: 1.45em;
+}
+
+.chat-markdown li {
+  margin: 0.2em 0;
+}
+
+.chat-markdown ul.contains-task-list {
+  list-style: none;
+  padding-left: 1.35em;
+}
+
+.chat-markdown li.task-list-item {
+  position: relative;
+}
+
+.chat-markdown li.task-list-item input {
+  margin-right: 0.4em;
+  vertical-align: middle;
+  pointer-events: none;
+}
+
+.chat-markdown blockquote {
+  margin: 0.5em 0;
+  padding: 0.15em 0 0.15em 0.85em;
+  border-left: 3px solid hsla(0, 0%, 0%, 0.15);
+  color: var(--cs-text-secondary);
+}
+
+.chat-markdown blockquote > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+  background: var(--cs-hover-message);
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
+}
+
+.chat-markdown pre {
+  margin: 0.55em 0;
+  padding: 0.7em 0.9em;
+  background: var(--cs-surface);
+  border-radius: 8px;
+  overflow-x: auto;
+  border: 0.33px solid hsla(0, 0%, 0%, 0.1);
+}
+
+.chat-markdown pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.84em;
+  line-height: 1.55;
+  border-radius: 0;
+}
+
+.chat-markdown .chat-markdown-table-wrap {
+  margin: 0.55em 0;
+  overflow-x: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.94em;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid hsla(0, 0%, 0%, 0.12);
+  padding: 0.35em 0.55em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-markdown th {
+  background: var(--cs-surface);
+  font-weight: 600;
+}
+
+.chat-markdown hr {
+  margin: 0.85em 0;
+  border: none;
+  border-top: 1px solid hsla(0, 0%, 0%, 0.12);
+}
+
+.chat-markdown a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 0.35em 0;
+  display: block;
+}
+
+.chat-markdown strong {
+  font-weight: 600;
+}
+
+.chat-markdown em {
+  font-style: italic;
+}
+
+.chat-markdown del,
+.chat-markdown s,
+.chat-markdown strike {
+  text-decoration: line-through;
+}
+
+.chat-markdown sub,
+.chat-markdown sup {
+  font-size: 0.8em;
+}
+
+.chat-markdown kbd {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  border: 1px solid hsla(0, 0%, 0%, 0.15);
+  background: var(--cs-surface);
+}
+
+.chat-markdown details {
+  margin: 0.5em 0;
+}
+
+.chat-markdown summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.chat-markdown section.footnotes {
+  margin-top: 0.85em;
+  padding-top: 0.65em;
+  border-top: 1px solid hsla(0, 0%, 0%, 0.1);
+  font-size: 0.88em;
+  color: var(--cs-text-secondary);
+}
+
+.chat-markdown dl {
+  margin: 0.45em 0;
+}
+
+.chat-markdown dt {
+  font-weight: 600;
+  margin-top: 0.35em;
+}
+
+.chat-markdown dd {
+  margin: 0.15em 0 0.35em 1em;
+}
+
+/* web.tsx AiSuggestedReplies — hide horizontal scrollbar */
+.ai-suggested-replies-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.ai-suggested-replies-scroll::-webkit-scrollbar {
+  display: none;
+}
