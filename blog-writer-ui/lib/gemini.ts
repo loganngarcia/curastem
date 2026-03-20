@@ -1,24 +1,25 @@
 import { GoogleGenAI, Type, type FunctionDeclaration } from "@google/genai";
 
 // ---------------------------------------------------------------------------
-// Client initialisation — Vertex AI via service account credentials.
-// GOOGLE_APPLICATION_CREDENTIALS_JSON  — service account key JSON (string)
-// GOOGLE_CLOUD_PROJECT                 — GCP project ID
-// Falls back to Gemini Developer API (GEMINI_API_KEY) if absent.
-//
-// In serverless environments (Vercel) we write the JSON to /tmp and point
-// GOOGLE_APPLICATION_CREDENTIALS at it — the standard ADC pattern.
+// Client initialisation
+// 1) GEMINI_API_KEY — Gemini Developer API (simplest for Vercel; set in env secrets)
+// 2) Else Vertex: GOOGLE_APPLICATION_CREDENTIALS_JSON + GOOGLE_CLOUD_PROJECT
+//    (serverless writes JSON to /tmp and sets GOOGLE_APPLICATION_CREDENTIALS)
 // ---------------------------------------------------------------------------
 import { writeFileSync, existsSync } from "fs";
 
 const CREDS_TMP_PATH = "/tmp/gcp-sa-credentials.json";
 
 function getClient(): GoogleGenAI {
+  const apiKey = (process.env.GEMINI_API_KEY || "").trim();
+  if (apiKey) {
+    return new GoogleGenAI({ apiKey });
+  }
+
   const credsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
   const project = process.env.GOOGLE_CLOUD_PROJECT?.trim();
 
   if (credsJson && project) {
-    // Write to /tmp once per cold start so ADC can find it
     if (!existsSync(CREDS_TMP_PATH)) {
       writeFileSync(CREDS_TMP_PATH, credsJson, "utf8");
     }
@@ -31,10 +32,9 @@ function getClient(): GoogleGenAI {
     });
   }
 
-  // Fallback — Gemini Developer API
-  const apiKey = (process.env.GEMINI_API_KEY || "").trim();
-  if (!apiKey) throw new Error("No credentials: set GOOGLE_APPLICATION_CREDENTIALS_JSON or GEMINI_API_KEY");
-  return new GoogleGenAI({ apiKey });
+  throw new Error(
+    "No credentials: set GEMINI_API_KEY (recommended) or GOOGLE_APPLICATION_CREDENTIALS_JSON + GOOGLE_CLOUD_PROJECT"
+  );
 }
 
 export const GEMINI_MODELS = {
@@ -308,8 +308,7 @@ export async function* streamChatWithTools(
 
 // ---------------------------------------------------------------------------
 // Image generation via Gemini 3.1 Flash Image — "Nano Banana 2"
-// Prefers Vertex AI (service account) over the Gemini Developer API (API key)
-// so no GEMINI_API_KEY HTTP-referrer restrictions apply.
+// Uses same auth as getClient() (API key or Vertex).
 // Returns a base64 data URL ready to upload to Framer.
 // ---------------------------------------------------------------------------
 export async function generateImageViaImagen(
@@ -343,7 +342,6 @@ STYLE:
 
   console.log(`[NanaBanana2] Generating image: subject="${subject}", aspect="${aspect}", size="${imageSize}"`);
 
-  // Always use Vertex AI — no fallback to the Gemini Developer API
   const ai = getClient();
   const response = await ai.models.generateContent({
     model: GEMINI_MODELS.NANO_BANANA_2,
@@ -361,11 +359,11 @@ STYLE:
   const imagePart = parts.find((p) => p.inlineData?.data);
   if (!imagePart?.inlineData) {
     throw new Error(
-      `No image returned from Nano Banana 2 (Vertex). Response: ${JSON.stringify(response).substring(0, 400)}`
+      `No image returned from Nano Banana 2. Response: ${JSON.stringify(response).substring(0, 400)}`
     );
   }
   const { mimeType, data: b64 } = imagePart.inlineData;
-  console.log(`[NanaBanana2/Vertex] Image generated (${b64.length} chars, ${mimeType})`);
+  console.log(`[NanaBanana2] Image generated (${b64.length} chars, ${mimeType})`);
   return `data:${mimeType};base64,${b64}`;
 }
 

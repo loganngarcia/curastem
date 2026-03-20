@@ -7,6 +7,22 @@ import { getBlogs, createOrUpdateBlog, uploadImageToFramer } from "@/lib/framer"
 import { generateBlogContent, generateImageConfigs, getRandomAccentColor } from "@/lib/blog-generator";
 import { generateImageViaImagen } from "@/lib/gemini";
 
+/** Google returns this when the API key has HTTP-referrer restrictions; server calls have no Referer. */
+function geminiReferrerBlockedMessage(errorText: string): string | undefined {
+  if (
+    errorText.includes("API_KEY_HTTP_REFERRER_BLOCKED") ||
+    (errorText.includes("referer") && errorText.includes("empty") && errorText.includes("PERMISSION_DENIED"))
+  ) {
+    return (
+      "Gemini API key is set to allow only certain websites (HTTP referrer). " +
+      "This app calls Gemini from the server, so the referer is empty and Google blocks the request. " +
+      "In Google AI Studio or Google Cloud Console, edit the key → Application restrictions → None " +
+      "(or create a new key with no referrer restriction). Keep the key only in Vercel environment variables."
+    );
+  }
+  return undefined;
+}
+
 const SYSTEM_PROMPT = `You are the Curastem Internal Blog Tool AI. Your role is to help create and manage research blog posts for the Curastem website.
 
 IMPORTANT: You can have casual conversations! Users may ask for blog ideas, brainstorm topics, ask questions, or just chat. You don't need to create a blog for every interaction. Only use the create_blog tool when the user explicitly wants to create a blog.
@@ -33,7 +49,7 @@ Structure and Formatting:
 - H2 statements should be 5-12 words, feel like pull quotes, emphasize key insights — plain language only, no metaphors or riddles
 - Never use em dashes (—), colons (:), or semicolons (;)
 - Do NOT add blank paragraphs (<p><br></p>) anywhere. Spacing is handled by CSS in both the editor and Framer CMS — manual spacer paragraphs create triple-spacing in Framer.
-- Blog length: Automatically determine the best length for the topic. Minimum: 800 words. Maximum: 1500 words.
+- Blog length: Automatically determine the best length for the topic. Minimum: 800 words. Maximum: 1500 words. Reach length in the main sections, not by repeating takeaways in multiple closing paragraphs.
 
 Tone and Voice:
 - Professional but accessible - write for educated readers who want clear information
@@ -56,7 +72,7 @@ Content Approach:
 - Explain "why" behind recommendations, not just "what"
 - Connect ideas with transitions that flow naturally
 - End sections with clear takeaways or forward-looking statements
-- End the blog with the final content paragraph — no closing remarks, no sign-offs, no "thank you", no "End of blog" or similar filler
+- End the blog with ONE clear sendoff only: either one closing <h3> plus at most two short <p> paragraphs, OR one closing <p> that lands the reader without restating the whole article. Do NOT stack multiple "in conclusion", "ultimately", or "both paths" paragraphs that repeat the same point. If you already said it, do not say it again in another closing paragraph.
 
 Paragraph Style:
 - Paragraphs should be 2-4 sentences typically
@@ -82,6 +98,7 @@ WHEN USER WANTS TO CREATE A BLOG:
 7. Include 3-6 H2 statements throughout the piece
 8. Do NOT add any <p><br></p> blank paragraphs — spacing is handled by CSS
 9. NEVER add closing remarks, sign-offs, or meta-text at the end. Do NOT write things like "End of blog", "Thank you", "Final word", "The Curastem Team", "Let's get to work", "See you in the next post", or any other closing statement. The blog ends with the last real content paragraph — nothing after that except the create_blog tool call.
+10. AFTER you call create_blog(title), output NO further assistant text in that same turn. Do not say the post was created, do not say content streamed to the editor, do not ask "anything else" or suggest other topics. Stop immediately after the tool call. The user sees the draft in the editor already.
 
 WHEN USER ASKS TO ADD AN IMAGE:
 - Call add_image with the exact H2 text and a description of what the image should show
@@ -96,7 +113,7 @@ WHEN USER ASKS TO EDIT THE OPEN BLOG (CRITICAL):
   6. For headings: copy the full tag e.g. <h3 dir="auto">The art of the professional narrative</h3>
   7. When asked to delete multiple paragraphs, use one operation per paragraph, each with "replace": "".
 
-Respond conversationally and naturally. Help with ideas, questions, or casual chat. Only use tools when the user explicitly wants to create a blog, list blogs, add an image, or edit a blog.`;
+Respond conversationally and naturally for normal chat, brainstorming, and edits. Only use tools when the user explicitly wants to create a blog, list blogs, add an image, or edit a blog. The sole exception: after create_blog in the blog-creation flow, do not add any conversational follow-up in that turn (see rule 10 above).`;
 
 // Convert OpenAI-style messages to Gemini contents format
 function toGeminiContents(
@@ -192,7 +209,8 @@ export async function POST(request: NextRequest) {
           controller.close();
         } catch (err) {
           console.error("Chat stream error:", err);
-          const msg = err instanceof Error ? err.message : String(err);
+          const raw = err instanceof Error ? err.message : String(err);
+          const msg = geminiReferrerBlockedMessage(raw) ?? raw;
           // No "n" field = stream-level error, frontend shows it in the chat bubble
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ t: "tool_error", err: msg })}\n\n`)
@@ -233,6 +251,10 @@ export async function POST(request: NextRequest) {
         { error: "Rate limit exceeded. Please try again in a moment." },
         { status: 429 }
       );
+    }
+    const referrerHint = geminiReferrerBlockedMessage(errorMessage);
+    if (referrerHint) {
+      return NextResponse.json({ error: referrerHint }, { status: 403 });
     }
     return NextResponse.json({ error: `Chat error: ${errorMessage}` }, { status: 500 });
   }

@@ -579,7 +579,7 @@ export default function ChatPage() {
     };
   }, [isResizing, handleResizePointerMove, handleResizePointerUp]);
 
-  // Computed for sidebar indicator: red dot when unsaved changes, none when saved
+  // Sidebar dots: red = not yet published to Framer (draft row); yellow = published but local edits not saved
   const blogHasChanges = useMemo(() => {
     if (!originalBlogState || !selectedBlog) return false;
     return (
@@ -1225,7 +1225,7 @@ export default function ChatPage() {
               </div>
           
           <div className="flex flex-col gap-0.5">
-            {/* Unsaved new blog — shown at top with red dot */}
+            {/* Draft not in CMS yet — red dot (not published) */}
             {unsavedBlog && (
               <div
                 role="button"
@@ -1263,9 +1263,11 @@ export default function ChatPage() {
                 }}
               >
                 <span className="truncate flex-1" style={{ fontFamily: "Inter" }}>{unsavedBlog.title}</span>
-                {(selectedBlog?.id === unsavedBlog.id ? blogHasChanges : true) && (
-                  <div className="h-2 w-2 rounded-full bg-red-500 flex-shrink-0" title="Unsaved" aria-hidden />
-                )}
+                <div
+                  className="h-2 w-2 rounded-full bg-red-500 flex-shrink-0"
+                  title="Not published yet"
+                  aria-label="Not published"
+                />
               </div>
             )}
 
@@ -1302,7 +1304,11 @@ export default function ChatPage() {
                 >
                   <span className="truncate flex-1" style={{ fontFamily: "Inter" }}>{blog.title}</span>
                   {selectedBlog?.id === blog.id && !loadingBlog && blogHasChanges && (
-                    <div className="h-2 w-2 rounded-full bg-red-500 flex-shrink-0" title="Unsaved changes" aria-hidden />
+                    <div
+                      className="h-2 w-2 rounded-full bg-amber-400 flex-shrink-0 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]"
+                      title="Published — unsaved changes"
+                      aria-label="Unsaved changes"
+                    />
                   )}
                   {loadingBlog && selectedBlog?.id === blog.id && (
                     <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" style={{ color: "var(--cs-text-secondary)" }} />
