@@ -10865,7 +10865,6 @@ const BigJobCard = ({
                             borderRadius: "50%",
                             overflow: "hidden",
                             flexShrink: 0,
-                            background: themeColors.surface,
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
@@ -11040,7 +11039,6 @@ const StackedJobCard = ({
                         borderRadius: "50%",
                         overflow: "hidden",
                         flexShrink: 0,
-                        background: themeColors.surface,
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -11182,7 +11180,6 @@ const RowJobCard = ({
                         borderRadius: "50%",
                         overflow: "hidden",
                         flexShrink: 0,
-                        background: themeColors.surface,
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -11923,28 +11920,18 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                 borderRadius: "50%",
                 overflow: "hidden",
                 flexShrink: 0,
-                background: themeColors.surface,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
             }}
         >
-            {job.company.logo_url ? (
+            {job.company.logo_url && (
                 <img
                     src={job.company.logo_url}
                     style={{
                         width: "100%",
                         height: "100%",
                         objectFit: "contain",
-                    }}
-                />
-            ) : (
-                <div
-                    style={{
-                        width: size,
-                        height: size,
-                        background: themeColors.surfaceHighlight,
-                        borderRadius: "50%",
                     }}
                 />
             )}
@@ -15688,35 +15675,18 @@ const MessageBubble = React.memo(
                                     cursor: onJobChipClick ? "pointer" : "default",
                                 }}
                             >
-                                <div
-                                    style={{
-                                        width: 16,
-                                        height: 16,
-                                        background: themeColors.surfaceHighlight,
-                                        overflow: "hidden",
-                                        borderRadius: 28,
-                                        justifyContent: "center",
-                                        alignItems: "center",
-                                        display: "flex",
-                                        flexShrink: 0,
-                                    }}
-                                >
-                                    {msg.jobContext.logoUrl ? (
-                                        <img
-                                            src={msg.jobContext.logoUrl}
-                                            style={{ width: 16, height: 16, objectFit: "cover" }}
-                                        />
-                                    ) : (
-                                        <div
-                                            style={{
-                                                width: 16,
-                                                height: 16,
-                                                background: themeColors.misc.graySolid,
-                                                borderRadius: 28,
-                                            }}
-                                        />
-                                    )}
-                                </div>
+                                {msg.jobContext.logoUrl && (
+                                    <img
+                                        src={msg.jobContext.logoUrl}
+                                        style={{
+                                            width: 16,
+                                            height: 16,
+                                            objectFit: "contain",
+                                            borderRadius: "50%",
+                                            flexShrink: 0,
+                                        }}
+                                    />
+                                )}
                                 <div
                                     style={{
                                         color: themeColors.text.primary,
@@ -27597,11 +27567,34 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
     )
 
     const handleIncomingPeerMessage = React.useCallback((payload: any) => {
+        if (payload.jobContext) {
+            // Persist so the chip can reopen the job on this peer's side too
+            writeJobChipStore({
+                id: payload.jobContext.id,
+                title: payload.jobContext.title,
+                company: {
+                    name: payload.jobContext.companyName,
+                    logo_url: payload.jobContext.logoUrl,
+                    description: null,
+                    website_url: null,
+                    linkedin_url: null,
+                    x_url: null,
+                },
+                posted_at: null,
+                apply_url: "",
+                locations: null,
+                employment_type: null,
+                workplace_type: null,
+                salary: null,
+                job_summary: null,
+            })
+        }
         const peerMsg: Message = {
             role: "peer",
             text: payload.text,
             skills: payload.skills,
             attachments: payload.attachments || [],
+            jobContext: payload.jobContext,
         }
 
         setMessages((prev) => [...prev, peerMsg])
@@ -28129,6 +28122,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                       }))
                                     : undefined,
                             attachments: validAttachments,
+                            jobContext: activeJob
+                                ? {
+                                      id: activeJob.id,
+                                      title: activeJob.title,
+                                      companyName: activeJob.company.name,
+                                      logoUrl: activeJob.company.logo_url,
+                                  }
+                                : undefined,
                         },
                     })
 
