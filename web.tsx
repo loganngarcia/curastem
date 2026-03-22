@@ -662,7 +662,7 @@ const darkColors = {
 
     semantic: {
         // Colors used for status indicators and UI feedback
-        accent: "hsl(202, 90%, 45%)", // #0B87DA - Blue, default student card color
+        accent: "hsl(202, 70%, 45%)", // Blue, muted for dark mode
     },
 
     overlay: {
@@ -5971,7 +5971,7 @@ const DocEditor = React.memo(function DocEditor({
 interface ChatInputProps {
     value: string
     onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void
-    onSend: () => void
+    onSend: (agentChip?: "app" | "doc" | "whiteboard" | null) => void
     onStop?: () => void
     onEndCall: () => void
     onFileSelect: () => void
@@ -6027,6 +6027,8 @@ interface ChatInputProps {
      * a job/doc/app is open (the default is to disable contentEditable to avoid double-keyboard UX).
      */
     overlayToolComposer?: boolean
+    /** Pre-seeds the agent chip shown in the two-row input bar. */
+    initialAgentChip?: "app" | "doc" | "whiteboard" | null
     /**
      * Applied from peer: sets the contenteditable HTML + extracts skills. seq increments each sync.
      * cursorOffset is the partner's caret position (character offset). When present and the local
@@ -6351,9 +6353,15 @@ const ChatInput = React.memo(function ChatInput({
     onHtmlChange,
     onCursorChange,
     overlayToolComposer = false,
+    initialAgentChip = null,
     peerSync,
 }: ChatInputProps) {
     const editableRef = React.useRef<HTMLDivElement | null>(null)
+
+    // Agent-mode chip shown in the two-row bottom bar (right of + button)
+    const [activeAgentChip, setActiveAgentChip] = React.useState<
+        "app" | "doc" | "whiteboard" | null
+    >(initialAgentChip)
 
     // Blur the input before sending — dismisses the soft keyboard on iOS/Android
     const sendAndDismissKeyboard = React.useCallback(() => {
@@ -6371,8 +6379,8 @@ const ChatInput = React.memo(function ChatInput({
                 document.body.removeChild(dummy)
             }
         }
-        onSend()
-    }, [onSend])
+        onSend(activeAgentChip)
+    }, [onSend, activeAgentChip])
 
     // Preserve contenteditable innerHTML across two-row/single-row layout switches
     const savedEditableContentRef = React.useRef<string>("")
@@ -6445,6 +6453,25 @@ const ChatInput = React.memo(function ChatInput({
         React.useState(false)
     const [isUploadButtonHovered, setIsUploadButtonHovered] =
         React.useState(false)
+    const [isChipHovered, setIsChipHovered] = React.useState(false)
+    const [chipLabelCollapsed, setChipLabelCollapsed] = React.useState(false)
+    const chipRowLeftRef = React.useRef<HTMLDivElement | null>(null)
+
+    // Collapse chip label when the left container is too narrow to show it
+    // comfortably (less than 4px gap from the right buttons).
+    // Full chip with label: ~36px + button, 4px gap, ~130px chip (icon+text+x).
+    // Icon-only chip: ~36px + button, 4px gap, ~52px chip (icon+x).
+    React.useEffect(() => {
+        if (!isMobileLayout || !activeAgentChip) return
+        const el = chipRowLeftRef.current
+        if (!el) return
+        const obs = new ResizeObserver(([entry]) => {
+            // +button(36) + gap(4) + full-chip(~130) + 4px buffer = ~174
+            setChipLabelCollapsed(entry.contentRect.width < 174)
+        })
+        obs.observe(el)
+        return () => obs.disconnect()
+    }, [isMobileLayout, activeAgentChip])
     const [isEndCallTooltipHovered, setIsEndCallTooltipHovered] =
         React.useState(false)
     const [showGradient, setShowGradient] = React.useState(true)
@@ -7144,15 +7171,33 @@ const ChatInput = React.memo(function ChatInput({
         (isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen) &&
         !overlayToolComposer
 
+    // On mobile overlay bars, block typing while AI is streaming
+    const mobileOverlayLoadingSuppressEditor =
+        isMobileLayout && overlayToolComposer && isLoading
+
+    const effectivePlaceholder =
+        isMobileLayout && overlayToolComposer && isLoading
+            ? "Thinking..."
+            : activeAgentChip === "doc"
+              ? "Ask to write anything"
+              : activeAgentChip === "app"
+                ? "What app do you want?"
+                : activeAgentChip === "whiteboard"
+                  ? "What do you want me to draw?"
+                  : placeholder
+
+    const isEditorSuppressed =
+        mobileToolSuppressEditor || mobileOverlayLoadingSuppressEditor
+
     // The contenteditable element shared between both layout branches
     const editableJSX = (
         <div
             ref={setEditableRef}
-            contentEditable={!mobileToolSuppressEditor}
+            contentEditable={!isEditorSuppressed}
             suppressContentEditableWarning
-            tabIndex={mobileToolSuppressEditor ? -1 : 1}
-            inputMode={mobileToolSuppressEditor ? "none" : undefined}
-            data-placeholder={placeholder}
+            tabIndex={isEditorSuppressed ? -1 : 1}
+            inputMode={isEditorSuppressed ? "none" : undefined}
+            data-placeholder={effectivePlaceholder}
             className="ChatTextInput"
             onInput={handleEditableInput}
             onKeyDown={handleEditableKeyDown}
@@ -7254,8 +7299,10 @@ const ChatInput = React.memo(function ChatInput({
         if (!value.trim()) setHasExpandedToTwoRows(false)
     }, [value])
 
-    // 2-row layout: text has ever wrapped/overflowed (sticky until user clears all text)
-    const useTwoRowLayout = value.trim().length > 0 && hasExpandedToTwoRows
+    // 2-row layout: text has ever wrapped/overflowed, OR an agent chip is active
+    const useTwoRowLayout =
+        (value.trim().length > 0 && hasExpandedToTwoRows) ||
+        activeAgentChip !== null
 
     // Clear contenteditable when parent resets value to "" (e.g. after send)
     const prevValueRef = React.useRef(value)
@@ -7372,6 +7419,7 @@ const ChatInput = React.memo(function ChatInput({
             className: string
             isDestructive: boolean
             hasSeparator?: boolean
+            trailingCheck?: boolean
         }[] = []
 
         const showShareScreen =
@@ -7491,7 +7539,7 @@ const ChatInput = React.memo(function ChatInput({
 
         items.push({
             id: "files",
-            label: "Add files & photos",
+            label: "Add photos & files",
             icon: (
                 <svg
                     width="15"
@@ -7520,24 +7568,8 @@ const ChatInput = React.memo(function ChatInput({
 
         items.push({
             id: "create_app",
-            label: isAppOpen ? "Close app" : "Create app",
-            icon: isAppOpen ? (
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                >
-                    <path
-                        d="M14 2L2 14M2 2L14 14"
-                        stroke={themeColors.destructive.light}
-                        strokeWidth="1.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    />
-                </svg>
-            ) : (
+            label: "Create app",
+            icon: (
                 <svg
                     width="16"
                     height="16"
@@ -7547,7 +7579,7 @@ const ChatInput = React.memo(function ChatInput({
                 >
                     <path
                         d="M8.47522 8.47522L14.3764 6.95631C15.2457 6.58346 15.1941 5.33387 14.297 5.03485L2.35569 1.05442C1.55185 0.786777 0.786777 1.55185 1.05442 2.35569L5.03485 14.297C5.33387 15.1941 6.58346 15.2457 6.95631 14.3764L8.47522 8.47522Z"
-                        stroke={themeColors.text.primary}
+                        stroke={activeAgentChip === "app" ? themeColors.semantic.accent : themeColors.text.primary}
                         strokeOpacity="0.95"
                         strokeWidth="1.2"
                         strokeLinecap="round"
@@ -7555,35 +7587,21 @@ const ChatInput = React.memo(function ChatInput({
                     />
                 </svg>
             ),
+            trailingCheck: activeAgentChip === "app",
             onClick: () => {
-                toggleApp?.()
+                if (!isAppOpen) toggleApp?.()
                 setShowMenu(false)
+                setActiveAgentChip(activeAgentChip === "app" ? null : "app")
             },
             className: "CreateApp",
-            isDestructive: isAppOpen,
+            isDestructive: false,
             hasSeparator: true,
         })
 
         items.push({
             id: "doc",
-            label: isDocOpen ? "Close docs" : "Make docs",
-            icon: isDocOpen ? (
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                >
-                    <path
-                        d="M14 2L2 14M2 2L14 14"
-                        stroke={themeColors.destructive.light}
-                        strokeWidth="1.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    />
-                </svg>
-            ) : (
+            label: "Make docs",
+            icon: (
                 <svg
                     width="16"
                     height="12"
@@ -7593,7 +7611,7 @@ const ChatInput = React.memo(function ChatInput({
                 >
                     <path
                         d="M0.599609 11.0021L8.48004 11.0018M0.599609 5.64345H15.0996M0.599609 0.599976H15.0996"
-                        stroke={themeColors.text.primary}
+                        stroke={activeAgentChip === "doc" ? themeColors.semantic.accent : themeColors.text.primary}
                         strokeOpacity="0.95"
                         strokeWidth="1.2"
                         strokeLinecap="round"
@@ -7601,34 +7619,20 @@ const ChatInput = React.memo(function ChatInput({
                     />
                 </svg>
             ),
+            trailingCheck: activeAgentChip === "doc",
             onClick: () => {
-                if (toggleDoc) toggleDoc()
+                if (!isDocOpen && toggleDoc) toggleDoc()
                 setShowMenu(false)
+                setActiveAgentChip(activeAgentChip === "doc" ? null : "doc")
             },
             className: "Doc",
-            isDestructive: isDocOpen,
+            isDestructive: false,
         })
 
         items.push({
             id: "whiteboard",
-            label: isWhiteboardOpen ? "Close whiteboard" : "Whiteboard",
-            icon: isWhiteboardOpen ? (
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                >
-                    <path
-                        d="M14 2L2 14M2 2L14 14"
-                        stroke={themeColors.destructive.light}
-                        strokeWidth="1.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    />
-                </svg>
-            ) : (
+            label: "Whiteboard",
+            icon: (
                 <svg
                     width="16"
                     height="16"
@@ -7638,7 +7642,7 @@ const ChatInput = React.memo(function ChatInput({
                 >
                     <path
                         d="M7.7678 12.938C7.38383 13.3223 5.11119 15.1876 4.47671 15.0968L1.08753 14.6089L0.602849 11.2417C0.511562 10.6074 2.37678 8.33438 2.76073 7.95043M7.7678 12.938L14.6179 6.08488C15.0023 5.70053 15.1668 5.12791 15.0754 4.49297C14.9841 3.85804 14.6442 3.2128 14.1306 2.69921L13.0021 1.57C12.7477 1.31548 12.4582 1.10098 12.1503 0.93875C11.8423 0.776525 11.5218 0.669761 11.2073 0.62456C10.8927 0.579359 10.5901 0.596608 10.3169 0.675321C10.0436 0.754034 9.80508 0.892667 9.61484 1.0833L2.76073 7.95043M7.7678 12.938L2.76073 7.95043"
-                        stroke={themeColors.text.primary}
+                        stroke={activeAgentChip === "whiteboard" ? themeColors.semantic.accent : themeColors.text.primary}
                         strokeOpacity="0.95"
                         strokeWidth="1.2"
                         strokeLinecap="round"
@@ -7646,12 +7650,14 @@ const ChatInput = React.memo(function ChatInput({
                     />
                 </svg>
             ),
+            trailingCheck: activeAgentChip === "whiteboard",
             onClick: () => {
-                if (toggleWhiteboard) toggleWhiteboard()
+                if (!isWhiteboardOpen && toggleWhiteboard) toggleWhiteboard()
                 setShowMenu(false)
+                setActiveAgentChip(activeAgentChip === "whiteboard" ? null : "whiteboard")
             },
             className: "Whiteboard",
-            isDestructive: isWhiteboardOpen,
+            isDestructive: false,
         })
 
         // Show "New Chat" button logic removed as per user request
@@ -7666,7 +7672,6 @@ const ChatInput = React.memo(function ChatInput({
         isDocOpen,
         isAppOpen,
         isConnected,
-        isLiveMode,
         onFileSelect,
         onScreenShare,
         toggleWhiteboard,
@@ -7678,6 +7683,7 @@ const ChatInput = React.memo(function ChatInput({
         hasMessages,
         isMobileLayout,
         setShowAddPeopleOverlay,
+        activeAgentChip,
     ])
 
     return (
@@ -8187,12 +8193,13 @@ const ChatInput = React.memo(function ChatInput({
                             >
                                 {/* LEFT: Plus + Skills chips (flexbox that fills width) */}
                                 <div
+                                    ref={chipRowLeftRef}
                                     style={{
                                         display: "flex",
                                         flexDirection: "row",
                                         flexWrap: "wrap",
                                         alignItems: "center",
-                                        gap: 8,
+                                        gap: 4,
                                         flex: "1 1 0",
                                         minWidth: 0,
                                     }}
@@ -8429,9 +8436,11 @@ const ChatInput = React.memo(function ChatInput({
                                                                                     ? themeColors
                                                                                           .destructive
                                                                                           .light
-                                                                                    : themeColors
-                                                                                          .text
-                                                                                          .primary,
+                                                                                    : item.trailingCheck
+                                                                                      ? themeColors.semantic.accent
+                                                                                      : themeColors
+                                                                                            .text
+                                                                                            .primary,
                                                                                 fontSize: 14,
                                                                                 fontFamily:
                                                                                     "Inter",
@@ -8447,6 +8456,11 @@ const ChatInput = React.memo(function ChatInput({
                                                                                 item.label
                                                                             }
                                                                         </div>
+                                                                        {item.trailingCheck && (
+                                                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}>
+                                                                                <path d="M1 6L4.5 9.5L11 2" stroke={themeColors.semantic.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                                                            </svg>
+                                                                        )}
                                                                     </div>
                                                                 </React.Fragment>
                                                             )
@@ -8499,6 +8513,76 @@ const ChatInput = React.memo(function ChatInput({
                                             </svg>
                                         </div>
                                     </div>
+
+                                    {/* AGENT MODE CHIP */}
+                                    {activeAgentChip && (
+                                        <div
+                                            data-layer="agent-chip"
+                                            className="AgentChip"
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                setActiveAgentChip(null)
+                                            }}
+                                            onMouseEnter={() => setIsChipHovered(true)}
+                                            onMouseLeave={() => setIsChipHovered(false)}
+                                            style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: 6,
+                                                height: 36,
+                                                paddingLeft: chipLabelCollapsed ? 8 : 10,
+                                                paddingRight: chipLabelCollapsed ? 8 : 12,
+                                                borderRadius: 28,
+                                                background: (isChipHovered || isMobileLayout)
+                                                    ? themeColors.semantic.accent
+                                                          .replace("hsl(", "hsla(")
+                                                          .replace(")", ", 0.12)")
+                                                    : "transparent",
+                                                flexShrink: 0,
+                                                cursor: "pointer",
+                                                userSelect: "none",
+                                                transition: "background 0.15s ease",
+                                            }}
+                                        >
+                                            {/* Icon — always visible, same size as + menu */}
+                                            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, width: 16 }}>
+                                                {activeAgentChip === "app" && (
+                                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                        <path d="M8.47522 8.47522L14.3764 6.95631C15.2457 6.58346 15.1941 5.33387 14.297 5.03485L2.35569 1.05442C1.55185 0.786777 0.786777 1.55185 1.05442 2.35569L5.03485 14.297C5.33387 15.1941 6.58346 15.2457 6.95631 14.3764L8.47522 8.47522Z" stroke={themeColors.semantic.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                                    </svg>
+                                                )}
+                                                {activeAgentChip === "doc" && (
+                                                    <svg width="16" height="12" viewBox="0 0 16 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                        <path d="M0.599609 11.0021L8.48004 11.0018M0.599609 5.64345H15.0996M0.599609 0.599976H15.0996" stroke={themeColors.semantic.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                                    </svg>
+                                                )}
+                                                {activeAgentChip === "whiteboard" && (
+                                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                        <path d="M7.7678 12.938C7.38383 13.3223 5.11119 15.1876 4.47671 15.0968L1.08753 14.6089L0.602849 11.2417C0.511562 10.6074 2.37678 8.33438 2.76073 7.95043M7.7678 12.938L14.6179 6.08488C15.0023 5.70053 15.1668 5.12791 15.0754 4.49297C14.9841 3.85804 14.6442 3.2128 14.1306 2.69921L13.0021 1.57C12.7477 1.31548 12.4582 1.10098 12.1503 0.93875C11.8423 0.776525 11.5218 0.669761 11.2073 0.62456C10.8927 0.579359 10.5901 0.596608 10.3169 0.675321C10.0436 0.754034 9.80508 0.892667 9.61484 1.0833L2.76073 7.95043M7.7678 12.938L2.76073 7.95043" stroke={themeColors.semantic.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                                    </svg>
+                                                )}
+                                            </div>
+                                            {/* Label — hidden when chip is too narrow on mobile */}
+                                            {!chipLabelCollapsed && (
+                                                <span style={{
+                                                    fontSize: 14,
+                                                    fontFamily: "Inter",
+                                                    fontWeight: "400",
+                                                    color: themeColors.semantic.accent,
+                                                    lineHeight: "19px",
+                                                    whiteSpace: "nowrap",
+                                                }}>
+                                                    {activeAgentChip === "app" && "Create app"}
+                                                    {activeAgentChip === "doc" && "Make docs"}
+                                                    {activeAgentChip === "whiteboard" && "Whiteboard"}
+                                                </span>
+                                            )}
+                                            {/* X — always visible */}
+                                            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0, marginLeft: 4 }}>
+                                                <path d="M9 1L1 9M1 1L9 9" stroke={themeColors.semantic.accent} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* RIGHT: Send + Start AI Live (top right corner) */}
@@ -17305,7 +17389,6 @@ Extract this structure:
     // Delayed flag so context-aware placeholder only shows after the overlay
     // slide-up animation is well underway (~halfway through 250ms).
     const [toolOverlayReady, setToolOverlayReady] = React.useState(false)
-    const jobOverlayReady = toolOverlayReady && isJobOpen
     React.useEffect(() => {
         const onMobile =
             typeof window !== "undefined" && window.innerWidth < 768
@@ -20232,6 +20315,8 @@ Do not include markdown formatting or explanations.`
         }, 2000)
     }, [])
     const [inputText, setInputText] = React.useState("")
+    // Tracks the active agent chip at send time so handleSendMessage can inject context
+    const activeAgentChipRef = React.useRef<"app" | "doc" | "whiteboard" | null>(null)
     const [isLoading, setIsLoading] = React.useState(false)
     const abortControllerRef = React.useRef<AbortController | null>(null)
     const lastMessageTimeRef = React.useRef<number>(0)
@@ -26253,6 +26338,22 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 ).trim()
             }
 
+            // Inject agent chip intent — strongly encourages the relevant tool call
+            // without guaranteeing it (model still has final say via AUTO mode).
+            const chipHint =
+                activeAgentChipRef.current === "doc"
+                    ? "[Intent: use the update_doc tool to fulfill this request as a document.]"
+                    : activeAgentChipRef.current === "app"
+                      ? "[Intent: use the create_app tool to fulfill this request as an interactive app.]"
+                      : activeAgentChipRef.current === "whiteboard"
+                        ? "[Intent: use the draw_whiteboard or edit_whiteboard tool to fulfill this request on the whiteboard.]"
+                        : null
+            if (chipHint) {
+                textToSend = textToSend
+                    ? `${chipHint}\n\n${textToSend}`
+                    : chipHint
+            }
+
             // Input length check — guard against users pasting huge blocks of
             // text. We check the user-visible text (textToCheck), NOT textToSend,
             // because textToSend may include a long AI override (e.g. the resume
@@ -27364,14 +27465,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
         const overlayPlaceholder =
             isLoading
                 ? "Thinking..."
-                : toolOverlayReady
-                  ? showJobPanel
-                      ? "Ask about this job"
-                      : isDocOpen
-                        ? "Edit doc"
-                        : isAppOpen
-                          ? "Edit app"
-                          : "Ask anything"
+                : toolOverlayReady && showJobPanel
+                  ? "Ask about this job"
                   : "Ask anything"
 
         const mobileOverlayInput = showMobileOverlay && (
@@ -27437,7 +27532,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         inputCursorRef.current = offset
                     }}
                     peerSync={peerSyncState}
-                    onSend={handleSendMessage}
+                    onSend={(chip) => { activeAgentChipRef.current = chip ?? null; handleSendMessage() }}
                     onConnectWithAI={handleConnectWithAI}
                     onStop={handleStop}
                     onEndCall={() => cleanup(true)}
@@ -27482,6 +27577,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         )
                     }
                     overlayToolComposer
+                    initialAgentChip={
+                        isDocOpen ? "doc" : isAppOpen ? "app" : null
+                    }
                 />
             </div>
         )
@@ -28121,14 +28219,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 inputCursorRef.current = offset
                             }}
                             peerSync={peerSyncState}
-                            onSend={handleSendMessage}
+                            onSend={(chip) => { activeAgentChipRef.current = chip ?? null; handleSendMessage() }}
                             onConnectWithAI={handleConnectWithAI}
                             onStop={handleStop}
                             onEndCall={() => cleanup(true)}
                             onFileSelect={handleFileSelect}
                             onScreenShare={toggleScreenShare}
                             onReport={handleReport}
-                            placeholder="Edit whiteboard"
+                            placeholder="Ask anything"
                             showEndCall={status !== "idle"}
                             showAiLiveButton={
                                 status === "searching" && role === "student"
@@ -28169,6 +28267,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             }
                             rootStyle={{ maxWidth: 816 }}
                             overlayToolComposer
+                            initialAgentChip="whiteboard"
                         />
                     </div>
                 )}
@@ -28501,7 +28600,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             inputCursorRef.current = offset
                         }}
                         peerSync={peerSyncState}
-                        onSend={handleSendMessage}
+                        onSend={(chip) => { activeAgentChipRef.current = chip ?? null; handleSendMessage() }}
                         onConnectWithAI={handleConnectWithAI}
                         onStop={handleStop}
                         onEndCall={() => cleanup(true)}
