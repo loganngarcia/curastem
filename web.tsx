@@ -210,10 +210,14 @@ function getContentDimensions(
     isMobile: boolean
 ): { width: number; height: number } | null {
     if (isWhiteboard)
-        return isMobile ? { width: 1080, height: 1350 } : { width: 1920, height: 1080 }
+        return isMobile
+            ? { width: 1080, height: 1350 }
+            : { width: 1920, height: 1080 }
     if (isDoc) return { width: 1240, height: 1754 }
     if (isApp)
-        return isMobile ? { width: 1080, height: 1350 } : { width: 1920, height: 1080 }
+        return isMobile
+            ? { width: 1080, height: 1350 }
+            : { width: 1920, height: 1080 }
     return null
 }
 
@@ -1586,7 +1590,10 @@ const getMemories = (): string[] => {
     try {
         if (typeof window === "undefined") return []
         const raw = localStorage.getItem("you_interests") || ""
-        return raw.split("\n").map(l => l.trim()).filter(Boolean)
+        return raw
+            .split("\n")
+            .map((l) => l.trim())
+            .filter(Boolean)
     } catch {
         return []
     }
@@ -1601,7 +1608,8 @@ const saveMemory = (text: string): string => {
     try {
         const existing = getMemories()
         const lower = line.toLowerCase()
-        if (existing.some(l => l.toLowerCase() === lower)) return existing.join("\n")
+        if (existing.some((l) => l.toLowerCase() === lower))
+            return existing.join("\n")
         const updated = [...existing, line]
         localStorage.setItem("you_interests", updated.join("\n"))
         return updated.join("\n")
@@ -1622,7 +1630,7 @@ const updateMemory = (index: number, newText: string | null): string => {
             updated = existing.filter((_, i) => i !== index)
         } else {
             const line = newText.startsWith("- ") ? newText : `- ${newText}`
-            updated = existing.map((l, i) => i === index ? line : l)
+            updated = existing.map((l, i) => (i === index ? line : l))
         }
         const joined = updated.join("\n")
         localStorage.setItem("you_interests", joined)
@@ -1754,7 +1762,12 @@ function markKeywordsInHtml(html: string, keywords: string[]): string {
             if (claimed.has(kw)) continue
             const idx = keywordIndexInText(txt, kw)
             if (idx !== -1) {
-                hits.push({ node: textNode, start: idx, end: idx + kw.length, kw })
+                hits.push({
+                    node: textNode,
+                    start: idx,
+                    end: idx + kw.length,
+                    kw,
+                })
                 claimed.add(kw)
             }
         }
@@ -2139,6 +2152,8 @@ interface Message {
     toolUsed?: "app" | "doc" | "resume" | "cover_letter"
     /** Jobs list from a search_jobs tool call, rendered as cards in chat. */
     jobs?: JobSnippet[]
+    /** Job context chip — shown above user message bubble when sent with job details open. */
+    jobContext?: { id: string; title: string; companyName: string; logoUrl: string | null }
 }
 
 interface FileAttachmentProps {
@@ -4417,7 +4432,11 @@ const DocEditor = React.memo(function DocEditor({
                             isCoverLetter ? pt * 0.32 : 0
 
                         // --- Parse HTML → flat block list ---
-                        type Run = { text: string; bold: boolean; italic: boolean }
+                        type Run = {
+                            text: string
+                            bold: boolean
+                            italic: boolean
+                        }
                         type Block =
                             | { kind: "h1"; text: string }
                             | { kind: "h2"; text: string }
@@ -4437,16 +4456,33 @@ const DocEditor = React.memo(function DocEditor({
                                 i = false
                             ): Run[] => {
                                 const runs: Run[] = []
-                                const walk = (node: Node, b: boolean, i: boolean) => {
+                                const walk = (
+                                    node: Node,
+                                    b: boolean,
+                                    i: boolean
+                                ) => {
                                     if (node.nodeType === Node.TEXT_NODE) {
                                         const t = node.textContent || ""
-                                        if (t) runs.push({ text: t, bold: b, italic: i })
-                                    } else if (node.nodeType === Node.ELEMENT_NODE) {
-                                        const tag = (node as Element).tagName.toLowerCase()
+                                        if (t)
+                                            runs.push({
+                                                text: t,
+                                                bold: b,
+                                                italic: i,
+                                            })
+                                    } else if (
+                                        node.nodeType === Node.ELEMENT_NODE
+                                    ) {
+                                        const tag = (
+                                            node as Element
+                                        ).tagName.toLowerCase()
                                         if (tag === "ul" || tag === "ol") return
-                                        const nb = b || tag === "b" || tag === "strong"
-                                        const ni = i || tag === "i" || tag === "em"
-                                        node.childNodes.forEach((c) => walk(c, nb, ni))
+                                        const nb =
+                                            b || tag === "b" || tag === "strong"
+                                        const ni =
+                                            i || tag === "i" || tag === "em"
+                                        node.childNodes.forEach((c) =>
+                                            walk(c, nb, ni)
+                                        )
                                     }
                                 }
                                 // Walk children, not el itself (b/i already passed in)
@@ -4454,41 +4490,64 @@ const DocEditor = React.memo(function DocEditor({
                                 return runs
                             }
 
-                            const processLi = (liEl: Element, indent: number) => {
+                            const processLi = (
+                                liEl: Element,
+                                indent: number
+                            ) => {
                                 const runs = inlineRuns(liEl)
                                 if (runs.some((r) => r.text.trim()))
                                     out.push({ kind: "li", runs, indent })
                                 liEl.childNodes.forEach((child) => {
                                     if (child.nodeType === Node.ELEMENT_NODE) {
-                                        const tag = (child as Element).tagName.toLowerCase()
+                                        const tag = (
+                                            child as Element
+                                        ).tagName.toLowerCase()
                                         if (tag === "ul" || tag === "ol")
                                             processNode(child, indent + 1)
                                     }
                                 })
                             }
 
-                            const processNode = (node: Node, listIndent = 0) => {
+                            const processNode = (
+                                node: Node,
+                                listIndent = 0
+                            ) => {
                                 if (node.nodeType !== Node.ELEMENT_NODE) return
                                 const el = node as Element
                                 const tag = el.tagName.toLowerCase()
                                 if (tag === "h1") {
-                                    out.push({ kind: "h1", text: el.textContent?.trim() || "" })
+                                    out.push({
+                                        kind: "h1",
+                                        text: el.textContent?.trim() || "",
+                                    })
                                 } else if (tag === "h2") {
                                     out.push({ kind: "rule" })
-                                    out.push({ kind: "h2", text: el.textContent?.trim() || "" })
+                                    out.push({
+                                        kind: "h2",
+                                        text: el.textContent?.trim() || "",
+                                    })
                                 } else if (tag === "p") {
                                     const runs = inlineRuns(el)
                                     if (runs.some((r) => r.text.trim()))
                                         out.push({ kind: "p", runs })
                                 } else if (tag === "ul" || tag === "ol") {
                                     el.childNodes.forEach((child) => {
-                                        if ((child as Element).tagName?.toLowerCase() === "li")
-                                            processLi(child as Element, listIndent)
+                                        if (
+                                            (
+                                                child as Element
+                                            ).tagName?.toLowerCase() === "li"
+                                        )
+                                            processLi(
+                                                child as Element,
+                                                listIndent
+                                            )
                                     })
                                 } else if (tag === "li") {
                                     processLi(el, listIndent)
                                 } else if (tag !== "br") {
-                                    el.childNodes.forEach((c) => processNode(c, listIndent))
+                                    el.childNodes.forEach((c) =>
+                                        processNode(c, listIndent)
+                                    )
                                 }
                             }
 
@@ -4505,13 +4564,33 @@ const DocEditor = React.memo(function DocEditor({
                         const pdfDoc = await PDFDocument.create()
                         const page = pdfDoc.addPage([PAGE_W_PT, PAGE_H_PT])
 
-                        const [regularFont, boldFont, italicFont, boldItalicFont] =
-                            await Promise.all([
-                                pdfDoc.embedFont(useSerif ? StandardFonts.TimesRoman : StandardFonts.Helvetica),
-                                pdfDoc.embedFont(useSerif ? StandardFonts.TimesRomanBold : StandardFonts.HelveticaBold),
-                                pdfDoc.embedFont(useSerif ? StandardFonts.TimesRomanItalic : StandardFonts.HelveticaOblique),
-                                pdfDoc.embedFont(useSerif ? StandardFonts.TimesRomanBoldItalic : StandardFonts.HelveticaBoldOblique),
-                            ])
+                        const [
+                            regularFont,
+                            boldFont,
+                            italicFont,
+                            boldItalicFont,
+                        ] = await Promise.all([
+                            pdfDoc.embedFont(
+                                useSerif
+                                    ? StandardFonts.TimesRoman
+                                    : StandardFonts.Helvetica
+                            ),
+                            pdfDoc.embedFont(
+                                useSerif
+                                    ? StandardFonts.TimesRomanBold
+                                    : StandardFonts.HelveticaBold
+                            ),
+                            pdfDoc.embedFont(
+                                useSerif
+                                    ? StandardFonts.TimesRomanItalic
+                                    : StandardFonts.HelveticaOblique
+                            ),
+                            pdfDoc.embedFont(
+                                useSerif
+                                    ? StandardFonts.TimesRomanBoldItalic
+                                    : StandardFonts.HelveticaBoldOblique
+                            ),
+                        ])
 
                         const black = rgb(0.07, 0.07, 0.07)
                         const gray = rgb(0.2, 0.2, 0.2)
@@ -4528,13 +4607,20 @@ const DocEditor = React.memo(function DocEditor({
                                 .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
 
                         const pickFont = (bold: boolean, italic: boolean) =>
-                            bold && italic ? boldItalicFont
-                            : bold ? boldFont
-                            : italic ? italicFont
-                            : regularFont
+                            bold && italic
+                                ? boldItalicFont
+                                : bold
+                                  ? boldFont
+                                  : italic
+                                    ? italicFont
+                                    : regularFont
 
                         // Word-wrap styled runs using real font metrics. Returns lines of runs.
-                        const wrapRuns = (runs: Run[], maxW: number, fontSize: number): Run[][] => {
+                        const wrapRuns = (
+                            runs: Run[],
+                            maxW: number,
+                            fontSize: number
+                        ): Run[][] => {
                             type Word = Run & { space: boolean }
                             const words: Word[] = []
                             for (const run of runs) {
@@ -4542,9 +4628,15 @@ const DocEditor = React.memo(function DocEditor({
                                 for (const p of parts) {
                                     if (!p) continue
                                     if (/^\s+$/.test(p)) {
-                                        if (words.length) words[words.length - 1].space = true
+                                        if (words.length)
+                                            words[words.length - 1].space = true
                                     } else {
-                                        words.push({ text: p, bold: run.bold, italic: run.italic, space: false })
+                                        words.push({
+                                            text: p,
+                                            bold: run.bold,
+                                            italic: run.italic,
+                                            space: false,
+                                        })
                                     }
                                 }
                             }
@@ -4559,10 +4651,21 @@ const DocEditor = React.memo(function DocEditor({
                                 curLine.forEach((w, wi) => {
                                     const needSpace = wi > 0
                                     const last = lineRuns[lineRuns.length - 1]
-                                    if (last && last.bold === w.bold && last.italic === w.italic) {
-                                        last.text += (needSpace ? " " : "") + w.text
+                                    if (
+                                        last &&
+                                        last.bold === w.bold &&
+                                        last.italic === w.italic
+                                    ) {
+                                        last.text +=
+                                            (needSpace ? " " : "") + w.text
                                     } else {
-                                        lineRuns.push({ text: (needSpace && last ? " " : "") + w.text, bold: w.bold, italic: w.italic })
+                                        lineRuns.push({
+                                            text:
+                                                (needSpace && last ? " " : "") +
+                                                w.text,
+                                            bold: w.bold,
+                                            italic: w.italic,
+                                        })
                                     }
                                 })
                                 lines.push(lineRuns)
@@ -4573,7 +4676,10 @@ const DocEditor = React.memo(function DocEditor({
                             for (const word of words) {
                                 const f = pickFont(word.bold, word.italic)
                                 const spW = f.widthOfTextAtSize(" ", fontSize)
-                                const wW = f.widthOfTextAtSize(word.text, fontSize)
+                                const wW = f.widthOfTextAtSize(
+                                    word.text,
+                                    fontSize
+                                )
                                 const addW = curLine.length ? spW + wW : wW
                                 if (curLine.length && curW + addW > maxW) {
                                     flush()
@@ -4585,17 +4691,31 @@ const DocEditor = React.memo(function DocEditor({
                                 }
                             }
                             flush()
-                            return lines.length ? lines : [[{ text: "", bold: false, italic: false }]]
+                            return lines.length
+                                ? lines
+                                : [[{ text: "", bold: false, italic: false }]]
                         }
 
                         // Draw a line of styled runs, returning the x position after the last character.
-                        const drawRuns = (runs: Run[], x: number, y: number, fontSize: number, color: typeof black) => {
+                        const drawRuns = (
+                            runs: Run[],
+                            x: number,
+                            y: number,
+                            fontSize: number,
+                            color: typeof black
+                        ) => {
                             let cx = x
                             for (const run of runs) {
                                 const t = sanitize(run.text)
                                 if (!t) continue
                                 const f = pickFont(run.bold, run.italic)
-                                page.drawText(t, { x: cx, y, font: f, size: fontSize, color })
+                                page.drawText(t, {
+                                    x: cx,
+                                    y,
+                                    font: f,
+                                    size: fontSize,
+                                    color,
+                                })
                                 cx += f.widthOfTextAtSize(t, fontSize)
                             }
                             return cx
@@ -4614,20 +4734,67 @@ const DocEditor = React.memo(function DocEditor({
                             let prev: Block | null = null
                             for (const block of blocks) {
                                 if (block.kind === "h1") {
-                                    totalH += wrapRuns([{ text: block.text, bold: true, italic: false }], CONTENT_W_PT, h1Pt).length * h1LineH + basePt * 0.4
+                                    totalH +=
+                                        wrapRuns(
+                                            [
+                                                {
+                                                    text: block.text,
+                                                    bold: true,
+                                                    italic: false,
+                                                },
+                                            ],
+                                            CONTENT_W_PT,
+                                            h1Pt
+                                        ).length *
+                                            h1LineH +
+                                        basePt * 0.4
                                 } else if (block.kind === "rule") {
                                     totalH += basePt * 0.5
                                 } else if (block.kind === "h2") {
-                                    totalH += wrapRuns([{ text: block.text, bold: true, italic: false }], CONTENT_W_PT, h2Pt).length * h2LineH + basePt * 0.8
+                                    totalH +=
+                                        wrapRuns(
+                                            [
+                                                {
+                                                    text: block.text,
+                                                    bold: true,
+                                                    italic: false,
+                                                },
+                                            ],
+                                            CONTENT_W_PT,
+                                            h2Pt
+                                        ).length *
+                                            h2LineH +
+                                        basePt * 0.8
                                 } else if (block.kind === "p") {
-                                    if (isCoverLetter && !firstP) totalH += basePt * bodyLineMult
-                                    totalH += wrapRuns(block.runs, CONTENT_W_PT, basePt).length * lineH + gapAfterParagraph(basePt)
+                                    if (isCoverLetter && !firstP)
+                                        totalH += basePt * bodyLineMult
+                                    totalH +=
+                                        wrapRuns(
+                                            block.runs,
+                                            CONTENT_W_PT,
+                                            basePt
+                                        ).length *
+                                            lineH +
+                                        gapAfterParagraph(basePt)
                                     firstP = false
                                 } else if (block.kind === "li") {
-                                    const newList = prev == null || prev.kind !== "li" || block.indent > (prev as { indent: number }).indent
-                                    if (isCoverLetter && newList) totalH += listFirstBulletGap(basePt)
-                                    const bulletW = basePt * 1.4 * (block.indent + 1)
-                                    totalH += wrapRuns(block.runs, CONTENT_W_PT - bulletW, basePt).length * lineH + gapAfterListItem(basePt)
+                                    const newList =
+                                        prev == null ||
+                                        prev.kind !== "li" ||
+                                        block.indent >
+                                            (prev as { indent: number }).indent
+                                    if (isCoverLetter && newList)
+                                        totalH += listFirstBulletGap(basePt)
+                                    const bulletW =
+                                        basePt * 1.4 * (block.indent + 1)
+                                    totalH +=
+                                        wrapRuns(
+                                            block.runs,
+                                            CONTENT_W_PT - bulletW,
+                                            basePt
+                                        ).length *
+                                            lineH +
+                                        gapAfterListItem(basePt)
                                 }
                                 prev = block
                             }
@@ -4635,11 +4802,15 @@ const DocEditor = React.memo(function DocEditor({
                         }
 
                         // Binary-search for the largest font size that fits on one page.
-                        let lo = 6, hi = 14, bestPt = 10
+                        let lo = 6,
+                            hi = 14,
+                            bestPt = 10
                         for (let i = 0; i < 12; i++) {
                             const mid = (lo + hi) / 2
-                            if (measureHeight(mid) <= CONTENT_H_PT) { bestPt = mid; lo = mid }
-                            else hi = mid
+                            if (measureHeight(mid) <= CONTENT_H_PT) {
+                                bestPt = mid
+                                lo = mid
+                            } else hi = mid
                         }
 
                         const h1Pt = bestPt * 1.55
@@ -4654,7 +4825,17 @@ const DocEditor = React.memo(function DocEditor({
                         let prev: Block | null = null
                         for (const block of blocks) {
                             if (block.kind === "h1") {
-                                for (const line of wrapRuns([{ text: sanitize(block.text), bold: true, italic: false }], CONTENT_W_PT, h1Pt)) {
+                                for (const line of wrapRuns(
+                                    [
+                                        {
+                                            text: sanitize(block.text),
+                                            bold: true,
+                                            italic: false,
+                                        },
+                                    ],
+                                    CONTENT_W_PT,
+                                    h1Pt
+                                )) {
                                     y -= h1LineH
                                     drawRuns(line, MARGIN_PT, y, h1Pt, black)
                                 }
@@ -4662,38 +4843,86 @@ const DocEditor = React.memo(function DocEditor({
                             } else if (block.kind === "rule") {
                                 y -= bestPt * 0.5
                             } else if (block.kind === "h2") {
-                                page.drawLine({ start: { x: MARGIN_PT, y: y - bestPt * 0.2 }, end: { x: PAGE_W_PT - MARGIN_PT, y: y - bestPt * 0.2 }, thickness: 0.5, color: gray })
-                                for (const line of wrapRuns([{ text: sanitize(block.text), bold: true, italic: false }], CONTENT_W_PT, h2Pt)) {
+                                page.drawLine({
+                                    start: {
+                                        x: MARGIN_PT,
+                                        y: y - bestPt * 0.2,
+                                    },
+                                    end: {
+                                        x: PAGE_W_PT - MARGIN_PT,
+                                        y: y - bestPt * 0.2,
+                                    },
+                                    thickness: 0.5,
+                                    color: gray,
+                                })
+                                for (const line of wrapRuns(
+                                    [
+                                        {
+                                            text: sanitize(block.text),
+                                            bold: true,
+                                            italic: false,
+                                        },
+                                    ],
+                                    CONTENT_W_PT,
+                                    h2Pt
+                                )) {
                                     y -= h2LineH
                                     drawRuns(line, MARGIN_PT, y, h2Pt, black)
                                 }
                                 y -= bestPt * 0.5
                             } else if (block.kind === "p") {
-                                if (isCoverLetter && !firstP) y -= bestPt * bodyLineMult
-                                for (const line of wrapRuns(block.runs, CONTENT_W_PT, bestPt)) {
+                                if (isCoverLetter && !firstP)
+                                    y -= bestPt * bodyLineMult
+                                for (const line of wrapRuns(
+                                    block.runs,
+                                    CONTENT_W_PT,
+                                    bestPt
+                                )) {
                                     y -= baseBodyLineH
                                     drawRuns(line, MARGIN_PT, y, bestPt, black)
                                 }
                                 y -= gapAfterParagraph(bestPt)
                                 firstP = false
                             } else if (block.kind === "li") {
-                                const newList = prev == null || prev.kind !== "li" || block.indent > (prev as { indent: number }).indent
-                                if (isCoverLetter && newList) y -= listFirstBulletGap(bestPt)
-                                const bulletIndent = bestPt * 1.4 * (block.indent + 1)
+                                const newList =
+                                    prev == null ||
+                                    prev.kind !== "li" ||
+                                    block.indent >
+                                        (prev as { indent: number }).indent
+                                if (isCoverLetter && newList)
+                                    y -= listFirstBulletGap(bestPt)
+                                const bulletIndent =
+                                    bestPt * 1.4 * (block.indent + 1)
                                 let isFirst = true
-                                for (const line of wrapRuns(block.runs, CONTENT_W_PT - bulletIndent, bestPt)) {
+                                for (const line of wrapRuns(
+                                    block.runs,
+                                    CONTENT_W_PT - bulletIndent,
+                                    bestPt
+                                )) {
                                     y -= baseBodyLineH
                                     if (isFirst) {
-                                        const r = block.indent === 0 ? bestPt * 0.11 : bestPt * 0.085
+                                        const r =
+                                            block.indent === 0
+                                                ? bestPt * 0.11
+                                                : bestPt * 0.085
                                         page.drawCircle({
-                                            x: MARGIN_PT + bulletIndent - bestPt * 0.52,
+                                            x:
+                                                MARGIN_PT +
+                                                bulletIndent -
+                                                bestPt * 0.52,
                                             y: y + bestPt * 0.32,
                                             size: r,
                                             color: black,
                                         })
                                         isFirst = false
                                     }
-                                    drawRuns(line, MARGIN_PT + bulletIndent, y, bestPt, black)
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT + bulletIndent,
+                                        y,
+                                        bestPt,
+                                        black
+                                    )
                                 }
                                 y -= gapAfterListItem(bestPt)
                             }
@@ -4701,20 +4930,34 @@ const DocEditor = React.memo(function DocEditor({
                         }
 
                         const pdfBytes = await pdfDoc.save()
-                        const blobUrl = URL.createObjectURL(new Blob([pdfBytes], { type: "application/pdf" }))
+                        const blobUrl = URL.createObjectURL(
+                            new Blob([pdfBytes], { type: "application/pdf" })
+                        )
                         const link = document.createElement("a")
                         link.href = blobUrl
                         link.download = `${
                             docType === "cover_letter"
-                                ? buildCoverLetterDownloadStem(userDisplayName, docCompany)
+                                ? buildCoverLetterDownloadStem(
+                                      userDisplayName,
+                                      docCompany
+                                  )
                                 : docType === "resume"
                                   ? `${profileNameStem(userDisplayName) || "resume"}${docCompany ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}` : ""}`
-                                  : (blocks.find((b) => b.kind === "h1") as { text?: string })?.text?.replace(/\s+/g, "_").slice(0, 40) || "document"
+                                  : (
+                                        blocks.find((b) => b.kind === "h1") as {
+                                            text?: string
+                                        }
+                                    )?.text
+                                        ?.replace(/\s+/g, "_")
+                                        .slice(0, 40) || "document"
                         }.pdf`
                         link.click()
                         setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
                     } catch (pdfErr) {
-                        console.error("pdf-lib failed, falling back to print:", pdfErr)
+                        console.error(
+                            "pdf-lib failed, falling back to print:",
+                            pdfErr
+                        )
                         // Print-dialog fallback — always works, not silent.
                         const fbIframe = document.createElement("iframe")
                         fbIframe.style.cssText =
@@ -4727,11 +4970,17 @@ const DocEditor = React.memo(function DocEditor({
                                     ? `@page{size:8.5in 11in;margin:0.45in 0.5in;}*{box-sizing:border-box;}body{margin:0;font-family:${fontFamily};font-size:10.5pt;line-height:1.48;color:#111;-webkit-font-smoothing:antialiased;}h1{font-size:17px;font-weight:700;margin:0 0 8px;letter-spacing:-0.01em;}h2{font-size:12px;font-weight:700;border-bottom:1px solid #333;margin:14px 0 6px;}p{margin:0;}p+p{margin-top:1.45em;}ul{margin:0 0 8px;padding-left:18px;}p+ul,h1+ul,h2+ul{margin-top:0.55em;}li>ul{margin-top:0.45em;}li{margin:4px 0;line-height:1.48;}`
                                     : `@page{size:8.5in 11in;margin:0.45in 0.5in;}*{box-sizing:border-box;}body{margin:0;font-family:${fontFamily};font-size:10pt;line-height:1.4;color:#111;}h1{font-size:16px;font-weight:700;margin:0 0 3px;}h2{font-size:12px;font-weight:700;border-bottom:1px solid #333;margin:10px 0 3px;}p{margin:2px 0;}ul{margin:2px 0;padding-left:16px;}li{margin:1px 0;}`
                             fbDoc.open()
-                            fbDoc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>${fbCSS}</style></head><body>${content}</body></html>`)
+                            fbDoc.write(
+                                `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${fbCSS}</style></head><body>${content}</body></html>`
+                            )
                             fbDoc.close()
                             setTimeout(() => {
                                 fbIframe.contentWindow?.print()
-                                setTimeout(() => { try { document.body.removeChild(fbIframe) } catch {} }, 2000)
+                                setTimeout(() => {
+                                    try {
+                                        document.body.removeChild(fbIframe)
+                                    } catch {}
+                                }, 2000)
                             }, 400)
                         }
                     }
@@ -4779,7 +5028,9 @@ const DocEditor = React.memo(function DocEditor({
                         ? firstLine.replace(/\s+/g, "_").slice(0, 40)
                         : ""
                     const base =
-                        profileNameStem(userDisplayName) || fromDoc || "document"
+                        profileNameStem(userDisplayName) ||
+                        fromDoc ||
+                        "document"
                     const companySuffix = docCompany
                         ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}`
                         : ""
@@ -5017,9 +5268,7 @@ const DocEditor = React.memo(function DocEditor({
                                     docType === "cover_letter"
                                         ? {
                                               ...coverLetterBodyLineSpacing,
-                                              before: firstLiInList
-                                                  ? 280
-                                                  : 0,
+                                              before: firstLiInList ? 280 : 0,
                                           }
                                         : bodyParaSpacing
                                 firstLiInList = false
@@ -5051,9 +5300,7 @@ const DocEditor = React.memo(function DocEditor({
                                     docType === "cover_letter"
                                         ? {
                                               ...coverLetterBodyLineSpacing,
-                                              before: firstLiInList
-                                                  ? 280
-                                                  : 0,
+                                              before: firstLiInList ? 280 : 0,
                                           }
                                         : bodyParaSpacing
                                 firstLiInList = false
@@ -5877,7 +6124,9 @@ const DocEditor = React.memo(function DocEditor({
                     position: "relative",
                     opacity: hideContent ? 0 : 1,
                     filter: hideContent ? "blur(4px)" : "blur(0px)",
-                    transition: hideContent ? "none" : "opacity 0.4s ease, filter 0.4s ease",
+                    transition: hideContent
+                        ? "none"
+                        : "opacity 0.4s ease, filter 0.4s ease",
                 }}
             >
                 <div
@@ -6084,7 +6333,10 @@ const AddPeopleOverlayContent = React.memo(function AddPeopleOverlayContent({
             const currentlyStacked = isStackedRef.current
             if (!currentlyStacked && w < ADD_PEOPLE_OVERLAY_STACK_THRESHOLD) {
                 setIsStacked(true)
-            } else if (currentlyStacked && w > ADD_PEOPLE_OVERLAY_ROW_THRESHOLD) {
+            } else if (
+                currentlyStacked &&
+                w > ADD_PEOPLE_OVERLAY_ROW_THRESHOLD
+            ) {
                 setIsStacked(false)
             }
         })
@@ -6263,12 +6515,34 @@ const AddPeopleOverlayContent = React.memo(function AddPeopleOverlayContent({
                 </div>
                 <div data-svg-wrapper>
                     {hasCopiedLink ? (
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path fillRule="evenodd" clipRule="evenodd" d="M12.6256 1.57762C13.0167 1.84429 13.1177 2.37754 12.8509 2.76866L6.42242 12.1971C6.27868 12.4081 6.04836 12.5439 5.79431 12.5677C5.54015 12.5915 5.28864 12.5009 5.10816 12.3204L1.25105 8.46328C0.916318 8.12857 0.916318 7.58583 1.25105 7.25112C1.58578 6.91641 2.12849 6.91641 2.46323 7.25112L5.58884 10.3768L11.4346 1.80295C11.7013 1.41183 12.2345 1.31095 12.6256 1.57762Z" fill={themeColors.text.secondary} fillOpacity="1" />
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 14 14"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                fillRule="evenodd"
+                                clipRule="evenodd"
+                                d="M12.6256 1.57762C13.0167 1.84429 13.1177 2.37754 12.8509 2.76866L6.42242 12.1971C6.27868 12.4081 6.04836 12.5439 5.79431 12.5677C5.54015 12.5915 5.28864 12.5009 5.10816 12.3204L1.25105 8.46328C0.916318 8.12857 0.916318 7.58583 1.25105 7.25112C1.58578 6.91641 2.12849 6.91641 2.46323 7.25112L5.58884 10.3768L11.4346 1.80295C11.7013 1.41183 12.2345 1.31095 12.6256 1.57762Z"
+                                fill={themeColors.text.secondary}
+                                fillOpacity="1"
+                            />
                         </svg>
                     ) : (
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M9.28734 7.57185C9.28734 6.96242 9.28733 6.53928 9.2605 6.21051C9.24078 5.96894 9.20829 5.8063 9.16422 5.68307L9.11656 5.57172C8.98453 5.31276 8.78349 5.09579 8.53718 4.94464L8.4283 4.88352C8.29285 4.81461 8.11136 4.76581 7.78952 4.73952C7.46074 4.71267 7.03765 4.71272 6.4282 4.71272H3.99941C3.38983 4.71272 2.96689 4.71266 2.63809 4.73952C2.39637 4.75927 2.2339 4.79168 2.11064 4.8358L1.99929 4.88352C1.74028 5.01549 1.52336 5.21646 1.37221 5.46288L1.31193 5.57172C1.24295 5.70717 1.19423 5.88852 1.16793 6.21051C1.14108 6.53929 1.1403 6.96239 1.1403 7.57185V10.0006C1.1403 10.6102 1.14106 11.0332 1.16793 11.362C1.19425 11.684 1.24291 11.8653 1.31193 12.0007L1.37221 12.1088C1.52336 12.3553 1.74016 12.556 1.99929 12.6881L2.11064 12.7367C2.23388 12.7807 2.39645 12.8124 2.63809 12.8321C2.96689 12.859 3.38983 12.8598 3.99941 12.8598H6.4282C7.03765 12.8598 7.46074 12.859 7.78952 12.8321C8.11153 12.8058 8.29285 12.7571 8.4283 12.6881L8.53718 12.6279C8.78358 12.4766 8.98453 12.2597 9.11656 12.0007L9.16422 11.8894C9.20838 11.7662 9.24078 11.6036 9.2605 11.362C9.28742 11.0332 9.28734 10.6102 9.28734 10.0006V7.57185ZM10.4276 9.28476C10.8175 9.28339 11.1161 9.28065 11.362 9.2605C11.684 9.23418 11.8653 9.18549 12.0007 9.11656L12.1088 9.05543C12.3553 8.9042 12.5561 8.68739 12.6881 8.4283L12.7367 8.31694C12.7807 8.19374 12.8124 8.03103 12.8321 7.78952C12.859 7.46074 12.8598 7.03765 12.8598 6.4282V3.99941C12.8598 3.38983 12.859 2.96689 12.8321 2.63809C12.8124 2.39645 12.7807 2.23388 12.7367 2.11064L12.6881 1.99929C12.556 1.74016 12.3553 1.52336 12.1088 1.37221L12.0007 1.31193C11.8653 1.24291 11.684 1.19425 11.362 1.16793C11.0332 1.14106 10.6102 1.1403 10.0006 1.1403H7.57185C6.96238 1.1403 6.53929 1.14108 6.21051 1.16793C5.969 1.18766 5.80629 1.21931 5.68307 1.26337L5.57172 1.31193C5.31261 1.44395 5.0958 1.64473 4.94464 1.89129L4.88352 1.99929C4.81455 2.13473 4.76583 2.31612 4.73952 2.63809C4.71943 2.88398 4.7158 3.18255 4.71441 3.57243H6.4282C7.01888 3.57243 7.49649 3.57188 7.88245 3.60341C8.2751 3.63549 8.62352 3.70339 8.94655 3.86797L9.13328 3.97262C9.55825 4.23329 9.90443 4.60685 10.132 5.05347L10.189 5.17571C10.3129 5.46421 10.3686 5.77383 10.3966 6.11758C10.4282 6.50356 10.4276 6.98115 10.4276 7.57185V9.28476ZM14 6.4282C14 7.01888 14.0006 7.49649 13.9691 7.88245C13.9409 8.22615 13.8852 8.53581 13.7614 8.8243L13.7045 8.94655C13.4769 9.39313 13.1306 9.76675 12.7057 10.0275L12.5181 10.132C12.1953 10.2966 11.8474 10.3646 11.4549 10.3966C11.166 10.4203 10.8257 10.4237 10.4251 10.4251C10.4237 10.8257 10.4203 11.166 10.3966 11.4549C10.3686 11.7984 10.3127 12.1076 10.189 12.3959L10.132 12.5181C9.90443 12.9649 9.55833 13.3391 9.13328 13.5998L8.94655 13.7045C8.62352 13.8691 8.2751 13.937 7.88245 13.9691C7.49649 14.0006 7.01888 14 6.4282 14H3.99941C3.40864 14 2.93115 14.0006 2.54516 13.9691C2.20167 13.941 1.89243 13.8851 1.60412 13.7614L1.48189 13.7045C1.03519 13.4769 0.660897 13.1307 0.400196 12.7057L0.295543 12.5181C0.131101 12.1953 0.0630563 11.8474 0.0309755 11.4549C-0.000556545 11.0688 6.49256e-07 10.5914 6.49256e-07 10.0006V7.57185C6.49256e-07 6.98116 -0.000547973 6.50355 0.0309755 6.11758C0.0630563 5.72493 0.130964 5.37648 0.295543 5.05347L0.400196 4.86678C0.660905 4.4417 1.03512 4.0956 1.48189 3.86797L1.60412 3.81103C1.89245 3.68735 2.20165 3.63148 2.54516 3.60341C2.8339 3.57982 3.17389 3.57548 3.57411 3.57411C3.57548 3.17389 3.57982 2.8339 3.60341 2.54516C3.63548 2.15265 3.70349 1.80479 3.86797 1.48189L3.97262 1.29435C4.23331 0.869456 4.60687 0.523117 5.05347 0.295543L5.17571 0.238609C5.46418 0.114795 5.77388 0.0590612 6.11758 0.0309755C6.50355 -0.000547973 6.98116 6.49247e-07 7.57185 6.49247e-07H10.0006C10.5914 6.49247e-07 11.0688 -0.000556545 11.4549 0.0309755C11.8474 0.0630563 12.1953 0.131101 12.5181 0.295543L12.7057 0.400196C13.1307 0.660897 13.4769 1.03519 13.7045 1.48189L13.7614 1.60412C13.8851 1.89243 13.941 2.20167 13.9691 2.54516C14.0006 2.93115 14 3.40864 14 3.99941V6.4282Z" fill={themeColors.text.secondary} fillOpacity="1" />
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 14 14"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                d="M9.28734 7.57185C9.28734 6.96242 9.28733 6.53928 9.2605 6.21051C9.24078 5.96894 9.20829 5.8063 9.16422 5.68307L9.11656 5.57172C8.98453 5.31276 8.78349 5.09579 8.53718 4.94464L8.4283 4.88352C8.29285 4.81461 8.11136 4.76581 7.78952 4.73952C7.46074 4.71267 7.03765 4.71272 6.4282 4.71272H3.99941C3.38983 4.71272 2.96689 4.71266 2.63809 4.73952C2.39637 4.75927 2.2339 4.79168 2.11064 4.8358L1.99929 4.88352C1.74028 5.01549 1.52336 5.21646 1.37221 5.46288L1.31193 5.57172C1.24295 5.70717 1.19423 5.88852 1.16793 6.21051C1.14108 6.53929 1.1403 6.96239 1.1403 7.57185V10.0006C1.1403 10.6102 1.14106 11.0332 1.16793 11.362C1.19425 11.684 1.24291 11.8653 1.31193 12.0007L1.37221 12.1088C1.52336 12.3553 1.74016 12.556 1.99929 12.6881L2.11064 12.7367C2.23388 12.7807 2.39645 12.8124 2.63809 12.8321C2.96689 12.859 3.38983 12.8598 3.99941 12.8598H6.4282C7.03765 12.8598 7.46074 12.859 7.78952 12.8321C8.11153 12.8058 8.29285 12.7571 8.4283 12.6881L8.53718 12.6279C8.78358 12.4766 8.98453 12.2597 9.11656 12.0007L9.16422 11.8894C9.20838 11.7662 9.24078 11.6036 9.2605 11.362C9.28742 11.0332 9.28734 10.6102 9.28734 10.0006V7.57185ZM10.4276 9.28476C10.8175 9.28339 11.1161 9.28065 11.362 9.2605C11.684 9.23418 11.8653 9.18549 12.0007 9.11656L12.1088 9.05543C12.3553 8.9042 12.5561 8.68739 12.6881 8.4283L12.7367 8.31694C12.7807 8.19374 12.8124 8.03103 12.8321 7.78952C12.859 7.46074 12.8598 7.03765 12.8598 6.4282V3.99941C12.8598 3.38983 12.859 2.96689 12.8321 2.63809C12.8124 2.39645 12.7807 2.23388 12.7367 2.11064L12.6881 1.99929C12.556 1.74016 12.3553 1.52336 12.1088 1.37221L12.0007 1.31193C11.8653 1.24291 11.684 1.19425 11.362 1.16793C11.0332 1.14106 10.6102 1.1403 10.0006 1.1403H7.57185C6.96238 1.1403 6.53929 1.14108 6.21051 1.16793C5.969 1.18766 5.80629 1.21931 5.68307 1.26337L5.57172 1.31193C5.31261 1.44395 5.0958 1.64473 4.94464 1.89129L4.88352 1.99929C4.81455 2.13473 4.76583 2.31612 4.73952 2.63809C4.71943 2.88398 4.7158 3.18255 4.71441 3.57243H6.4282C7.01888 3.57243 7.49649 3.57188 7.88245 3.60341C8.2751 3.63549 8.62352 3.70339 8.94655 3.86797L9.13328 3.97262C9.55825 4.23329 9.90443 4.60685 10.132 5.05347L10.189 5.17571C10.3129 5.46421 10.3686 5.77383 10.3966 6.11758C10.4282 6.50356 10.4276 6.98115 10.4276 7.57185V9.28476ZM14 6.4282C14 7.01888 14.0006 7.49649 13.9691 7.88245C13.9409 8.22615 13.8852 8.53581 13.7614 8.8243L13.7045 8.94655C13.4769 9.39313 13.1306 9.76675 12.7057 10.0275L12.5181 10.132C12.1953 10.2966 11.8474 10.3646 11.4549 10.3966C11.166 10.4203 10.8257 10.4237 10.4251 10.4251C10.4237 10.8257 10.4203 11.166 10.3966 11.4549C10.3686 11.7984 10.3127 12.1076 10.189 12.3959L10.132 12.5181C9.90443 12.9649 9.55833 13.3391 9.13328 13.5998L8.94655 13.7045C8.62352 13.8691 8.2751 13.937 7.88245 13.9691C7.49649 14.0006 7.01888 14 6.4282 14H3.99941C3.40864 14 2.93115 14.0006 2.54516 13.9691C2.20167 13.941 1.89243 13.8851 1.60412 13.7614L1.48189 13.7045C1.03519 13.4769 0.660897 13.1307 0.400196 12.7057L0.295543 12.5181C0.131101 12.1953 0.0630563 11.8474 0.0309755 11.4549C-0.000556545 11.0688 6.49256e-07 10.5914 6.49256e-07 10.0006V7.57185C6.49256e-07 6.98116 -0.000547973 6.50355 0.0309755 6.11758C0.0630563 5.72493 0.130964 5.37648 0.295543 5.05347L0.400196 4.86678C0.660905 4.4417 1.03512 4.0956 1.48189 3.86797L1.60412 3.81103C1.89245 3.68735 2.20165 3.63148 2.54516 3.60341C2.8339 3.57982 3.17389 3.57548 3.57411 3.57411C3.57548 3.17389 3.57982 2.8339 3.60341 2.54516C3.63548 2.15265 3.70349 1.80479 3.86797 1.48189L3.97262 1.29435C4.23331 0.869456 4.60687 0.523117 5.05347 0.295543L5.17571 0.238609C5.46418 0.114795 5.77388 0.0590612 6.11758 0.0309755C6.50355 -0.000547973 6.98116 6.49247e-07 7.57185 6.49247e-07H10.0006C10.5914 6.49247e-07 11.0688 -0.000556545 11.4549 0.0309755C11.8474 0.0630563 12.1953 0.131101 12.5181 0.295543L12.7057 0.400196C13.1307 0.660897 13.4769 1.03519 13.7045 1.48189L13.7614 1.60412C13.8851 1.89243 13.941 2.20167 13.9691 2.54516C14.0006 2.93115 14 3.40864 14 3.99941V6.4282Z"
+                                fill={themeColors.text.secondary}
+                                fillOpacity="1"
+                            />
                         </svg>
                     )}
                 </div>
@@ -6299,8 +6573,18 @@ const AddPeopleOverlayContent = React.memo(function AddPeopleOverlayContent({
                         : {}),
                 }}
             >
-                <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M22.3182 23.3033L17.9994 18.9844L13.6805 23.3033C13.4087 23.5751 12.9679 23.5752 12.6961 23.3033C12.4242 23.0315 12.4242 22.5907 12.6961 22.3188L17.0149 18L12.6961 13.6812C12.4242 13.4093 12.4242 12.9685 12.6961 12.6967C12.9679 12.4248 13.4087 12.4249 13.6805 12.6967L17.9994 17.0155L22.3182 12.6967L22.4274 12.6078C22.6976 12.4293 23.0648 12.4588 23.3027 12.6967C23.5406 12.9346 23.5701 13.3018 23.3916 13.572L23.3027 13.6811L18.9838 18L23.3027 22.3189C23.5745 22.5907 23.5745 23.0314 23.3027 23.3033C23.0308 23.5751 22.5901 23.5752 22.3182 23.3033Z" fill={themeColors.text.secondary} fillOpacity="1" />
+                <svg
+                    width="36"
+                    height="36"
+                    viewBox="0 0 36 36"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        d="M22.3182 23.3033L17.9994 18.9844L13.6805 23.3033C13.4087 23.5751 12.9679 23.5752 12.6961 23.3033C12.4242 23.0315 12.4242 22.5907 12.6961 22.3188L17.0149 18L12.6961 13.6812C12.4242 13.4093 12.4242 12.9685 12.6961 12.6967C12.9679 12.4248 13.4087 12.4249 13.6805 12.6967L17.9994 17.0155L22.3182 12.6967L22.4274 12.6078C22.6976 12.4293 23.0648 12.4588 23.3027 12.6967C23.5406 12.9346 23.5701 13.3018 23.3916 13.572L23.3027 13.6811L18.9838 18L23.3027 22.3189C23.5745 22.5907 23.5745 23.0314 23.3027 23.3033C23.0308 23.5751 22.5901 23.5752 22.3182 23.3033Z"
+                        fill={themeColors.text.secondary}
+                        fillOpacity="1"
+                    />
                 </svg>
             </div>
         </div>
@@ -6368,11 +6652,15 @@ const ChatInput = React.memo(function ChatInput({
         if (editableRef.current && typeof document !== "undefined") {
             editableRef.current.blur()
             // iOS requires a small tick before the blur takes effect on keyboard dismiss
-            if (typeof window !== "undefined" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+            if (
+                typeof window !== "undefined" &&
+                /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+            ) {
                 const dummy = document.createElement("input")
                 dummy.setAttribute("type", "text")
                 dummy.setAttribute("readonly", "")
-                dummy.style.cssText = "position:fixed;top:-100px;left:-100px;opacity:0;"
+                dummy.style.cssText =
+                    "position:fixed;top:-100px;left:-100px;opacity:0;"
                 document.body.appendChild(dummy)
                 dummy.focus()
                 dummy.blur()
@@ -6400,15 +6688,21 @@ const ChatInput = React.memo(function ChatInput({
         if (!editableRef.current) return
         editableRef.current.innerHTML = snap.html
         savedEditableContentRef.current = snap.html
-        onChange({ target: { value: snap.text } } as React.ChangeEvent<HTMLTextAreaElement>)
+        onChange({
+            target: { value: snap.text },
+        } as React.ChangeEvent<HTMLTextAreaElement>)
         // Place caret at end
         requestAnimationFrame(() => {
             if (!editableRef.current) return
             const range = document.createRange()
             range.selectNodeContents(editableRef.current)
             range.collapse(false)
-            const sel = typeof window !== "undefined" ? window.getSelection() : null
-            if (sel) { sel.removeAllRanges(); sel.addRange(range) }
+            const sel =
+                typeof window !== "undefined" ? window.getSelection() : null
+            if (sel) {
+                sel.removeAllRanges()
+                sel.addRange(range)
+            }
         })
     }
     const isApplyingPeerSyncRef = React.useRef(false)
@@ -7031,7 +7325,9 @@ const ChatInput = React.memo(function ChatInput({
     const handleEditableKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
         const meta = e.metaKey || e.ctrlKey
         const isUndo = meta && !e.shiftKey && e.key === "z"
-        const isRedo = (meta && e.shiftKey && e.key === "z") || (e.ctrlKey && e.key === "y")
+        const isRedo =
+            (meta && e.shiftKey && e.key === "z") ||
+            (e.ctrlKey && e.key === "y")
         if (isUndo) {
             e.preventDefault()
             if (chatUndoStack.current.length > 0) {
@@ -7426,7 +7722,9 @@ const ChatInput = React.memo(function ChatInput({
             canShareScreen && (status !== "idle" || isLiveMode)
 
         const showAddPeople =
-            (status !== "idle" || role) && !isLiveMode && setShowAddPeopleOverlay
+            (status !== "idle" || role) &&
+            !isLiveMode &&
+            setShowAddPeopleOverlay
 
         if (showAddPeople) {
             items.push({
@@ -7579,7 +7877,11 @@ const ChatInput = React.memo(function ChatInput({
                 >
                     <path
                         d="M8.47522 8.47522L14.3764 6.95631C15.2457 6.58346 15.1941 5.33387 14.297 5.03485L2.35569 1.05442C1.55185 0.786777 0.786777 1.55185 1.05442 2.35569L5.03485 14.297C5.33387 15.1941 6.58346 15.2457 6.95631 14.3764L8.47522 8.47522Z"
-                        stroke={activeAgentChip === "app" ? themeColors.semantic.accent : themeColors.text.primary}
+                        stroke={
+                            activeAgentChip === "app"
+                                ? themeColors.semantic.accent
+                                : themeColors.text.primary
+                        }
                         strokeOpacity="0.95"
                         strokeWidth="1.2"
                         strokeLinecap="round"
@@ -7611,7 +7913,11 @@ const ChatInput = React.memo(function ChatInput({
                 >
                     <path
                         d="M0.599609 11.0021L8.48004 11.0018M0.599609 5.64345H15.0996M0.599609 0.599976H15.0996"
-                        stroke={activeAgentChip === "doc" ? themeColors.semantic.accent : themeColors.text.primary}
+                        stroke={
+                            activeAgentChip === "doc"
+                                ? themeColors.semantic.accent
+                                : themeColors.text.primary
+                        }
                         strokeOpacity="0.95"
                         strokeWidth="1.2"
                         strokeLinecap="round"
@@ -7642,7 +7948,11 @@ const ChatInput = React.memo(function ChatInput({
                 >
                     <path
                         d="M7.7678 12.938C7.38383 13.3223 5.11119 15.1876 4.47671 15.0968L1.08753 14.6089L0.602849 11.2417C0.511562 10.6074 2.37678 8.33438 2.76073 7.95043M7.7678 12.938L14.6179 6.08488C15.0023 5.70053 15.1668 5.12791 15.0754 4.49297C14.9841 3.85804 14.6442 3.2128 14.1306 2.69921L13.0021 1.57C12.7477 1.31548 12.4582 1.10098 12.1503 0.93875C11.8423 0.776525 11.5218 0.669761 11.2073 0.62456C10.8927 0.579359 10.5901 0.596608 10.3169 0.675321C10.0436 0.754034 9.80508 0.892667 9.61484 1.0833L2.76073 7.95043M7.7678 12.938L2.76073 7.95043"
-                        stroke={activeAgentChip === "whiteboard" ? themeColors.semantic.accent : themeColors.text.primary}
+                        stroke={
+                            activeAgentChip === "whiteboard"
+                                ? themeColors.semantic.accent
+                                : themeColors.text.primary
+                        }
                         strokeOpacity="0.95"
                         strokeWidth="1.2"
                         strokeLinecap="round"
@@ -7654,7 +7964,9 @@ const ChatInput = React.memo(function ChatInput({
             onClick: () => {
                 if (!isWhiteboardOpen && toggleWhiteboard) toggleWhiteboard()
                 setShowMenu(false)
-                setActiveAgentChip(activeAgentChip === "whiteboard" ? null : "whiteboard")
+                setActiveAgentChip(
+                    activeAgentChip === "whiteboard" ? null : "whiteboard"
+                )
             },
             className: "Whiteboard",
             isDestructive: false,
@@ -7736,7 +8048,6 @@ const ChatInput = React.memo(function ChatInput({
                     setHasCopiedLink={setHasCopiedLink}
                     showAddPeopleOverlay={showAddPeopleOverlay}
                 />
-
             )}
 
             {children}
@@ -8437,7 +8748,9 @@ const ChatInput = React.memo(function ChatInput({
                                                                                           .destructive
                                                                                           .light
                                                                                     : item.trailingCheck
-                                                                                      ? themeColors.semantic.accent
+                                                                                      ? themeColors
+                                                                                            .semantic
+                                                                                            .accent
                                                                                       : themeColors
                                                                                             .text
                                                                                             .primary,
@@ -8457,8 +8770,27 @@ const ChatInput = React.memo(function ChatInput({
                                                                             }
                                                                         </div>
                                                                         {item.trailingCheck && (
-                                                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}>
-                                                                                <path d="M1 6L4.5 9.5L11 2" stroke={themeColors.semantic.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                                                            <svg
+                                                                                width="12"
+                                                                                height="12"
+                                                                                viewBox="0 0 12 12"
+                                                                                fill="none"
+                                                                                xmlns="http://www.w3.org/2000/svg"
+                                                                                style={{
+                                                                                    flexShrink: 0,
+                                                                                }}
+                                                                            >
+                                                                                <path
+                                                                                    d="M1 6L4.5 9.5L11 2"
+                                                                                    stroke={
+                                                                                        themeColors
+                                                                                            .semantic
+                                                                                            .accent
+                                                                                    }
+                                                                                    strokeWidth="1.2"
+                                                                                    strokeLinecap="round"
+                                                                                    strokeLinejoin="round"
+                                                                                />
                                                                             </svg>
                                                                         )}
                                                                     </div>
@@ -8523,63 +8855,163 @@ const ChatInput = React.memo(function ChatInput({
                                                 e.stopPropagation()
                                                 setActiveAgentChip(null)
                                             }}
-                                            onMouseEnter={() => setIsChipHovered(true)}
-                                            onMouseLeave={() => setIsChipHovered(false)}
+                                            onMouseEnter={() =>
+                                                setIsChipHovered(true)
+                                            }
+                                            onMouseLeave={() =>
+                                                setIsChipHovered(false)
+                                            }
                                             style={{
                                                 display: "flex",
                                                 alignItems: "center",
                                                 gap: 6,
                                                 height: 36,
-                                                paddingLeft: chipLabelCollapsed ? 8 : 10,
-                                                paddingRight: chipLabelCollapsed ? 8 : 12,
+                                                paddingLeft: chipLabelCollapsed
+                                                    ? 8
+                                                    : 10,
+                                                paddingRight: chipLabelCollapsed
+                                                    ? 8
+                                                    : 12,
                                                 borderRadius: 28,
-                                                background: (isChipHovered || isMobileLayout)
-                                                    ? themeColors.semantic.accent
-                                                          .replace("hsl(", "hsla(")
-                                                          .replace(")", ", 0.12)")
-                                                    : "transparent",
+                                                background:
+                                                    isChipHovered ||
+                                                    isMobileLayout
+                                                        ? themeColors.semantic.accent
+                                                              .replace(
+                                                                  "hsl(",
+                                                                  "hsla("
+                                                              )
+                                                              .replace(
+                                                                  ")",
+                                                                  ", 0.12)"
+                                                              )
+                                                        : "transparent",
                                                 flexShrink: 0,
                                                 cursor: "pointer",
                                                 userSelect: "none",
-                                                transition: "background 0.15s ease",
+                                                transition:
+                                                    "background 0.15s ease",
                                             }}
                                         >
                                             {/* Icon — always visible, same size as + menu */}
-                                            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, width: 16 }}>
+                                            <div
+                                                style={{
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    justifyContent: "center",
+                                                    flexShrink: 0,
+                                                    width: 16,
+                                                }}
+                                            >
                                                 {activeAgentChip === "app" && (
-                                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                        <path d="M8.47522 8.47522L14.3764 6.95631C15.2457 6.58346 15.1941 5.33387 14.297 5.03485L2.35569 1.05442C1.55185 0.786777 0.786777 1.55185 1.05442 2.35569L5.03485 14.297C5.33387 15.1941 6.58346 15.2457 6.95631 14.3764L8.47522 8.47522Z" stroke={themeColors.semantic.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 16 16"
+                                                        fill="none"
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                    >
+                                                        <path
+                                                            d="M8.47522 8.47522L14.3764 6.95631C15.2457 6.58346 15.1941 5.33387 14.297 5.03485L2.35569 1.05442C1.55185 0.786777 0.786777 1.55185 1.05442 2.35569L5.03485 14.297C5.33387 15.1941 6.58346 15.2457 6.95631 14.3764L8.47522 8.47522Z"
+                                                            stroke={
+                                                                themeColors
+                                                                    .semantic
+                                                                    .accent
+                                                            }
+                                                            strokeWidth="1.2"
+                                                            strokeLinecap="round"
+                                                            strokeLinejoin="round"
+                                                        />
                                                     </svg>
                                                 )}
                                                 {activeAgentChip === "doc" && (
-                                                    <svg width="16" height="12" viewBox="0 0 16 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                        <path d="M0.599609 11.0021L8.48004 11.0018M0.599609 5.64345H15.0996M0.599609 0.599976H15.0996" stroke={themeColors.semantic.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                                    <svg
+                                                        width="16"
+                                                        height="12"
+                                                        viewBox="0 0 16 12"
+                                                        fill="none"
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                    >
+                                                        <path
+                                                            d="M0.599609 11.0021L8.48004 11.0018M0.599609 5.64345H15.0996M0.599609 0.599976H15.0996"
+                                                            stroke={
+                                                                themeColors
+                                                                    .semantic
+                                                                    .accent
+                                                            }
+                                                            strokeWidth="1.2"
+                                                            strokeLinecap="round"
+                                                            strokeLinejoin="round"
+                                                        />
                                                     </svg>
                                                 )}
-                                                {activeAgentChip === "whiteboard" && (
-                                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                        <path d="M7.7678 12.938C7.38383 13.3223 5.11119 15.1876 4.47671 15.0968L1.08753 14.6089L0.602849 11.2417C0.511562 10.6074 2.37678 8.33438 2.76073 7.95043M7.7678 12.938L14.6179 6.08488C15.0023 5.70053 15.1668 5.12791 15.0754 4.49297C14.9841 3.85804 14.6442 3.2128 14.1306 2.69921L13.0021 1.57C12.7477 1.31548 12.4582 1.10098 12.1503 0.93875C11.8423 0.776525 11.5218 0.669761 11.2073 0.62456C10.8927 0.579359 10.5901 0.596608 10.3169 0.675321C10.0436 0.754034 9.80508 0.892667 9.61484 1.0833L2.76073 7.95043M7.7678 12.938L2.76073 7.95043" stroke={themeColors.semantic.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                                {activeAgentChip ===
+                                                    "whiteboard" && (
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 16 16"
+                                                        fill="none"
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                    >
+                                                        <path
+                                                            d="M7.7678 12.938C7.38383 13.3223 5.11119 15.1876 4.47671 15.0968L1.08753 14.6089L0.602849 11.2417C0.511562 10.6074 2.37678 8.33438 2.76073 7.95043M7.7678 12.938L14.6179 6.08488C15.0023 5.70053 15.1668 5.12791 15.0754 4.49297C14.9841 3.85804 14.6442 3.2128 14.1306 2.69921L13.0021 1.57C12.7477 1.31548 12.4582 1.10098 12.1503 0.93875C11.8423 0.776525 11.5218 0.669761 11.2073 0.62456C10.8927 0.579359 10.5901 0.596608 10.3169 0.675321C10.0436 0.754034 9.80508 0.892667 9.61484 1.0833L2.76073 7.95043M7.7678 12.938L2.76073 7.95043"
+                                                            stroke={
+                                                                themeColors
+                                                                    .semantic
+                                                                    .accent
+                                                            }
+                                                            strokeWidth="1.2"
+                                                            strokeLinecap="round"
+                                                            strokeLinejoin="round"
+                                                        />
                                                     </svg>
                                                 )}
                                             </div>
                                             {/* Label — hidden when chip is too narrow on mobile */}
                                             {!chipLabelCollapsed && (
-                                                <span style={{
-                                                    fontSize: 14,
-                                                    fontFamily: "Inter",
-                                                    fontWeight: "400",
-                                                    color: themeColors.semantic.accent,
-                                                    lineHeight: "19px",
-                                                    whiteSpace: "nowrap",
-                                                }}>
-                                                    {activeAgentChip === "app" && "Create app"}
-                                                    {activeAgentChip === "doc" && "Make docs"}
-                                                    {activeAgentChip === "whiteboard" && "Whiteboard"}
+                                                <span
+                                                    style={{
+                                                        fontSize: 14,
+                                                        fontFamily: "Inter",
+                                                        fontWeight: "400",
+                                                        color: themeColors
+                                                            .semantic.accent,
+                                                        lineHeight: "19px",
+                                                        whiteSpace: "nowrap",
+                                                    }}
+                                                >
+                                                    {activeAgentChip ===
+                                                        "app" && "Create app"}
+                                                    {activeAgentChip ===
+                                                        "doc" && "Make docs"}
+                                                    {activeAgentChip ===
+                                                        "whiteboard" &&
+                                                        "Whiteboard"}
                                                 </span>
                                             )}
                                             {/* X — always visible */}
-                                            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0, marginLeft: 4 }}>
-                                                <path d="M9 1L1 9M1 1L9 9" stroke={themeColors.semantic.accent} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                                            <svg
+                                                width="10"
+                                                height="10"
+                                                viewBox="0 0 10 10"
+                                                fill="none"
+                                                xmlns="http://www.w3.org/2000/svg"
+                                                style={{
+                                                    flexShrink: 0,
+                                                    marginLeft: 4,
+                                                }}
+                                            >
+                                                <path
+                                                    d="M9 1L1 9M1 1L9 9"
+                                                    stroke={
+                                                        themeColors.semantic
+                                                            .accent
+                                                    }
+                                                    strokeWidth="1.4"
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                />
                                             </svg>
                                         </div>
                                     )}
@@ -9299,7 +9731,8 @@ const ChatInput = React.memo(function ChatInput({
                                     }
                                     onClick={() => {
                                         if (isLoading && onStop) onStop()
-                                        else if (hasContent) sendAndDismissKeyboard()
+                                        else if (hasContent)
+                                            sendAndDismissKeyboard()
                                     }}
                                     style={{
                                         cursor: "pointer",
@@ -9772,188 +10205,186 @@ function ReportModal({
                 gap: 24,
             }}
         >
-                        {/* Header */}
+            {/* Header */}
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    height: "auto",
+                    position: "relative",
+                    flexDirection: "column",
+                    justifyContent: "center",
+                    alignItems: "flex-start",
+                    gap: 8,
+                    display: "flex",
+                }}
+            >
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        color: themeColors.text.primary,
+                        fontSize: 16,
+                        fontFamily: "Inter",
+                        fontWeight: "400",
+                        lineHeight: "18px",
+                        wordWrap: "break-word",
+                    }}
+                >
+                    {title}
+                </div>
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        justifyContent: "center",
+                        display: "flex",
+                        flexDirection: "column",
+                        color: themeColors.text.secondary,
+                        fontSize: 12,
+                        fontFamily: "Inter",
+                        fontWeight: "400",
+                        lineHeight: "17px",
+                        wordWrap: "break-word",
+                    }}
+                >
+                    {question}
+                </div>
+                <div
+                    data-svg-wrapper
+                    data-layer="close report button"
+                    className="CloseReportButtonHasAFillHoverEffect"
+                    style={{
+                        right: isMobileLayout ? 0 : -12,
+                        top: -12,
+                        position: "absolute",
+                        cursor: "pointer",
+                        width: 36,
+                        height: 36,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: isCloseHovered
+                            ? themeColors.hover.strong
+                            : "transparent",
+                        borderRadius: "50%",
+                        transition: "background 0.2s",
+                    }}
+                    onClick={onClose}
+                    onMouseEnter={() =>
+                        !isMobileLayout && setIsCloseHovered(true)
+                    }
+                    onMouseLeave={() => setIsCloseHovered(false)}
+                >
+                    <svg
+                        width="36"
+                        height="36"
+                        viewBox="0 0 36 36"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+                        <path
+                            d="M23.25 12.75L12.75 23.25M12.75 12.75L23.25 23.25"
+                            stroke={themeColors.text.primary}
+                            strokeOpacity="0.95"
+                            strokeWidth="1.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
+                    </svg>
+                </div>
+            </div>
+
+            {/* Options List */}
+            <div
+                style={{
+                    display: "flex",
+                    flexDirection: "column",
+                }}
+            >
+                {reasons.map((reason) => (
+                    <div
+                        key={reason}
+                        onClick={() => setSelected(reason)}
+                        onMouseEnter={() => setHoveredRow(reason)}
+                        onMouseLeave={() => setHoveredRow(null)}
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "8px 0",
+                            cursor: "pointer",
+                        }}
+                    >
                         <div
                             style={{
-                                alignSelf: "stretch",
-                                height: "auto",
-                                position: "relative",
-                                flexDirection: "column",
-                                justifyContent: "center",
-                                alignItems: "flex-start",
-                                gap: 8,
-                                display: "flex",
-                            }}
-                        >
-                            <div
-                                style={{
-                                    alignSelf: "stretch",
-                                    color: themeColors.text.primary,
-                                    fontSize: 16,
-                                    fontFamily: "Inter",
-                                    fontWeight: "400",
-                                    lineHeight: "18px",
-                                    wordWrap: "break-word",
-                                }}
-                            >
-                                {title}
-                            </div>
-                            <div
-                                style={{
-                                    alignSelf: "stretch",
-                                    justifyContent: "center",
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    color: themeColors.text.secondary,
-                                    fontSize: 12,
-                                    fontFamily: "Inter",
-                                    fontWeight: "400",
-                                    lineHeight: "17px",
-                                    wordWrap: "break-word",
-                                }}
-                            >
-                                {question}
-                            </div>
-                            <div
-                                data-svg-wrapper
-                                data-layer="close report button"
-                                className="CloseReportButtonHasAFillHoverEffect"
-                                style={{
-                                    right: isMobileLayout ? 0 : -12,
-                                    top: -12,
-                                    position: "absolute",
-                                    cursor: "pointer",
-                                    width: 36,
-                                    height: 36,
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    background: isCloseHovered
-                                        ? themeColors.hover.strong
+                                width: 16,
+                                height: 16,
+                                borderRadius: "50%",
+                                border: `0.33px solid ${selected === reason ? themeColors.text.primary : themeColors.text.secondary}`,
+                                background:
+                                    hoveredRow === reason
+                                        ? themeColors.border.subtle
                                         : "transparent",
-                                    borderRadius: "50%",
-                                    transition: "background 0.2s",
-                                }}
-                                onClick={onClose}
-                                onMouseEnter={() =>
-                                    !isMobileLayout && setIsCloseHovered(true)
-                                }
-                                onMouseLeave={() => setIsCloseHovered(false)}
-                            >
-                                <svg
-                                    width="36"
-                                    height="36"
-                                    viewBox="0 0 36 36"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                >
-                                    <path
-                                        d="M23.25 12.75L12.75 23.25M12.75 12.75L23.25 23.25"
-                                        stroke={themeColors.text.primary}
-                                        strokeOpacity="0.95"
-                                        strokeWidth="1.2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                    />
-                                </svg>
-                            </div>
-                        </div>
-
-                        {/* Options List */}
-                        <div
-                            style={{
                                 display: "flex",
-                                flexDirection: "column",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                boxSizing: "border-box",
                             }}
                         >
-                            {reasons.map((reason) => (
+                            {selected === reason && (
                                 <div
-                                    key={reason}
-                                    onClick={() => setSelected(reason)}
-                                    onMouseEnter={() => setHoveredRow(reason)}
-                                    onMouseLeave={() => setHoveredRow(null)}
                                     style={{
-                                        display: "flex",
-                                        alignItems: "center",
-                                        gap: 8,
-                                        padding: "8px 0",
-                                        cursor: "pointer",
+                                        width: 7,
+                                        height: 7,
+                                        borderRadius: "50%",
+                                        background: themeColors.text.primary,
                                     }}
-                                >
-                                    <div
-                                        style={{
-                                            width: 16,
-                                            height: 16,
-                                            borderRadius: "50%",
-                                            border: `0.33px solid ${selected === reason ? themeColors.text.primary : themeColors.text.secondary}`,
-                                            background:
-                                                hoveredRow === reason
-                                                    ? themeColors.border.subtle
-                                                    : "transparent",
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                            boxSizing: "border-box",
-                                        }}
-                                    >
-                                        {selected === reason && (
-                                            <div
-                                                style={{
-                                                    width: 7,
-                                                    height: 7,
-                                                    borderRadius: "50%",
-                                                    background:
-                                                        themeColors.text
-                                                            .primary,
-                                                }}
-                                            />
-                                        )}
-                                    </div>
-                                    <div
-                                        style={{
-                                            color: themeColors.text.primary,
-                                            fontSize: 15,
-                                            fontFamily: "Inter",
-                                            fontWeight: "400",
-                                            opacity: 0.95,
-                                        }}
-                                    >
-                                        {reason}
-                                    </div>
-                                </div>
-                            ))}
+                                />
+                            )}
                         </div>
-
-                        {/* Footer / Submit */}
                         <div
                             style={{
-                                display: "flex",
-                                justifyContent: "flex-end",
+                                color: themeColors.text.primary,
+                                fontSize: 15,
+                                fontFamily: "Inter",
+                                fontWeight: "400",
+                                opacity: 0.95,
                             }}
                         >
-                            <button
-                                disabled={!selected}
-                                onClick={() => selected && onSubmit(selected)}
-                                style={{
-                                    padding: "10px 12px",
-                                    borderRadius: 28,
-                                    background: selected
-                                        ? themeColors.text.primary
-                                        : themeColors.surface,
-                                    color: selected
-                                        ? themeColors.surfaceBlack
-                                        : themeColors.text.tertiary,
-                                    border: "none",
-                                    fontSize: 14,
-                                    fontFamily: "Inter",
-                                    fontWeight: "500",
-                                    cursor: selected ? "pointer" : "default",
-                                    boxSizing: "border-box",
-                                }}
-                            >
-                                Submit
-                            </button>
+                            {reason}
                         </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Footer / Submit */}
+            <div
+                style={{
+                    display: "flex",
+                    justifyContent: "flex-end",
+                }}
+            >
+                <button
+                    disabled={!selected}
+                    onClick={() => selected && onSubmit(selected)}
+                    style={{
+                        padding: "10px 12px",
+                        borderRadius: 28,
+                        background: selected
+                            ? themeColors.text.primary
+                            : themeColors.surface,
+                        color: selected
+                            ? themeColors.surfaceBlack
+                            : themeColors.text.tertiary,
+                        border: "none",
+                        fontSize: 14,
+                        fontFamily: "Inter",
+                        fontWeight: "500",
+                        cursor: selected ? "pointer" : "default",
+                        boxSizing: "border-box",
+                    }}
+                >
+                    Submit
+                </button>
+            </div>
         </ModalSheet>
     )
 }
@@ -10052,12 +10483,41 @@ function writeJobDetailCache(
             const drop = ids.length - JOB_DETAIL_CACHE_MAX_JOBS
             for (let i = 0; i < drop; i++) delete root[ids[i]!]
         }
-        localStorage.setItem(
-            JOB_DETAIL_CACHE_STORAGE_KEY,
-            JSON.stringify(root)
-        )
+        localStorage.setItem(JOB_DETAIL_CACHE_STORAGE_KEY, JSON.stringify(root))
     } catch {
         // Quota, private mode, or parse errors — ignore.
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Job chip store — persists minimal HomepageJob data so chip clicks survive reload
+// -----------------------------------------------------------------------------
+const JOB_CHIP_STORE_KEY = "curastem_job_chip_store_v1"
+
+function readJobChipStore(): Record<string, HomepageJob> {
+    if (typeof localStorage === "undefined") return {}
+    try {
+        const raw = localStorage.getItem(JOB_CHIP_STORE_KEY)
+        return raw ? (JSON.parse(raw) as Record<string, HomepageJob>) : {}
+    } catch {
+        return {}
+    }
+}
+
+function writeJobChipStore(job: HomepageJob): void {
+    if (typeof localStorage === "undefined") return
+    try {
+        const store = readJobChipStore()
+        store[job.id] = job
+        // Cap at 100 entries (cheap — each entry is tiny)
+        const ids = Object.keys(store)
+        if (ids.length > 100) {
+            // No timestamps here; just drop the oldest by insertion order
+            delete store[ids[0]!]
+        }
+        localStorage.setItem(JOB_CHIP_STORE_KEY, JSON.stringify(store))
+    } catch {
+        // Quota or private mode — ignore
     }
 }
 
@@ -10302,7 +10762,9 @@ const ChatJobCards = React.memo(function ChatJobCards({
                         {job.locations?.[0] && (
                             <>
                                 <span style={metaStyle}>•</span>
-                                <span style={metaStyle}>{job.locations[0]}</span>
+                                <span style={metaStyle}>
+                                    {job.locations[0]}
+                                </span>
                             </>
                         )}
                         {/* Salary */}
@@ -10797,10 +11259,10 @@ const RowJobCard = ({
 
 interface CapturedKeyword {
     word: string
-    startX: number   // viewport center-x of the [data-keyword] span at capture time
-    startY: number   // viewport center-y
+    startX: number // viewport center-x of the [data-keyword] span at capture time
+    startY: number // viewport center-y
     baseAngle: number // radians — evenly distributed around the orbit ring
-    fontSize: string  // computed font size of the span (e.g. "14px")
+    fontSize: string // computed font size of the span (e.g. "14px")
     fontWeight: string // computed font weight (e.g. "600")
     isTitle?: boolean // job title gets variable-font weight animation
 }
@@ -10829,10 +11291,7 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
     // After DOM scan — used keywords must not take the "unused" fade while
     // landPositions is still empty (that caused a brief opacity dip).
     const [landingScanDone, setLandingScanDone] = React.useState(false)
-    const usedSet = React.useMemo(
-        () => new Set(usedKeywords),
-        [usedKeywords]
-    )
+    const usedSet = React.useMemo(() => new Set(usedKeywords), [usedKeywords])
     const usedItemCount = React.useMemo(
         () => capturedItems.filter((i) => usedSet.has(i.word)).length,
         [capturedItems, usedKeywords]
@@ -10920,9 +11379,7 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
                     string,
                     { x: number; y: number; targetFontWeight: number }
                 > = {}
-                const markers = document.querySelectorAll(
-                    "[data-keyword-land]"
-                )
+                const markers = document.querySelectorAll("[data-keyword-land]")
                 markers.forEach((el) => {
                     const kw = el.getAttribute("data-keyword-land") ?? ""
                     if (!kw || positions[kw]) return
@@ -11106,9 +11563,12 @@ const KeywordOrbitItem = React.memo(function KeywordOrbitItem({
             // Each word brightens as the cursor passes through its index slot.
             // Transition window: smaller divisor = crisper/faster brightness change.
             const floatIdx = (elapsed / 0.18) % totalOrbitItems
-            const fwd = ((orbitIndex - floatIdx) % totalOrbitItems + totalOrbitItems) % totalOrbitItems
+            const fwd =
+                (((orbitIndex - floatIdx) % totalOrbitItems) +
+                    totalOrbitItems) %
+                totalOrbitItems
             const dist = Math.min(fwd, totalOrbitItems - fwd)
-            const brightness = Math.max(0, 1.5 - dist / .8)
+            const brightness = Math.max(0, 1.5 - dist / 0.8)
 
             if (elapsed < flyDuration) {
                 const t = elapsed / flyDuration
@@ -11245,7 +11705,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     /** When false, skip the network fetch (swipe preview slots until they become the active job). */
     fetchEnabled?: boolean
     /** Called after a successful network fetch so the caller can relay the data to P2P peers. */
-    onDetailFetched?: (jobId: string, entry: Omit<JobDetailCacheEntry, "t" | "u">) => void
+    onDetailFetched?: (
+        jobId: string,
+        entry: Omit<JobDetailCacheEntry, "t" | "u">
+    ) => void
 }) {
     // Compute the correct detail state synchronously on every render so that
     // when `job.id` changes (prop update, no remount) we never show stale or
@@ -11255,7 +11718,8 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [job.id, jobsApiUrl, fetchEnabled]
     )
-    const [detail, setDetail] = React.useState<JobDetailHydrationState>(desiredState)
+    const [detail, setDetail] =
+        React.useState<JobDetailHydrationState>(desiredState)
 
     // Keep detail in sync when the job changes without unmounting.
     const lastJobIdRef = React.useRef(job.id)
@@ -11266,7 +11730,14 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         setDetail(desiredState)
     }
 
-    const { desc, detailSummary, detailCompanyDesc, detailVisaSponsorship, loadingDesc, apiKeywords } = detail
+    const {
+        desc,
+        detailSummary,
+        detailCompanyDesc,
+        detailVisaSponsorship,
+        loadingDesc,
+        apiKeywords,
+    } = detail
 
     React.useEffect(() => {
         if (!fetchEnabled) return
@@ -11277,29 +11748,51 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         const timer = setTimeout(() => ctrl.abort(), 8000)
         fetch(`${jobsApiUrl}/jobs/${job.id}`, { signal: ctrl.signal })
             .then((r) => (r.ok ? r.json() : null))
-            .then((d: {
-                job_description?: JobDescriptionDetail | null
-                job_summary?: string | null
-                visa_sponsorship?: string | null
-                company?: { description?: string | null }
-                keywords?: string[]
-            } | null) => {
-                if (cancelled) return
-                const descVal = d?.job_description ?? null
-                const sumVal = d?.job_summary ?? null
-                const coVal = d?.company?.description ?? null
-                const visaVal = d?.visa_sponsorship ?? null
-                const kwVal = d?.keywords ?? []
-                setDetail({ desc: descVal, detailSummary: sumVal, detailCompanyDesc: coVal, detailVisaSponsorship: visaVal, apiKeywords: kwVal, loadingDesc: false })
-                if (d) {
-                    const entry = { desc: descVal, detailSummary: sumVal, detailCompanyDesc: coVal, detailVisaSponsorship: visaVal, apiKeywords: kwVal }
-                    writeJobDetailCache(job.id, jobsApiUrl, entry)
-                    onDetailFetched?.(job.id, entry)
+            .then(
+                (
+                    d: {
+                        job_description?: JobDescriptionDetail | null
+                        job_summary?: string | null
+                        visa_sponsorship?: string | null
+                        company?: { description?: string | null }
+                        keywords?: string[]
+                    } | null
+                ) => {
+                    if (cancelled) return
+                    const descVal = d?.job_description ?? null
+                    const sumVal = d?.job_summary ?? null
+                    const coVal = d?.company?.description ?? null
+                    const visaVal = d?.visa_sponsorship ?? null
+                    const kwVal = d?.keywords ?? []
+                    setDetail({
+                        desc: descVal,
+                        detailSummary: sumVal,
+                        detailCompanyDesc: coVal,
+                        detailVisaSponsorship: visaVal,
+                        apiKeywords: kwVal,
+                        loadingDesc: false,
+                    })
+                    if (d) {
+                        const entry = {
+                            desc: descVal,
+                            detailSummary: sumVal,
+                            detailCompanyDesc: coVal,
+                            detailVisaSponsorship: visaVal,
+                            apiKeywords: kwVal,
+                        }
+                        writeJobDetailCache(job.id, jobsApiUrl, entry)
+                        onDetailFetched?.(job.id, entry)
+                    }
                 }
+            )
+            .catch(() => {
+                if (!cancelled) setDetail((p) => ({ ...p, loadingDesc: false }))
             })
-            .catch(() => { if (!cancelled) setDetail((p) => ({ ...p, loadingDesc: false })) })
             .finally(() => clearTimeout(timer))
-        return () => { cancelled = true; ctrl.abort() }
+        return () => {
+            cancelled = true
+            ctrl.abort()
+        }
     }, [job.id, jobsApiUrl, fetchEnabled])
 
     const openUrl = (url: string | null | undefined) => {
@@ -11310,29 +11803,49 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     const effectiveCompanyDesc = job.company.description || detailCompanyDesc
 
     const hasCachedDetail = readJobDetailCache(job.id, jobsApiUrl) !== null
-    const showLazyDetailBody =
-        !loadingDesc && (fetchEnabled || hasCachedDetail)
+    const showLazyDetailBody = !loadingDesc && (fetchEnabled || hasCachedDetail)
 
     const highlightedPhrases = React.useRef(new Set<string>())
-    React.useEffect(() => { highlightedPhrases.current.clear() }, [job.id])
+    React.useEffect(() => {
+        highlightedPhrases.current.clear()
+    }, [job.id])
     const highlightText = (text: string) => {
         if (!text || !apiKeywords.length) return text
         const sorted = [...apiKeywords].sort((a, b) => b.length - a.length)
-        const regex = new RegExp(`(\\b(?:${sorted.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b)`, "gi")
+        const regex = new RegExp(
+            `(\\b(?:${sorted.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b)`,
+            "gi"
+        )
         return text.split(regex).map((part, i) => {
-            const matched = sorted.find((p) => p.toLowerCase() === part.toLowerCase())
+            const matched = sorted.find(
+                (p) => p.toLowerCase() === part.toLowerCase()
+            )
             if (matched) {
                 const key = matched.toLowerCase()
                 if (highlightedPhrases.current.has(key)) return part
                 highlightedPhrases.current.add(key)
-                return <span key={i} data-keyword={matched} style={{ fontWeight: 600 }}>{part}</span>
+                return (
+                    <span
+                        key={i}
+                        data-keyword={matched}
+                        style={{ fontWeight: 600 }}
+                    >
+                        {part}
+                    </span>
+                )
             }
             return part
         })
     }
 
-    const fmtType = (t: string | null) => t ? t.replace(/_/g, "-").replace(/\b\w/g, (c) => c.toUpperCase()) : null
-    const fmtPlace = (t: string | null) => t ? (t === "on_site" ? "On-site" : t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())) : null
+    const fmtType = (t: string | null) =>
+        t ? t.replace(/_/g, "-").replace(/\b\w/g, (c) => c.toUpperCase()) : null
+    const fmtPlace = (t: string | null) =>
+        t
+            ? t === "on_site"
+                ? "On-site"
+                : t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+            : null
     const metaItems = [
         jobTimeAgo(job.posted_at),
         job.locations?.[0] ?? null,
@@ -11358,26 +11871,103 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         </div>
     )
 
-    const SectionBlock = ({ title, items }: { title: string; items: string[] }) => (
+    const SectionBlock = ({
+        title,
+        items,
+    }: {
+        title: string
+        items: string[]
+    }) => (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 500, lineHeight: "21px" }}>{title}</div>
-            <ul style={{ listStyleType: "disc", listStylePosition: "outside", paddingLeft: 20, margin: 0, color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>
-                {items.map((item, i) => <li key={i} style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}>{highlightText(item)}</li>)}
+            <div
+                style={{
+                    color: themeColors.text.primary,
+                    fontSize: 14,
+                    fontFamily: "Inter",
+                    fontWeight: 500,
+                    lineHeight: "21px",
+                }}
+            >
+                {title}
+            </div>
+            <ul
+                style={{
+                    listStyleType: "disc",
+                    listStylePosition: "outside",
+                    paddingLeft: 20,
+                    margin: 0,
+                    color: themeColors.text.primary,
+                    fontSize: 14,
+                    fontFamily: "Inter",
+                    fontWeight: 400,
+                    lineHeight: "21px",
+                }}
+            >
+                {items.map((item, i) => (
+                    <li
+                        key={i}
+                        style={{ marginBottom: i < items.length - 1 ? 4 : 0 }}
+                    >
+                        {highlightText(item)}
+                    </li>
+                ))}
             </ul>
         </div>
     )
 
     const CompanyLogo = ({ size }: { size: number }) => (
-        <div style={{ width: size, height: size, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: themeColors.surface, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            {job.company.logo_url
-                ? <img src={job.company.logo_url} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                : <div style={{ width: size, height: size, background: themeColors.surfaceHighlight, borderRadius: "50%" }} />}
+        <div
+            style={{
+                width: size,
+                height: size,
+                borderRadius: "50%",
+                overflow: "hidden",
+                flexShrink: 0,
+                background: themeColors.surface,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+            }}
+        >
+            {job.company.logo_url ? (
+                <img
+                    src={job.company.logo_url}
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "contain",
+                    }}
+                />
+            ) : (
+                <div
+                    style={{
+                        width: size,
+                        height: size,
+                        background: themeColors.surfaceHighlight,
+                        borderRadius: "50%",
+                    }}
+                />
+            )}
         </div>
     )
 
     const Chevron = () => (
-        <svg width="6" height="10" viewBox="0 0 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-            <path d="M0.601562 8.6L4.60156 4.6L0.601562 0.599998" stroke={themeColors.text.primary} strokeOpacity={0.65} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+        <svg
+            width="6"
+            height="10"
+            viewBox="0 0 6 10"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden
+        >
+            <path
+                d="M0.601562 8.6L4.60156 4.6L0.601562 0.599998"
+                stroke={themeColors.text.primary}
+                strokeOpacity={0.65}
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
         </svg>
     )
 
@@ -11385,7 +11975,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         <motion.div
             animate={{
                 opacity: previewOnly || resumeAnimPhase !== "fading" ? 1 : 0,
-                filter: !previewOnly && resumeAnimPhase === "fading" ? "blur(4px)" : "blur(0px)",
+                filter:
+                    !previewOnly && resumeAnimPhase === "fading"
+                        ? "blur(4px)"
+                        : "blur(0px)",
             }}
             transition={{ duration: 0.25, ease: "easeInOut" }}
             style={{ display: "flex", flexDirection: "column", gap: 32 }}
@@ -11393,32 +11986,158 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
             {/* Header */}
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                 {/* Company */}
-                <div onClick={() => openUrl(job.company.website_url)} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: job.company.website_url ? "pointer" : "default" }}>
+                <div
+                    onClick={() => openUrl(job.company.website_url)}
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        cursor: job.company.website_url ? "pointer" : "default",
+                    }}
+                >
                     <CompanyLogo size={32} />
-                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                        <span data-company-name style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{job.company.name}</span>
-                        <div data-company-chevron className="CompanyChevron" style={{ flexShrink: 0, marginTop: 2 }}><Chevron /></div>
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 5,
+                        }}
+                    >
+                        <span
+                            data-company-name
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: 400,
+                                lineHeight: "21px",
+                            }}
+                        >
+                            {job.company.name}
+                        </span>
+                        <div
+                            data-company-chevron
+                            className="CompanyChevron"
+                            style={{ flexShrink: 0, marginTop: 2 }}
+                        >
+                            <Chevron />
+                        </div>
                     </div>
                 </div>
 
                 {/* Title + meta + CTA row */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                    <div data-job-title style={{ color: themeColors.text.primary, fontSize: 24, fontFamily: "Inter", fontWeight: 600, lineHeight: "1.2" }}>{job.title}</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                <div
+                    style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 16,
+                    }}
+                >
+                    <div
+                        data-job-title
+                        style={{
+                            color: themeColors.text.primary,
+                            fontSize: 24,
+                            fontFamily: "Inter",
+                            fontWeight: 600,
+                            lineHeight: "1.2",
+                        }}
+                    >
+                        {job.title}
+                    </div>
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            flexWrap: "wrap",
+                        }}
+                    >
                         {metaItems.map((item, i) => (
                             <React.Fragment key={i}>
-                                {i > 0 && <span style={{ color: themeColors.text.primary, fontSize: 14 }}>•</span>}
-                                <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{item}</span>
+                                {i > 0 && (
+                                    <span
+                                        style={{
+                                            color: themeColors.text.primary,
+                                            fontSize: 14,
+                                        }}
+                                    >
+                                        •
+                                    </span>
+                                )}
+                                <span
+                                    style={{
+                                        color: themeColors.text.primary,
+                                        fontSize: 14,
+                                        fontFamily: "Inter",
+                                        fontWeight: 400,
+                                        lineHeight: "21px",
+                                    }}
+                                >
+                                    {item}
+                                </span>
                             </React.Fragment>
                         ))}
                     </div>
-                    <div style={{
-                        display: "flex", alignItems: "center", gap: 8,
-                        flexWrap: isMobile ? "nowrap" : "wrap",
-                        ...(isMobile ? { marginLeft: -24, marginRight: -24, paddingLeft: 24, paddingRight: 24, overflowX: "auto", overflowY: "visible", scrollbarWidth: "none", WebkitOverflowScrolling: "touch", paddingBottom: 6, marginBottom: -6 } : {}),
-                    }}>
-                        <motion.div onClick={() => openUrl(job.apply_url)} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} transition={{ type: "spring", stiffness: 400, damping: 20 }} style={{ height: 40, paddingLeft: 20, paddingRight: 20, background: "#0099FF", borderRadius: 31, display: "inline-flex", alignItems: "center", cursor: "pointer", flex: isMobile ? 1 : undefined, minWidth: isMobile ? 148 : undefined, maxWidth: isMobile ? "50%" : undefined, justifyContent: isMobile ? "center" : undefined, flexShrink: 0 }}>
-                            <span style={{ color: "rgba(255,255,255,0.95)", fontSize: 15, fontFamily: "Inter", fontWeight: 500, lineHeight: "22.5px" }}>Apply</span>
+                    <div
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            flexWrap: isMobile ? "nowrap" : "wrap",
+                            ...(isMobile
+                                ? {
+                                      marginLeft: -24,
+                                      marginRight: -24,
+                                      paddingLeft: 24,
+                                      paddingRight: 24,
+                                      overflowX: "auto",
+                                      overflowY: "visible",
+                                      scrollbarWidth: "none",
+                                      WebkitOverflowScrolling: "touch",
+                                      paddingBottom: 6,
+                                      marginBottom: -6,
+                                  }
+                                : {}),
+                        }}
+                    >
+                        <motion.div
+                            onClick={() => openUrl(job.apply_url)}
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.97 }}
+                            transition={{
+                                type: "spring",
+                                stiffness: 400,
+                                damping: 20,
+                            }}
+                            style={{
+                                height: 40,
+                                paddingLeft: 20,
+                                paddingRight: 20,
+                                background: "#0099FF",
+                                borderRadius: 31,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                cursor: "pointer",
+                                flex: isMobile ? 1 : undefined,
+                                minWidth: isMobile ? 148 : undefined,
+                                maxWidth: isMobile ? "50%" : undefined,
+                                justifyContent: isMobile ? "center" : undefined,
+                                flexShrink: 0,
+                            }}
+                        >
+                            <span
+                                style={{
+                                    color: "rgba(255,255,255,0.95)",
+                                    fontSize: 15,
+                                    fontFamily: "Inter",
+                                    fontWeight: 500,
+                                    lineHeight: "22.5px",
+                                }}
+                            >
+                                Apply
+                            </span>
                         </motion.div>
                         {onCreateResume && (
                             <motion.div
@@ -11436,7 +12155,11 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 whileTap={
                                     previewOnly ? undefined : { scale: 0.97 }
                                 }
-                                transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                                transition={{
+                                    type: "spring",
+                                    stiffness: 400,
+                                    damping: 20,
+                                }}
                                 style={{
                                     height: 40,
                                     paddingLeft: 20,
@@ -11452,14 +12175,39 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                     minWidth: isMobile ? 170 : undefined,
                                     maxWidth: isMobile ? "50%" : undefined,
                                     flexShrink: 0,
-                                    pointerEvents: previewOnly ? "none" : "auto",
+                                    pointerEvents: previewOnly
+                                        ? "none"
+                                        : "auto",
                                 }}
                             >
-                                <svg width="15" height="14" viewBox="0 0 15 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                                    <path d="M11.3289 1.09214C10.3915 1.09214 9.54907 1.50477 8.96289 2.14171L3.16814 7.93728C2.63599 8.46943 2.26266 9.1555 2.1112 9.91443L1.61261 12.8413C1.50864 13.4594 1.89588 14.057 2.54265 13.9956L5.60049 13.4881C6.28574 13.3718 6.90386 13.0378 7.39672 12.5032L13.5599 6.33918C14.178 5.74726 14.4916 4.98833 14.4523 4.17208C14.3753 2.6403 13.085 1.09214 11.3289 1.09214ZM6.65088 11.6943C6.25954 12.1069 5.98774 12.2485 5.4081 12.3468L2.79973 12.8126L3.30159 10.1445C3.41784 9.5714 3.6962 9.11866 4.09572 8.71913L8.70499 4.03454L11.6523 6.8918L6.65088 11.6943ZM12.4849 6.03544L9.56463 3.19047C10.0575 2.65586 10.5233 2.30955 11.3289 2.30955C12.4399 2.30955 13.302 3.2576 13.302 4.2736C13.302 5.0047 12.9884 5.53931 12.4849 6.03544Z" fill={themeColors.text.primary} />
-                                    <path d="M0.203947 2.18429C-0.00236458 2.26779 -0.11862 2.62065 0.185117 2.73036C0.307922 2.77539 0.479848 2.76311 0.631308 2.78849C1.4934 2.9465 2.02801 3.63175 2.18602 4.51348C2.23104 4.7198 2.37595 4.89991 2.45946 4.89991C2.60437 4.89991 2.75583 4.72962 2.80741 4.51348C3.02518 3.60637 3.57944 3.00053 4.55369 2.79422C4.77146 2.74264 4.94912 2.65258 4.94257 2.44627C4.92947 2.23914 4.73626 2.17774 4.56024 2.15891C3.744 2.06066 3.18401 1.40734 2.87045 0.57882C2.85735 0.244791 2.74764 0.0450284 2.47256 0C2.24824 0 2.12543 0.25789 2.0804 0.57882C1.82824 1.31647 1.12989 2.0754 0.404528 2.14253C0.35295 2.14253 0.262894 2.15563 0.203947 2.18429Z" fill={themeColors.text.primary} />
+                                <svg
+                                    width="15"
+                                    height="14"
+                                    viewBox="0 0 15 14"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    aria-hidden
+                                >
+                                    <path
+                                        d="M11.3289 1.09214C10.3915 1.09214 9.54907 1.50477 8.96289 2.14171L3.16814 7.93728C2.63599 8.46943 2.26266 9.1555 2.1112 9.91443L1.61261 12.8413C1.50864 13.4594 1.89588 14.057 2.54265 13.9956L5.60049 13.4881C6.28574 13.3718 6.90386 13.0378 7.39672 12.5032L13.5599 6.33918C14.178 5.74726 14.4916 4.98833 14.4523 4.17208C14.3753 2.6403 13.085 1.09214 11.3289 1.09214ZM6.65088 11.6943C6.25954 12.1069 5.98774 12.2485 5.4081 12.3468L2.79973 12.8126L3.30159 10.1445C3.41784 9.5714 3.6962 9.11866 4.09572 8.71913L8.70499 4.03454L11.6523 6.8918L6.65088 11.6943ZM12.4849 6.03544L9.56463 3.19047C10.0575 2.65586 10.5233 2.30955 11.3289 2.30955C12.4399 2.30955 13.302 3.2576 13.302 4.2736C13.302 5.0047 12.9884 5.53931 12.4849 6.03544Z"
+                                        fill={themeColors.text.primary}
+                                    />
+                                    <path
+                                        d="M0.203947 2.18429C-0.00236458 2.26779 -0.11862 2.62065 0.185117 2.73036C0.307922 2.77539 0.479848 2.76311 0.631308 2.78849C1.4934 2.9465 2.02801 3.63175 2.18602 4.51348C2.23104 4.7198 2.37595 4.89991 2.45946 4.89991C2.60437 4.89991 2.75583 4.72962 2.80741 4.51348C3.02518 3.60637 3.57944 3.00053 4.55369 2.79422C4.77146 2.74264 4.94912 2.65258 4.94257 2.44627C4.92947 2.23914 4.73626 2.17774 4.56024 2.15891C3.744 2.06066 3.18401 1.40734 2.87045 0.57882C2.85735 0.244791 2.74764 0.0450284 2.47256 0C2.24824 0 2.12543 0.25789 2.0804 0.57882C1.82824 1.31647 1.12989 2.0754 0.404528 2.14253C0.35295 2.14253 0.262894 2.15563 0.203947 2.18429Z"
+                                        fill={themeColors.text.primary}
+                                    />
                                 </svg>
-                                <span style={{ color: themeColors.text.primary, fontSize: 15, fontFamily: "Inter", fontWeight: 500, lineHeight: "22.5px" }}>Create resume</span>
+                                <span
+                                    style={{
+                                        color: themeColors.text.primary,
+                                        fontSize: 15,
+                                        fontFamily: "Inter",
+                                        fontWeight: 500,
+                                        lineHeight: "22.5px",
+                                    }}
+                                >
+                                    Create resume
+                                </span>
                             </motion.div>
                         )}
                     </div>
@@ -11471,54 +12219,270 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
             ) : showLazyDetailBody ? (
                 <>
                     {effectiveSummary && (
-                        <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{effectiveSummary}</div>
+                        <div
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: 400,
+                                lineHeight: "21px",
+                            }}
+                        >
+                            {effectiveSummary}
+                        </div>
                     )}
 
-                    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-                        <div style={{ color: themeColors.text.primary, fontSize: 17, fontFamily: "Inter", fontWeight: 600, lineHeight: "17px" }}>About the job</div>
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 24,
+                        }}
+                    >
+                        <div
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 17,
+                                fontFamily: "Inter",
+                                fontWeight: 600,
+                                lineHeight: "17px",
+                            }}
+                        >
+                            About the job
+                        </div>
                         {desc ? (
                             <>
-                                {desc.responsibilities.length > 0 && <SectionBlock title="Responsibilities" items={desc.responsibilities} />}
-                                {desc.minimum_qualifications.length > 0 && <SectionBlock title="Minimum Qualifications" items={desc.minimum_qualifications} />}
-                                {desc.preferred_qualifications.length > 0 && <SectionBlock title="Preferred Qualifications" items={desc.preferred_qualifications} />}
+                                {desc.responsibilities.length > 0 && (
+                                    <SectionBlock
+                                        title="Responsibilities"
+                                        items={desc.responsibilities}
+                                    />
+                                )}
+                                {desc.minimum_qualifications.length > 0 && (
+                                    <SectionBlock
+                                        title="Minimum Qualifications"
+                                        items={desc.minimum_qualifications}
+                                    />
+                                )}
+                                {desc.preferred_qualifications.length > 0 && (
+                                    <SectionBlock
+                                        title="Preferred Qualifications"
+                                        items={desc.preferred_qualifications}
+                                    />
+                                )}
                             </>
                         ) : (
-                            <div style={{ color: themeColors.text.secondary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Apply to learn more about this role.</div>
+                            <div
+                                style={{
+                                    color: themeColors.text.secondary,
+                                    fontSize: 14,
+                                    fontFamily: "Inter",
+                                    fontWeight: 400,
+                                }}
+                            >
+                                Apply to learn more about this role.
+                            </div>
                         )}
                     </div>
 
-                    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-                        <div style={{ color: themeColors.text.primary, fontSize: 17, fontFamily: "Inter", fontWeight: 600, lineHeight: "17px" }}>About the company</div>
-                        <div onClick={() => openUrl(job.company.website_url)} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: job.company.website_url ? "pointer" : "default" }}>
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 24,
+                        }}
+                    >
+                        <div
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 17,
+                                fontFamily: "Inter",
+                                fontWeight: 600,
+                                lineHeight: "17px",
+                            }}
+                        >
+                            About the company
+                        </div>
+                        <div
+                            onClick={() => openUrl(job.company.website_url)}
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 12,
+                                flexWrap: "wrap",
+                                cursor: job.company.website_url
+                                    ? "pointer"
+                                    : "default",
+                            }}
+                        >
                             <CompanyLogo size={40} />
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{job.company.name}</span>
-                                <div data-company-chevron className="CompanyChevron" style={{ flexShrink: 0, marginTop: 1.5 }}><Chevron /></div>
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                }}
+                            >
+                                <span
+                                    style={{
+                                        color: themeColors.text.primary,
+                                        fontSize: 14,
+                                        fontFamily: "Inter",
+                                        fontWeight: 400,
+                                        lineHeight: "21px",
+                                    }}
+                                >
+                                    {job.company.name}
+                                </span>
+                                <div
+                                    data-company-chevron
+                                    className="CompanyChevron"
+                                    style={{ flexShrink: 0, marginTop: 1.5 }}
+                                >
+                                    <Chevron />
+                                </div>
                             </div>
                         </div>
-                        {(job.company.website_url || job.company.linkedin_url || job.company.x_url) && (
-                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        {(job.company.website_url ||
+                            job.company.linkedin_url ||
+                            job.company.x_url) && (
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    flexWrap: "wrap",
+                                }}
+                            >
                                 {job.company.website_url && (
-                                    <div onClick={() => openUrl(job.company.website_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", cursor: "pointer" }}>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Website</span>
+                                    <div
+                                        onClick={() =>
+                                            openUrl(job.company.website_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            Website
+                                        </span>
                                     </div>
                                 )}
                                 {job.company.linkedin_url && (
-                                    <div onClick={() => openUrl(job.company.linkedin_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287-0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603-0.00831011 14.8147 0.000101367" fill={themeColors.text.primary} /></svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>LinkedIn</span>
+                                    <div
+                                        onClick={() =>
+                                            openUrl(job.company.linkedin_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <svg
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 16 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287-0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603-0.00831011 14.8147 0.000101367"
+                                                fill={themeColors.text.primary}
+                                            />
+                                        </svg>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            LinkedIn
+                                        </span>
                                     </div>
                                 )}
                                 {job.company.x_url && (
-                                    <div onClick={() => openUrl(job.company.x_url)} style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>X/Twitter</span>
+                                    <div
+                                        onClick={() =>
+                                            openUrl(job.company.x_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
+                                    >
+                                        <svg
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 16 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623"
+                                                stroke={
+                                                    themeColors.text.primary
+                                                }
+                                                strokeWidth="1.2"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                            />
+                                        </svg>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            X/Twitter
+                                        </span>
                                     </div>
                                 )}
                             </div>
                         )}
                         {effectiveCompanyDesc ? (
-                            <div style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400, lineHeight: "21px" }}>{effectiveCompanyDesc}</div>
+                            <div
+                                style={{
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    fontFamily: "Inter",
+                                    fontWeight: 400,
+                                    lineHeight: "21px",
+                                }}
+                            >
+                                {effectiveCompanyDesc}
+                            </div>
                         ) : null}
                     </div>
                 </>
@@ -11552,7 +12516,10 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     jobSwipeDeck?: HomepageJob[]
     /** When 'y', pull-to-dismiss owns the gesture — disable job carousel drag. */
     mobileToolGestureAxis?: null | "x" | "y"
-    onJobDetailFetched?: (jobId: string, entry: Omit<JobDetailCacheEntry, "t" | "u">) => void
+    onJobDetailFetched?: (
+        jobId: string,
+        entry: Omit<JobDetailCacheEntry, "t" | "u">
+    ) => void
 }) {
     const [isShareHovered, setIsShareHovered] = React.useState(false)
     const [isCloseHovered, setIsCloseHovered] = React.useState(false)
@@ -11603,33 +12570,47 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         }
     }, [job.id, swipeMode])
 
-    const onDragEnd = React.useCallback((_e: unknown, info: PanInfo) => {
-        if (!swipeMode || colW <= 0 || committingRef.current) return
-        const W = colW
-        const rest = -W
-        const cur = trackX.get()
-        const vel = info.velocity.x
-        const threshold = W * 0.18
-        let delta: -1 | 0 | 1 = 0
-        let target = rest
-        if (cur > rest + threshold || vel > 380) { delta = -1; target = 0 }
-        else if (cur < rest - threshold || vel < -380) { delta = 1; target = -2 * W }
-        if (!delta) {
-            animate(trackX, rest, { type: "spring", stiffness: 420, damping: 36 })
-            return
-        }
-        committingRef.current = true
-        setCommitting(true)
-        animate(trackX, target, {
-            type: "spring", stiffness: 420, damping: 38,
-            onComplete: () => {
-                onSwipeCycleJob!(delta)
-                trackX.set(-W)
-                committingRef.current = false
-                setCommitting(false)
-            },
-        })
-    }, [swipeMode, colW, trackX, onSwipeCycleJob])
+    const onDragEnd = React.useCallback(
+        (_e: unknown, info: PanInfo) => {
+            if (!swipeMode || colW <= 0 || committingRef.current) return
+            const W = colW
+            const rest = -W
+            const cur = trackX.get()
+            const vel = info.velocity.x
+            const threshold = W * 0.18
+            let delta: -1 | 0 | 1 = 0
+            let target = rest
+            if (cur > rest + threshold || vel > 380) {
+                delta = -1
+                target = 0
+            } else if (cur < rest - threshold || vel < -380) {
+                delta = 1
+                target = -2 * W
+            }
+            if (!delta) {
+                animate(trackX, rest, {
+                    type: "spring",
+                    stiffness: 420,
+                    damping: 36,
+                })
+                return
+            }
+            committingRef.current = true
+            setCommitting(true)
+            animate(trackX, target, {
+                type: "spring",
+                stiffness: 420,
+                damping: 38,
+                onComplete: () => {
+                    onSwipeCycleJob!(delta)
+                    trackX.set(-W)
+                    committingRef.current = false
+                    setCommitting(false)
+                },
+            })
+        },
+        [swipeMode, colW, trackX, onSwipeCycleJob]
+    )
 
     const colStyle = {
         flexShrink: 0,
@@ -11649,8 +12630,11 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         const text = `${job.title} at ${job.company.name}`
         if (typeof navigator === "undefined") return
         if (navigator.share) {
-            try { await navigator.share({ title: text, url, text }) } catch (e) {
-                if ((e as Error).name !== "AbortError") navigator.clipboard?.writeText(url || text)
+            try {
+                await navigator.share({ title: text, url, text })
+            } catch (e) {
+                if ((e as Error).name !== "AbortError")
+                    navigator.clipboard?.writeText(url || text)
             }
         } else {
             navigator.clipboard?.writeText(url || text)
@@ -11670,21 +12654,129 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                 overflow: "visible",
                 position: "relative",
                 boxShadow:
-                    isMobile || themeColors.background !== lightColors.background
+                    isMobile ||
+                    themeColors.background !== lightColors.background
                         ? "none"
                         : "2px 0 24px 2px rgba(0,0,0,0.04)",
             }}
         >
             {/* Toolbar */}
-            <div style={{ position: "absolute", top: 16, left: 0, right: 0, paddingLeft: 16, paddingRight: 16, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, zIndex: 10, opacity: resumeAnimPhase === "idle" ? 1 : 0, pointerEvents: "none" }}>
-                <div style={{ paddingLeft: 4, paddingRight: 4, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", pointerEvents: "auto" }}>
-                    <div onClick={shareJob} onMouseEnter={() => setIsShareHovered(true)} onMouseLeave={() => setIsShareHovered(false)} style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", position: "relative" }} aria-label="Share">
-                        {isShareHovered && <Tooltip style={{ top: "100%", left: "50%", transform: "translate(-50%, 8px)", zIndex: 100 }}>Share</Tooltip>}
-                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            <div
+                style={{
+                    position: "absolute",
+                    top: 16,
+                    left: 0,
+                    right: 0,
+                    paddingLeft: 16,
+                    paddingRight: 16,
+                    display: "flex",
+                    justifyContent: "flex-end",
+                    alignItems: "center",
+                    gap: 8,
+                    zIndex: 10,
+                    opacity: resumeAnimPhase === "idle" ? 1 : 0,
+                    pointerEvents: "none",
+                }}
+            >
+                <div
+                    style={{
+                        paddingLeft: 4,
+                        paddingRight: 4,
+                        background: themeColors.surface,
+                        borderRadius: 31,
+                        display: "flex",
+                        alignItems: "center",
+                        pointerEvents: "auto",
+                    }}
+                >
+                    <div
+                        onClick={shareJob}
+                        onMouseEnter={() => setIsShareHovered(true)}
+                        onMouseLeave={() => setIsShareHovered(false)}
+                        style={{
+                            width: 40,
+                            height: 40,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            position: "relative",
+                        }}
+                        aria-label="Share"
+                    >
+                        {isShareHovered && (
+                            <Tooltip
+                                style={{
+                                    top: "100%",
+                                    left: "50%",
+                                    transform: "translate(-50%, 8px)",
+                                    zIndex: 100,
+                                }}
+                            >
+                                Share
+                            </Tooltip>
+                        )}
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 40 40"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
+                                stroke={themeColors.text.primary}
+                                strokeWidth="1.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        </svg>
                     </div>
-                    <div onClick={() => { setIsCloseHovered(false); onClose() }} onMouseEnter={() => setIsCloseHovered(true)} onMouseLeave={() => setIsCloseHovered(false)} style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", position: "relative" }} aria-label="Close">
-                        {isCloseHovered && <Tooltip style={{ top: "100%", left: "50%", transform: "translate(-50%, 8px)", zIndex: 100 }}>Close</Tooltip>}
-                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                    <div
+                        onClick={() => {
+                            setIsCloseHovered(false)
+                            onClose()
+                        }}
+                        onMouseEnter={() => setIsCloseHovered(true)}
+                        onMouseLeave={() => setIsCloseHovered(false)}
+                        style={{
+                            width: 40,
+                            height: 40,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer",
+                            position: "relative",
+                        }}
+                        aria-label="Close"
+                    >
+                        {isCloseHovered && (
+                            <Tooltip
+                                style={{
+                                    top: "100%",
+                                    left: "50%",
+                                    transform: "translate(-50%, 8px)",
+                                    zIndex: 100,
+                                }}
+                            >
+                                Close
+                            </Tooltip>
+                        )}
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 40 40"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25"
+                                stroke={themeColors.text.primary}
+                                strokeWidth="1.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        </svg>
                     </div>
                 </div>
             </div>
@@ -11699,49 +12791,108 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                     borderRadius: jobPanelRadius,
                 }}
             >
-            {swipeMode ? (
-                <div ref={clipRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
-                    {colW > 0 && (
-                        <motion.div
-                            style={{ display: "flex", height: "100%", width: colW * 3, x: trackX }}
-                            drag={
-                                !committing && mobileToolGestureAxis !== "y"
-                                    ? "x"
-                                    : false
-                            }
-                            dragDirectionLock
-                            dragElastic={0.07}
-                            dragMomentum={false}
-                            dragConstraints={{ left: -2 * colW, right: 0 }}
-                            onDragEnd={onDragEnd}
-                        >
-                            {/* Prev slot — permanently mounted, job prop updates on each swipe commit */}
-                            <div ref={swipeColPrevRef} style={colStyle}>
-                                <JobDetailScrollBody job={prevJob} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} previewOnly onCreateResume={onCreateResume} fetchEnabled={fetchedIdsRef.current.has(prevJob.id)} />
-                            </div>
-                            {/* Center slot */}
-                            <div
-                                ref={swipeColCenterRef}
-                                style={colStyle}
-                                {...(isMobile ? { "data-pull-scroll": "1" } : {})}
+                {swipeMode ? (
+                    <div
+                        ref={clipRef}
+                        style={{
+                            flex: 1,
+                            minHeight: 0,
+                            overflow: "hidden",
+                            position: "relative",
+                        }}
+                    >
+                        {colW > 0 && (
+                            <motion.div
+                                style={{
+                                    display: "flex",
+                                    height: "100%",
+                                    width: colW * 3,
+                                    x: trackX,
+                                }}
+                                drag={
+                                    !committing && mobileToolGestureAxis !== "y"
+                                        ? "x"
+                                        : false
+                                }
+                                dragDirectionLock
+                                dragElastic={0.07}
+                                dragMomentum={false}
+                                dragConstraints={{ left: -2 * colW, right: 0 }}
+                                onDragEnd={onDragEnd}
                             >
-                                <JobDetailScrollBody job={job} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} onCreateResume={onCreateResume} fetchEnabled onDetailFetched={onJobDetailFetched} />
-                            </div>
-                            {/* Next slot */}
-                            <div ref={swipeColNextRef} style={colStyle}>
-                                <JobDetailScrollBody job={nextJob} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} previewOnly onCreateResume={onCreateResume} fetchEnabled={fetchedIdsRef.current.has(nextJob.id)} />
-                            </div>
-                        </motion.div>
-                    )}
-                </div>
-            ) : (
-                <div
-                    style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px 24px 48px" }}
-                    {...(isMobile ? { "data-pull-scroll": "1" } : {})}
-                >
-                    <JobDetailScrollBody job={job} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} onCreateResume={onCreateResume} onDetailFetched={onJobDetailFetched} />
-                </div>
-            )}
+                                {/* Prev slot — permanently mounted, job prop updates on each swipe commit */}
+                                <div ref={swipeColPrevRef} style={colStyle}>
+                                    <JobDetailScrollBody
+                                        job={prevJob}
+                                        jobsApiUrl={jobsApiUrl}
+                                        themeColors={themeColors}
+                                        isMobile={isMobile}
+                                        resumeAnimPhase={resumeAnimPhase}
+                                        previewOnly
+                                        onCreateResume={onCreateResume}
+                                        fetchEnabled={fetchedIdsRef.current.has(
+                                            prevJob.id
+                                        )}
+                                    />
+                                </div>
+                                {/* Center slot */}
+                                <div
+                                    ref={swipeColCenterRef}
+                                    style={colStyle}
+                                    {...(isMobile
+                                        ? { "data-pull-scroll": "1" }
+                                        : {})}
+                                >
+                                    <JobDetailScrollBody
+                                        job={job}
+                                        jobsApiUrl={jobsApiUrl}
+                                        themeColors={themeColors}
+                                        isMobile={isMobile}
+                                        resumeAnimPhase={resumeAnimPhase}
+                                        onCreateResume={onCreateResume}
+                                        fetchEnabled
+                                        onDetailFetched={onJobDetailFetched}
+                                    />
+                                </div>
+                                {/* Next slot */}
+                                <div ref={swipeColNextRef} style={colStyle}>
+                                    <JobDetailScrollBody
+                                        job={nextJob}
+                                        jobsApiUrl={jobsApiUrl}
+                                        themeColors={themeColors}
+                                        isMobile={isMobile}
+                                        resumeAnimPhase={resumeAnimPhase}
+                                        previewOnly
+                                        onCreateResume={onCreateResume}
+                                        fetchEnabled={fetchedIdsRef.current.has(
+                                            nextJob.id
+                                        )}
+                                    />
+                                </div>
+                            </motion.div>
+                        )}
+                    </div>
+                ) : (
+                    <div
+                        style={{
+                            flex: 1,
+                            minHeight: 0,
+                            overflowY: "auto",
+                            padding: "24px 24px 48px",
+                        }}
+                        {...(isMobile ? { "data-pull-scroll": "1" } : {})}
+                    >
+                        <JobDetailScrollBody
+                            job={job}
+                            jobsApiUrl={jobsApiUrl}
+                            themeColors={themeColors}
+                            isMobile={isMobile}
+                            resumeAnimPhase={resumeAnimPhase}
+                            onCreateResume={onCreateResume}
+                            onDetailFetched={onJobDetailFetched}
+                        />
+                    </div>
+                )}
             </div>
         </div>
     )
@@ -11805,9 +12956,13 @@ const HomepageJobs = React.memo(function HomepageJobs({
 
         const primaryQuery =
             userQuery.trim() ||
-            FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
+            FALLBACK_QUERIES[
+                Math.floor(Math.random() * FALLBACK_QUERIES.length)
+            ]
         const fallbackQuery =
-            FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
+            FALLBACK_QUERIES[
+                Math.floor(Math.random() * FALLBACK_QUERIES.length)
+            ]
 
         // Lazy fallback fetch — only materialises when picks returns fewer than 6 results.
         let fallbackPromise: Promise<HomepageJob[]> | null = null
@@ -11828,7 +12983,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     // Fewer than 6 picks — pull fallback results to fill the top row.
                     getFallback().then((fallback) => {
                         if (cancelled) return
-                        if (picks.length === 0) setNextJobs(fallback.slice(0, 3))
+                        if (picks.length === 0)
+                            setNextJobs(fallback.slice(0, 3))
                         setTopJobs(fallback.slice(0, 3))
                         setLoadingPicks(false)
                     })
@@ -11840,13 +12996,23 @@ const HomepageJobs = React.memo(function HomepageJobs({
         // Geo lookup via the jobs-proxy edge endpoint (no third-party needed).
         const geoCtrl = new AbortController()
         const geoTimer = setTimeout(() => geoCtrl.abort(), 4000)
-        const geoPromise = fetch(`${jobsApiUrl}/geo`, { signal: geoCtrl.signal })
+        const geoPromise = fetch(`${jobsApiUrl}/geo`, {
+            signal: geoCtrl.signal,
+        })
             .finally(() => clearTimeout(geoTimer))
             .then((r) => (r.ok ? r.json() : {}))
-            .then(({ lat, lng }: { lat?: number | null; lng?: number | null }) => ({
-                lat: typeof lat === "number" ? lat : NaN,
-                lng: typeof lng === "number" ? lng : NaN,
-            }))
+            .then(
+                ({
+                    lat,
+                    lng,
+                }: {
+                    lat?: number | null
+                    lng?: number | null
+                }) => ({
+                    lat: typeof lat === "number" ? lat : NaN,
+                    lng: typeof lng === "number" ? lng : NaN,
+                })
+            )
             .catch(() => ({ lat: NaN, lng: NaN }))
 
         const nearPromise = Promise.all([picksPromise, geoPromise]).then(
@@ -11854,13 +13020,19 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 const next3 = picks.slice(0, 3)
                 // Use fallback results for top row only if already fetched (picks < 6 path above).
                 const fallback = fallbackPromise ? await fallbackPromise : []
-                const top3 = picks.length >= 6 ? picks.slice(3, 6) : fallback.slice(0, 3)
-                const excludeIds = [...new Set([...next3, ...top3].map((j) => j.id))]
+                const top3 =
+                    picks.length >= 6 ? picks.slice(3, 6) : fallback.slice(0, 3)
+                const excludeIds = [
+                    ...new Set([...next3, ...top3].map((j) => j.id)),
+                ]
 
                 const hasCoords =
-                    !isNaN(lat) && !isNaN(lng) &&
-                    lat >= -90 && lat <= 90 &&
-                    lng >= -180 && lng <= 180
+                    !isNaN(lat) &&
+                    !isNaN(lng) &&
+                    lat >= -90 &&
+                    lat <= 90 &&
+                    lng >= -180 &&
+                    lng <= 180
 
                 if (!hasCoords) {
                     setNearbyBasedOnLocation(false)
@@ -11885,12 +13057,13 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 }
 
                 const nearResults = await api(buildNearParams(true))
-                if (nearResults.length >= 5 || !userQuery.trim()) return nearResults
+                if (nearResults.length >= 5 || !userQuery.trim())
+                    return nearResults
                 return api(buildNearParams(false))
             }
         )
 
-        const safetyTimer = setTimeout(() => { 
+        const safetyTimer = setTimeout(() => {
             if (!cancelled) {
                 setLoadingPicks(false)
                 setLoadingNear(false)
@@ -11988,71 +13161,122 @@ const HomepageJobs = React.memo(function HomepageJobs({
     }
 
     return (
+        <div
+            ref={containerRef}
+            data-layer="homepage"
+            className="Homepage"
+            style={{
+                width: m ? "calc(100% + 48px)" : "100%",
+                marginLeft: m ? -24 : "auto",
+                marginRight: m ? -24 : "auto",
+                paddingLeft: m ? 24 : 0,
+                paddingRight: m ? 24 : 0,
+                alignSelf: "stretch",
+                maxWidth: m ? "none" : 816,
+                paddingTop: 0,
+                paddingBottom: 148,
+                flexDirection: "column",
+                justifyContent: "flex-start",
+                alignItems: "flex-start",
+                gap: m ? 48 : 64,
+                display: "flex",
+            }}
+        >
+            {/* ── SECTION 1: WHAT'S YOUR NEXT JOB ── */}
             <div
-                ref={containerRef}
-                data-layer="homepage"
-                className="Homepage"
                 style={{
-                    width: m ? "calc(100% + 48px)" : "100%",
-                    marginLeft: m ? -24 : "auto",
-                    marginRight: m ? -24 : "auto",
-                    paddingLeft: m ? 24 : 0,
-                    paddingRight: m ? 24 : 0,
                     alignSelf: "stretch",
-                    maxWidth: m ? "none" : 816,
-                    paddingTop: 0,
-                    paddingBottom: 148,
                     flexDirection: "column",
-                    justifyContent: "flex-start",
-                    alignItems: "flex-start",
-                    gap: m ? 48 : 64,
+                    gap: m ? 24 : 48,
                     display: "flex",
                 }}
             >
-                {/* ── SECTION 1: WHAT'S YOUR NEXT JOB ── */}
                 <div
                     style={{
                         alignSelf: "stretch",
-                        flexDirection: "column",
-                        gap: m ? 24 : 48,
-                        display: "flex",
+                        textAlign: "center",
+                        color: themeColors.text.primary,
+                        fontSize: m ? 21 : 28,
+                        fontFamily: "Inter",
+                        fontWeight: 600,
+                        lineHeight: 1,
                     }}
                 >
+                    What's your next job?
+                </div>
+                {m ? (
+                    // Mobile: big card on top, 2 stacked cards below
                     <div
                         style={{
                             alignSelf: "stretch",
-                            textAlign: "center",
-                            color: themeColors.text.primary,
-                            fontSize: m ? 21 : 28,
-                            fontFamily: "Inter",
-                            fontWeight: 600,
-                            lineHeight: 1,
+                            flexDirection: "column",
+                            gap: 12,
+                            display: "flex",
                         }}
                     >
-                        What's your next job?
+                        <BigJobCard
+                            job={nextList[0] ?? null}
+                            borderRadius={32}
+                            style={{ height: 164 }}
+                            onClick={
+                                nextList[0]
+                                    ? () => openJob(nextList[0])
+                                    : undefined
+                            }
+                            themeColors={themeColors}
+                            isMobile
+                        />
+                        <StackedJobCard
+                            job={nextList[1] ?? null}
+                            onClick={
+                                nextList[1]
+                                    ? () => openJob(nextList[1])
+                                    : undefined
+                            }
+                            themeColors={themeColors}
+                            isMobile
+                        />
+                        <StackedJobCard
+                            job={nextList[2] ?? null}
+                            onClick={
+                                nextList[2]
+                                    ? () => openJob(nextList[2])
+                                    : undefined
+                            }
+                            themeColors={themeColors}
+                            isMobile
+                        />
                     </div>
-                    {m ? (
-                        // Mobile: big card on top, 2 stacked cards below
+                ) : (
+                    // Desktop: big card left, 2 stacked cards right
+                    <div
+                        style={{
+                            alignSelf: "stretch",
+                            justifyContent: "center",
+                            alignItems: "stretch",
+                            gap: 12,
+                            display: "inline-flex",
+                        }}
+                    >
+                        <BigJobCard
+                            job={nextList[0] ?? null}
+                            borderRadius={36}
+                            style={{ flex: "1 1 0" }}
+                            onClick={
+                                nextList[0]
+                                    ? () => openJob(nextList[0])
+                                    : undefined
+                            }
+                            themeColors={themeColors}
+                        />
                         <div
                             style={{
-                                alignSelf: "stretch",
+                                flex: "1 1 0",
                                 flexDirection: "column",
                                 gap: 12,
                                 display: "flex",
                             }}
                         >
-                            <BigJobCard
-                                job={nextList[0] ?? null}
-                                borderRadius={32}
-                                style={{ height: 164 }}
-                                onClick={
-                                    nextList[0]
-                                        ? () => openJob(nextList[0])
-                                        : undefined
-                                }
-                                themeColors={themeColors}
-                                isMobile
-                            />
                             <StackedJobCard
                                 job={nextList[1] ?? null}
                                 onClick={
@@ -12061,7 +13285,6 @@ const HomepageJobs = React.memo(function HomepageJobs({
                                         : undefined
                                 }
                                 themeColors={themeColors}
-                                isMobile
                             />
                             <StackedJobCard
                                 job={nextList[2] ?? null}
@@ -12071,81 +13294,87 @@ const HomepageJobs = React.memo(function HomepageJobs({
                                         : undefined
                                 }
                                 themeColors={themeColors}
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* ── SECTION 2: JOBS NEAR YOU ── */}
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    flexDirection: "column",
+                    gap: m ? 24 : 48,
+                    display: "flex",
+                }}
+            >
+                <div style={sectionTitleStyle}>
+                    {nearbyBasedOnLocation ? "Jobs near you" : "Explore jobs"}
+                </div>
+                {m ? (
+                    // Mobile: 4 row cards on top, big card at bottom
+                    <div
+                        style={{
+                            alignSelf: "stretch",
+                            flexDirection: "column",
+                            gap: 12,
+                            display: "flex",
+                        }}
+                    >
+                        {nearList.slice(1, 5).map((job, i) => (
+                            <RowJobCard
+                                key={job?.id ?? i}
+                                job={job}
+                                onClick={job ? () => openJob(job) : undefined}
+                                themeColors={themeColors}
                                 isMobile
                             />
-                        </div>
-                    ) : (
-                        // Desktop: big card left, 2 stacked cards right
-                        <div
-                            style={{
-                                alignSelf: "stretch",
-                                justifyContent: "center",
-                                alignItems: "stretch",
-                                gap: 12,
-                                display: "inline-flex",
-                            }}
-                        >
-                            <BigJobCard
-                                job={nextList[0] ?? null}
-                                borderRadius={36}
-                                style={{ flex: "1 1 0" }}
-                                onClick={
-                                    nextList[0]
-                                        ? () => openJob(nextList[0])
-                                        : undefined
-                                }
-                                themeColors={themeColors}
-                            />
-                            <div
-                                style={{
-                                    flex: "1 1 0",
-                                    flexDirection: "column",
-                                    gap: 12,
-                                    display: "flex",
-                                }}
-                            >
-                                <StackedJobCard
-                                    job={nextList[1] ?? null}
-                                    onClick={
-                                        nextList[1]
-                                            ? () => openJob(nextList[1])
-                                            : undefined
-                                    }
-                                    themeColors={themeColors}
-                                />
-                                <StackedJobCard
-                                    job={nextList[2] ?? null}
-                                    onClick={
-                                        nextList[2]
-                                            ? () => openJob(nextList[2])
-                                            : undefined
-                                    }
-                                    themeColors={themeColors}
-                                />
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* ── SECTION 2: JOBS NEAR YOU ── */}
-                <div
-                    style={{
-                        alignSelf: "stretch",
-                        flexDirection: "column",
-                        gap: m ? 24 : 48,
-                        display: "flex",
-                    }}
-                >
-                    <div style={sectionTitleStyle}>
-                        {nearbyBasedOnLocation
-                            ? "Jobs near you"
-                            : "Explore jobs"}
+                        ))}
+                        <BigJobCard
+                            job={nearList[0] ?? null}
+                            borderRadius={36}
+                            style={{ height: 164 }}
+                            onClick={
+                                nearList[0]
+                                    ? () => openJob(nearList[0])
+                                    : undefined
+                            }
+                            themeColors={themeColors}
+                            isMobile
+                        />
                     </div>
-                    {m ? (
-                        // Mobile: 4 row cards on top, big card at bottom
+                ) : (
+                    // Desktop: big card left (square by default, grows taller if content needs it), 4 row cards right
+                    <div
+                        style={{
+                            alignSelf: "stretch",
+                            justifyContent: "center",
+                            alignItems: "stretch",
+                            gap: 12,
+                            display: "flex",
+                        }}
+                    >
+                        <BigJobCard
+                            job={nearList[0] ?? null}
+                            borderRadius={48}
+                            style={{
+                                width: 272,
+                                minWidth: 272,
+                                maxWidth: 272,
+                                minHeight: 272,
+                            }}
+                            onClick={
+                                nearList[0]
+                                    ? () => openJob(nearList[0])
+                                    : undefined
+                            }
+                            themeColors={themeColors}
+                        />
                         <div
                             style={{
-                                alignSelf: "stretch",
+                                flex: "1 1 0",
+                                minWidth: 0,
                                 flexDirection: "column",
                                 gap: 12,
                                 display: "flex",
@@ -12159,194 +13388,130 @@ const HomepageJobs = React.memo(function HomepageJobs({
                                         job ? () => openJob(job) : undefined
                                     }
                                     themeColors={themeColors}
-                                    isMobile
-                                />
-                            ))}
-                            <BigJobCard
-                                job={nearList[0] ?? null}
-                                borderRadius={36}
-                                style={{ height: 164 }}
-                                onClick={
-                                    nearList[0]
-                                        ? () => openJob(nearList[0])
-                                        : undefined
-                                }
-                                themeColors={themeColors}
-                                isMobile
-                            />
-                        </div>
-                    ) : (
-                        // Desktop: big card left (square by default, grows taller if content needs it), 4 row cards right
-                        <div
-                            style={{
-                                alignSelf: "stretch",
-                                justifyContent: "center",
-                                alignItems: "stretch",
-                                gap: 12,
-                                display: "flex",
-                            }}
-                        >
-                            <BigJobCard
-                                job={nearList[0] ?? null}
-                                borderRadius={48}
-                                style={{
-                                    width: 272,
-                                    minWidth: 272,
-                                    maxWidth: 272,
-                                    minHeight: 272,
-                                }}
-                                onClick={
-                                    nearList[0]
-                                        ? () => openJob(nearList[0])
-                                        : undefined
-                                }
-                                themeColors={themeColors}
-                            />
-                            <div
-                                style={{
-                                    flex: "1 1 0",
-                                    minWidth: 0,
-                                    flexDirection: "column",
-                                    gap: 12,
-                                    display: "flex",
-                                }}
-                            >
-                                {nearList.slice(1, 5).map((job, i) => (
-                                    <RowJobCard
-                                        key={job?.id ?? i}
-                                        job={job}
-                                        onClick={
-                                            job ? () => openJob(job) : undefined
-                                        }
-                                        themeColors={themeColors}
-                                    />
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* ── SECTION 3: TOP PICKS FOR YOU ── */}
-                <div
-                    style={{
-                        alignSelf: "stretch",
-                        flexDirection: "column",
-                        gap: m ? 24 : 48,
-                        display: "flex",
-                    }}
-                >
-                    <div style={sectionTitleStyle}>Top picks for you</div>
-                    {m ? (
-                        // Mobile: 3 stacked cards vertically
-                        <div
-                            style={{
-                                alignSelf: "stretch",
-                                flexDirection: "column",
-                                gap: 12,
-                                display: "flex",
-                            }}
-                        >
-                            {topList.map((job, i) => (
-                                <StackedJobCard
-                                    key={job?.id ?? i}
-                                    job={job}
-                                    onClick={
-                                        job ? () => openJob(job) : undefined
-                                    }
-                                    themeColors={themeColors}
-                                    isMobile
                                 />
                             ))}
                         </div>
-                    ) : (
-                        // Desktop: 3 big cards side by side
-                        <div
-                            style={{
-                                alignSelf: "stretch",
-                                justifyContent: "center",
-                                alignItems: "stretch",
-                                gap: 12,
-                                display: "flex",
-                            }}
-                        >
-                            {topList.map((job, i) => (
-                                <BigJobCard
-                                    key={job?.id ?? i}
-                                    job={job}
-                                    borderRadius={48}
-                                    style={{ flex: "1 1 0", minHeight: 234 }}
-                                    onClick={
-                                        job ? () => openJob(job) : undefined
-                                    }
-                                    themeColors={themeColors}
-                                />
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                {/* ── SECTION 4: CUSTOMIZE ── */}
-                <div
-                    onClick={onOpenSettings}
-                    style={{
-                        alignSelf: "stretch",
-                        paddingLeft: 24,
-                        paddingRight: 24,
-                        paddingTop: 19,
-                        paddingBottom: 19,
-                        borderRadius: 48,
-                        border:
-                            themeColors.background === lightColors.background
-                                ? `0.33px solid ${themeColors.border.subtle}`
-                                : `1px solid ${themeColors.border.subtle}`,
-                        justifyContent: "flex-start",
-                        alignItems: "center",
-                        gap: 4,
-                        display: "inline-flex",
-                        cursor: "pointer",
-                    }}
-                >
-                    <div
-                        style={{
-                            flex: "1 1 0",
-                            color: themeColors.text.primary,
-                            fontSize: 15,
-                            fontFamily: "Inter",
-                            fontWeight: 400,
-                            lineHeight: 1.2,
-                        }}
-                    >
-                        Customize
                     </div>
-                    {/* Magic pencil icon */}
+                )}
+            </div>
+
+            {/* ── SECTION 3: TOP PICKS FOR YOU ── */}
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    flexDirection: "column",
+                    gap: m ? 24 : 48,
+                    display: "flex",
+                }}
+            >
+                <div style={sectionTitleStyle}>Top picks for you</div>
+                {m ? (
+                    // Mobile: 3 stacked cards vertically
                     <div
-                        data-svg-wrapper
-                        data-layer="magic pencil icon"
                         style={{
-                            flexShrink: 0,
-                            opacity: 0.95,
+                            alignSelf: "stretch",
+                            flexDirection: "column",
+                            gap: 12,
                             display: "flex",
                         }}
                     >
-                        <svg
-                            width="17"
-                            height="16"
-                            viewBox="0 0 17 16"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
-                        >
-                            <path
-                                d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z"
-                                fill={themeColors.text.primary}
+                        {topList.map((job, i) => (
+                            <StackedJobCard
+                                key={job?.id ?? i}
+                                job={job}
+                                onClick={job ? () => openJob(job) : undefined}
+                                themeColors={themeColors}
+                                isMobile
                             />
-                            <path
-                                d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z"
-                                fill={themeColors.text.primary}
-                            />
-                        </svg>
+                        ))}
                     </div>
+                ) : (
+                    // Desktop: 3 big cards side by side
+                    <div
+                        style={{
+                            alignSelf: "stretch",
+                            justifyContent: "center",
+                            alignItems: "stretch",
+                            gap: 12,
+                            display: "flex",
+                        }}
+                    >
+                        {topList.map((job, i) => (
+                            <BigJobCard
+                                key={job?.id ?? i}
+                                job={job}
+                                borderRadius={48}
+                                style={{ flex: "1 1 0", minHeight: 234 }}
+                                onClick={job ? () => openJob(job) : undefined}
+                                themeColors={themeColors}
+                            />
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* ── SECTION 4: CUSTOMIZE ── */}
+            <div
+                onClick={onOpenSettings}
+                style={{
+                    alignSelf: "stretch",
+                    paddingLeft: 24,
+                    paddingRight: 24,
+                    paddingTop: 19,
+                    paddingBottom: 19,
+                    borderRadius: 48,
+                    border:
+                        themeColors.background === lightColors.background
+                            ? `0.33px solid ${themeColors.border.subtle}`
+                            : `1px solid ${themeColors.border.subtle}`,
+                    justifyContent: "flex-start",
+                    alignItems: "center",
+                    gap: 4,
+                    display: "inline-flex",
+                    cursor: "pointer",
+                }}
+            >
+                <div
+                    style={{
+                        flex: "1 1 0",
+                        color: themeColors.text.primary,
+                        fontSize: 15,
+                        fontFamily: "Inter",
+                        fontWeight: 400,
+                        lineHeight: 1.2,
+                    }}
+                >
+                    Customize
+                </div>
+                {/* Magic pencil icon */}
+                <div
+                    data-svg-wrapper
+                    data-layer="magic pencil icon"
+                    style={{
+                        flexShrink: 0,
+                        opacity: 0.95,
+                        display: "flex",
+                    }}
+                >
+                    <svg
+                        width="17"
+                        height="16"
+                        viewBox="0 0 17 16"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+                        <path
+                            d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z"
+                            fill={themeColors.text.primary}
+                        />
+                        <path
+                            d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z"
+                            fill={themeColors.text.primary}
+                        />
+                    </svg>
                 </div>
             </div>
+        </div>
     )
 })
 
@@ -12374,88 +13539,86 @@ const BaseModalOverlay = ({
     instantEnter?: boolean
     imageFetchPriority?: "high" | "low" | "auto"
 }) => {
-    const openState =
-        isMobile
-            ? { y: "0%", scale: 1, opacity: 1 }
-            : { scale: 1, opacity: 1 }
-    const closedState =
-        isMobile
-            ? { y: "100%", scale: 0, opacity: 0 }
-            : { scale: 0.95, opacity: 0 }
+    const openState = isMobile
+        ? { y: "0%", scale: 1, opacity: 1 }
+        : { scale: 1, opacity: 1 }
+    const closedState = isMobile
+        ? { y: "100%", scale: 0, opacity: 0 }
+        : { scale: 0.95, opacity: 0 }
     const moveTransition = isMobile
         ? { duration: 0.25, ease: "easeInOut" as const }
         : { duration: 0.2, ease: [0.4, 0, 0.2, 1] as const }
     return (
-    <div
-        style={{
-            width: "100%",
-            height: "100%",
-            left: 0,
-            top: 0,
-            position: "fixed",
-            background: themeColors.overlay.black,
-            overflow: "hidden",
-            justifyContent: "center",
-            alignItems: isMobile ? "flex-end" : "center",
-            gap: 10,
-            display: "inline-flex",
-            zIndex: 99999,
-        }}
-        onClick={onClose}
-    >
-        <motion.div
-            initial={instantEnter ? openState : closedState}
-            animate={openState}
-            exit={
-                instantEnter
-                    ? { ...closedState, transition: moveTransition }
-                    : closedState
-            }
-            transition={instantEnter ? { duration: 0 } : moveTransition}
-            onClick={(e) => e.stopPropagation()}
+        <div
             style={{
-                flex: isMobile ? "none" : "1 1 0",
-                width: isMobile ? "100%" : "auto",
-                maxWidth: isMobile ? "100%" : 400,
-                maxHeight: 600,
-                background: themeColors.background,
-                boxShadow: "0px 4px 24px rgba(0, 0, 0, 0.04)",
+                width: "100%",
+                height: "100%",
+                left: 0,
+                top: 0,
+                position: "fixed",
+                background: themeColors.overlay.black,
                 overflow: "hidden",
-                borderRadius: isMobile ? "48px 48px 0px 0px" : 48,
-                flexDirection: "column",
-                justifyContent: "flex-start",
-                alignItems: "flex-start",
+                justifyContent: "center",
+                alignItems: isMobile ? "flex-end" : "center",
+                gap: 10,
                 display: "inline-flex",
-                marginBottom: isMobile ? 0 : "auto",
-                marginTop: "auto",
-                transformOrigin: isMobile ? "bottom center" : "center",
+                zIndex: 99999,
             }}
+            onClick={onClose}
         >
-            <div
+            <motion.div
+                initial={instantEnter ? openState : closedState}
+                animate={openState}
+                exit={
+                    instantEnter
+                        ? { ...closedState, transition: moveTransition }
+                        : closedState
+                }
+                transition={instantEnter ? { duration: 0 } : moveTransition}
+                onClick={(e) => e.stopPropagation()}
                 style={{
-                    alignSelf: "stretch",
-                    height: 224,
+                    flex: isMobile ? "none" : "1 1 0",
+                    width: isMobile ? "100%" : "auto",
+                    maxWidth: isMobile ? "100%" : 400,
+                    maxHeight: 600,
+                    background: themeColors.background,
+                    boxShadow: "0px 4px 24px rgba(0, 0, 0, 0.04)",
                     overflow: "hidden",
-                    flexShrink: 0,
-                    position: "relative",
+                    borderRadius: isMobile ? "48px 48px 0px 0px" : 48,
+                    flexDirection: "column",
+                    justifyContent: "flex-start",
+                    alignItems: "flex-start",
+                    display: "inline-flex",
+                    marginBottom: isMobile ? 0 : "auto",
+                    marginTop: "auto",
+                    transformOrigin: isMobile ? "bottom center" : "center",
                 }}
             >
-                <img
+                <div
                     style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                        display: "block",
+                        alignSelf: "stretch",
+                        height: 224,
+                        overflow: "hidden",
+                        flexShrink: 0,
+                        position: "relative",
                     }}
-                    src={imageSrc}
-                    {...(imageFetchPriority
-                        ? { fetchPriority: imageFetchPriority }
-                        : {})}
-                />
-            </div>
-            {children}
-        </motion.div>
-    </div>
+                >
+                    <img
+                        style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                            display: "block",
+                        }}
+                        src={imageSrc}
+                        {...(imageFetchPriority
+                            ? { fetchPriority: imageFetchPriority }
+                            : {})}
+                    />
+                </div>
+                {children}
+            </motion.div>
+        </div>
     )
 }
 
@@ -12488,9 +13651,14 @@ const ModalSheet = ({
     /** e.g. `mobile-tool-overlay` — KeywordOrbitOverlay measures this rect for resume animation. */
     anchorDataLayer?: string
 }) => {
-    const isMobile = mobileOnly || (typeof window !== "undefined" && window.innerWidth < 768)
-    const openState   = isMobile ? { y: "0%", scale: 1, opacity: 1 } : { scale: 1, opacity: 1 }
-    const closedState = isMobile ? { y: "100%", scale: 0, opacity: 0 } : { scale: 0.95, opacity: 0 }
+    const isMobile =
+        mobileOnly || (typeof window !== "undefined" && window.innerWidth < 768)
+    const openState = isMobile
+        ? { y: "0%", scale: 1, opacity: 1 }
+        : { scale: 1, opacity: 1 }
+    const closedState = isMobile
+        ? { y: "100%", scale: 0, opacity: 0 }
+        : { scale: 0.95, opacity: 0 }
     const moveTrans = isMobile
         ? { duration: 0.25, ease: "easeInOut" as const }
         : { duration: 0.2, ease: [0.4, 0, 0.2, 1] as const }
@@ -12524,7 +13692,11 @@ const ModalSheet = ({
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1, transition: { duration: 0.2 } }}
                         exit={{ opacity: 0, transition: { duration: 0.2 } }}
-                        style={{ position: "absolute", inset: 0, background: themeColors.overlay.black }}
+                        style={{
+                            position: "absolute",
+                            inset: 0,
+                            background: themeColors.overlay.black,
+                        }}
                         onClick={onClose}
                         aria-hidden
                     />
@@ -12541,7 +13713,9 @@ const ModalSheet = ({
                             zIndex: 1,
                             display: "flex",
                             flexDirection: "column",
-                            transformOrigin: isMobile ? "bottom center" : "center",
+                            transformOrigin: isMobile
+                                ? "bottom center"
+                                : "center",
                             overflow: "hidden",
                             ...(dragY ? outerSheetStyle : sheet),
                         }}
@@ -13666,6 +14840,7 @@ const MessageBubble = React.memo(
         isAppOpen,
         docCallType,
         onJobClick,
+        onJobChipClick,
     }: {
         msg: Message
         isMobileLayout: boolean
@@ -13687,6 +14862,7 @@ const MessageBubble = React.memo(
         isAppOpen?: boolean
         docCallType?: "doc" | "resume" | "cover_letter"
         onJobClick?: (job: JobSnippet) => void
+        onJobChipClick?: (jobId: string) => void
     }) => {
         // Memoize base styles to avoid recreation
         const baseTextStyle = React.useMemo(
@@ -14486,6 +15662,79 @@ const MessageBubble = React.memo(
                         }
                     }}
                 >
+                    {/* Job context chip — shown above user bubble when sent with job details open */}
+                    {(msg.role === "user" || msg.role === "peer") &&
+                        msg.jobContext && (
+                            <div
+                                role="button"
+                                tabIndex={0}
+                                onClick={() =>
+                                    onJobChipClick?.(msg.jobContext!.id)
+                                }
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ")
+                                        onJobChipClick?.(msg.jobContext!.id)
+                                }}
+                                style={{
+                                    height: 40,
+                                    paddingLeft: 16,
+                                    paddingRight: 16,
+                                    background: themeColors.surface,
+                                    borderRadius: 28,
+                                    alignItems: "center",
+                                    gap: 6,
+                                    display: "inline-flex",
+                                    alignSelf: "flex-end",
+                                    cursor: onJobChipClick ? "pointer" : "default",
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        width: 16,
+                                        height: 16,
+                                        background: themeColors.surfaceHighlight,
+                                        overflow: "hidden",
+                                        borderRadius: 28,
+                                        justifyContent: "center",
+                                        alignItems: "center",
+                                        display: "flex",
+                                        flexShrink: 0,
+                                    }}
+                                >
+                                    {msg.jobContext.logoUrl ? (
+                                        <img
+                                            src={msg.jobContext.logoUrl}
+                                            style={{ width: 16, height: 16, objectFit: "cover" }}
+                                        />
+                                    ) : (
+                                        <div
+                                            style={{
+                                                width: 16,
+                                                height: 16,
+                                                background: themeColors.misc.graySolid,
+                                                borderRadius: 28,
+                                            }}
+                                        />
+                                    )}
+                                </div>
+                                <div
+                                    style={{
+                                        color: themeColors.text.primary,
+                                        fontSize: 15,
+                                        fontFamily: "Inter",
+                                        fontWeight: 400,
+                                        lineHeight: "22.5px",
+                                        whiteSpace: "nowrap",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        maxWidth: 220,
+                                    }}
+                                >
+                                    {msg.jobContext.title} at {msg.jobContext.companyName}
+                                </div>
+                            </div>
+                        )}
+
                     {/* Attachments rendering */}
                     {(msg.role === "user" || msg.role === "peer") &&
                         msg.attachments &&
@@ -16810,7 +18059,9 @@ export default function OmegleMentorshipUI(props: Props) {
 
     React.useEffect(() => {
         if (typeof window === "undefined") return
-        if (localStorage.getItem("should_never_show_welcome_overlay") === "true")
+        if (
+            localStorage.getItem("should_never_show_welcome_overlay") === "true"
+        )
             return
         if (localStorage.getItem("has_seen_welcome_overlay") === "true") return
 
@@ -17030,10 +18281,14 @@ export default function OmegleMentorshipUI(props: Props) {
         }
         return ""
     })
-    const [dismissedInterestChips, setDismissedInterestChips] = React.useState<string[]>(() => {
+    const [dismissedInterestChips, setDismissedInterestChips] = React.useState<
+        string[]
+    >(() => {
         if (typeof window !== "undefined") {
             try {
-                return JSON.parse(localStorage.getItem("dismissed_interest_chips") || "[]")
+                return JSON.parse(
+                    localStorage.getItem("dismissed_interest_chips") || "[]"
+                )
             } catch {
                 return []
             }
@@ -17042,20 +18297,24 @@ export default function OmegleMentorshipUI(props: Props) {
     })
     const [resumeFile, setResumeFile] = React.useState<{
         name: string
-        base64: string    // full data URL ("data:application/pdf;base64,...")
+        base64: string // full data URL ("data:application/pdf;base64,...")
         mimeType: string
-        savedAt: number   // Date.now()
+        savedAt: number // Date.now()
     } | null>(() => {
         if (typeof window !== "undefined") {
             try {
                 const raw = localStorage.getItem("curastem_resume_file")
                 return raw ? JSON.parse(raw) : null
-            } catch { return null }
+            } catch {
+                return null
+            }
         }
         return null
     })
     const [resumeMenuOpen, setResumeMenuOpen] = React.useState(false)
-    const [hoveredResumeMenuItem, setHoveredResumeMenuItem] = React.useState<"download" | "delete" | null>(null)
+    const [hoveredResumeMenuItem, setHoveredResumeMenuItem] = React.useState<
+        "download" | "delete" | null
+    >(null)
     const [isProcessingResume, setIsProcessingResume] = React.useState(false)
     const resumeFileInputRef = React.useRef<HTMLInputElement>(null)
     const interestsTextareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -17079,7 +18338,9 @@ export default function OmegleMentorshipUI(props: Props) {
         onKeyDown: (e: React.KeyboardEvent) => {
             const meta = e.metaKey || e.ctrlKey
             const isUndo = meta && !e.shiftKey && e.key === "z"
-            const isRedo = (meta && e.shiftKey && e.key === "z") || (e.ctrlKey && e.key === "y")
+            const isRedo =
+                (meta && e.shiftKey && e.key === "z") ||
+                (e.ctrlKey && e.key === "y")
             if (isUndo && undoStack.current.length > 0) {
                 e.preventDefault()
                 redoStack.current.push(getValue())
@@ -17090,7 +18351,10 @@ export default function OmegleMentorshipUI(props: Props) {
                 setValue(redoStack.current.pop()!)
             }
         },
-        onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>, transformed?: string) => {
+        onChange: (
+            e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+            transformed?: string
+        ) => {
             undoStack.current.push(getValue())
             redoStack.current = []
             setValue(transformed ?? e.target.value)
@@ -17106,42 +18370,60 @@ export default function OmegleMentorshipUI(props: Props) {
             localStorage.setItem("you_school", youSchool)
             localStorage.setItem("you_work", youWork)
             localStorage.setItem("you_interests", youInterests)
-            if (youInterests.trim() === "" && dismissedInterestChips.length > 0) {
+            if (
+                youInterests.trim() === "" &&
+                dismissedInterestChips.length > 0
+            ) {
                 setDismissedInterestChips([])
             } else {
-                localStorage.setItem("dismissed_interest_chips", JSON.stringify(dismissedInterestChips))
+                localStorage.setItem(
+                    "dismissed_interest_chips",
+                    JSON.stringify(dismissedInterestChips)
+                )
             }
             if (resumeFile) {
-                localStorage.setItem("curastem_resume_file", JSON.stringify(resumeFile))
+                localStorage.setItem(
+                    "curastem_resume_file",
+                    JSON.stringify(resumeFile)
+                )
             } else {
                 localStorage.removeItem("curastem_resume_file")
             }
         }
-    }, [youName, youSchool, youWork, youInterests, dismissedInterestChips, resumeFile])
+    }, [
+        youName,
+        youSchool,
+        youWork,
+        youInterests,
+        dismissedInterestChips,
+        resumeFile,
+    ])
 
     // No longer need hasSentYouInfo flag as we will inject dynamically
     // const [hasSentYouInfo, setHasSentYouInfo] = React.useState(false)
 
     // --- Resume upload handlers ---
 
-    const handleResumeUpload = React.useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0]
-        if (!file) return
-        if (resumeFileInputRef.current) resumeFileInputRef.current.value = ""
+    const handleResumeUpload = React.useCallback(
+        async (e: React.ChangeEvent<HTMLInputElement>) => {
+            const file = e.target.files?.[0]
+            if (!file) return
+            if (resumeFileInputRef.current)
+                resumeFileInputRef.current.value = ""
 
-        setIsProcessingResume(true)
-        try {
-            // Read file as base64 data URL
-            const dataUrl = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader()
-                reader.onload = () => resolve(reader.result as string)
-                reader.onerror = reject
-                reader.readAsDataURL(file)
-            })
-            const base64 = dataUrl.substring(dataUrl.indexOf(",") + 1)
+            setIsProcessingResume(true)
+            try {
+                // Read file as base64 data URL
+                const dataUrl = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader()
+                    reader.onload = () => resolve(reader.result as string)
+                    reader.onerror = reject
+                    reader.readAsDataURL(file)
+                })
+                const base64 = dataUrl.substring(dataUrl.indexOf(",") + 1)
 
-            // Ask Gemini to extract profile info + full resume text
-            const extractionPrompt = `You are parsing a resume. Return ONLY valid JSON, no markdown, no explanation.
+                // Ask Gemini to extract profile info + full resume text
+                const extractionPrompt = `You are parsing a resume. Return ONLY valid JSON, no markdown, no explanation.
 Extract this structure:
 {
   "fullName": "First Last or empty string",
@@ -17151,77 +18433,118 @@ Extract this structure:
   "resumeText": "the full plain-text content of the resume"
 }`
 
-            const extractRes = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
-                {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: extractionPrompt },
-                                { inlineData: { mimeType: file.type || "application/pdf", data: base64 } },
+                const extractRes = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            contents: [
+                                {
+                                    parts: [
+                                        { text: extractionPrompt },
+                                        {
+                                            inlineData: {
+                                                mimeType:
+                                                    file.type ||
+                                                    "application/pdf",
+                                                data: base64,
+                                            },
+                                        },
+                                    ],
+                                },
                             ],
-                        }],
-                        generationConfig: { temperature: 0, maxOutputTokens: 2048 },
-                        safetySettings: [
-                            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-                        ],
-                    }),
+                            generationConfig: {
+                                temperature: 0,
+                                maxOutputTokens: 2048,
+                            },
+                            safetySettings: [
+                                {
+                                    category: "HARM_CATEGORY_HARASSMENT",
+                                    threshold: "BLOCK_NONE",
+                                },
+                                {
+                                    category: "HARM_CATEGORY_HATE_SPEECH",
+                                    threshold: "BLOCK_NONE",
+                                },
+                                {
+                                    category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                                    threshold: "BLOCK_NONE",
+                                },
+                                {
+                                    category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+                                    threshold: "BLOCK_NONE",
+                                },
+                            ],
+                        }),
+                    }
+                )
+
+                let extracted: {
+                    fullName?: string
+                    school?: string
+                    work?: string
+                    interests?: string[]
+                    resumeText?: string
+                } = {}
+
+                if (extractRes.ok) {
+                    const extractData = await extractRes.json()
+                    const rawText: string =
+                        extractData?.candidates?.[0]?.content?.parts
+                            ?.map((p: any) => p.text || "")
+                            .join("") || ""
+                    // Strip any markdown fences before parsing
+                    const jsonStr = rawText
+                        .replace(/^```[a-z]*\n?/i, "")
+                        .replace(/```$/i, "")
+                        .trim()
+                    try {
+                        extracted = JSON.parse(jsonStr)
+                    } catch {
+                        /* use empty fallback */
+                    }
                 }
-            )
 
-            let extracted: {
-                fullName?: string
-                school?: string
-                work?: string
-                interests?: string[]
-                resumeText?: string
-            } = {}
+                // Use the original filename, strip any extension, force .pdf
+                const savedFileName = file.name.replace(/\.[^.]+$/, "") + ".pdf"
 
-            if (extractRes.ok) {
-                const extractData = await extractRes.json()
-                const rawText: string =
-                    extractData?.candidates?.[0]?.content?.parts
-                        ?.map((p: any) => p.text || "")
-                        .join("") || ""
-                // Strip any markdown fences before parsing
-                const jsonStr = rawText.replace(/^```[a-z]*\n?/i, "").replace(/```$/i, "").trim()
-                try { extracted = JSON.parse(jsonStr) } catch { /* use empty fallback */ }
-            }
+                // Persist the file itself (always as PDF label even if uploaded as docx)
+                setResumeFile({
+                    name: savedFileName,
+                    base64: dataUrl,
+                    mimeType: file.type,
+                    savedAt: Date.now(),
+                })
 
-            // Use the original filename, strip any extension, force .pdf
-            const savedFileName = file.name.replace(/\.[^.]+$/, "") + ".pdf"
+                // Save plain resume text for AI tool calls
+                if (extracted.resumeText) saveResume(extracted.resumeText)
 
-            // Persist the file itself (always as PDF label even if uploaded as docx)
-            setResumeFile({ name: savedFileName, base64: dataUrl, mimeType: file.type, savedAt: Date.now() })
+                // Auto-fill only empty profile fields
+                if (extracted.fullName && !youName.trim())
+                    setYouName(extracted.fullName.trim())
+                if (extracted.school && !youSchool.trim())
+                    setYouSchool(extracted.school.trim())
+                if (extracted.work && !youWork.trim())
+                    setYouWork(extracted.work.trim())
 
-            // Save plain resume text for AI tool calls
-            if (extracted.resumeText) saveResume(extracted.resumeText)
-
-            // Auto-fill only empty profile fields
-            if (extracted.fullName && !youName.trim()) setYouName(extracted.fullName.trim())
-            if (extracted.school && !youSchool.trim()) setYouSchool(extracted.school.trim())
-            if (extracted.work && !youWork.trim()) setYouWork(extracted.work.trim())
-
-            // Append interests that aren't already in the textarea (case-insensitive dedup)
-            if (extracted.interests?.length) {
-                // Use saveMemory for each interest — same dedup logic as the save_memories tool call
-                let updated = localStorage.getItem("you_interests") || ""
-                for (const interest of extracted.interests) {
-                    updated = saveMemory(interest)
+                // Append interests that aren't already in the textarea (case-insensitive dedup)
+                if (extracted.interests?.length) {
+                    // Use saveMemory for each interest — same dedup logic as the save_memories tool call
+                    let updated = localStorage.getItem("you_interests") || ""
+                    for (const interest of extracted.interests) {
+                        updated = saveMemory(interest)
+                    }
+                    setYouInterests(updated)
                 }
-                setYouInterests(updated)
+            } catch {
+                // Silently fail — file input resets, no state changes
+            } finally {
+                setIsProcessingResume(false)
             }
-        } catch {
-            // Silently fail — file input resets, no state changes
-        } finally {
-            setIsProcessingResume(false)
-        }
-    }, [geminiApiKey, youName, youSchool, youWork])
+        },
+        [geminiApiKey, youName, youSchool, youWork]
+    )
 
     const handleResumeDownload = React.useCallback(() => {
         if (!resumeFile) return
@@ -17237,7 +18560,8 @@ Extract this structure:
     const handleResumeDelete = React.useCallback(() => {
         setResumeFile(null)
         // Also wipe the plain-text resume so AI tools no longer see stale data
-        if (typeof window !== "undefined") localStorage.removeItem("curastem_resume")
+        if (typeof window !== "undefined")
+            localStorage.removeItem("curastem_resume")
         setResumeMenuOpen(false)
     }, [])
 
@@ -17413,8 +18737,7 @@ Extract this structure:
     }, [isJobOpen, isDocOpen, isAppOpen])
 
     // True when any agent sidebar panel is open (docs, whiteboard, apps, jobs)
-    const isAgentOpen =
-        isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen
+    const isAgentOpen = isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen
 
     // --- STATE: RESUME KEYWORD ANIMATION ---
     // Drives the multi-phase animation: keywords orbit the right sidebar during
@@ -18377,7 +19700,9 @@ Do not include markdown formatting or explanations.`
                         const newVolunteerHash = generateLinkHash()
                         window.history.replaceState(null, "", newVolunteerHash)
                         justClearedHash = false // hash is present; skip the re-generation below
-                        log(`Volunteer manual hangup - new waiting hash: ${newVolunteerHash}`)
+                        log(
+                            `Volunteer manual hangup - new waiting hash: ${newVolunteerHash}`
+                        )
                     }
                 }
 
@@ -18443,7 +19768,9 @@ Do not include markdown formatting or explanations.`
                         // while they wait for the next student. The old student's hash is gone.
                         const newVolunteerHash = generateLinkHash()
                         window.history.replaceState(null, "", newVolunteerHash)
-                        log(`Volunteer remote disconnect - new waiting hash: ${newVolunteerHash}`)
+                        log(
+                            `Volunteer remote disconnect - new waiting hash: ${newVolunteerHash}`
+                        )
                     }
                 }
 
@@ -18927,7 +20254,8 @@ Do not include markdown formatting or explanations.`
                                     const args = fc.args ?? {}
                                     const params = new URLSearchParams()
                                     if (args.query) params.set("q", args.query)
-                                    if (args.company) params.set("company", args.company)
+                                    if (args.company)
+                                        params.set("company", args.company)
                                     if (args.location)
                                         params.set("location", args.location)
                                     if (args.employment_type)
@@ -18941,10 +20269,23 @@ Do not include markdown formatting or explanations.`
                                             args.workplace_type
                                         )
                                     if (args.seniority_level)
-                                        params.set("seniority_level", args.seniority_level)
-                                    params.set("since", String(Math.floor(Date.now() / 1000) - (args.posted_within_days ?? 3) * 86400))
+                                        params.set(
+                                            "seniority_level",
+                                            args.seniority_level
+                                        )
+                                    params.set(
+                                        "since",
+                                        String(
+                                            Math.floor(Date.now() / 1000) -
+                                                (args.posted_within_days ?? 3) *
+                                                    86400
+                                        )
+                                    )
                                     if (args.salary_min != null)
-                                        params.set("salary_min", String(args.salary_min))
+                                        params.set(
+                                            "salary_min",
+                                            String(args.salary_min)
+                                        )
                                     params.set(
                                         "limit",
                                         String(Math.min(args.limit ?? 6, 20))
@@ -18954,29 +20295,41 @@ Do not include markdown formatting or explanations.`
                                             `${jobsApiUrl}/jobs?${params}`
                                         )
                                         if (jobsRes.ok) {
-                                            const jobsData = await jobsRes.json()
+                                            const jobsData =
+                                                await jobsRes.json()
                                             const snippets: JobSnippet[] = (
-                                            jobsData.data ?? []
-                                        ).map((j: any): JobSnippet => ({
-                                            id: j.id,
-                                            title: j.title,
-                                            company: j.company?.name ?? "",
-                                            company_logo:
-                                                j.company?.logo_url ?? null,
-                                            locations: j.locations ?? null,
-                                            employment_type:
-                                                j.employment_type ?? null,
-                                            workplace_type:
-                                                j.workplace_type ?? null,
-                                            seniority_level:
-                                                j.seniority_level ?? null,
-                                            posted_at: j.posted_at ?? null,
-                                            apply_url: j.apply_url ?? null,
-                                            summary: j.job_summary ?? null,
-                                            salary: j.salary
-                                                ? `${j.salary.currency} ${[j.salary.min, j.salary.max].filter(Boolean).join("–")}/${j.salary.period}`
-                                                : null,
-                                        }))
+                                                jobsData.data ?? []
+                                            ).map(
+                                                (j: any): JobSnippet => ({
+                                                    id: j.id,
+                                                    title: j.title,
+                                                    company:
+                                                        j.company?.name ?? "",
+                                                    company_logo:
+                                                        j.company?.logo_url ??
+                                                        null,
+                                                    locations:
+                                                        j.locations ?? null,
+                                                    employment_type:
+                                                        j.employment_type ??
+                                                        null,
+                                                    workplace_type:
+                                                        j.workplace_type ??
+                                                        null,
+                                                    seniority_level:
+                                                        j.seniority_level ??
+                                                        null,
+                                                    posted_at:
+                                                        j.posted_at ?? null,
+                                                    apply_url:
+                                                        j.apply_url ?? null,
+                                                    summary:
+                                                        j.job_summary ?? null,
+                                                    salary: j.salary
+                                                        ? `${j.salary.currency} ${[j.salary.min, j.salary.max].filter(Boolean).join("–")}/${j.salary.period}`
+                                                        : null,
+                                                })
+                                            )
                                             // Show cards in chat
                                             if (snippets.length > 0) {
                                                 setMessages((prev) => [
@@ -19017,44 +20370,71 @@ Do not include markdown formatting or explanations.`
                                         try {
                                             // Serve from cache when available — avoids a redundant round-trip
                                             // for jobs the panel already loaded.
-                                            const cached = readJobDetailCache(jobId, jobsApiUrl)
+                                            const cached = readJobDetailCache(
+                                                jobId,
+                                                jobsApiUrl
+                                            )
                                             const j: any = cached
                                                 ? {
-                                                    job_description: cached.desc,
-                                                    job_summary: cached.detailSummary,
-                                                    visa_sponsorship: cached.detailVisaSponsorship,
-                                                    company: { description: cached.detailCompanyDesc },
-                                                    keywords: cached.apiKeywords,
-                                                }
-                                                : await fetch(`${jobsApiUrl}/jobs/${jobId}`)
-                                                    .then((r) => (r.ok ? r.json() : null))
+                                                      job_description:
+                                                          cached.desc,
+                                                      job_summary:
+                                                          cached.detailSummary,
+                                                      visa_sponsorship:
+                                                          cached.detailVisaSponsorship,
+                                                      company: {
+                                                          description:
+                                                              cached.detailCompanyDesc,
+                                                      },
+                                                      keywords:
+                                                          cached.apiKeywords,
+                                                  }
+                                                : await fetch(
+                                                      `${jobsApiUrl}/jobs/${jobId}`
+                                                  ).then((r) =>
+                                                      r.ok ? r.json() : null
+                                                  )
                                             if (j) {
                                                 responsePayload = {
                                                     title: j.title,
                                                     company: j.company?.name,
-                                                    locations: j.locations ?? null,
-                                                    employment_type: j.employment_type,
-                                                    workplace_type: j.workplace_type,
+                                                    locations:
+                                                        j.locations ?? null,
+                                                    employment_type:
+                                                        j.employment_type,
+                                                    workplace_type:
+                                                        j.workplace_type,
                                                     summary: j.job_summary,
                                                     salary: j.salary,
-                                                    responsibilities: j.job_description?.responsibilities ?? [],
-                                                    minimum_qualifications: j.job_description?.minimum_qualifications ?? [],
+                                                    responsibilities:
+                                                        j.job_description
+                                                            ?.responsibilities ??
+                                                        [],
+                                                    minimum_qualifications:
+                                                        j.job_description
+                                                            ?.minimum_qualifications ??
+                                                        [],
                                                     apply_url: j.apply_url,
                                                 }
                                             }
                                         } catch (err) {
-                                            console.error("live get_job_details:", err)
-                                            responsePayload = { error: "Could not retrieve job details." }
+                                            console.error(
+                                                "live get_job_details:",
+                                                err
+                                            )
+                                            responsePayload = {
+                                                error: "Could not retrieve job details.",
+                                            }
                                         }
                                     } else {
-                                        responsePayload = { error: "No job ID provided." }
+                                        responsePayload = {
+                                            error: "No job ID provided.",
+                                        }
                                     }
                                 }
 
                                 // Send tool response back so the model can speak its answer
-                                if (
-                                    ws.readyState === WebSocket.OPEN
-                                ) {
+                                if (ws.readyState === WebSocket.OPEN) {
                                     ws.send(
                                         JSON.stringify({
                                             toolResponse: {
@@ -19105,8 +20485,7 @@ Do not include markdown formatting or explanations.`
                                         fetchAiSuggestions(
                                             lastAssistantMsg.text.trim()
                                         )
-                                        suggestionsGeneratedForTurnRef.current =
-                                            true
+                                        suggestionsGeneratedForTurnRef.current = true
                                     }
                                     return prev
                                 })
@@ -19663,13 +21042,14 @@ Do not include markdown formatting or explanations.`
             const idx = jobCycleDeck.findIndex((j) => j.id === selectedJob?.id)
             const n = jobCycleDeck.length
             const base = idx >= 0 ? idx : 0
-            const next = ((base + delta) % n + n) % n
+            const next = (((base + delta) % n) + n) % n
             const nextJob = jobCycleDeck[next]!
             setSelectedJob(nextJob)
             haptic.light()
             // Sync swipe/arrow navigation to peers
             dataConnectionsRef.current.forEach((conn) => {
-                if (conn.open) conn.send({ type: "job-cycle", payload: nextJob })
+                if (conn.open)
+                    conn.send({ type: "job-cycle", payload: nextJob })
             })
         },
         [jobCycleDeck, selectedJob?.id]
@@ -19704,11 +21084,7 @@ Do not include markdown formatting or explanations.`
         const onKey = (e: KeyboardEvent) => {
             if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
             const el = document.activeElement as HTMLElement | null
-            if (
-                el?.closest(
-                    "input, textarea, select, [contenteditable=true]"
-                )
-            )
+            if (el?.closest("input, textarea, select, [contenteditable=true]"))
                 return
             e.preventDefault()
             cycleJobDetail(e.key === "ArrowRight" ? 1 : -1)
@@ -19955,7 +21331,9 @@ Do not include markdown formatting or explanations.`
                     ? now
                     : existing?.whiteboardLastEdited
 
-                const isAppBlank = !appCodeRef.current || appCodeRef.current === DEFAULT_APP_CODE
+                const isAppBlank =
+                    !appCodeRef.current ||
+                    appCodeRef.current === DEFAULT_APP_CODE
                 const miniIdeLastEdited: number | undefined = isAppBlank
                     ? undefined // empty app → don't list in Your Stuff
                     : hasAppChanges
@@ -20339,7 +21717,9 @@ Do not include markdown formatting or explanations.`
     }, [])
     const [inputText, setInputText] = React.useState("")
     // Tracks the active agent chip at send time so handleSendMessage can inject context
-    const activeAgentChipRef = React.useRef<"app" | "doc" | "whiteboard" | null>(null)
+    const activeAgentChipRef = React.useRef<
+        "app" | "doc" | "whiteboard" | null
+    >(null)
     const [isLoading, setIsLoading] = React.useState(false)
     const abortControllerRef = React.useRef<AbortController | null>(null)
     const lastMessageTimeRef = React.useRef<number>(0)
@@ -20466,9 +21846,9 @@ Do not include markdown formatting or explanations.`
     // --- CONSTANTS ---
     const MIN_CHAT_HEIGHT = 204
     const LEFT_SIDEBAR_WIDTH = 260
-    const MIN_CHAT_WIDTH = 400          // chat panel hard floor
-    const CHAT_MAX_WIDTH = 872          // chat panel max when agent sidebar is open
-    const AGENTS_MIN_WIDTH = 400        // agent sidebar minimum — viewport too narrow: chat shrinks to cover
+    const MIN_CHAT_WIDTH = 400 // chat panel hard floor
+    const CHAT_MAX_WIDTH = 872 // chat panel max when agent sidebar is open
+    const AGENTS_MIN_WIDTH = 400 // agent sidebar minimum — viewport too narrow: chat shrinks to cover
     const AGENT_SIDEBAR_CHAT_WIDTH = 400 // effective chat width used for tile/height math in agent sidebar mode
 
     // --- STATE: LAYOUT & DIMENSIONS ---
@@ -20509,7 +21889,10 @@ Do not include markdown formatting or explanations.`
             const floored = Math.max(prev, MIN_CHAT_WIDTH)
             const agentsWidth = availableWidth - floored
             if (agentsWidth < AGENTS_MIN_WIDTH) {
-                return Math.max(MIN_CHAT_WIDTH, availableWidth - AGENTS_MIN_WIDTH)
+                return Math.max(
+                    MIN_CHAT_WIDTH,
+                    availableWidth - AGENTS_MIN_WIDTH
+                )
             }
             return floored
         })
@@ -20520,8 +21903,7 @@ Do not include markdown formatting or explanations.`
     const chatHeightBeforeOverlay = React.useRef<number | null>(null)
     // Width 0 happens before first layout / SSR — do not treat as mobile or
     // homepage job skeletons use the wrong (narrow) placeholder layout on desktop.
-    const isMobileLayout =
-        containerSize.width > 0 && containerSize.width < 768
+    const isMobileLayout = containerSize.width > 0 && containerSize.width < 768
     const leftSidebarWidth =
         !isMobileLayout && isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
 
@@ -21130,7 +22512,9 @@ Do not include markdown formatting or explanations.`
                     // When they connect to a student, this hash is replaced with the student's.
                     const volunteerWaitHash = generateLinkHash()
                     window.history.replaceState(null, "", volunteerWaitHash)
-                    log(`Volunteer generated waiting hash: ${volunteerWaitHash}`)
+                    log(
+                        `Volunteer generated waiting hash: ${volunteerWaitHash}`
+                    )
                 }
             }
 
@@ -21450,21 +22834,43 @@ Do not include markdown formatting or explanations.`
     closeSettingsSheetRef.current = () => setShowYouSettings(false)
 
     const mobileToolGestureAxisRef = React.useRef<null | "x" | "y">(null)
-    const [mobileToolGestureAxis, setMobileToolGestureAxis] =
-        React.useState<null | "x" | "y">(null)
-    const lockMobileToolGesture = React.useCallback((axis: null | "x" | "y") => {
-        mobileToolGestureAxisRef.current = axis
-        setMobileToolGestureAxis(axis)
-    }, [])
+    const [mobileToolGestureAxis, setMobileToolGestureAxis] = React.useState<
+        null | "x" | "y"
+    >(null)
+    const lockMobileToolGesture = React.useCallback(
+        (axis: null | "x" | "y") => {
+            mobileToolGestureAxisRef.current = axis
+            setMobileToolGestureAxis(axis)
+        },
+        []
+    )
 
     /** Mobile full-screen tool sheet — same dismiss as toolbar (mutually exclusive tools). */
     const dismissMobileToolOverlayRef = React.useRef<() => void>(() => {})
     const dismissMobileToolOverlay = React.useCallback(() => {
-        if (isDocOpen) { toggleDoc(); return }
-        if (isWhiteboardOpen) { toggleWhiteboard(); return }
-        if (isAppOpen) { toggleApp(); return }
+        if (isDocOpen) {
+            toggleDoc()
+            return
+        }
+        if (isWhiteboardOpen) {
+            toggleWhiteboard()
+            return
+        }
+        if (isAppOpen) {
+            toggleApp()
+            return
+        }
         if (isJobOpen) closeJobDetail()
-    }, [isDocOpen, isWhiteboardOpen, isAppOpen, isJobOpen, toggleDoc, toggleWhiteboard, toggleApp, closeJobDetail])
+    }, [
+        isDocOpen,
+        isWhiteboardOpen,
+        isAppOpen,
+        isJobOpen,
+        toggleDoc,
+        toggleWhiteboard,
+        toggleApp,
+        closeJobDetail,
+    ])
     dismissMobileToolOverlayRef.current = dismissMobileToolOverlay
 
     // Pull-to-dismiss: listen on the sheet card itself so pointermove stays alive
@@ -21472,13 +22878,20 @@ Do not include markdown formatting or explanations.`
     React.useEffect(() => {
         if (!isMobileLayout) return
         if (isWhiteboardOpen) return
-        const sheet = document.querySelector(".MobileToolOverlay") as HTMLElement | null
+        const sheet = document.querySelector(
+            ".MobileToolOverlay"
+        ) as HTMLElement | null
         if (!sheet) return
         const pullY = overlayDragYRef.current
-        let lastY = 0, lastX = 0, startX = 0, startY = 0, pressed = false
+        let lastY = 0,
+            lastX = 0,
+            startX = 0,
+            startY = 0,
+            pressed = false
         let activePointerId = -1
         let pullCaptureActive = false
-        const scrollEl = () => sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
+        const scrollEl = () =>
+            sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
         const GESTURE_MIN = 10
         const AXIS_RATIO = 1.35
         const releasePullCapture = () => {
@@ -21499,7 +22912,11 @@ Do not include markdown formatting or explanations.`
             lockMobileToolGesture(null)
             const py = pullY.get()
             if (py < 88) {
-                animate(pullY, 0, { type: "spring", stiffness: 420, damping: 38 })
+                animate(pullY, 0, {
+                    type: "spring",
+                    stiffness: 420,
+                    damping: 38,
+                })
             } else {
                 // Do not pullY.set(0) here — it would snap inner sheet up before exit runs.
                 // ModalSheet AnimatePresence onExitComplete resets dragY after exit.
@@ -21546,7 +22963,8 @@ Do not include markdown formatting or explanations.`
                 if (axis === "x") return
             }
 
-            const dy = e.clientY - lastY, dx = e.clientX - lastX
+            const dy = e.clientY - lastY,
+                dx = e.clientX - lastX
             lastY = e.clientY
             lastX = e.clientX
             const py = pullY.get()
@@ -21595,13 +23013,20 @@ Do not include markdown formatting or explanations.`
     // Pull-to-dismiss for mobile settings sheet (same rules as docs: only when scroll is at top).
     React.useEffect(() => {
         if (!isMobileLayout || !showYouSettings) return
-        const sheet = document.querySelector(".SettingsOverlay") as HTMLElement | null
+        const sheet = document.querySelector(
+            ".SettingsOverlay"
+        ) as HTMLElement | null
         if (!sheet) return
         const pullY = settingsOverlayDragYRef.current
-        let lastY = 0, lastX = 0, startX = 0, startY = 0, pressed = false
+        let lastY = 0,
+            lastX = 0,
+            startX = 0,
+            startY = 0,
+            pressed = false
         let activePointerId = -1
         let pullCaptureActive = false
-        const scrollEl = () => sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
+        const scrollEl = () =>
+            sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
         const GESTURE_MIN = 10
         const AXIS_RATIO = 1.35
         const releasePullCapture = () => {
@@ -21622,7 +23047,11 @@ Do not include markdown formatting or explanations.`
             lockMobileToolGesture(null)
             const py = pullY.get()
             if (py < 88) {
-                animate(pullY, 0, { type: "spring", stiffness: 420, damping: 38 })
+                animate(pullY, 0, {
+                    type: "spring",
+                    stiffness: 420,
+                    damping: 38,
+                })
             } else {
                 closeSettingsSheetRef.current()
             }
@@ -21665,7 +23094,8 @@ Do not include markdown formatting or explanations.`
                 if (axis === "x") return
             }
 
-            const dy = e.clientY - lastY, dx = e.clientX - lastX
+            const dy = e.clientY - lastY,
+                dx = e.clientX - lastX
             lastY = e.clientY
             lastX = e.clientX
             const py = pullY.get()
@@ -23442,10 +24872,7 @@ Do not include markdown formatting or explanations.`
                         }
                         return newArr
                     }
-                    return [
-                        ...prev,
-                        { role: "model", ...msgPatch } as Message,
-                    ]
+                    return [...prev, { role: "model", ...msgPatch } as Message]
                 })
             } else if (data.type === "ai-suggestions") {
                 // Receive and display shared AI suggestions
@@ -23625,11 +25052,13 @@ Do not include markdown formatting or explanations.`
                 const { items, job: animJob } = data.payload
                 const vw = window.innerWidth || 1
                 const vh = window.innerHeight || 1
-                const remapped: CapturedKeyword[] = items.map((c: CapturedKeyword) => ({
-                    ...c,
-                    startX: c.startX * vw,
-                    startY: c.startY * vh,
-                }))
+                const remapped: CapturedKeyword[] = items.map(
+                    (c: CapturedKeyword) => ({
+                        ...c,
+                        startX: c.startX * vw,
+                        startY: c.startY * vh,
+                    })
+                )
                 // Open the job panel briefly (fading phase keeps it visible), then
                 // transition to doc — mirrors exactly what handleCreateResume does locally
                 setSelectedJob(animJob)
@@ -24791,8 +26220,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         ) {
                                             if (!isWhiteboardOpenRef.current) {
                                                 setIsWhiteboardOpen(true)
-                                                isWhiteboardOpenRef.current =
-                                                    true
+                                                isWhiteboardOpenRef.current = true
                                                 setIsDocOpen(false)
                                                 setIsAppOpen(false)
                                                 isDocOpenRef.current = false
@@ -25296,7 +26724,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         ) {
                             const used = capturedOrbitWordsInHtml(
                                 newContent,
-                                resumeCapturedItemsRef.current.map((c) => c.word)
+                                resumeCapturedItemsRef.current.map(
+                                    (c) => c.word
+                                )
                             )
                             // Mark keyword positions in the HTML before setting
                             // content so getBoundingClientRect on the markers is
@@ -25312,7 +26742,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             if (dataConnectionsRef.current.size > 0) {
                                 broadcastData({
                                     type: "resume-anim-land",
-                                    payload: { markedContent, usedKeywords: used },
+                                    payload: {
+                                        markedContent,
+                                        usedKeywords: used,
+                                    },
                                 })
                             }
                         } else {
@@ -25339,7 +26772,12 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             // Send docType so the peer renders the correct editor variant
                             broadcastData({
                                 type: "doc-start",
-                                payload: { docType: toolName === "create_resume" ? "resume" : "cover_letter" },
+                                payload: {
+                                    docType:
+                                        toolName === "create_resume"
+                                            ? "resume"
+                                            : "cover_letter",
+                                },
                             })
                         }
                         const isResume = toolName === "create_resume"
@@ -25408,9 +26846,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         },
                                     },
                                     toolUsed:
-                                        accumulatedFunctionCall.name === "create_resume"
+                                        accumulatedFunctionCall.name ===
+                                        "create_resume"
                                             ? "resume"
-                                            : accumulatedFunctionCall.name === "create_cover_letter"
+                                            : accumulatedFunctionCall.name ===
+                                                "create_cover_letter"
                                               ? "cover_letter"
                                               : "doc",
                                 }
@@ -25500,7 +26940,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     functionCall: accumulatedFunctionCall,
                                     functionResponse: {
                                         name: "retrieve_memories",
-                                        response: { favorites: memoriesContent },
+                                        response: {
+                                            favorites: memoriesContent,
+                                        },
                                     },
                                 }
                             }
@@ -25544,7 +26986,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         if (id !== undefined && id !== "") {
                             const idx = parseInt(id, 10)
                             if (!isNaN(idx)) {
-                                const updated = updateMemory(idx, new_text || null)
+                                const updated = updateMemory(
+                                    idx,
+                                    new_text || null
+                                )
                                 setYouInterests(updated)
                             }
                         }
@@ -25759,9 +27204,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             }
                             return newArr
                         })
-                    } else if (
-                        accumulatedFunctionCall.name === "search_jobs"
-                    ) {
+                    } else if (accumulatedFunctionCall.name === "search_jobs") {
                         // ---------------------------------------------------------------------------
                         // search_jobs — fetch from jobs API, render cards in chat, follow up
                         // ---------------------------------------------------------------------------
@@ -25776,7 +27219,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             params.set("workplace_type", args.workplace_type)
                         if (args.seniority_level)
                             params.set("seniority_level", args.seniority_level)
-                        params.set("since", String(Math.floor(Date.now() / 1000) - (args.posted_within_days ?? 3) * 86400))
+                        params.set(
+                            "since",
+                            String(
+                                Math.floor(Date.now() / 1000) -
+                                    (args.posted_within_days ?? 3) * 86400
+                            )
+                        )
                         if (args.salary_min != null)
                             params.set("salary_min", String(args.salary_min))
                         if (args.cursor) params.set("cursor", args.cursor)
@@ -25932,9 +27381,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         const args = accumulatedFunctionCall.args as any
                         // Fall back to currently open job if the model omitted the ID.
                         const jobId =
-                            args.job_id ||
-                            selectedJobRef.current?.id ||
-                            null
+                            args.job_id || selectedJobRef.current?.id || null
 
                         let jobDetail: any = null
                         if (jobId) {
@@ -25945,8 +27392,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     id: jobId,
                                     job_description: cached.desc,
                                     job_summary: cached.detailSummary,
-                                    visa_sponsorship: cached.detailVisaSponsorship,
-                                    company: { description: cached.detailCompanyDesc },
+                                    visa_sponsorship:
+                                        cached.detailVisaSponsorship,
+                                    company: {
+                                        description: cached.detailCompanyDesc,
+                                    },
                                     keywords: cached.apiKeywords,
                                 }
                             } else {
@@ -25955,10 +27405,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         `${jobsApiUrl}/jobs/${jobId}`,
                                         { signal: controller.signal }
                                     )
-                                    if (detailRes.ok) jobDetail = await detailRes.json()
+                                    if (detailRes.ok)
+                                        jobDetail = await detailRes.json()
                                 } catch (err) {
                                     if ((err as Error).name !== "AbortError")
-                                        console.error("get_job_details fetch:", err)
+                                        console.error(
+                                            "get_job_details fetch:",
+                                            err
+                                        )
                                 }
                             }
                         }
@@ -26556,6 +28010,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             }
 
             // Build user message for display (text = display text with skills inline; full skill metadata hidden for API)
+            const activeJob = selectedJobRef.current
+            // Persist the job so the chip can reopen it after a page reload
+            if (activeJob) writeJobChipStore(activeJob)
             const userMsg: Message = {
                 role: "user",
                 text: textToCheck,
@@ -26574,6 +28031,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     mimeType: a.mimeType,
                     file: a.file, // Keep file ref for local processing
                 })),
+                jobContext: activeJob
+                    ? {
+                          id: activeJob.id,
+                          title: activeJob.title,
+                          companyName: activeJob.company.name,
+                          logoUrl: activeJob.company.logo_url,
+                      }
+                    : undefined,
             }
             setMessages((prev) => [...prev, userMsg])
 
@@ -26786,7 +28251,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     const availableWidth = containerWidth - leftSidebarWidth
                     // Chat can grow until agents hit their minimum (400px); no upper cap during manual drag
                     const chatMax = availableWidth - AGENTS_MIN_WIDTH
-                    const clampedChatWidth = Math.max(MIN_CHAT_WIDTH, Math.min(newChatWidth, chatMax))
+                    const clampedChatWidth = Math.max(
+                        MIN_CHAT_WIDTH,
+                        Math.min(newChatWidth, chatMax)
+                    )
 
                     // Track in ref so pointer-up can commit the correct value regardless of Framer overrides
                     liveChatWidthRef.current = clampedChatWidth
@@ -27046,12 +28514,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
         let activeWidth: number
         let activeHeight: number
 
-        if (
-            isDocOpen ||
-            isWhiteboardOpen ||
-            isAppOpen ||
-            isJobOpen
-        ) {
+        if (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) {
             return {
                 width: "100%",
                 height: "100%",
@@ -27156,7 +28619,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
         // MOBILE / SIDEBAR LOGIC
         // "if 3 tiles then side-by-side horizontal. if 4 tiles, its a 2x2 grid."
         const availableWidth =
-            (isAgentSidebarMode ? AGENT_SIDEBAR_CHAT_WIDTH : containerSize.width) - 32
+            (isAgentSidebarMode
+                ? AGENT_SIDEBAR_CHAT_WIDTH
+                : containerSize.width) - 32
 
         if (numTiles === 4) {
             // 2x2 Grid
@@ -27427,7 +28892,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 word: string,
                 extra?: Partial<CapturedKeyword>
             ): Omit<CapturedKeyword, "baseAngle"> | null => {
-                const el = document.querySelector(selector) as HTMLElement | null
+                const el = document.querySelector(
+                    selector
+                ) as HTMLElement | null
                 if (!el) return null
                 const r = el.getBoundingClientRect()
                 const cs = window.getComputedStyle(el)
@@ -27451,8 +28918,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             )
 
             // Build the pre-keyword entries (title then company)
-            const preEntries = [titleEntry, companyEntry].filter(Boolean) as
-                Omit<CapturedKeyword, "baseAngle">[]
+            const preEntries = [titleEntry, companyEntry].filter(
+                Boolean
+            ) as Omit<CapturedKeyword, "baseAngle">[]
             const totalCount = uniqueSpans.length + preEntries.length || 1
 
             const captured: CapturedKeyword[] = [
@@ -27460,14 +28928,19 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     ...entry,
                     baseAngle: (i / totalCount) * 2 * Math.PI,
                 })),
-                ...uniqueSpans.map(({ word, rect, fontSize, fontWeight }, i) => ({
-                    word,
-                    startX: rect.left + rect.width / 2,
-                    startY: rect.top + rect.height / 2,
-                    baseAngle: ((i + preEntries.length) / totalCount) * 2 * Math.PI,
-                    fontSize,
-                    fontWeight,
-                })),
+                ...uniqueSpans.map(
+                    ({ word, rect, fontSize, fontWeight }, i) => ({
+                        word,
+                        startX: rect.left + rect.width / 2,
+                        startY: rect.top + rect.height / 2,
+                        baseAngle:
+                            ((i + preEntries.length) / totalCount) *
+                            2 *
+                            Math.PI,
+                        fontSize,
+                        fontWeight,
+                    })
+                ),
             ]
 
             // Track which job this animation belongs to so the cache can be
@@ -27549,7 +29022,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 )
             }
 
-            const displayText = `Create a resume for ${job.title} at ${job.company.name}`
+            const displayText = `Create a resume for this job`
             const aiText =
                 `Call create_resume immediately with a complete, tailored HTML resume.\n\n` +
                 contextParts.join("\n\n") +
@@ -27585,17 +29058,15 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             (resumeAnimPhase === "fading" ||
                 (resumeAnimPhase === "idle" && !isDocOpen))
         const showMobileOverlay =
-            isMobileLayout &&
-            (showJobPanel || isDocOpen || isAppOpen)
+            isMobileLayout && (showJobPanel || isDocOpen || isAppOpen)
         const overlayGradientBg = showJobPanel
             ? themeColors.backgroundDark
             : chatThemeColors.background
-        const overlayPlaceholder =
-            isLoading
-                ? "Thinking..."
-                : toolOverlayReady && showJobPanel
-                  ? "Ask about this job"
-                  : "Ask anything"
+        const overlayPlaceholder = isLoading
+            ? "Thinking..."
+            : toolOverlayReady && showJobPanel
+              ? "Ask about this job"
+              : "Ask anything"
 
         const mobileOverlayInput = showMobileOverlay && (
             <div
@@ -27612,8 +29083,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             >
                 <ChatInput
                     showAddPeopleOverlay={
-                        showAddPeopleOverlay &&
-                        !(isMobileLayout && isAgentOpen)
+                        showAddPeopleOverlay && !(isMobileLayout && isAgentOpen)
                     }
                     setShowAddPeopleOverlay={setShowAddPeopleOverlay}
                     hideGradient={false}
@@ -27623,7 +29093,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         const newValue = sanitizeMessage(e.target.value)
                         inputTextRef.current = newValue
                         setInputText(newValue)
-                        if (!showJobPanel && dataConnectionsRef.current.size > 0) {
+                        if (
+                            !showJobPanel &&
+                            dataConnectionsRef.current.size > 0
+                        ) {
                             const now = Date.now()
                             const interval = 50
                             const timeSinceLastSend =
@@ -27660,7 +29133,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         inputCursorRef.current = offset
                     }}
                     peerSync={peerSyncState}
-                    onSend={(chip) => { activeAgentChipRef.current = chip ?? null; handleSendMessage() }}
+                    onSend={(chip) => {
+                        activeAgentChipRef.current = chip ?? null
+                        handleSendMessage()
+                    }}
                     onConnectWithAI={handleConnectWithAI}
                     onStop={handleStop}
                     onEndCall={() => cleanup(true)}
@@ -27669,7 +29145,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     onReport={handleReport}
                     placeholder={overlayPlaceholder}
                     showEndCall={status !== "idle"}
-                    showAiLiveButton={showJobPanel ? false : status === "searching" && role === "student"}
+                    showAiLiveButton={
+                        showJobPanel
+                            ? false
+                            : status === "searching" && role === "student"
+                    }
                     attachments={attachments}
                     onRemoveAttachment={handleRemoveAttachment}
                     isLoading={isLoading}
@@ -27740,7 +29220,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         onJobDetailFetched={(jobId, entry) => {
                             // Relay fetched detail to peers so they hydrate from cache
                             // instead of making a duplicate API call
-                            broadcastData({ type: "job-detail-cache", payload: { jobId, entry } })
+                            broadcastData({
+                                type: "job-detail-cache",
+                                payload: { jobId, entry },
+                            })
                         }}
                     />
                     {mobileOverlayInput}
@@ -27759,42 +29242,42 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     overflow: isMobileLayout ? "hidden" : "visible",
                 }}
             >
-            {/* Shell draws shadow; inner clips scroll — overflow:hidden on the same node as box-shadow clips the shadow. */}
-            <div
-                style={{
-                    width: "100%",
-                    height: "100%",
-                    position: "relative",
-                    background:
-                        isWhiteboardOpen && isMobileLayout
-                            ? "#F9FAFC"
-                            : chatThemeColors.background,
-                    display: "flex",
-                    flexDirection: "column",
-                    overflow: "visible",
-                    borderRadius: toolPanelRadius,
-                    boxShadow:
-                        !isMobileLayout &&
-                        !isWhiteboardOpen &&
-                        themeColors.background === lightColors.background
-                            ? "2px 0 24px 2px rgba(0,0,0,0.04)"
-                            : "none",
-                    border: "none",
-                    paddingBottom: 0,
-                }}
-            >
-            <div
-                style={{
-                    width: "100%",
-                    minHeight: 0,
-                    flex: 1,
-                    display: "flex",
-                    flexDirection: "column",
-                    overflow: "hidden",
-                    borderRadius: toolPanelRadius,
-                }}
-            >
-                {/* 
+                {/* Shell draws shadow; inner clips scroll — overflow:hidden on the same node as box-shadow clips the shadow. */}
+                <div
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        position: "relative",
+                        background:
+                            isWhiteboardOpen && isMobileLayout
+                                ? "#F9FAFC"
+                                : chatThemeColors.background,
+                        display: "flex",
+                        flexDirection: "column",
+                        overflow: "visible",
+                        borderRadius: toolPanelRadius,
+                        boxShadow:
+                            !isMobileLayout &&
+                            !isWhiteboardOpen &&
+                            themeColors.background === lightColors.background
+                                ? "2px 0 24px 2px rgba(0,0,0,0.04)"
+                                : "none",
+                        border: "none",
+                        paddingBottom: 0,
+                    }}
+                >
+                    <div
+                        style={{
+                            width: "100%",
+                            minHeight: 0,
+                            flex: 1,
+                            display: "flex",
+                            flexDirection: "column",
+                            overflow: "hidden",
+                            borderRadius: toolPanelRadius,
+                        }}
+                    >
+                        {/* 
                   Standard Topbar (hidden for both Doc and Whiteboard on mobile) 
                   Only show this bar if it's an overlay AND NOT a Doc/Whiteboard tool on mobile
                   Wait, isOverlay is ONLY true for mobile tools or non-sidebar mode.
@@ -27803,610 +29286,658 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                   If Doc is open, we hide it.
                   If Whiteboard is open, we hide it (since we added custom buttons).
                 */}
-                {isOverlay && !isMobileLayout && (
-                    <div
-                        style={{
-                            height: 56,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            padding: "0 16px",
-                            background: themeColors.background,
-                            flexShrink: 0,
-                        }}
-                    >
-                        <div style={{ fontWeight: 600, fontSize: 16 }}>
-                            {isDocOpen
-                                ? "Docs"
-                                : isWhiteboardOpen
-                                  ? "Whiteboard"
-                                  : isAppOpen
-                                    ? "App"
-                                    : ""}
-                        </div>
-                        <button
-                            onClick={
-                                isDocOpen
-                                    ? toggleDoc
-                                    : isWhiteboardOpen
-                                      ? toggleWhiteboard
-                                      : isAppOpen
-                                        ? toggleApp
-                                        : undefined
-                            }
-                            style={{
-                                background: themeColors.surfaceHighlight,
-                                border: "none",
-                                borderRadius: "50%",
-                                width: 32,
-                                height: 32,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                cursor: "pointer",
-                                fontSize: 20,
-                                color: themeColors.text.primary,
-                            }}
-                        >
-                            ×
-                        </button>
-                    </div>
-                )}
-
-                <div
-                    style={{
-                        flex: 1,
-                        position: "relative",
-                        overflow: "hidden",
-                    }}
-                >
-                    {isAppOpen && !isDocOpen && !isWhiteboardOpen ? (
-                        <div
-                            style={{
-                                position: "absolute",
-                                inset: 0,
-                                zIndex: 10,
-                            }}
-                        >
-                            <MiniIDE
-                                ref={miniIDERef}
-                                code={appCode}
-                                onChange={handleAppChange}
-                                mode={appMode}
-                                onModeChange={handleAppModeChange}
-                                onClose={toggleApp}
-                                isResizing={isResizing}
-                                onAppInteraction={handleAppInteraction}
-                                remoteAppEvent={remoteAppEvent}
-                                onAppMutation={handleAppMutation}
-                                remoteAppMutation={remoteAppMutation}
-                                remoteAppInitialState={remoteAppInitialState}
-                                onAppInitialState={handleAppInitialState}
-                                onRequestInitialState={
-                                    handleRequestInitialState
-                                }
-                                amIHost={amIHost}
-                                debugMode={debugMode}
-                                onDownload={() => {
-                                    const blob = new Blob([appCode], {
-                                        type: "text/html",
-                                    })
-                                    const url = URL.createObjectURL(blob)
-                                    const a = document.createElement("a")
-                                    a.href = url
-                                    a.download = "mini-app.html"
-                                    a.click()
-                                    URL.revokeObjectURL(url)
-                                }}
-                                isMobileLayout={isMobileLayout}
-                                themeColors={chatThemeColors}
-                                remoteCursors={remoteCursors}
-                                onCursorMove={handleAppPointerMove}
-                                onAppInteraction={handleAppInteraction}
-                                remoteAppEvent={remoteAppEvent}
-                                onAppMutation={handleAppMutation}
-                                remoteAppMutation={remoteAppMutation}
-                                amIHost={amIHost}
-                            />
-                        </div>
-                    ) : null}
-
-                    {isDocOpen ? (
-                        <div
-                            style={{
-                                position: "absolute",
-                                inset: 0,
-                                zIndex: 10,
-                            }}
-                        >
-                            <DocEditor
-                                content={docContent}
-                                onChange={handleDocChange}
-                                settings={docSettings}
-                                onSettingsChange={setDocSettings}
-                                themeColors={chatThemeColors}
-                                isMobileLayout={isMobileLayout}
-                                remoteCursors={remoteCursors}
-                                onCursorMove={handleDocPointerMove}
-                                onClose={handleDocClose}
-                                docType={docType}
-                                hideContent={resumeAnimPhase === "landing" || resumeAnimPhase === "orbiting"}
-                                docCompany={
-                                    (docType === "resume" ||
-                                        docType === "cover_letter") &&
-                                    selectedJob
-                                        ? selectedJob.company.name
-                                        : ""
-                                }
-                                userDisplayName={youName}
-                            />
-                        </div>
-                    ) : null}
-
-                    {(isWhiteboardOpen || hasWhiteboardStarted) &&
-                        !isDocOpen &&
-                        !isAppOpen && (
+                        {isOverlay && !isMobileLayout && (
                             <div
-                                ref={whiteboardContainerRef}
-                                onPointerMove={handleWhiteboardPointerMove}
-                                onPointerLeave={() => {
-                                    if (activeCalls.current.size > 0) {
-                                        broadcastData({
-                                            type: "cursor-update",
-                                            payload: {
-                                                x: -9999,
-                                                y: -9999,
-                                                color: myCursorColor.current,
-                                            },
-                                        })
-                                    }
-                                }}
                                 style={{
-                                    width: "100%",
-                                    height: "100%",
-                                    position: "relative",
-                                    zIndex: 0,
-                                    visibility: "visible",
-                                    pointerEvents: "auto",
-                                    background: "#FAFAFB", // Match tldraw canvas background (slightly off-white)
+                                    height: 56,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    padding: "0 16px",
+                                    background: themeColors.background,
+                                    flexShrink: 0,
                                 }}
-                                onPointerDown={(e) => e.stopPropagation()}
                             >
-                                {/* Whiteboard Toolbar (Download + Collapse) */}
+                                <div style={{ fontWeight: 600, fontSize: 16 }}>
+                                    {isDocOpen
+                                        ? "Docs"
+                                        : isWhiteboardOpen
+                                          ? "Whiteboard"
+                                          : isAppOpen
+                                            ? "App"
+                                            : ""}
+                                </div>
+                                <button
+                                    onClick={
+                                        isDocOpen
+                                            ? toggleDoc
+                                            : isWhiteboardOpen
+                                              ? toggleWhiteboard
+                                              : isAppOpen
+                                                ? toggleApp
+                                                : undefined
+                                    }
+                                    style={{
+                                        background:
+                                            themeColors.surfaceHighlight,
+                                        border: "none",
+                                        borderRadius: "50%",
+                                        width: 32,
+                                        height: 32,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        cursor: "pointer",
+                                        fontSize: 20,
+                                        color: themeColors.text.primary,
+                                    }}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                        )}
+
+                        <div
+                            style={{
+                                flex: 1,
+                                position: "relative",
+                                overflow: "hidden",
+                            }}
+                        >
+                            {isAppOpen && !isDocOpen && !isWhiteboardOpen ? (
                                 <div
                                     style={{
                                         position: "absolute",
-                                        top: 12,
-                                        right: 12,
-                                        zIndex: 9999 /* Boost Z-Index to be sure */,
+                                        inset: 0,
+                                        zIndex: 10,
                                     }}
                                 >
-                                    <HeaderActions
-                                        themeColors={themeColors}
-                                        onDownloadClick={async () => {
-                                            if (editor && exportToBlob) {
-                                                try {
-                                                    const shapeIds =
-                                                        editor.getCurrentPageShapeIds()
-                                                    if (shapeIds.size === 0)
-                                                        return
-
-                                                    const blob =
-                                                        await exportToBlob({
-                                                            editor,
-                                                            ids: [...shapeIds],
-                                                            format: "png",
-                                                            opts: {
-                                                                background:
-                                                                    true,
-                                                            },
-                                                        })
-                                                    const url =
-                                                        URL.createObjectURL(
-                                                            blob
-                                                        )
-                                                    const a =
-                                                        document.createElement(
-                                                            "a"
-                                                        )
-                                                    a.href = url
-                                                    // Format: whiteboard_curastem.org12345.png
-                                                    const randomNum =
-                                                        Math.floor(
-                                                            10000 +
-                                                                Math.random() *
-                                                                    90000
-                                                        )
-                                                    a.download = `whiteboard_curastem.org${randomNum}.png`
-                                                    a.click()
-                                                    URL.revokeObjectURL(url)
-                                                } catch (e) {
-                                                    console.error(
-                                                        "Export failed",
-                                                        e
-                                                    )
-                                                }
-                                            }
+                                    <MiniIDE
+                                        ref={miniIDERef}
+                                        code={appCode}
+                                        onChange={handleAppChange}
+                                        mode={appMode}
+                                        onModeChange={handleAppModeChange}
+                                        onClose={toggleApp}
+                                        isResizing={isResizing}
+                                        onAppInteraction={handleAppInteraction}
+                                        remoteAppEvent={remoteAppEvent}
+                                        onAppMutation={handleAppMutation}
+                                        remoteAppMutation={remoteAppMutation}
+                                        remoteAppInitialState={
+                                            remoteAppInitialState
+                                        }
+                                        onAppInitialState={
+                                            handleAppInitialState
+                                        }
+                                        onRequestInitialState={
+                                            handleRequestInitialState
+                                        }
+                                        amIHost={amIHost}
+                                        debugMode={debugMode}
+                                        onDownload={() => {
+                                            const blob = new Blob([appCode], {
+                                                type: "text/html",
+                                            })
+                                            const url =
+                                                URL.createObjectURL(blob)
+                                            const a =
+                                                document.createElement("a")
+                                            a.href = url
+                                            a.download = "mini-app.html"
+                                            a.click()
+                                            URL.revokeObjectURL(url)
                                         }}
-                                        onCloseClick={toggleWhiteboard}
-                                        isDownloadHovered={
-                                            isWhiteboardDownloadHovered
-                                        }
-                                        onDownloadHoverChange={
-                                            setIsWhiteboardDownloadHovered
-                                        }
-                                        isCloseHovered={
-                                            isWhiteboardCloseHovered
-                                        }
-                                        onCloseHoverChange={
-                                            setIsWhiteboardCloseHovered
-                                        }
+                                        isMobileLayout={isMobileLayout}
+                                        themeColors={chatThemeColors}
+                                        remoteCursors={remoteCursors}
+                                        onCursorMove={handleAppPointerMove}
+                                        onAppInteraction={handleAppInteraction}
+                                        remoteAppEvent={remoteAppEvent}
+                                        onAppMutation={handleAppMutation}
+                                        remoteAppMutation={remoteAppMutation}
+                                        amIHost={amIHost}
                                     />
                                 </div>
+                            ) : null}
 
+                            {isDocOpen ? (
                                 <div
                                     style={{
                                         position: "absolute",
-                                        top: !isMobileLayout ? 56 : 0,
-                                        left: 0,
-                                        right: 0,
-                                        bottom: 0,
+                                        inset: 0,
+                                        zIndex: 10,
                                     }}
                                 >
-                                    <Tldraw
-                                        persistenceKey="curastem-whiteboard-v1"
-                                        onMount={(e) => {
-                                            if (editor) return
-                                            log("Tldraw editor mounted")
-                                            setEditor(e)
-                                            // Rename the default "Page 1" to "Whiteboard"
-                                            const currentPage =
-                                                e.getCurrentPage?.()
-                                            if (currentPage)
-                                                e.renamePage(
-                                                    currentPage.id,
-                                                    "Whiteboard"
-                                                )
-                                            e.setCurrentTool("draw")
-                                            const defaultColor =
-                                                role === "volunteer"
-                                                    ? "red"
-                                                    : "black"
-                                            e.setStyleForNextShapes(
-                                                DefaultColorStyle,
-                                                defaultColor
-                                            )
-                                            e.setStyleForNextShapes(
-                                                DefaultSizeStyle,
-                                                "l"
-                                            )
+                                    <DocEditor
+                                        content={docContent}
+                                        onChange={handleDocChange}
+                                        settings={docSettings}
+                                        onSettingsChange={setDocSettings}
+                                        themeColors={chatThemeColors}
+                                        isMobileLayout={isMobileLayout}
+                                        remoteCursors={remoteCursors}
+                                        onCursorMove={handleDocPointerMove}
+                                        onClose={handleDocClose}
+                                        docType={docType}
+                                        hideContent={
+                                            resumeAnimPhase === "landing" ||
+                                            resumeAnimPhase === "orbiting"
+                                        }
+                                        docCompany={
+                                            (docType === "resume" ||
+                                                docType === "cover_letter") &&
+                                            selectedJob
+                                                ? selectedJob.company.name
+                                                : ""
+                                        }
+                                        userDisplayName={youName}
+                                    />
+                                </div>
+                            ) : null}
 
-                                            // Drain tool calls that arrived before the editor mounted
-                                            if (
-                                                pendingWhiteboardUpdates.current
-                                                    .length > 0
-                                            ) {
-                                                try {
-                                                    e.batch(() => {
-                                                        while (
-                                                            pendingWhiteboardUpdates
-                                                                .current
-                                                                .length > 0
-                                                        ) {
-                                                            const {
-                                                                toolName: tn,
-                                                                args,
-                                                            } =
-                                                                pendingWhiteboardUpdates.current.shift()
-                                                            if (
-                                                                tn ===
-                                                                "erase_whiteboard"
-                                                            ) {
-                                                                ;(
-                                                                    args.ids ||
-                                                                    []
-                                                                ).forEach(
-                                                                    (
-                                                                        id: string
-                                                                    ) => {
-                                                                        try {
-                                                                            const sid =
-                                                                                wbSanitizeId(
-                                                                                    id
-                                                                                )
-                                                                            if (
-                                                                                e.getShape(
-                                                                                    sid
-                                                                                )
-                                                                            )
-                                                                                e.deleteShapes(
-                                                                                    [
-                                                                                        sid,
-                                                                                    ]
-                                                                                )
-                                                                        } catch (err) {
-                                                                            console.error(
-                                                                                "[Whiteboard] pending erase failed:",
-                                                                                id,
-                                                                                err
-                                                                            )
-                                                                        }
-                                                                    }
-                                                                )
-                                                            } else if (
-                                                                tn ===
-                                                                "draw_whiteboard"
-                                                            ) {
-                                                                ;(
-                                                                    args.shapes ||
-                                                                    []
-                                                                )
-                                                                    .map(
-                                                                        wbValidateShape
-                                                                    )
-                                                                    .filter(
-                                                                        Boolean
-                                                                    )
-                                                                    .forEach(
-                                                                        (
-                                                                            s: any
-                                                                        ) => {
-                                                                            try {
-                                                                                if (
-                                                                                    e.getShape(
-                                                                                        s.id
-                                                                                    )
-                                                                                )
-                                                                                    e.updateShapes(
-                                                                                        [
-                                                                                            s,
-                                                                                        ]
-                                                                                    )
-                                                                                else
-                                                                                    e.createShapes(
-                                                                                        [
-                                                                                            s,
-                                                                                        ]
-                                                                                    )
-                                                                            } catch (err) {
-                                                                                console.error(
-                                                                                    "[Whiteboard] pending draw failed:",
-                                                                                    s.id,
-                                                                                    err
-                                                                                )
-                                                                            }
-                                                                        }
-                                                                    )
-                                                            } else if (
-                                                                tn ===
-                                                                "edit_whiteboard"
-                                                            ) {
-                                                                ;(
-                                                                    args.patches ||
-                                                                    []
-                                                                )
-                                                                    .filter(
-                                                                        (
-                                                                            s: any
-                                                                        ) =>
-                                                                            s?.id
-                                                                    )
-                                                                    .map(
-                                                                        wbApplyToPatch
-                                                                    )
-                                                                    .forEach(
-                                                                        (
-                                                                            s: any
-                                                                        ) => {
-                                                                            try {
-                                                                                if (
-                                                                                    e.getShape(
-                                                                                        s.id
-                                                                                    )
-                                                                                )
-                                                                                    e.updateShapes(
-                                                                                        [
-                                                                                            s,
-                                                                                        ]
-                                                                                    )
-                                                                            } catch (err) {
-                                                                                console.error(
-                                                                                    "[Whiteboard] pending patch failed:",
-                                                                                    s.id,
-                                                                                    err
-                                                                                )
-                                                                            }
-                                                                        }
-                                                                    )
-                                                                ;(
-                                                                    args.remove ||
-                                                                    []
-                                                                ).forEach(
-                                                                    (
-                                                                        id: string
-                                                                    ) => {
-                                                                        try {
-                                                                            const sid =
-                                                                                wbSanitizeId(
-                                                                                    id
-                                                                                )
-                                                                            if (
-                                                                                e.getShape(
-                                                                                    sid
-                                                                                )
-                                                                            )
-                                                                                e.deleteShapes(
-                                                                                    [
-                                                                                        sid,
-                                                                                    ]
-                                                                                )
-                                                                        } catch (err) {
-                                                                            console.error(
-                                                                                "[Whiteboard] pending remove failed:",
-                                                                                id,
-                                                                                err
-                                                                            )
-                                                                        }
-                                                                    }
-                                                                )
-                                                            }
-                                                        }
-                                                    })
-                                                } catch (err) {
-                                                    console.error(
-                                                        "[Whiteboard] Failed to drain pending updates",
-                                                        err
-                                                    )
-                                                }
-                                            }
-
-                                            if (
-                                                isWhiteboardOpenRef.current &&
-                                                dataConnectionsRef.current
-                                                    .size > 0
-                                            ) {
-                                                const snapshot =
-                                                    e.store.getSnapshot()
+                            {(isWhiteboardOpen || hasWhiteboardStarted) &&
+                                !isDocOpen &&
+                                !isAppOpen && (
+                                    <div
+                                        ref={whiteboardContainerRef}
+                                        onPointerMove={
+                                            handleWhiteboardPointerMove
+                                        }
+                                        onPointerLeave={() => {
+                                            if (activeCalls.current.size > 0) {
                                                 broadcastData({
-                                                    type: "tldraw-snapshot",
-                                                    payload: snapshot,
+                                                    type: "cursor-update",
+                                                    payload: {
+                                                        x: -9999,
+                                                        y: -9999,
+                                                        color: myCursorColor.current,
+                                                    },
                                                 })
                                             }
                                         }}
-                                    />
-                                </div>
-                                {Array.from(remoteCursors.entries()).map(
-                                    ([peerId, cursor]) => (
-                                        <LiveCursor
-                                            key={peerId}
-                                            x={cursor.x}
-                                            y={cursor.y}
-                                            color={cursor.color}
-                                            editor={editor}
-                                            containerRef={
-                                                whiteboardContainerRef
-                                            }
-                                            themeColors={themeColors}
-                                        />
-                                    )
+                                        style={{
+                                            width: "100%",
+                                            height: "100%",
+                                            position: "relative",
+                                            zIndex: 0,
+                                            visibility: "visible",
+                                            pointerEvents: "auto",
+                                            background: "#FAFAFB", // Match tldraw canvas background (slightly off-white)
+                                        }}
+                                        onPointerDown={(e) =>
+                                            e.stopPropagation()
+                                        }
+                                    >
+                                        {/* Whiteboard Toolbar (Download + Collapse) */}
+                                        <div
+                                            style={{
+                                                position: "absolute",
+                                                top: 12,
+                                                right: 12,
+                                                zIndex: 9999 /* Boost Z-Index to be sure */,
+                                            }}
+                                        >
+                                            <HeaderActions
+                                                themeColors={themeColors}
+                                                onDownloadClick={async () => {
+                                                    if (
+                                                        editor &&
+                                                        exportToBlob
+                                                    ) {
+                                                        try {
+                                                            const shapeIds =
+                                                                editor.getCurrentPageShapeIds()
+                                                            if (
+                                                                shapeIds.size ===
+                                                                0
+                                                            )
+                                                                return
+
+                                                            const blob =
+                                                                await exportToBlob(
+                                                                    {
+                                                                        editor,
+                                                                        ids: [
+                                                                            ...shapeIds,
+                                                                        ],
+                                                                        format: "png",
+                                                                        opts: {
+                                                                            background: true,
+                                                                        },
+                                                                    }
+                                                                )
+                                                            const url =
+                                                                URL.createObjectURL(
+                                                                    blob
+                                                                )
+                                                            const a =
+                                                                document.createElement(
+                                                                    "a"
+                                                                )
+                                                            a.href = url
+                                                            // Format: whiteboard_curastem.org12345.png
+                                                            const randomNum =
+                                                                Math.floor(
+                                                                    10000 +
+                                                                        Math.random() *
+                                                                            90000
+                                                                )
+                                                            a.download = `whiteboard_curastem.org${randomNum}.png`
+                                                            a.click()
+                                                            URL.revokeObjectURL(
+                                                                url
+                                                            )
+                                                        } catch (e) {
+                                                            console.error(
+                                                                "Export failed",
+                                                                e
+                                                            )
+                                                        }
+                                                    }
+                                                }}
+                                                onCloseClick={toggleWhiteboard}
+                                                isDownloadHovered={
+                                                    isWhiteboardDownloadHovered
+                                                }
+                                                onDownloadHoverChange={
+                                                    setIsWhiteboardDownloadHovered
+                                                }
+                                                isCloseHovered={
+                                                    isWhiteboardCloseHovered
+                                                }
+                                                onCloseHoverChange={
+                                                    setIsWhiteboardCloseHovered
+                                                }
+                                            />
+                                        </div>
+
+                                        <div
+                                            style={{
+                                                position: "absolute",
+                                                top: !isMobileLayout ? 56 : 0,
+                                                left: 0,
+                                                right: 0,
+                                                bottom: 0,
+                                            }}
+                                        >
+                                            <Tldraw
+                                                persistenceKey="curastem-whiteboard-v1"
+                                                onMount={(e) => {
+                                                    if (editor) return
+                                                    log("Tldraw editor mounted")
+                                                    setEditor(e)
+                                                    // Rename the default "Page 1" to "Whiteboard"
+                                                    const currentPage =
+                                                        e.getCurrentPage?.()
+                                                    if (currentPage)
+                                                        e.renamePage(
+                                                            currentPage.id,
+                                                            "Whiteboard"
+                                                        )
+                                                    e.setCurrentTool("draw")
+                                                    const defaultColor =
+                                                        role === "volunteer"
+                                                            ? "red"
+                                                            : "black"
+                                                    e.setStyleForNextShapes(
+                                                        DefaultColorStyle,
+                                                        defaultColor
+                                                    )
+                                                    e.setStyleForNextShapes(
+                                                        DefaultSizeStyle,
+                                                        "l"
+                                                    )
+
+                                                    // Drain tool calls that arrived before the editor mounted
+                                                    if (
+                                                        pendingWhiteboardUpdates
+                                                            .current.length > 0
+                                                    ) {
+                                                        try {
+                                                            e.batch(() => {
+                                                                while (
+                                                                    pendingWhiteboardUpdates
+                                                                        .current
+                                                                        .length >
+                                                                    0
+                                                                ) {
+                                                                    const {
+                                                                        toolName:
+                                                                            tn,
+                                                                        args,
+                                                                    } =
+                                                                        pendingWhiteboardUpdates.current.shift()
+                                                                    if (
+                                                                        tn ===
+                                                                        "erase_whiteboard"
+                                                                    ) {
+                                                                        ;(
+                                                                            args.ids ||
+                                                                            []
+                                                                        ).forEach(
+                                                                            (
+                                                                                id: string
+                                                                            ) => {
+                                                                                try {
+                                                                                    const sid =
+                                                                                        wbSanitizeId(
+                                                                                            id
+                                                                                        )
+                                                                                    if (
+                                                                                        e.getShape(
+                                                                                            sid
+                                                                                        )
+                                                                                    )
+                                                                                        e.deleteShapes(
+                                                                                            [
+                                                                                                sid,
+                                                                                            ]
+                                                                                        )
+                                                                                } catch (err) {
+                                                                                    console.error(
+                                                                                        "[Whiteboard] pending erase failed:",
+                                                                                        id,
+                                                                                        err
+                                                                                    )
+                                                                                }
+                                                                            }
+                                                                        )
+                                                                    } else if (
+                                                                        tn ===
+                                                                        "draw_whiteboard"
+                                                                    ) {
+                                                                        ;(
+                                                                            args.shapes ||
+                                                                            []
+                                                                        )
+                                                                            .map(
+                                                                                wbValidateShape
+                                                                            )
+                                                                            .filter(
+                                                                                Boolean
+                                                                            )
+                                                                            .forEach(
+                                                                                (
+                                                                                    s: any
+                                                                                ) => {
+                                                                                    try {
+                                                                                        if (
+                                                                                            e.getShape(
+                                                                                                s.id
+                                                                                            )
+                                                                                        )
+                                                                                            e.updateShapes(
+                                                                                                [
+                                                                                                    s,
+                                                                                                ]
+                                                                                            )
+                                                                                        else
+                                                                                            e.createShapes(
+                                                                                                [
+                                                                                                    s,
+                                                                                                ]
+                                                                                            )
+                                                                                    } catch (err) {
+                                                                                        console.error(
+                                                                                            "[Whiteboard] pending draw failed:",
+                                                                                            s.id,
+                                                                                            err
+                                                                                        )
+                                                                                    }
+                                                                                }
+                                                                            )
+                                                                    } else if (
+                                                                        tn ===
+                                                                        "edit_whiteboard"
+                                                                    ) {
+                                                                        ;(
+                                                                            args.patches ||
+                                                                            []
+                                                                        )
+                                                                            .filter(
+                                                                                (
+                                                                                    s: any
+                                                                                ) =>
+                                                                                    s?.id
+                                                                            )
+                                                                            .map(
+                                                                                wbApplyToPatch
+                                                                            )
+                                                                            .forEach(
+                                                                                (
+                                                                                    s: any
+                                                                                ) => {
+                                                                                    try {
+                                                                                        if (
+                                                                                            e.getShape(
+                                                                                                s.id
+                                                                                            )
+                                                                                        )
+                                                                                            e.updateShapes(
+                                                                                                [
+                                                                                                    s,
+                                                                                                ]
+                                                                                            )
+                                                                                    } catch (err) {
+                                                                                        console.error(
+                                                                                            "[Whiteboard] pending patch failed:",
+                                                                                            s.id,
+                                                                                            err
+                                                                                        )
+                                                                                    }
+                                                                                }
+                                                                            )
+                                                                        ;(
+                                                                            args.remove ||
+                                                                            []
+                                                                        ).forEach(
+                                                                            (
+                                                                                id: string
+                                                                            ) => {
+                                                                                try {
+                                                                                    const sid =
+                                                                                        wbSanitizeId(
+                                                                                            id
+                                                                                        )
+                                                                                    if (
+                                                                                        e.getShape(
+                                                                                            sid
+                                                                                        )
+                                                                                    )
+                                                                                        e.deleteShapes(
+                                                                                            [
+                                                                                                sid,
+                                                                                            ]
+                                                                                        )
+                                                                                } catch (err) {
+                                                                                    console.error(
+                                                                                        "[Whiteboard] pending remove failed:",
+                                                                                        id,
+                                                                                        err
+                                                                                    )
+                                                                                }
+                                                                            }
+                                                                        )
+                                                                    }
+                                                                }
+                                                            })
+                                                        } catch (err) {
+                                                            console.error(
+                                                                "[Whiteboard] Failed to drain pending updates",
+                                                                err
+                                                            )
+                                                        }
+                                                    }
+
+                                                    if (
+                                                        isWhiteboardOpenRef.current &&
+                                                        dataConnectionsRef
+                                                            .current.size > 0
+                                                    ) {
+                                                        const snapshot =
+                                                            e.store.getSnapshot()
+                                                        broadcastData({
+                                                            type: "tldraw-snapshot",
+                                                            payload: snapshot,
+                                                        })
+                                                    }
+                                                }}
+                                            />
+                                        </div>
+                                        {Array.from(
+                                            remoteCursors.entries()
+                                        ).map(([peerId, cursor]) => (
+                                            <LiveCursor
+                                                key={peerId}
+                                                x={cursor.x}
+                                                y={cursor.y}
+                                                color={cursor.color}
+                                                editor={editor}
+                                                containerRef={
+                                                    whiteboardContainerRef
+                                                }
+                                                themeColors={themeColors}
+                                            />
+                                        ))}
+                                    </div>
                                 )}
-                            </div>
-                        )}
-                </div>
-                {isMobileLayout && isWhiteboardOpen && (
-                    <div
-                        ref={mobileInputRef}
-                        style={{
-                            flexShrink: 0,
-                            paddingBottom: "env(safe-area-inset-bottom)",
-                            display: "flex",
-                            justifyContent: "center",
-                        }}
-                    >
-                        <ChatInput
-                            showAddPeopleOverlay={
-                                showAddPeopleOverlay &&
-                                !(isMobileLayout && isAgentOpen)
-                            }
-                            setShowAddPeopleOverlay={setShowAddPeopleOverlay}
-                            hideGradient={true}
-                            value={inputText}
-                            onChange={(e) => {
-                                const newValue = sanitizeMessage(e.target.value)
-                                inputTextRef.current = newValue
-                                setInputText(newValue)
-                                if (dataConnectionsRef.current.size > 0) {
-                                    const now = Date.now()
-                                    const interval = 50
-                                    const timeSinceLastSend =
-                                        now - lastInputSendTimeRef.current
-                                    if (inputTimeoutRef.current)
-                                        clearTimeout(inputTimeoutRef.current)
-                                    const broadcast = () => {
-                                        broadcastData({
-                                            type: "input-sync",
-                                            payload: {
-                                                text: inputTextRef.current,
-                                                html: inputHtmlRef.current,
-                                                skills: selectedSkillsRef.current,
-                                                seq: Date.now(),
-                                                cursorOffset: inputCursorRef.current,
-                                            },
-                                        })
-                                        lastInputSendTimeRef.current = Date.now()
+                        </div>
+                        {isMobileLayout && isWhiteboardOpen && (
+                            <div
+                                ref={mobileInputRef}
+                                style={{
+                                    flexShrink: 0,
+                                    paddingBottom:
+                                        "env(safe-area-inset-bottom)",
+                                    display: "flex",
+                                    justifyContent: "center",
+                                }}
+                            >
+                                <ChatInput
+                                    showAddPeopleOverlay={
+                                        showAddPeopleOverlay &&
+                                        !(isMobileLayout && isAgentOpen)
                                     }
-                                    if (timeSinceLastSend > interval) {
-                                        broadcast()
-                                    } else {
-                                        inputTimeoutRef.current = setTimeout(
-                                            broadcast,
-                                            interval - timeSinceLastSend
+                                    setShowAddPeopleOverlay={
+                                        setShowAddPeopleOverlay
+                                    }
+                                    hideGradient={true}
+                                    value={inputText}
+                                    onChange={(e) => {
+                                        const newValue = sanitizeMessage(
+                                            e.target.value
+                                        )
+                                        inputTextRef.current = newValue
+                                        setInputText(newValue)
+                                        if (
+                                            dataConnectionsRef.current.size > 0
+                                        ) {
+                                            const now = Date.now()
+                                            const interval = 50
+                                            const timeSinceLastSend =
+                                                now -
+                                                lastInputSendTimeRef.current
+                                            if (inputTimeoutRef.current)
+                                                clearTimeout(
+                                                    inputTimeoutRef.current
+                                                )
+                                            const broadcast = () => {
+                                                broadcastData({
+                                                    type: "input-sync",
+                                                    payload: {
+                                                        text: inputTextRef.current,
+                                                        html: inputHtmlRef.current,
+                                                        skills: selectedSkillsRef.current,
+                                                        seq: Date.now(),
+                                                        cursorOffset:
+                                                            inputCursorRef.current,
+                                                    },
+                                                })
+                                                lastInputSendTimeRef.current =
+                                                    Date.now()
+                                            }
+                                            if (timeSinceLastSend > interval) {
+                                                broadcast()
+                                            } else {
+                                                inputTimeoutRef.current =
+                                                    setTimeout(
+                                                        broadcast,
+                                                        interval -
+                                                            timeSinceLastSend
+                                                    )
+                                            }
+                                        }
+                                    }}
+                                    onHtmlChange={(html) => {
+                                        inputHtmlRef.current = html
+                                    }}
+                                    onCursorChange={(offset) => {
+                                        inputCursorRef.current = offset
+                                    }}
+                                    peerSync={peerSyncState}
+                                    onSend={(chip) => {
+                                        activeAgentChipRef.current =
+                                            chip ?? null
+                                        handleSendMessage()
+                                    }}
+                                    onConnectWithAI={handleConnectWithAI}
+                                    onStop={handleStop}
+                                    onEndCall={() => cleanup(true)}
+                                    onFileSelect={handleFileSelect}
+                                    onScreenShare={toggleScreenShare}
+                                    onReport={handleReport}
+                                    placeholder="Ask anything"
+                                    showEndCall={status !== "idle"}
+                                    showAiLiveButton={
+                                        status === "searching" &&
+                                        role === "student"
+                                    }
+                                    attachments={attachments}
+                                    onRemoveAttachment={handleRemoveAttachment}
+                                    isLoading={isLoading}
+                                    isScreenSharing={isScreenSharing}
+                                    isWhiteboardOpen={isWhiteboardOpen}
+                                    toggleWhiteboard={toggleWhiteboard}
+                                    isDocOpen={isDocOpen}
+                                    toggleDoc={toggleDoc}
+                                    isAppOpen={isAppOpen}
+                                    toggleApp={toggleApp}
+                                    isJobOpen={isJobOpen}
+                                    isConnected={
+                                        status === "connected" && !isLiveMode
+                                    }
+                                    status={status}
+                                    isMobileLayout={isMobileLayout}
+                                    isLiveMode={isLiveMode}
+                                    onPasteFile={processFiles}
+                                    themeColors={themeColors}
+                                    role={role}
+                                    hasMessages={messages.length > 0}
+                                    onClearMessages={handleClearMessages}
+                                    skillsApiUrl={skillsApiUrl}
+                                    selectedSkills={selectedSkills}
+                                    onSelectSkill={(skill) =>
+                                        setSelectedSkills((prev) =>
+                                            prev.some((s) => s.id === skill.id)
+                                                ? prev
+                                                : [...prev, skill]
                                         )
                                     }
-                                }
-                            }}
-                            onHtmlChange={(html) => {
-                                inputHtmlRef.current = html
-                            }}
-                            onCursorChange={(offset) => {
-                                inputCursorRef.current = offset
-                            }}
-                            peerSync={peerSyncState}
-                            onSend={(chip) => { activeAgentChipRef.current = chip ?? null; handleSendMessage() }}
-                            onConnectWithAI={handleConnectWithAI}
-                            onStop={handleStop}
-                            onEndCall={() => cleanup(true)}
-                            onFileSelect={handleFileSelect}
-                            onScreenShare={toggleScreenShare}
-                            onReport={handleReport}
-                            placeholder="Ask anything"
-                            showEndCall={status !== "idle"}
-                            showAiLiveButton={
-                                status === "searching" && role === "student"
-                            }
-                            attachments={attachments}
-                            onRemoveAttachment={handleRemoveAttachment}
-                            isLoading={isLoading}
-                            isScreenSharing={isScreenSharing}
-                            isWhiteboardOpen={isWhiteboardOpen}
-                            toggleWhiteboard={toggleWhiteboard}
-                            isDocOpen={isDocOpen}
-                            toggleDoc={toggleDoc}
-                            isAppOpen={isAppOpen}
-                            toggleApp={toggleApp}
-                            isJobOpen={isJobOpen}
-                            isConnected={status === "connected" && !isLiveMode}
-                            status={status}
-                            isMobileLayout={isMobileLayout}
-                            isLiveMode={isLiveMode}
-                            onPasteFile={processFiles}
-                            themeColors={themeColors}
-                            role={role}
-                            hasMessages={messages.length > 0}
-                            onClearMessages={handleClearMessages}
-                            skillsApiUrl={skillsApiUrl}
-                            selectedSkills={selectedSkills}
-                            onSelectSkill={(skill) =>
-                                setSelectedSkills((prev) =>
-                                    prev.some((s) => s.id === skill.id)
-                                        ? prev
-                                        : [...prev, skill]
-                                )
-                            }
-                            onRemoveSkill={(id) =>
-                                setSelectedSkills((prev) =>
-                                    prev.filter((s) => s.id !== id)
-                                )
-                            }
-                            rootStyle={{ maxWidth: 816 }}
-                            overlayToolComposer
-                            initialAgentChip="whiteboard"
-                        />
+                                    onRemoveSkill={(id) =>
+                                        setSelectedSkills((prev) =>
+                                            prev.filter((s) => s.id !== id)
+                                        )
+                                    }
+                                    rootStyle={{ maxWidth: 816 }}
+                                    overlayToolComposer
+                                    initialAgentChip="whiteboard"
+                                />
+                            </div>
+                        )}
                     </div>
-                )}
-            </div>
-            </div>
-            {mobileOverlayInput}
+                </div>
+                {mobileOverlayInput}
             </div>
         )
     }
@@ -28567,10 +30098,15 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         idx === lastWhiteboardCallIdx
                                     }
                                     showAppButton={idx === lastAppCallIdx}
-                                    docCallType={idx === lastDocCallIdx ? lastDocCallType : undefined}
+                                    docCallType={
+                                        idx === lastDocCallIdx
+                                            ? lastDocCallType
+                                            : undefined
+                                    }
                                     onToggleDoc={() => {
                                         setIsDocOpen((prev) => {
-                                            if (!prev) setDocType(lastDocCallType)
+                                            if (!prev)
+                                                setDocType(lastDocCallType)
                                             return !prev
                                         })
                                     }}
@@ -28586,6 +30122,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             jobSnippetToHomepageJob(job)
                                         )
                                     }
+                                    onJobChipClick={(jobId) => {
+                                        // jobCycleDeck already covers homepage jobs, message job cards, and extras
+                                        const fromDeck = jobCycleDeck.find((j) => j.id === jobId)
+                                        if (fromDeck) { openJobDetail(fromDeck); return }
+                                        // Chip store covers jobs that were only ever opened directly (survives reload)
+                                        const stored = readJobChipStore()[jobId]
+                                        if (stored) openJobDetail(stored)
+                                    }}
                                 />
                                 {shouldShowAd && (
                                     <AdCarousel
@@ -28733,7 +30277,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             inputCursorRef.current = offset
                         }}
                         peerSync={peerSyncState}
-                        onSend={(chip) => { activeAgentChipRef.current = chip ?? null; handleSendMessage() }}
+                        onSend={(chip) => {
+                            activeAgentChipRef.current = chip ?? null
+                            handleSendMessage()
+                        }}
                         onConnectWithAI={handleConnectWithAI}
                         onStop={handleStop}
                         onEndCall={() => cleanup(true)}
@@ -29270,9 +30817,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 initial={false}
                                 animate={{
                                     flex: "0 0 auto",
-                                    width: isContentCompact
-                                        ? "auto"
-                                        : fitWidth,
+                                    width: isContentCompact ? "auto" : fitWidth,
                                     height: isContentCompact
                                         ? isSidebarOrMobile
                                             ? "auto"
@@ -29281,9 +30826,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     borderRadius: isContentCompact
                                         ? 24
                                         : fitHeight <
-                                              (isSidebarOrMobile ? 164 : 224)
-                                              ? 28
-                                              : 36,
+                                            (isSidebarOrMobile ? 164 : 224)
+                                          ? 28
+                                          : 36,
                                 }}
                                 // @ts-ignore
                                 transition={{
@@ -29304,8 +30849,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     aspectRatio: targetRatio,
                                     minWidth: 0,
                                     flexShrink:
-                                        isContentCompact &&
-                                        !isSidebarOrMobile
+                                        isContentCompact && !isSidebarOrMobile
                                             ? 0
                                             : 1,
                                 }}
@@ -31426,137 +32970,134 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 }}
                 aria-label="Your profile settings"
             >
-                            {/* Floating gradient header — position:absolute over the scroll body */}
-                            <div
-                                data-layer="settings header"
-                                className="SettingsHeader"
-                                style={{
-                                    position: "absolute",
-                                    top: 0,
-                                    left: 0,
-                                    right: 0,
-                                    padding: isMobileLayout ? 16 : 28,
-                                    paddingBottom: 32,
-                                    background: `linear-gradient(180deg, ${themeColors.background} 72%, transparent 100%)`,
-                                    flexDirection: "column",
-                                    justifyContent: "center",
-                                    alignItems: "flex-start",
-                                    gap: 8,
-                                    display: "flex",
-                                    zIndex: 2,
-                                    pointerEvents: "none",
-                                }}
-                            >
-                                <h2
-                                    id="settings-title"
-                                    data-layer="Your profile"
-                                    className="YourProfile"
-                                    style={{
-                                        margin: 0,
-                                        padding: 0,
-                                        alignSelf: "stretch",
-                                        color: themeColors.text.primary,
-                                        fontSize: 16,
-                                        fontFamily: "Inter",
-                                        fontWeight: "400",
-                                        lineHeight: "16px",
-                                        wordWrap: "break-word",
-                                    }}
-                                >
-                                    Your profile
-                                </h2>
-                                <div
-                                    data-layer="Share information about yourself to make jobs more relevant and personal."
-                                    className="ShareInformationAboutYourselfToMakeJobsMoreRelevantAndPersonal"
-                                    style={{
-                                        alignSelf: "stretch",
-                                        justifyContent: "center",
-                                        display: "flex",
-                                        flexDirection: "column",
-                                        color: themeColors.text.secondary,
-                                        fontSize: 12,
-                                        fontFamily: "Inter",
-                                        fontWeight: "400",
-                                        lineHeight: "16.8px",
-                                        wordWrap: "break-word",
-                                    }}
-                                >
-                                    Share information about yourself to make jobs more relevant and personal.
-                                </div>
-                                {/* Close button — re-enable pointer events since parent is none */}
-                                <div
-                                    data-svg-wrapper
-                                    data-layer="close settings button (has a fill hover effect)"
-                                    className="CloseSettingsButtonHasAFillHoverEffect"
-                                    aria-label="Close settings"
-                                    style={{
-                                        position: "absolute",
-                                        top: 14,
-                                        right: isMobileLayout ? 8 : 16,
-                                        cursor: "pointer",
-                                        width: 36,
-                                        height: 36,
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                        background: isSettingsCloseHovered
-                                            ? themeColors.hover.strong
-                                            : "transparent",
-                                        borderRadius: "50%",
-                                        transition: "background 0.2s",
-                                        pointerEvents: "auto",
-                                    }}
-                                    onClick={() => setShowYouSettings(false)}
-                                    onMouseEnter={() =>
-                                        !isMobileLayout &&
-                                        setIsSettingsCloseHovered(true)
-                                    }
-                                    onMouseLeave={() =>
-                                        setIsSettingsCloseHovered(false)
-                                    }
-                                >
-                                    <svg
-                                        width="36"
-                                        height="36"
-                                        viewBox="0 0 36 36"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        aria-hidden="true"
-                                    >
-                                        <path
-                                            d="M23.25 12.75L12.75 23.25M12.75 12.75L23.25 23.25"
-                                            stroke={themeColors.text.primary}
-                                            strokeOpacity="0.95"
-                                            strokeWidth="1.2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    </svg>
-                                </div>
-                            </div>
+                {/* Floating gradient header — position:absolute over the scroll body */}
+                <div
+                    data-layer="settings header"
+                    className="SettingsHeader"
+                    style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        padding: isMobileLayout ? 16 : 28,
+                        paddingBottom: 32,
+                        background: `linear-gradient(180deg, ${themeColors.background} 72%, transparent 100%)`,
+                        flexDirection: "column",
+                        justifyContent: "center",
+                        alignItems: "flex-start",
+                        gap: 8,
+                        display: "flex",
+                        zIndex: 2,
+                        pointerEvents: "none",
+                    }}
+                >
+                    <h2
+                        id="settings-title"
+                        data-layer="Your profile"
+                        className="YourProfile"
+                        style={{
+                            margin: 0,
+                            padding: 0,
+                            alignSelf: "stretch",
+                            color: themeColors.text.primary,
+                            fontSize: 16,
+                            fontFamily: "Inter",
+                            fontWeight: "400",
+                            lineHeight: "16px",
+                            wordWrap: "break-word",
+                        }}
+                    >
+                        Your profile
+                    </h2>
+                    <div
+                        data-layer="Share information about yourself to make jobs more relevant and personal."
+                        className="ShareInformationAboutYourselfToMakeJobsMoreRelevantAndPersonal"
+                        style={{
+                            alignSelf: "stretch",
+                            justifyContent: "center",
+                            display: "flex",
+                            flexDirection: "column",
+                            color: themeColors.text.secondary,
+                            fontSize: 12,
+                            fontFamily: "Inter",
+                            fontWeight: "400",
+                            lineHeight: "16.8px",
+                            wordWrap: "break-word",
+                        }}
+                    >
+                        Share information about yourself to make jobs more
+                        relevant and personal.
+                    </div>
+                    {/* Close button — re-enable pointer events since parent is none */}
+                    <div
+                        data-svg-wrapper
+                        data-layer="close settings button (has a fill hover effect)"
+                        className="CloseSettingsButtonHasAFillHoverEffect"
+                        aria-label="Close settings"
+                        style={{
+                            position: "absolute",
+                            top: 14,
+                            right: isMobileLayout ? 8 : 16,
+                            cursor: "pointer",
+                            width: 36,
+                            height: 36,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            background: isSettingsCloseHovered
+                                ? themeColors.hover.strong
+                                : "transparent",
+                            borderRadius: "50%",
+                            transition: "background 0.2s",
+                            pointerEvents: "auto",
+                        }}
+                        onClick={() => setShowYouSettings(false)}
+                        onMouseEnter={() =>
+                            !isMobileLayout && setIsSettingsCloseHovered(true)
+                        }
+                        onMouseLeave={() => setIsSettingsCloseHovered(false)}
+                    >
+                        <svg
+                            width="36"
+                            height="36"
+                            viewBox="0 0 36 36"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                            aria-hidden="true"
+                        >
+                            <path
+                                d="M23.25 12.75L12.75 23.25M12.75 12.75L23.25 23.25"
+                                stroke={themeColors.text.primary}
+                                strokeOpacity="0.95"
+                                strokeWidth="1.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        </svg>
+                    </div>
+                </div>
 
-                            {/* Vertically scrollable inner wrapper — paddingTop accounts for floating header */}
-                            <div
-                                className="SettingsScrollBody"
-                                {...(isMobileLayout ? { "data-pull-scroll": "1" } : {})}
-                                style={{
-                                    width: "100%",
-                                    flex: "1 1 0",
-                                    overflowY: "auto",
-                                    overflowX: "hidden",
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    gap: 24,
-                                    paddingTop: 112,
-                                    paddingBottom: 28,
-                                    paddingLeft: isMobileLayout ? 16 : 28,
-                                    paddingRight: isMobileLayout ? 16 : 28,
-                                    boxSizing: "border-box",
-                                }}
-                            >
-
-                            {/* Inputs */}
-                            <style>{`
+                {/* Vertically scrollable inner wrapper — paddingTop accounts for floating header */}
+                <div
+                    className="SettingsScrollBody"
+                    {...(isMobileLayout ? { "data-pull-scroll": "1" } : {})}
+                    style={{
+                        width: "100%",
+                        flex: "1 1 0",
+                        overflowY: "auto",
+                        overflowX: "hidden",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 24,
+                        paddingTop: 112,
+                        paddingBottom: 28,
+                        paddingLeft: isMobileLayout ? 16 : 28,
+                        paddingRight: isMobileLayout ? 16 : 28,
+                        boxSizing: "border-box",
+                    }}
+                >
+                    {/* Inputs */}
+                    <style>{`
                                 .SettingsInput::placeholder {
                                     color: ${themeColors.text.secondary};
                                 }
@@ -31577,192 +33118,346 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 }
                             `}</style>
 
-                            {/* Resume */}
+                    {/* Resume */}
+                    <div
+                        className="SettingsResumeSection"
+                        style={{
+                            alignSelf: "stretch",
+                            flexDirection: "column",
+                            gap: 8,
+                            display: "flex",
+                        }}
+                    >
+                        <div
+                            className="SettingsSectionLabel"
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: "400",
+                            }}
+                        >
+                            Resume
+                        </div>
+                        {resumeFile ? (
+                            // File saved — filename row with 3-dot menu
                             <div
-                                className="SettingsResumeSection"
+                                className="SettingsResumeRow"
                                 style={{
                                     alignSelf: "stretch",
-                                    flexDirection: "column",
-                                    gap: 8,
+                                    height: 44,
+                                    paddingLeft: 16,
+                                    paddingRight: 16,
+                                    background:
+                                        themeColors.background ===
+                                        lightColors.background
+                                            ? themeColors.background
+                                            : themeColors.surface,
+                                    border:
+                                        themeColors.background ===
+                                        lightColors.background
+                                            ? `0.33px solid ${themeColors.border.subtle}`
+                                            : "none",
+                                    overflow: "visible",
+                                    borderRadius: 28,
+                                    alignItems: "center",
+                                    gap: 16,
                                     display: "flex",
+                                    position: "relative",
                                 }}
                             >
-                                <div
-                                    className="SettingsSectionLabel"
+                                <span
+                                    className="SettingsResumeFileName"
                                     style={{
+                                        flex: "1 1 0",
                                         color: themeColors.text.primary,
                                         fontSize: 14,
                                         fontFamily: "Inter",
                                         fontWeight: "400",
+                                        lineHeight: "21px",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
                                     }}
                                 >
-                                    Resume
-                                </div>
-                                {resumeFile ? (
-                                    // File saved — filename row with 3-dot menu
-                                    <div
-                                        className="SettingsResumeRow"
-                                        style={{
-                                            alignSelf: "stretch",
-                                            height: 44,
-                                            paddingLeft: 16,
-                                            paddingRight: 16,
-                                            background: themeColors.background === lightColors.background ? themeColors.background : themeColors.surface,
-                                            border: themeColors.background === lightColors.background ? `0.33px solid ${themeColors.border.subtle}` : "none",
-                                            overflow: "visible",
-                                            borderRadius: 28,
-                                            alignItems: "center",
-                                            gap: 16,
-                                            display: "flex",
-                                            position: "relative",
-                                        }}
+                                    {resumeFile.name}
+                                </span>
+                                {/* 3-dot menu trigger — matches sidebar OpenActionsMenuButton */}
+                                <div
+                                    data-svg-wrapper
+                                    data-layer="open actions menu button"
+                                    className="OpenActionsMenuButton"
+                                    aria-label="Resume actions"
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        setResumeMenuOpen((v) => !v)
+                                        setHoveredResumeMenuItem(null)
+                                    }}
+                                    style={{
+                                        cursor: "pointer",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        flexShrink: 0,
+                                        padding: 4,
+                                        borderRadius: 8,
+                                    }}
+                                >
+                                    <svg
+                                        width="16"
+                                        height="24"
+                                        viewBox="0 0 16 24"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
                                     >
-                                        <span
-                                            className="SettingsResumeFileName"
-                                            style={{
-                                                flex: "1 1 0",
-                                                color: themeColors.text.primary,
-                                                fontSize: 14,
-                                                fontFamily: "Inter",
-                                                fontWeight: "400",
-                                                lineHeight: "21px",
-                                                overflow: "hidden",
-                                                textOverflow: "ellipsis",
-                                                whiteSpace: "nowrap",
-                                            }}
-                                        >
-                                            {resumeFile.name}
-                                        </span>
-                                        {/* 3-dot menu trigger — matches sidebar OpenActionsMenuButton */}
+                                        <path
+                                            d="M13.498 10.5016C14.3254 10.5016 14.9959 11.1723 14.9961 11.9996C14.9961 12.8271 14.3256 13.4987 13.498 13.4987C12.6705 13.4987 12 12.8271 12 11.9996C12.0002 11.1723 12.6706 10.5016 13.498 10.5016Z"
+                                            fill={themeColors.text.primary}
+                                            fillOpacity="0.95"
+                                        />
+                                        <path
+                                            d="M2.49805 10.5016C3.32544 10.5016 3.99689 11.1723 3.99707 11.9996C3.99707 12.8271 3.32555 13.4987 2.49805 13.4987C1.67069 13.4985 1 12.827 1 11.9996C1.00018 11.1724 1.6708 10.5018 2.49805 10.5016Z"
+                                            fill={themeColors.text.primary}
+                                            fillOpacity="0.95"
+                                        />
+                                        <path
+                                            d="M8.0003 10.5016C8.8276 10.5018 9.4982 11.1724 9.4984 11.9996C9.4984 12.827 8.8277 13.4985 8.0003 13.4987C7.17283 13.4987 6.50131 12.8271 6.50131 11.9996C6.50149 11.1723 7.17294 10.5016 8.0003 10.5016Z"
+                                            fill={themeColors.text.primary}
+                                            fillOpacity="0.95"
+                                        />
+                                    </svg>
+                                </div>
+                                {/* Dropdown menu */}
+                                {resumeMenuOpen && (
+                                    <>
+                                        {/* Fixed backdrop — same zIndex pattern as ChatActionsMenu */}
                                         <div
-                                            data-svg-wrapper
-                                            data-layer="open actions menu button"
-                                            className="OpenActionsMenuButton"
-                                            aria-label="Resume actions"
-                                            onClick={(e) => {
-                                                e.stopPropagation()
-                                                setResumeMenuOpen(v => !v)
+                                            style={{
+                                                position: "fixed",
+                                                inset: 0,
+                                                zIndex: 30001,
+                                            }}
+                                            onClick={() => {
+                                                setResumeMenuOpen(false)
                                                 setHoveredResumeMenuItem(null)
                                             }}
+                                        />
+                                        <div
+                                            data-layer="chat actions"
+                                            className="SettingsResumeMenu"
+                                            onMouseLeave={() =>
+                                                setHoveredResumeMenuItem(null)
+                                            }
                                             style={{
-                                                cursor: "pointer",
+                                                position: "absolute",
+                                                top: "calc(100% + 6px)",
+                                                right: 0,
+                                                zIndex: 30002,
+                                                width: 196,
+                                                padding: 10,
+                                                background:
+                                                    themeColors.surfaceMenu,
+                                                boxShadow:
+                                                    "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                                borderRadius: 28,
+                                                outline: `0.1px ${themeColors.border.subtle} solid`,
+                                                outlineOffset: -0.1,
                                                 display: "flex",
-                                                alignItems: "center",
-                                                flexShrink: 0,
-                                                padding: 4,
-                                                borderRadius: 8,
+                                                flexDirection: "column",
+                                                gap: 4,
                                             }}
                                         >
-                                            <svg width="16" height="24" viewBox="0 0 16 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                <path d="M13.498 10.5016C14.3254 10.5016 14.9959 11.1723 14.9961 11.9996C14.9961 12.8271 14.3256 13.4987 13.498 13.4987C12.6705 13.4987 12 12.8271 12 11.9996C12.0002 11.1723 12.6706 10.5016 13.498 10.5016Z" fill={themeColors.text.primary} fillOpacity="0.95"/>
-                                                <path d="M2.49805 10.5016C3.32544 10.5016 3.99689 11.1723 3.99707 11.9996C3.99707 12.8271 3.32555 13.4987 2.49805 13.4987C1.67069 13.4985 1 12.827 1 11.9996C1.00018 11.1724 1.6708 10.5018 2.49805 10.5016Z" fill={themeColors.text.primary} fillOpacity="0.95"/>
-                                                <path d="M8.0003 10.5016C8.8276 10.5018 9.4982 11.1724 9.4984 11.9996C9.4984 12.827 8.8277 13.4985 8.0003 13.4987C7.17283 13.4987 6.50131 12.8271 6.50131 11.9996C6.50149 11.1723 7.17294 10.5016 8.0003 10.5016Z" fill={themeColors.text.primary} fillOpacity="0.95"/>
-                                            </svg>
-                                        </div>
-                                        {/* Dropdown menu */}
-                                        {resumeMenuOpen && (
-                                            <>
-                                                {/* Fixed backdrop — same zIndex pattern as ChatActionsMenu */}
+                                            {/* Upload date — matches "Save as" label in doc editor download menu */}
+                                            <div
+                                                style={{
+                                                    padding: "4px 12px",
+                                                    color: themeColors.text
+                                                        .secondary,
+                                                    fontSize: 12,
+                                                    fontFamily: "Inter",
+                                                    fontWeight: "500",
+                                                    lineHeight: "16px",
+                                                }}
+                                            >
+                                                {new Date(
+                                                    resumeFile.savedAt
+                                                ).toLocaleDateString(
+                                                    undefined,
+                                                    {
+                                                        month: "long",
+                                                        day: "numeric",
+                                                        year: "numeric",
+                                                    }
+                                                )}
+                                            </div>
+                                            {/* Download */}
+                                            <div
+                                                onClick={handleResumeDownload}
+                                                onMouseEnter={() =>
+                                                    setHoveredResumeMenuItem(
+                                                        "download"
+                                                    )
+                                                }
+                                                style={{
+                                                    ...styles.menuItem,
+                                                    ...(hoveredResumeMenuItem ===
+                                                    "download"
+                                                        ? styles.menuItemHover
+                                                        : {}),
+                                                }}
+                                            >
                                                 <div
                                                     style={{
-                                                        position: "fixed",
-                                                        inset: 0,
-                                                        zIndex: 30001,
-                                                    }}
-                                                    onClick={() => {
-                                                        setResumeMenuOpen(false)
-                                                        setHoveredResumeMenuItem(null)
-                                                    }}
-                                                />
-                                                <div
-                                                    data-layer="chat actions"
-                                                    className="SettingsResumeMenu"
-                                                    onMouseLeave={() => setHoveredResumeMenuItem(null)}
-                                                    style={{
-                                                        position: "absolute",
-                                                        top: "calc(100% + 6px)",
-                                                        right: 0,
-                                                        zIndex: 30002,
-                                                        width: 196,
-                                                        padding: 10,
-                                                        background: themeColors.surfaceMenu,
-                                                        boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
-                                                        borderRadius: 28,
-                                                        outline: `0.1px ${themeColors.border.subtle} solid`,
-                                                        outlineOffset: -0.1,
+                                                        width: 15,
                                                         display: "flex",
-                                                        flexDirection: "column",
-                                                        gap: 4,
+                                                        justifyContent:
+                                                            "center",
                                                     }}
                                                 >
-                                                    {/* Upload date — matches "Save as" label in doc editor download menu */}
-                                                    <div
-                                                        style={{
-                                                            padding: "4px 12px",
-                                                            color: themeColors.text.secondary,
-                                                            fontSize: 12,
-                                                            fontFamily: "Inter",
-                                                            fontWeight: "500",
-                                                            lineHeight: "16px",
-                                                        }}
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 16 16"
+                                                        fill="none"
+                                                        xmlns="http://www.w3.org/2000/svg"
                                                     >
-                                                        {new Date(resumeFile.savedAt).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}
-                                                    </div>
-                                                    {/* Download */}
-                                                    <div
-                                                        onClick={handleResumeDownload}
-                                                        onMouseEnter={() => setHoveredResumeMenuItem("download")}
-                                                        style={{
-                                                            ...styles.menuItem,
-                                                            ...(hoveredResumeMenuItem === "download" ? styles.menuItemHover : {}),
-                                                        }}
-                                                    >
-                                                        <div style={{ width: 15, display: "flex", justifyContent: "center" }}>
-                                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                                <path d="M0.796875 11.3786V12.275C0.796875 12.9911 1.08134 13.6778 1.58769 14.1842C2.09403 14.6905 2.78079 14.975 3.49687 14.975H12.4969C13.213 14.975 13.8997 14.6905 14.4061 14.1842C14.9124 13.6778 15.1969 12.9911 15.1969 12.275V11.375M7.99687 1.02499V10.925M7.99687 10.925L11.1469 7.77499M7.99687 10.925L4.84687 7.77499" stroke={themeColors.text.primary} strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                                            </svg>
-                                                        </div>
-                                                        <div style={{ flex: "1 1 0", justifyContent: "center", display: "flex", flexDirection: "column", color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.32px", wordWrap: "break-word" }}>Download</div>
-                                                    </div>
-                                                    {/* Delete */}
-                                                    <div
-                                                        onClick={handleResumeDelete}
-                                                        onMouseEnter={() => setHoveredResumeMenuItem("delete")}
-                                                        style={{
-                                                            ...styles.menuItem,
-                                                            ...(hoveredResumeMenuItem === "delete" ? styles.menuItemDestructiveHover : {}),
-                                                        }}
-                                                    >
-                                                        <div style={{ width: 15, display: "flex", justifyContent: "center" }}>
-                                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                                <path d="M13.3359 4.33333L12.5893 11.7982C12.4764 12.9298 12.4204 13.4951 12.1626 13.9227C11.9365 14.299 11.604 14.6 11.207 14.7876C10.7564 15 10.1893 15 9.05149 15H6.95371C5.81683 15 5.24883 15 4.79816 14.7867C4.40087 14.5992 4.06804 14.2983 3.84172 13.9218C3.58572 13.4951 3.52883 12.9298 3.41505 11.7982L2.66927 4.33333M9.33594 11.3111V6.86667M6.66927 11.3111V6.86667M1.33594 4.11111H5.43816M5.43816 4.11111L5.78127 1.736C5.88083 1.304 6.23994 1 6.65238 1H9.35283C9.76527 1 10.1235 1.304 10.2239 1.736L10.567 4.11111M5.43816 4.11111H10.567M10.567 4.11111H14.6693" stroke={themeColors.destructive.light} strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                                            </svg>
-                                                        </div>
-                                                        <div style={{ flex: "1 1 0", justifyContent: "center", display: "flex", flexDirection: "column", color: themeColors.destructive.light, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "19.32px", wordWrap: "break-word" }}>Delete</div>
-                                                    </div>
+                                                        <path
+                                                            d="M0.796875 11.3786V12.275C0.796875 12.9911 1.08134 13.6778 1.58769 14.1842C2.09403 14.6905 2.78079 14.975 3.49687 14.975H12.4969C13.213 14.975 13.8997 14.6905 14.4061 14.1842C14.9124 13.6778 15.1969 12.9911 15.1969 12.275V11.375M7.99687 1.02499V10.925M7.99687 10.925L11.1469 7.77499M7.99687 10.925L4.84687 7.77499"
+                                                            stroke={
+                                                                themeColors.text
+                                                                    .primary
+                                                            }
+                                                            strokeOpacity="0.95"
+                                                            strokeWidth="1.2"
+                                                            strokeLinecap="round"
+                                                            strokeLinejoin="round"
+                                                        />
+                                                    </svg>
                                                 </div>
-                                            </>
-                                        )}
-                                    </div>
-                                ) : isProcessingResume ? (
-                                    // Processing state
-                                    <div
-                                        style={{
-                                            alignSelf: "stretch",
-                                            height: 44,
-                                            paddingLeft: 16,
-                                            paddingRight: 16,
-                                            background: themeColors.background === lightColors.background ? themeColors.background : themeColors.surface,
-                                            border: themeColors.background === lightColors.background ? `0.33px solid ${themeColors.border.subtle}` : "none",
-                                            borderRadius: 28,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: 8,
-                                            opacity: 0.6,
-                                        }}
-                                    >
-                                        <span style={{ flex: "1 1 0", color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "21px" }}>Analyzing resume…</span>
-                                        <style>{`
+                                                <div
+                                                    style={{
+                                                        flex: "1 1 0",
+                                                        justifyContent:
+                                                            "center",
+                                                        display: "flex",
+                                                        flexDirection: "column",
+                                                        color: themeColors.text
+                                                            .primary,
+                                                        fontSize: 14,
+                                                        fontFamily: "Inter",
+                                                        fontWeight: "400",
+                                                        lineHeight: "19.32px",
+                                                        wordWrap: "break-word",
+                                                    }}
+                                                >
+                                                    Download
+                                                </div>
+                                            </div>
+                                            {/* Delete */}
+                                            <div
+                                                onClick={handleResumeDelete}
+                                                onMouseEnter={() =>
+                                                    setHoveredResumeMenuItem(
+                                                        "delete"
+                                                    )
+                                                }
+                                                style={{
+                                                    ...styles.menuItem,
+                                                    ...(hoveredResumeMenuItem ===
+                                                    "delete"
+                                                        ? styles.menuItemDestructiveHover
+                                                        : {}),
+                                                }}
+                                            >
+                                                <div
+                                                    style={{
+                                                        width: 15,
+                                                        display: "flex",
+                                                        justifyContent:
+                                                            "center",
+                                                    }}
+                                                >
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 16 16"
+                                                        fill="none"
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                    >
+                                                        <path
+                                                            d="M13.3359 4.33333L12.5893 11.7982C12.4764 12.9298 12.4204 13.4951 12.1626 13.9227C11.9365 14.299 11.604 14.6 11.207 14.7876C10.7564 15 10.1893 15 9.05149 15H6.95371C5.81683 15 5.24883 15 4.79816 14.7867C4.40087 14.5992 4.06804 14.2983 3.84172 13.9218C3.58572 13.4951 3.52883 12.9298 3.41505 11.7982L2.66927 4.33333M9.33594 11.3111V6.86667M6.66927 11.3111V6.86667M1.33594 4.11111H5.43816M5.43816 4.11111L5.78127 1.736C5.88083 1.304 6.23994 1 6.65238 1H9.35283C9.76527 1 10.1235 1.304 10.2239 1.736L10.567 4.11111M5.43816 4.11111H10.567M10.567 4.11111H14.6693"
+                                                            stroke={
+                                                                themeColors
+                                                                    .destructive
+                                                                    .light
+                                                            }
+                                                            strokeOpacity="0.95"
+                                                            strokeWidth="1.2"
+                                                            strokeLinecap="round"
+                                                            strokeLinejoin="round"
+                                                        />
+                                                    </svg>
+                                                </div>
+                                                <div
+                                                    style={{
+                                                        flex: "1 1 0",
+                                                        justifyContent:
+                                                            "center",
+                                                        display: "flex",
+                                                        flexDirection: "column",
+                                                        color: themeColors
+                                                            .destructive.light,
+                                                        fontSize: 14,
+                                                        fontFamily: "Inter",
+                                                        fontWeight: "400",
+                                                        lineHeight: "19.32px",
+                                                        wordWrap: "break-word",
+                                                    }}
+                                                >
+                                                    Delete
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        ) : isProcessingResume ? (
+                            // Processing state
+                            <div
+                                style={{
+                                    alignSelf: "stretch",
+                                    height: 44,
+                                    paddingLeft: 16,
+                                    paddingRight: 16,
+                                    background:
+                                        themeColors.background ===
+                                        lightColors.background
+                                            ? themeColors.background
+                                            : themeColors.surface,
+                                    border:
+                                        themeColors.background ===
+                                        lightColors.background
+                                            ? `0.33px solid ${themeColors.border.subtle}`
+                                            : "none",
+                                    borderRadius: 28,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    opacity: 0.6,
+                                }}
+                            >
+                                <span
+                                    style={{
+                                        flex: "1 1 0",
+                                        color: themeColors.text.primary,
+                                        fontSize: 14,
+                                        fontFamily: "Inter",
+                                        fontWeight: "400",
+                                        lineHeight: "21px",
+                                    }}
+                                >
+                                    Analyzing resume…
+                                </span>
+                                <style>{`
                                             @keyframes resumeSpinnerPulse {
                                                 0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
                                                 40% { opacity: 1; transform: scale(1); }
@@ -31771,394 +33466,513 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             .ResumeSpinnerDot:nth-child(2) { animation-delay: 0.2s; }
                                             .ResumeSpinnerDot:nth-child(3) { animation-delay: 0.4s; }
                                         `}</style>
-                                        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                                            <div className="ResumeSpinnerDot" />
-                                            <div className="ResumeSpinnerDot" />
-                                            <div className="ResumeSpinnerDot" />
-                                        </div>
-                                    </div>
-                                ) : (
-                                    // Upload button
-                                    <div
-                                        className="SettingsResumeUploadBtn"
-                                        onClick={() => resumeFileInputRef.current?.click()}
-                                        style={{
-                                            ...styles.menuItem,
-                                            height: 44,
-                                            paddingLeft: 16,
-                                            paddingRight: 16,
-                                            background: themeColors.background === lightColors.background ? themeColors.background : themeColors.surface,
-                                            border: themeColors.background === lightColors.background ? `0.33px solid ${themeColors.border.subtle}` : "none",
-                                            borderRadius: 28,
-                                            gap: 8,
-                                        }}
-                                    >
-                                        <span style={{ flex: "1 1 0", color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: "400", lineHeight: "21px" }}>Upload resume</span>
-                                        <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M0.601562 10.2485V11.0839C0.601562 11.7512 0.866654 12.3912 1.33852 12.863C1.81039 13.3349 2.45037 13.6 3.11769 13.6H11.5048C12.1721 13.6 12.8121 13.3349 13.284 12.863C13.7558 12.3912 14.0209 11.7512 14.0209 11.0839V10.2452M7.31705 9.82581L7.30542 0.60001M7.30542 0.60001L4.37364 3.53919M7.30542 0.60001L10.2446 3.53179" stroke={themeColors.text.primary} strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        </svg>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Name */}
-                            <div
-                                className="Flexbox"
-                                style={{
-                                    alignSelf: "stretch",
-                                    flexDirection: "column",
-                                    gap: 8,
-                                    display: "flex",
-                                }}
-                            >
-                                <div
-                                    className="Name"
-                                    style={{
-                                        color: "${themeColors.text.primary}",
-                                        fontSize: 14,
-                                        fontFamily: "Inter",
-                                        fontWeight: "400",
-                                    }}
-                                >
-                                    Name
-                                </div>
                                 <div
                                     style={{
-                                        alignSelf: "stretch",
-                                        height: 44,
-                                        padding: "0 16px",
-                                        background:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? themeColors.background
-                                                : themeColors.surface,
-                                        border:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? `0.33px solid ${themeColors.border.subtle}`
-                                                : "none",
-                                        borderRadius: 28,
                                         display: "flex",
+                                        gap: 4,
                                         alignItems: "center",
                                     }}
                                 >
-                                    <input
-                                        className="SettingsInput"
-                                        type="text"
-                                        aria-label="Your name or nickname"
-                                        placeholder="Add a nickname"
-                                        value={youName}
-                                        {...makeUndoHandlers(() => youName, setYouName, nameUndoStack, nameRedoStack)}
-                                        style={{
-                                            width: "100%",
-                                            background: "transparent",
-                                            border: "none",
-                                            color: themeColors.text.primary,
-                                            fontSize: 14,
-                                            outline: "none",
-                                            fontFamily: "Inter",
-                                        }}
-                                    />
+                                    <div className="ResumeSpinnerDot" />
+                                    <div className="ResumeSpinnerDot" />
+                                    <div className="ResumeSpinnerDot" />
                                 </div>
                             </div>
-
-                            {/* Job title */}
+                        ) : (
+                            // Upload button
                             <div
-                                className="Flexbox"
+                                className="SettingsResumeUploadBtn"
+                                onClick={() =>
+                                    resumeFileInputRef.current?.click()
+                                }
                                 style={{
-                                    alignSelf: "stretch",
-                                    flexDirection: "column",
+                                    ...styles.menuItem,
+                                    height: 44,
+                                    paddingLeft: 16,
+                                    paddingRight: 16,
+                                    background:
+                                        themeColors.background ===
+                                        lightColors.background
+                                            ? themeColors.background
+                                            : themeColors.surface,
+                                    border:
+                                        themeColors.background ===
+                                        lightColors.background
+                                            ? `0.33px solid ${themeColors.border.subtle}`
+                                            : "none",
+                                    borderRadius: 28,
                                     gap: 8,
-                                    display: "flex",
                                 }}
                             >
-                                <div
-                                    className="Work"
+                                <span
                                     style={{
-                                        color: "${themeColors.text.primary}",
-                                        fontSize: 14,
-                                        fontFamily: "Inter",
-                                        fontWeight: "400",
-                                    }}
-                                >
-                                    Job title
-                                </div>
-                                <div
-                                    style={{
-                                        alignSelf: "stretch",
-                                        height: 44,
-                                        padding: "0 16px",
-                                        background:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? themeColors.background
-                                                : themeColors.surface,
-                                        border:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? `0.33px solid ${themeColors.border.subtle}`
-                                                : "none",
-                                        borderRadius: 28,
-                                        display: "flex",
-                                        alignItems: "center",
-                                    }}
-                                >
-                                    <input
-                                        className="SettingsInput"
-                                        type="text"
-                                        aria-label="Your job title"
-                                        placeholder="Add your dream job"
-                                        value={youWork}
-                                        {...makeUndoHandlers(() => youWork, setYouWork, workUndoStack, workRedoStack)}
-                                        style={{
-                                            width: "100%",
-                                            background: "transparent",
-                                            border: "none",
-                                            color: themeColors.text.primary,
-                                            fontSize: 14,
-                                            outline: "none",
-                                            fontFamily: "Inter",
-                                        }}
-                                    />
-                                </div>
-                            </div>
-
-                            {/* School */}
-                            <div
-                                className="Flexbox"
-                                style={{
-                                    alignSelf: "stretch",
-                                    flexDirection: "column",
-                                    gap: 8,
-                                    display: "flex",
-                                }}
-                            >
-                                <div
-                                    className="School"
-                                    style={{
-                                        color: "${themeColors.text.primary}",
-                                        fontSize: 14,
-                                        fontFamily: "Inter",
-                                        fontWeight: "400",
-                                    }}
-                                >
-                                    School
-                                </div>
-                                <div
-                                    style={{
-                                        alignSelf: "stretch",
-                                        height: 44,
-                                        padding: "0 16px",
-                                        background:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? themeColors.background
-                                                : themeColors.surface,
-                                        border:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? `0.33px solid ${themeColors.border.subtle}`
-                                                : "none",
-                                        borderRadius: 28,
-                                        display: "flex",
-                                        alignItems: "center",
-                                    }}
-                                >
-                                    <input
-                                        className="SettingsInput"
-                                        type="text"
-                                        aria-label="Your school or college"
-                                        placeholder="Add your school"
-                                        value={youSchool}
-                                        {...makeUndoHandlers(() => youSchool, setYouSchool, schoolUndoStack, schoolRedoStack)}
-                                        style={{
-                                            width: "100%",
-                                            background: "transparent",
-                                            border: "none",
-                                            color: themeColors.text.primary,
-                                            fontSize: 14,
-                                            outline: "none",
-                                            fontFamily: "Inter",
-                                        }}
-                                    />
-                                </div>
-                            </div>
-
-                            {/* Interests */}
-                            <div
-                                className="SettingsInterestsSection"
-                                style={{
-                                    alignSelf: "stretch",
-                                    flexDirection: "column",
-                                    gap: 8,
-                                    display: "flex",
-                                }}
-                            >
-                                <div
-                                    className="SettingsSectionLabel"
-                                    style={{
+                                        flex: "1 1 0",
                                         color: themeColors.text.primary,
                                         fontSize: 14,
                                         fontFamily: "Inter",
                                         fontWeight: "400",
+                                        lineHeight: "21px",
                                     }}
                                 >
-                                    Your favorite things
-                                </div>
-                                <div
-                                    className="SettingsInterestsInputWrap"
-                                    style={{
-                                        alignSelf: "stretch",
-                                        minHeight: 128,
-                                        maxHeight: 172,
-                                        background:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? themeColors.background
-                                                : themeColors.surface,
-                                        border:
-                                            themeColors.background ===
-                                            lightColors.background
-                                                ? `0.33px solid ${themeColors.border.subtle}`
-                                                : "none",
-                                        borderRadius: 28,
-                                        display: "flex",
-                                        alignItems: "flex-start",
-                                        overflow: "hidden",
-                                    }}
+                                    Upload resume
+                                </span>
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 15 15"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
                                 >
-                                    <textarea
-                                        ref={interestsTextareaRef}
-                                        className="SettingsInput"
-                                        aria-label="Your skills and interests"
-                                        placeholder="Add skills, interests, and hobbies"
-                                        value={youInterests}
-                                        onKeyDown={makeUndoHandlers(() => youInterests, setYouInterests, interestsUndoStack, interestsRedoStack).onKeyDown}
-                                        onChange={(e) => {
-                                            interestsUndoStack.current.push(youInterests)
-                                            interestsRedoStack.current = []
-                                            const raw = e.target.value
-                                            if (raw === "") { setYouInterests(""); return }
-                                            const cursor = e.target.selectionStart ?? raw.length
-                                            let charPos = 0, added = 0
-                                            const fixed = raw.split("\n").map(line => {
-                                                const needs = line !== "-" && line !== "- " && !line.startsWith("- ")
-                                                const result = needs ? `- ${line.replace(/^-\s*/, "")}` : line
-                                                if (needs && cursor >= charPos) added += 2
-                                                charPos += line.length + 1
-                                                return result
-                                            })
-                                            setYouInterests(fixed.join("\n"))
-                                            if (added > 0) requestAnimationFrame(() => {
-                                                if (interestsTextareaRef.current) {
-                                                    const p = cursor + added
-                                                    interestsTextareaRef.current.selectionStart = p
-                                                    interestsTextareaRef.current.selectionEnd = p
-                                                }
-                                            })
-                                        }}
-                                        style={{
-                                            width: "100%",
-                                            height: "100%",
-                                            padding: "12px 16px",
-                                            boxSizing: "border-box",
-                                            background: "transparent",
-                                            border: "none",
-                                            color: themeColors.text.primary,
-                                            fontSize: 14,
-                                            outline: "none",
-                                            fontFamily: "Inter",
-                                            resize: "none",
-                                        }}
+                                    <path
+                                        d="M0.601562 10.2485V11.0839C0.601562 11.7512 0.866654 12.3912 1.33852 12.863C1.81039 13.3349 2.45037 13.6 3.11769 13.6H11.5048C12.1721 13.6 12.8121 13.3349 13.284 12.863C13.7558 12.3912 14.0209 11.7512 14.0209 11.0839V10.2452M7.31705 9.82581L7.30542 0.60001M7.30542 0.60001L4.37364 3.53919M7.30542 0.60001L10.2446 3.53179"
+                                        stroke={themeColors.text.primary}
+                                        strokeOpacity="0.95"
+                                        strokeWidth="1.2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
                                     />
-                                </div>
-                                {/* Suggestion chips below textarea — full-bleed horizontal scroll, dismissed forever on click */}
-                                {(() => {
-                                    const INTEREST_CHIPS: { id: string; label: string; template: string }[] = [
-                                        { id: "dream_job", label: "Dream job", template: "- My dream job is " },
-                                        { id: "best_skill", label: "Best skill", template: "- My best skill is " },
-                                        { id: "favorite_hobby", label: "Favorite hobby", template: "- My favorite hobby is " },
-                                    ]
-                                    const visible = INTEREST_CHIPS.filter(c => !dismissedInterestChips.includes(c.id))
-                                    if (visible.length === 0) return null
-                                    const sidePad = isMobileLayout ? 16 : 28
-                                    return (
-                                        // Negative margin breaks out of SettingsScrollBody padding so scroll goes full-width
-                                        <div
-                                            className="InterestChipsScrollOuter"
-                                            style={{
-                                                marginLeft: -sidePad,
-                                                marginRight: -sidePad,
-                                                overflowX: "auto",
-                                                overflowY: "visible",
-                                                // Hide scrollbar while keeping it functional
-                                                msOverflowStyle: "none",
-                                                scrollbarWidth: "none",
-                                            }}
-                                        >
-                                            <div
-                                                className="InterestChipsRow"
+                                </svg>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Name */}
+                    <div
+                        className="Flexbox"
+                        style={{
+                            alignSelf: "stretch",
+                            flexDirection: "column",
+                            gap: 8,
+                            display: "flex",
+                        }}
+                    >
+                        <div
+                            className="Name"
+                            style={{
+                                color: "${themeColors.text.primary}",
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: "400",
+                            }}
+                        >
+                            Name
+                        </div>
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                height: 44,
+                                padding: "0 16px",
+                                background:
+                                    themeColors.background ===
+                                    lightColors.background
+                                        ? themeColors.background
+                                        : themeColors.surface,
+                                border:
+                                    themeColors.background ===
+                                    lightColors.background
+                                        ? `0.33px solid ${themeColors.border.subtle}`
+                                        : "none",
+                                borderRadius: 28,
+                                display: "flex",
+                                alignItems: "center",
+                            }}
+                        >
+                            <input
+                                className="SettingsInput"
+                                type="text"
+                                aria-label="Your name or nickname"
+                                placeholder="Add a nickname"
+                                value={youName}
+                                {...makeUndoHandlers(
+                                    () => youName,
+                                    setYouName,
+                                    nameUndoStack,
+                                    nameRedoStack
+                                )}
+                                style={{
+                                    width: "100%",
+                                    background: "transparent",
+                                    border: "none",
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    outline: "none",
+                                    fontFamily: "Inter",
+                                }}
+                            />
+                        </div>
+                    </div>
+
+                    {/* Job title */}
+                    <div
+                        className="Flexbox"
+                        style={{
+                            alignSelf: "stretch",
+                            flexDirection: "column",
+                            gap: 8,
+                            display: "flex",
+                        }}
+                    >
+                        <div
+                            className="Work"
+                            style={{
+                                color: "${themeColors.text.primary}",
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: "400",
+                            }}
+                        >
+                            Job title
+                        </div>
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                height: 44,
+                                padding: "0 16px",
+                                background:
+                                    themeColors.background ===
+                                    lightColors.background
+                                        ? themeColors.background
+                                        : themeColors.surface,
+                                border:
+                                    themeColors.background ===
+                                    lightColors.background
+                                        ? `0.33px solid ${themeColors.border.subtle}`
+                                        : "none",
+                                borderRadius: 28,
+                                display: "flex",
+                                alignItems: "center",
+                            }}
+                        >
+                            <input
+                                className="SettingsInput"
+                                type="text"
+                                aria-label="Your job title"
+                                placeholder="Add your dream job"
+                                value={youWork}
+                                {...makeUndoHandlers(
+                                    () => youWork,
+                                    setYouWork,
+                                    workUndoStack,
+                                    workRedoStack
+                                )}
+                                style={{
+                                    width: "100%",
+                                    background: "transparent",
+                                    border: "none",
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    outline: "none",
+                                    fontFamily: "Inter",
+                                }}
+                            />
+                        </div>
+                    </div>
+
+                    {/* School */}
+                    <div
+                        className="Flexbox"
+                        style={{
+                            alignSelf: "stretch",
+                            flexDirection: "column",
+                            gap: 8,
+                            display: "flex",
+                        }}
+                    >
+                        <div
+                            className="School"
+                            style={{
+                                color: "${themeColors.text.primary}",
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: "400",
+                            }}
+                        >
+                            School
+                        </div>
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                height: 44,
+                                padding: "0 16px",
+                                background:
+                                    themeColors.background ===
+                                    lightColors.background
+                                        ? themeColors.background
+                                        : themeColors.surface,
+                                border:
+                                    themeColors.background ===
+                                    lightColors.background
+                                        ? `0.33px solid ${themeColors.border.subtle}`
+                                        : "none",
+                                borderRadius: 28,
+                                display: "flex",
+                                alignItems: "center",
+                            }}
+                        >
+                            <input
+                                className="SettingsInput"
+                                type="text"
+                                aria-label="Your school or college"
+                                placeholder="Add your school"
+                                value={youSchool}
+                                {...makeUndoHandlers(
+                                    () => youSchool,
+                                    setYouSchool,
+                                    schoolUndoStack,
+                                    schoolRedoStack
+                                )}
+                                style={{
+                                    width: "100%",
+                                    background: "transparent",
+                                    border: "none",
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    outline: "none",
+                                    fontFamily: "Inter",
+                                }}
+                            />
+                        </div>
+                    </div>
+
+                    {/* Interests */}
+                    <div
+                        className="SettingsInterestsSection"
+                        style={{
+                            alignSelf: "stretch",
+                            flexDirection: "column",
+                            gap: 8,
+                            display: "flex",
+                        }}
+                    >
+                        <div
+                            className="SettingsSectionLabel"
+                            style={{
+                                color: themeColors.text.primary,
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: "400",
+                            }}
+                        >
+                            Your favorite things
+                        </div>
+                        <div
+                            className="SettingsInterestsInputWrap"
+                            style={{
+                                alignSelf: "stretch",
+                                minHeight: 128,
+                                maxHeight: 172,
+                                background:
+                                    themeColors.background ===
+                                    lightColors.background
+                                        ? themeColors.background
+                                        : themeColors.surface,
+                                border:
+                                    themeColors.background ===
+                                    lightColors.background
+                                        ? `0.33px solid ${themeColors.border.subtle}`
+                                        : "none",
+                                borderRadius: 28,
+                                display: "flex",
+                                alignItems: "flex-start",
+                                overflow: "hidden",
+                            }}
+                        >
+                            <textarea
+                                ref={interestsTextareaRef}
+                                className="SettingsInput"
+                                aria-label="Your skills and interests"
+                                placeholder="Add skills, interests, and hobbies"
+                                value={youInterests}
+                                onKeyDown={
+                                    makeUndoHandlers(
+                                        () => youInterests,
+                                        setYouInterests,
+                                        interestsUndoStack,
+                                        interestsRedoStack
+                                    ).onKeyDown
+                                }
+                                onChange={(e) => {
+                                    interestsUndoStack.current.push(
+                                        youInterests
+                                    )
+                                    interestsRedoStack.current = []
+                                    const raw = e.target.value
+                                    if (raw === "") {
+                                        setYouInterests("")
+                                        return
+                                    }
+                                    const cursor =
+                                        e.target.selectionStart ?? raw.length
+                                    let charPos = 0,
+                                        added = 0
+                                    const fixed = raw
+                                        .split("\n")
+                                        .map((line) => {
+                                            const needs =
+                                                line !== "-" &&
+                                                line !== "- " &&
+                                                !line.startsWith("- ")
+                                            const result = needs
+                                                ? `- ${line.replace(/^-\s*/, "")}`
+                                                : line
+                                            if (needs && cursor >= charPos)
+                                                added += 2
+                                            charPos += line.length + 1
+                                            return result
+                                        })
+                                    setYouInterests(fixed.join("\n"))
+                                    if (added > 0)
+                                        requestAnimationFrame(() => {
+                                            if (interestsTextareaRef.current) {
+                                                const p = cursor + added
+                                                interestsTextareaRef.current.selectionStart =
+                                                    p
+                                                interestsTextareaRef.current.selectionEnd =
+                                                    p
+                                            }
+                                        })
+                                }}
+                                style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    padding: "12px 16px",
+                                    boxSizing: "border-box",
+                                    background: "transparent",
+                                    border: "none",
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    outline: "none",
+                                    fontFamily: "Inter",
+                                    resize: "none",
+                                }}
+                            />
+                        </div>
+                        {/* Suggestion chips below textarea — full-bleed horizontal scroll, dismissed forever on click */}
+                        {(() => {
+                            const INTEREST_CHIPS: {
+                                id: string
+                                label: string
+                                template: string
+                            }[] = [
+                                {
+                                    id: "dream_job",
+                                    label: "Dream job",
+                                    template: "- My dream job is ",
+                                },
+                                {
+                                    id: "best_skill",
+                                    label: "Best skill",
+                                    template: "- My best skill is ",
+                                },
+                                {
+                                    id: "favorite_hobby",
+                                    label: "Favorite hobby",
+                                    template: "- My favorite hobby is ",
+                                },
+                            ]
+                            const visible = INTEREST_CHIPS.filter(
+                                (c) => !dismissedInterestChips.includes(c.id)
+                            )
+                            if (visible.length === 0) return null
+                            const sidePad = isMobileLayout ? 16 : 28
+                            return (
+                                // Negative margin breaks out of SettingsScrollBody padding so scroll goes full-width
+                                <div
+                                    className="InterestChipsScrollOuter"
+                                    style={{
+                                        marginLeft: -sidePad,
+                                        marginRight: -sidePad,
+                                        overflowX: "auto",
+                                        overflowY: "visible",
+                                        // Hide scrollbar while keeping it functional
+                                        msOverflowStyle: "none",
+                                        scrollbarWidth: "none",
+                                    }}
+                                >
+                                    <div
+                                        className="InterestChipsRow"
+                                        style={{
+                                            display: "flex",
+                                            flexWrap: "nowrap",
+                                            gap: 8,
+                                            // Inner padding restores visual alignment and gives scroll breathing room
+                                            paddingLeft: sidePad,
+                                            paddingRight: sidePad,
+                                            width: "max-content",
+                                        }}
+                                    >
+                                        {visible.map((chip) => (
+                                            <button
+                                                key={chip.id}
+                                                className="InterestChip"
+                                                onClick={() => {
+                                                    setYouInterests((prev) => {
+                                                        const base = prev.trim()
+                                                        return base
+                                                            ? `${base}\n${chip.template}`
+                                                            : chip.template
+                                                    })
+                                                    setDismissedInterestChips(
+                                                        (prev) => [
+                                                            ...prev,
+                                                            chip.id,
+                                                        ]
+                                                    )
+                                                }}
                                                 style={{
-                                                    display: "flex",
-                                                    flexWrap: "nowrap",
-                                                    gap: 8,
-                                                    // Inner padding restores visual alignment and gives scroll breathing room
-                                                    paddingLeft: sidePad,
-                                                    paddingRight: sidePad,
-                                                    width: "max-content",
+                                                    height: 36,
+                                                    paddingLeft: 14,
+                                                    paddingRight: 14,
+                                                    paddingTop: 7.5,
+                                                    paddingBottom: 7.5,
+                                                    borderRadius: 28,
+                                                    border: `0.33px solid ${themeColors.border.subtle}`,
+                                                    background: "transparent",
+                                                    cursor: "pointer",
+                                                    flexShrink: 0,
+                                                    display: "inline-flex",
+                                                    alignItems: "center",
+                                                    gap: 6,
                                                 }}
                                             >
-                                                {visible.map(chip => (
-                                                    <button
-                                                        key={chip.id}
-                                                        className="InterestChip"
-                                                        onClick={() => {
-                                                            setYouInterests(prev => {
-                                                                const base = prev.trim()
-                                                                return base ? `${base}\n${chip.template}` : chip.template
-                                                            })
-                                                            setDismissedInterestChips(prev => [...prev, chip.id])
-                                                        }}
-                                                        style={{
-                                                            height: 36,
-                                                            paddingLeft: 14,
-                                                            paddingRight: 14,
-                                                            paddingTop: 7.5,
-                                                            paddingBottom: 7.5,
-                                                            borderRadius: 28,
-                                                            border: `0.33px solid ${themeColors.border.subtle}`,
-                                                            background: "transparent",
-                                                            cursor: "pointer",
-                                                            flexShrink: 0,
-                                                            display: "inline-flex",
-                                                            alignItems: "center",
-                                                            gap: 6,
-                                                        }}
-                                                    >
-                                                        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                            <path d="M5.8967 12.3967V7.1033H0.603314C0.270133 7.1033 0 6.83323 0 6.50002C0 6.16684 0.270133 5.8967 0.603314 5.8967H5.8967V0.603314C5.8967 0.270133 6.16684 0 6.50002 0C6.83323 0 7.1033 0.270133 7.1033 0.603314V5.8967H12.3967L12.5181 5.9091C12.7931 5.9653 13 6.20842 13 6.50002C13 6.79159 12.7931 7.03471 12.5181 7.09096L12.3967 7.1033H7.1033V12.3967C7.1033 12.7299 6.83323 13 6.50002 13C6.16684 13 5.8967 12.7299 5.8967 12.3967Z" fill={themeColors.text.secondary}/>
-                                                        </svg>
-                                                        <span
-                                                            className="InterestChipLabel"
-                                                            style={{
-                                                                color: themeColors.text.secondary,
-                                                                fontSize: 14,
-                                                                fontFamily: "Inter",
-                                                                fontWeight: "400",
-                                                                lineHeight: "21px",
-                                                                whiteSpace: "nowrap",
-                                                            }}
-                                                        >
-                                                            {chip.label}
-                                                        </span>
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )
-                                })()}
-                            </div>
-                            </div>{/* end SettingsScrollBody */}
+                                                <svg
+                                                    width="13"
+                                                    height="13"
+                                                    viewBox="0 0 13 13"
+                                                    fill="none"
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                >
+                                                    <path
+                                                        d="M5.8967 12.3967V7.1033H0.603314C0.270133 7.1033 0 6.83323 0 6.50002C0 6.16684 0.270133 5.8967 0.603314 5.8967H5.8967V0.603314C5.8967 0.270133 6.16684 0 6.50002 0C6.83323 0 7.1033 0.270133 7.1033 0.603314V5.8967H12.3967L12.5181 5.9091C12.7931 5.9653 13 6.20842 13 6.50002C13 6.79159 12.7931 7.03471 12.5181 7.09096L12.3967 7.1033H7.1033V12.3967C7.1033 12.7299 6.83323 13 6.50002 13C6.16684 13 5.8967 12.7299 5.8967 12.3967Z"
+                                                        fill={
+                                                            themeColors.text
+                                                                .secondary
+                                                        }
+                                                    />
+                                                </svg>
+                                                <span
+                                                    className="InterestChipLabel"
+                                                    style={{
+                                                        color: themeColors.text
+                                                            .secondary,
+                                                        fontSize: 14,
+                                                        fontFamily: "Inter",
+                                                        fontWeight: "400",
+                                                        lineHeight: "21px",
+                                                        whiteSpace: "nowrap",
+                                                    }}
+                                                >
+                                                    {chip.label}
+                                                </span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )
+                        })()}
+                    </div>
+                </div>
+                {/* end SettingsScrollBody */}
             </ModalSheet>
 
             {/* Hidden file input — chat attachments */}
