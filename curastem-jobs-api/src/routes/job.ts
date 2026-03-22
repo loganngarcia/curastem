@@ -17,10 +17,19 @@
  * still returns the job with null AI fields rather than erroring.
  */
 
-import { getJobById, updateJobAiFields, updateCompanyEnrichment, updateJobDescriptionRaw, getSourceById, type FullJobRow } from "../db/queries.ts";
+import {
+  getJobById,
+  updateJobAiFields,
+  updateCompanyEnrichment,
+  updateJobDescriptionRaw,
+  replaceJobDescriptionRawClearingAi,
+  getSourceById,
+  type FullJobRow,
+} from "../db/queries.ts";
 import { extractJobFields, formatSalaryDisplay } from "../enrichment/ai.ts";
 import { extractKeywords } from "../enrichment/keywords.ts";
 import { fetchSmartRecruitersDescription } from "../ingestion/sources/smartrecruiters.ts";
+import { fetchWorkdayJobPostingHtml } from "../ingestion/sources/workday.ts";
 import type { Env, JobDescriptionExtracted, PublicJob, PublicSalary } from "../types.ts";
 import { Errors, jsonOk } from "../utils/errors.ts";
 import { authenticate, recordKeyUsage } from "../middleware/auth.ts";
@@ -128,6 +137,31 @@ export async function handleGetJob(
     } catch (err) {
       // 描述懒加载失败不影响主响应
       logger.warn("sr_description_fetch_failed", { job_id: row.id, error: String(err) });
+    }
+  }
+
+  // Workday listing API only returns bullets / req ids — fetch full HTML from CXS job detail.
+  const workdayNeedsDetail =
+    row.source_name === "workday" &&
+    row.external_id.startsWith("/job/") &&
+    (!row.description_raw || !row.description_raw.includes("<"));
+  if (workdayNeedsDetail) {
+    try {
+      const source = await getSourceById(env.JOBS_DB, row.source_id);
+      if (source?.base_url) {
+        const descHtml = await fetchWorkdayJobPostingHtml(source.base_url, row.external_id);
+        if (descHtml) {
+          ctx.waitUntil(replaceJobDescriptionRawClearingAi(env.JOBS_DB, row.id, descHtml));
+          row.description_raw = descHtml;
+          // Drop any AI cache tied to the listing stub so this response re-extracts from HTML.
+          row.ai_generated_at = null;
+          row.job_summary = null;
+          row.job_description = null;
+          row.description_language = null;
+        }
+      }
+    } catch (err) {
+      logger.warn("workday_description_fetch_failed", { job_id: row.id, error: String(err) });
     }
   }
 

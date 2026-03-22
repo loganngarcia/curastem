@@ -13,7 +13,7 @@
  * skipped so one bad company never stops the rest.
  */
 
-import { extractCompanyDescription } from "./ai.ts";
+import { extractCompanyDescription, resolveCanonicalCompanyDomain } from "./ai.ts";
 import { listUnenrichedCompanies, updateCompanyEnrichment } from "../db/queries.ts";
 import { logger } from "../utils/logger.ts";
 import type { CompanyRow } from "../types.ts";
@@ -118,6 +118,14 @@ function extractDomain(websiteUrl: string): string | null {
   }
 }
 
+/** True when the stored URL is the slug-inferred ${slug}.com placeholder from enrichment. */
+function isSlugPlaceholderWebsite(websiteUrl: string | null, slug: string): boolean {
+  if (!websiteUrl) return false;
+  const host = extractDomain(websiteUrl);
+  if (!host) return false;
+  return host === `${slug}.com`;
+}
+
 async function getCompanyJobContext(db: D1Database, companyId: string): Promise<string | null> {
   const result = await db
     .prepare("SELECT description_raw FROM jobs WHERE company_id = ? AND description_raw IS NOT NULL LIMIT 1")
@@ -142,21 +150,48 @@ async function enrichCompany(
 
     // Resolve the best domain for API lookups — use stored website_url if available,
     // fall back to slug.com which works for many but not all startups.
-    const domain = company.website_url
-      ? extractDomain(company.website_url)
-      : `${company.slug}.com`;
+    let domain =
+      (company.website_url ? extractDomain(company.website_url) : null) ?? `${company.slug}.com`;
+
+    // Slug-based hostnames (cvs-health.com) break Brandfetch and show generic favicons.
+    if (
+      geminiApiKey &&
+      (!company.website_url || isSlugPlaceholderWebsite(company.website_url, company.slug))
+    ) {
+      try {
+        const resolved = await resolveCanonicalCompanyDomain(
+          geminiApiKey,
+          company.name,
+          company.website_url,
+          company.slug
+        );
+        if (resolved) {
+          domain = resolved;
+          fields.website_url = `https://${resolved}`;
+        }
+      } catch (e) {
+        logger.warn("company_domain_resolve_failed", { company_id: company.id, error: String(e) });
+      }
+    }
+
+    const logoIsGenericFavicon = Boolean(company.logo_url?.includes("google.com/s2/favicons"));
 
     // Brandfetch: one call returns logo + all social links.
-    // Only fetch if at least one field is missing — avoids wasting free-tier quota
-    // on companies that are already fully enriched.
+    // Also re-fetch when the logo is still the Google favicon placeholder after a bad domain.
     const needsBrandfetch =
-      !company.logo_url || !company.linkedin_url || !company.x_url || !company.glassdoor_url;
+      brandfetchClientId &&
+      domain &&
+      (!company.logo_url ||
+        logoIsGenericFavicon ||
+        !company.linkedin_url ||
+        !company.x_url ||
+        !company.glassdoor_url);
     let brandfetch: BrandfetchResult | null = null;
-    if (brandfetchClientId && domain && needsBrandfetch) {
+    if (needsBrandfetch) {
       brandfetch = await fetchBrandfetchData(domain, brandfetchClientId);
     }
 
-    if (!company.logo_url) {
+    if (!company.logo_url || logoIsGenericFavicon) {
       fields.logo_url =
         brandfetch?.logo_url ??
         (domain ? getGoogleFaviconUrl(domain) : null);

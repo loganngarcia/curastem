@@ -411,3 +411,59 @@ export async function extractCompanyDescription(
 
   return typeof parsed.description === "string" ? parsed.description : "";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Canonical company domain — fixes slug-inferred websites (e.g. cvs-health.com)
+// so Brandfetch and the public "Website" link use the real corporate domain.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CANONICAL_DOMAIN_PROMPT = (companyName: string, websiteUrl: string | null, slug: string) => `
+You resolve the primary public marketing website registrable domain for established employers.
+
+Company name: ${companyName}
+Internal URL slug (often used as a fallback hostname): ${slug}
+Stored website URL (may be missing, wrong, or ${slug}.com): ${websiteUrl ?? "none"}
+
+Return ONLY valid JSON (no markdown fences):
+{ "domain": "example.com" }
+
+Rules:
+- "domain" is lowercase, no scheme or path — only the host (e.g. "cvs.com", "vfc.com").
+- If the stored URL already points at this company's real corporate site (not ${slug}.com), return that host without "www.".
+- If the host is exactly ${slug}.com or there is no usable URL, infer the widely known real domain from the company name.
+- Return { "domain": null } if the company is not a recognizable brand and you cannot name a domain with high confidence — do not guess.
+`.trim();
+
+function isPlausibleRegistrableDomain(domain: string): boolean {
+  if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,24}$/i.test(domain)) return false;
+  if (domain.includes("..") || domain.startsWith(".") || domain.endsWith(".")) return false;
+  return true;
+}
+
+/**
+ * Returns the registrable domain for logo/website enrichment when the DB has a
+ * slug-derived hostname (cvs-health.com) or no website yet.
+ */
+export async function resolveCanonicalCompanyDomain(
+  apiKey: string,
+  companyName: string,
+  websiteUrl: string | null,
+  slug: string
+): Promise<string | null> {
+  const prompt = CANONICAL_DOMAIN_PROMPT(companyName, websiteUrl, slug);
+  const raw = await callGemini(apiKey, prompt, 256);
+  const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+
+  let parsed: { domain?: string | null };
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+
+  const d = parsed.domain;
+  if (typeof d !== "string" || d.length === 0) return null;
+  const lower = d.toLowerCase().trim();
+  if (!isPlausibleRegistrableDomain(lower)) return null;
+  return lower;
+}

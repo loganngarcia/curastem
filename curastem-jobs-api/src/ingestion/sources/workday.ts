@@ -130,7 +130,7 @@ export const workdayFetcher: JobSource = {
     const origin = url.origin;
 
     // Preflight: get session cookie so Workday's WAF accepts our datacenter IP
-    const cookieHeader = await fetchSessionCookie(origin, tenant);;
+    const cookieHeader = await fetchSessionCookie(origin, tenant);
 
     const commonHeaders: Record<string, string> = {
       "User-Agent": BROWSER_UA,
@@ -209,3 +209,46 @@ export const workdayFetcher: JobSource = {
     return jobs;
   },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lazy job detail — listing API has no full description; CXS exposes HTML body.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface WorkdayJobPostingInfoResponse {
+  jobPostingInfo?: { jobDescription?: string };
+}
+
+/**
+ * Fetch full job posting HTML from the Workday CXS job detail endpoint.
+ * @param cxsJobsListUrl source.base_url ending in `/jobs` (CXS list POST URL)
+ * @param externalPath job external_id e.g. `/job/VA---Lynchburg/Role_R123`
+ */
+export async function fetchWorkdayJobPostingHtml(
+  cxsJobsListUrl: string,
+  externalPath: string
+): Promise<string | null> {
+  const url = new URL(cxsJobsListUrl);
+  const pathParts = url.pathname.split("/").filter(Boolean);
+  const tenant = pathParts[pathParts.length - 2] ?? "jobs";
+  const origin = url.origin;
+
+  const cookieHeader = await fetchSessionCookie(origin, tenant);
+  const cxsBase = cxsJobsListUrl.replace(/\/jobs\/?$/i, "");
+  const detailUrl = `${cxsBase}${externalPath}`;
+
+  const res = await fetch(detailUrl, {
+    headers: {
+      "User-Agent": BROWSER_UA,
+      Accept: "application/json",
+      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      Origin: origin,
+      Referer: `${origin}/en-US/${tenant}`,
+    },
+  });
+
+  if (!res.ok) return null;
+
+  const data = (await res.json()) as WorkdayJobPostingInfoResponse;
+  const html = data.jobPostingInfo?.jobDescription;
+  return typeof html === "string" && html.length > 0 ? html : null;
+}

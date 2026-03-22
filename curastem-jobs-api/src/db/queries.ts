@@ -182,6 +182,7 @@ export async function updateCompanyEnrichment(
  *   2. Enrichment is stale (> 7 days old) — full re-enrich
  *   3. Recently enriched but still missing logo or social links — retry after 24h
  *      (handles failures where Brandfetch/Clearbit returned nothing first time)
+ *   4. Logo is still the Google favicon placeholder (wrong domain before canonical fix)
  */
 export async function listUnenrichedCompanies(
   db: D1Database,
@@ -201,10 +202,14 @@ export async function listUnenrichedCompanies(
                (c.logo_url IS NULL OR c.linkedin_url IS NULL)
                AND c.description_enriched_at < ?
              )
+          OR (
+               c.logo_url LIKE '%google.com/s2/favicons%'
+               AND c.description_enriched_at < ?
+             )
        ORDER BY j.newest_job DESC NULLS LAST
        LIMIT 50`
     )
-    .bind(staleBefore, retryMissingBefore)
+    .bind(staleBefore, retryMissingBefore, retryMissingBefore)
     .all<CompanyRow>();
   return result.results ?? [];
 }
@@ -1290,6 +1295,30 @@ export async function updateJobDescriptionRaw(
 ): Promise<void> {
   await db
     .prepare("UPDATE jobs SET description_raw = ? WHERE id = ? AND description_raw IS NULL")
+    .bind(descriptionRaw, id)
+    .run();
+}
+
+/**
+ * Replace description_raw and clear AI + embedding caches — used when lazy-loading
+ * a full posting body over a Workday listing stub (requisition id / bullets only).
+ */
+export async function replaceJobDescriptionRawClearingAi(
+  db: D1Database,
+  id: string,
+  descriptionRaw: string
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE jobs SET
+         description_raw = ?,
+         description_language = NULL,
+         ai_generated_at = NULL,
+         job_summary = NULL,
+         job_description = NULL,
+         embedding_generated_at = NULL
+       WHERE id = ?`
+    )
     .bind(descriptionRaw, id)
     .run();
 }
