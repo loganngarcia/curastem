@@ -27,6 +27,8 @@ import { ycombinatorFetcher } from "./sources/ycombinator.ts";
 import { browserFetcher } from "./sources/browser.ts";
 import { rssFetcher } from "./sources/rss.ts";
 import { usajobsFetcher } from "./sources/usajobs.ts";
+import { saashrFetcher } from "./sources/saashr.ts";
+import { considerFetcher } from "./sources/consider.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -44,6 +46,8 @@ const REGISTRY: Record<SourceType, JobSource> = {
   browser: browserFetcher,
   rss: rssFetcher,
   usajobs: usajobsFetcher,
+  saashr: saashrFetcher,
+  consider: considerFetcher,
 };
 
 /**
@@ -86,6 +90,10 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   rss: 45,
   // Federal government job board — official US source
   usajobs: 75,
+  // UKG / SaaSHR tenant portals — unauthenticated public REST API (same trust as direct ATS)
+  saashr: 100,
+  // VC portfolio boards (Consider) — structured API but syndicated listings
+  consider: 68,
 };
 
 export function getSourcePriority(sourceType: string): number {

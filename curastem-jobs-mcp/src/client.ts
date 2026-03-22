@@ -27,7 +27,10 @@ export interface ListJobsParams {
   location?: string | undefined;
   employment_type?: string | undefined;
   workplace_type?: string | undefined;
+  seniority_level?: string | undefined;
   company?: string | undefined;
+  since?: number | undefined;
+  salary_min?: number | undefined;
   limit?: number | undefined;
   cursor?: string | undefined;
 }
@@ -80,7 +83,10 @@ export class JobsApiClient {
     if (params.location) qs.set("location", params.location);
     if (params.employment_type) qs.set("employment_type", params.employment_type);
     if (params.workplace_type) qs.set("workplace_type", params.workplace_type);
+    if (params.seniority_level) qs.set("seniority_level", params.seniority_level);
     if (params.company) qs.set("company", params.company);
+    if (params.since) qs.set("since", String(params.since));
+    if (params.salary_min !== undefined) qs.set("salary_min", String(params.salary_min));
     if (params.limit) qs.set("limit", String(params.limit));
     if (params.cursor) qs.set("cursor", params.cursor);
 

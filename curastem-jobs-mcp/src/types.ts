@@ -55,6 +55,7 @@ export interface Job {
   locations: string[] | null;
   employment_type: string | null;
   workplace_type: string | null;
+  seniority_level: string | null;
   source_name: string;
   source_url: string | null;
   salary: JobSalary | null;

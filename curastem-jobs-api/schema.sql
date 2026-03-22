@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS sources (
   last_job_count  INTEGER,            -- how many jobs returned on last fetch
   last_error      TEXT,               -- last error message if fetch failed
 
+  -- Throttle: minimum hours between fetches (NULL = every cron run, i.e. hourly).
+  -- Use for large/slow sources (e.g. full VC portfolio boards) to avoid burning
+  -- cron time on sources whose listings change infrequently.
+  fetch_interval_hours INTEGER,       -- e.g. 12 = fetch at most twice a day
+
   created_at      INTEGER NOT NULL
 );
 
@@ -89,10 +94,17 @@ CREATE TABLE IF NOT EXISTS jobs (
   salary_currency TEXT,               -- ISO 4217, e.g. "USD"
   salary_period   TEXT,               -- "year" | "month" | "hour" | null
 
+  -- Language of the job description text (ISO 639-1).
+  -- Populated in two passes: heuristic at ingest/backfill (fast, zero cost),
+  -- then AI lazy-load on GET /jobs/:id which overrides and fills remaining nulls.
+  -- Supported values: en es de fr pt it nl pl ja zh | null = unknown/ambiguous.
+  description_language TEXT,
+
   -- AI-generated fields (lazy; populated on first GET /jobs/:id request, then cached)
   job_summary        TEXT,            -- two-sentence summary (company + role)
   job_description    TEXT,            -- JSON: {responsibilities, minimum_qualifications, preferred_qualifications}
   visa_sponsorship   TEXT,            -- "yes" | "no" | null (null = not mentioned in posting)
+  seniority_level    TEXT,            -- "new_grad"|"entry"|"mid"|"senior"|"staff"|"manager"|"director"|"executive"|null
   ai_generated_at    INTEGER,         -- epoch; NULL = not generated; cleared when description_raw changes
 
   -- Semantic search embedding (generated at ingestion time via Gemini Embedding API)
@@ -120,12 +132,28 @@ CREATE INDEX IF NOT EXISTS idx_jobs_title ON jobs (title);
 -- No scalar location index needed; geocoding uses json_extract(locations, '$[0]')
 CREATE INDEX IF NOT EXISTS idx_jobs_employment_type ON jobs (employment_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_workplace_type ON jobs (workplace_type);
+CREATE INDEX IF NOT EXISTS idx_jobs_seniority_level ON jobs (seniority_level);
+CREATE INDEX IF NOT EXISTS idx_jobs_description_language ON jobs (description_language);
 
 -- Composite index for the embedding backfill query:
 --   WHERE embedding_generated_at IS NULL ORDER BY first_seen_at DESC
 -- Without this the query requires a full table scan to find un-embedded jobs.
 CREATE INDEX IF NOT EXISTS idx_jobs_embedding_backfill
   ON jobs (embedding_generated_at, first_seen_at DESC);
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- company_aliases
+-- Maps variant company name slugs → canonical company slug.
+-- Populated by migrate.ts seed data; used at ingestion time so that
+-- "hadrian" (from Consider) and "hadrian-automation" (from Ashby) resolve to
+-- the same company row and share a dedup_key namespace.
+-- ──────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS company_aliases (
+  alias_slug      TEXT PRIMARY KEY,   -- variant slug, e.g. "hadrian"
+  canonical_slug  TEXT NOT NULL       -- slug of the authoritative companies row
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_aliases_canonical ON company_aliases (canonical_slug);
 
 -- ──────────────────────────────────────────────────────────────────────────────
 -- api_keys

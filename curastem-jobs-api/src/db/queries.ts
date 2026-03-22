@@ -32,6 +32,23 @@ import type {
 // companies
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Resolve an incoming company slug to its canonical slug via the aliases table.
+ * Returns the canonical slug if an alias exists, otherwise returns the input unchanged.
+ * Used at ingestion time so variant names (e.g. "hadrian" vs "hadrian-automation")
+ * collapse to the same company row and share a dedup_key namespace.
+ */
+export async function resolveCompanySlug(
+  db: D1Database,
+  slug: string
+): Promise<string> {
+  const row = await db
+    .prepare("SELECT canonical_slug FROM company_aliases WHERE alias_slug = ?")
+    .bind(slug)
+    .first<{ canonical_slug: string }>();
+  return row?.canonical_slug ?? slug;
+}
+
 export async function getCompanyBySlug(
   db: D1Database,
   slug: string
@@ -204,6 +221,10 @@ export async function listUnenrichedCompanies(
  * The limit caps subrequest usage per invocation: each source consumes
  * roughly 6 subrequests (1 HTTP fetch + 5 D1 batch calls), so 150 sources
  * stays safely under Cloudflare's 1,000-subrequest-per-invocation limit.
+ *
+ * Sources with fetch_interval_hours set are excluded if they were fetched
+ * more recently than that interval, so large/slow sources (e.g. full VC
+ * portfolio boards) don't consume a cron slot on every hourly run.
  */
 export async function listEnabledSources(
   db: D1Database,
@@ -211,7 +232,15 @@ export async function listEnabledSources(
 ): Promise<SourceRow[]> {
   const result = await db
     .prepare(
-      "SELECT * FROM sources WHERE enabled = 1 ORDER BY last_fetched_at ASC NULLS FIRST LIMIT ?"
+      `SELECT * FROM sources
+       WHERE enabled = 1
+         AND (
+           fetch_interval_hours IS NULL
+           OR last_fetched_at IS NULL
+           OR last_fetched_at <= (strftime('%s','now') - fetch_interval_hours * 3600)
+         )
+       ORDER BY last_fetched_at ASC NULLS FIRST
+       LIMIT ?`
     )
     .bind(limit)
     .all<SourceRow>();
@@ -400,6 +429,9 @@ export async function upsertJob(
  * limit for sources with hundreds of jobs. db.batch() counts as exactly ONE
  * subrequest regardless of how many statements are included.
  */
+// Each "existing job" check statement is ~80 bytes; 1000 per chunk ≈ 80KB.
+const EXISTING_CHUNK = 1000;
+
 export async function batchGetExistingJobs(
   db: D1Database,
   sourceId: string,
@@ -407,17 +439,19 @@ export async function batchGetExistingJobs(
 ): Promise<Map<string, { id: string; description_raw: string | null }>> {
   if (externalIds.length === 0) return new Map();
 
-  const stmts = externalIds.map((eid) =>
-    db
-      .prepare("SELECT id, description_raw FROM jobs WHERE source_id = ? AND external_id = ?")
-      .bind(sourceId, eid)
-  );
-
-  const results = await db.batch<{ id: string; description_raw: string | null }>(stmts);
   const map = new Map<string, { id: string; description_raw: string | null }>();
-  for (let i = 0; i < externalIds.length; i++) {
-    const row = results[i].results?.[0];
-    if (row) map.set(externalIds[i], row);
+  for (let start = 0; start < externalIds.length; start += EXISTING_CHUNK) {
+    const chunk = externalIds.slice(start, start + EXISTING_CHUNK);
+    const stmts = chunk.map((eid) =>
+      db
+        .prepare("SELECT id, description_raw FROM jobs WHERE source_id = ? AND external_id = ?")
+        .bind(sourceId, eid)
+    );
+    const results = await db.batch<{ id: string; description_raw: string | null }>(stmts);
+    for (let i = 0; i < chunk.length; i++) {
+      const row = results[i].results?.[0];
+      if (row) map.set(chunk[i], row);
+    }
   }
   return map;
 }
@@ -426,23 +460,29 @@ export async function batchGetExistingJobs(
  * Batch cross-source dedup check in a single D1 subrequest.
  * Returns a Set of dedup_keys that already exist from a different source.
  */
+// D1 batch() request body limit is ~1MB. Each dedup-check statement is ~120 bytes,
+// so chunks of 1000 stay well under that (~120KB each).
+const DEDUP_CHUNK = 1000;
+
 export async function batchCheckCrossSourceDups(
   db: D1Database,
   checks: Array<{ dedupKey: string; sourceId: string }>
 ): Promise<Set<string>> {
   if (checks.length === 0) return new Set();
 
-  const stmts = checks.map(({ dedupKey, sourceId }) =>
-    db
-      .prepare("SELECT dedup_key FROM jobs WHERE dedup_key = ? AND source_id != ? LIMIT 1")
-      .bind(dedupKey, sourceId)
-  );
-
-  const results = await db.batch<{ dedup_key: string }>(stmts);
   const dupes = new Set<string>();
-  for (const r of results) {
-    const row = r.results?.[0];
-    if (row) dupes.add(row.dedup_key);
+  for (let i = 0; i < checks.length; i += DEDUP_CHUNK) {
+    const chunk = checks.slice(i, i + DEDUP_CHUNK);
+    const stmts = chunk.map(({ dedupKey, sourceId }) =>
+      db
+        .prepare("SELECT dedup_key FROM jobs WHERE dedup_key = ? AND source_id != ? LIMIT 1")
+        .bind(dedupKey, sourceId)
+    );
+    const results = await db.batch<{ dedup_key: string }>(stmts);
+    for (const r of results) {
+      const row = r.results?.[0];
+      if (row) dupes.add(row.dedup_key);
+    }
   }
   return dupes;
 }
@@ -470,9 +510,10 @@ export async function batchUpsertJobs(
   const INSERT_SQL = `INSERT INTO jobs (
     id, company_id, source_id, external_id, title, locations,
     employment_type, workplace_type, apply_url, source_url, source_name,
-    description_raw, salary_min, salary_max, salary_currency, salary_period,
+    description_raw, description_language,
+    salary_min, salary_max, salary_currency, salary_period,
     posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const UPDATE_SQL = `UPDATE jobs SET
     company_id = ?, title = ?,
@@ -485,11 +526,13 @@ export async function batchUpsertJobs(
     location_lng           = COALESCE(?, location_lng),
     updated_at = ?,
     description_raw        = CASE WHEN ? = 1 THEN ? ELSE description_raw END,
+    description_language   = CASE WHEN ? = 1 THEN ? ELSE description_language END,
     ai_generated_at        = CASE WHEN ? = 1 THEN NULL ELSE ai_generated_at END,
     embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END
   WHERE source_id = ? AND external_id = ?`;
 
   const { normalizeLocation } = await import("../utils/normalize.ts");
+  const { detectLanguage } = await import("../enrichment/language.ts");
 
   for (let i = 0; i < inputs.length; i++) {
     const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now, location_lat, location_lng } = inputs[i];
@@ -502,28 +545,40 @@ export async function batchUpsertJobs(
     const locationsJson = locNorm ? JSON.stringify([locNorm]) : null;
     const existing = existingMap.get(external_id);
 
+    // D1 rejects `undefined` bindings with a cryptic type error — coerce every
+    // nullable field to null so any fetcher that omits optional fields is safe.
+    const n = <T>(v: T | undefined): T | null => (v === undefined ? null : v);
+
+    // Run heuristic language detection on the raw description at ingest time.
+    // AI lazy-load will override this on first GET /jobs/:id if needed.
+    const detectedLang = description_raw ? detectLanguage(description_raw) : null;
+
     if (!existing) {
       inserts.push(
         db.prepare(INSERT_SQL).bind(
           id, company_id, source_id, external_id, title, locationsJson,
-          employment_type, workplace_type, apply_url, source_url, source_name,
-          description_raw, salary_min, salary_max, salary_currency, salary_period,
-          posted_at, now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
+          n(employment_type), n(workplace_type), apply_url, n(source_url), source_name,
+          n(description_raw), detectedLang,
+          n(salary_min), n(salary_max), n(salary_currency), n(salary_period),
+          n(posted_at), now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
         )
       );
       insertIndices.push(i);
     } else {
       const descChanged = description_raw !== null && existing.description_raw !== description_raw;
       descChangedFlags[i] = descChanged;
+      // Re-detect language when description changes; keep existing value otherwise
+      const updatedLang = descChanged ? detectLanguage(description_raw) : null;
       updates.push(
         db.prepare(UPDATE_SQL).bind(
           company_id, title,
           locationsJson,
-          employment_type,
-          workplace_type, apply_url, source_url,
-          salary_min, salary_max, salary_currency, salary_period,
-          posted_at, dedup_key, location_lat ?? null, location_lng ?? null, now,
-          descChanged ? 1 : 0, description_raw,
+          n(employment_type),
+          n(workplace_type), apply_url, n(source_url),
+          n(salary_min), n(salary_max), n(salary_currency), n(salary_period),
+          n(posted_at), dedup_key, location_lat ?? null, location_lng ?? null, now,
+          descChanged ? 1 : 0, n(description_raw),
+          descChanged ? 1 : 0, updatedLang,
           descChanged ? 1 : 0,
           descChanged ? 1 : 0,
           source_id, external_id
@@ -533,10 +588,16 @@ export async function batchUpsertJobs(
     }
   }
 
-  // Two subrequests total regardless of how many jobs — one batch for inserts,
-  // one for updates. Each db.batch() call counts as a single D1 subrequest.
-  if (inserts.length > 0) await db.batch(inserts);
-  if (updates.length > 0) await db.batch(updates);
+  // Chunk inserts and updates to stay under D1's ~1MB batch request body limit.
+  // Each INSERT is ~500 bytes (23 params); 500 inserts ≈ 250KB — safe headroom.
+  // Each UPDATE is ~400 bytes (22 params); 500 updates ≈ 200KB.
+  const UPSERT_CHUNK = 500;
+  for (let i = 0; i < inserts.length; i += UPSERT_CHUNK) {
+    await db.batch(inserts.slice(i, i + UPSERT_CHUNK));
+  }
+  for (let i = 0; i < updates.length; i += UPSERT_CHUNK) {
+    await db.batch(updates.slice(i, i + UPSERT_CHUNK));
+  }
 
   const results: Array<{ inserted: boolean; needsEmbedding: boolean }> = new Array(inputs.length);
   for (const i of insertIndices) results[i] = { inserted: true, needsEmbedding: true };
@@ -649,7 +710,7 @@ const D1_IN_CHUNK = 90;
 export async function listJobsByIds(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since">
+  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min">
 ): Promise<ListJobsRow[]> {
   if (ids.length === 0) return [];
 
@@ -673,7 +734,7 @@ export async function listJobsByIds(
 async function listJobsByIdsChunk(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since">
+  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min">
 ): Promise<ListJobsRow[]> {
   const placeholders = ids.map(() => "?").join(", ");
   const conditions: string[] = [`j.id IN (${placeholders})`];
@@ -718,6 +779,10 @@ async function listJobsByIdsChunk(
     conditions.push("COALESCE(j.posted_at, j.first_seen_at) >= ?");
     bindings.push(filter.posted_since);
   }
+  if (filter.salary_min !== undefined) {
+    conditions.push("j.salary_min IS NOT NULL AND j.salary_min >= ?");
+    bindings.push(filter.salary_min);
+  }
 
   const where = conditions.join(" AND ");
   // Same explicit column list as listJobs — no description_raw or job_description
@@ -753,8 +818,11 @@ export interface ListJobsFilter {
   exclude_ids?: string[]; // job IDs to exclude (e.g. already shown on homepage)
   employment_type?: string;
   workplace_type?: string;
+  seniority_level?: string;
+  description_language?: string;
   company?: string;
   posted_since?: number; // unix timestamp — only return jobs posted/seen at or after this time
+  salary_min?: number;   // only return jobs where salary_min >= this value (annual, in salary_currency)
   limit: number;
   cursor?: string; // opaque cursor = base64(last posted_at:id)
 }
@@ -779,6 +847,8 @@ export interface ListJobsRow {
   locations: string | null;  // serialized JSON array; locations[0] is primary display value
   employment_type: import("../types.ts").EmploymentType | null;
   workplace_type: import("../types.ts").WorkplaceType | null;
+  seniority_level: import("../types.ts").SeniorityLevel | null;
+  description_language: import("../types.ts").DescriptionLanguage | null;
   apply_url: string;
   source_url: string | null;
   source_name: string;
@@ -847,6 +917,14 @@ export async function listJobs(
     conditions.push("j.workplace_type = ?");
     bindings.push(filter.workplace_type);
   }
+  if (filter.seniority_level) {
+    conditions.push("j.seniority_level = ?");
+    bindings.push(filter.seniority_level);
+  }
+  if (filter.description_language) {
+    conditions.push("j.description_language = ?");
+    bindings.push(filter.description_language);
+  }
   if (filter.company) {
     conditions.push("c.slug = ?");
     bindings.push(filter.company);
@@ -854,6 +932,12 @@ export async function listJobs(
   if (filter.posted_since) {
     conditions.push("COALESCE(j.posted_at, j.first_seen_at) >= ?");
     bindings.push(filter.posted_since);
+  }
+  if (filter.salary_min !== undefined) {
+    // Require salary_min to be populated AND meet the threshold.
+    // salary_min is always stored as an annual figure (normalised at ingest).
+    conditions.push("j.salary_min IS NOT NULL AND j.salary_min >= ?");
+    bindings.push(filter.salary_min);
   }
 
   // Cursor decoding: cursor encodes the last row's sort key so we can do
@@ -877,7 +961,8 @@ export async function listJobs(
   const selectJoined = `
     SELECT
       j.id, j.company_id, j.source_id, j.external_id,
-      j.title, j.locations, j.employment_type, j.workplace_type,
+      j.title, j.locations, j.employment_type, j.workplace_type, j.seniority_level,
+      j.description_language,
       j.apply_url, j.source_url, j.source_name,
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
       j.job_summary, j.ai_generated_at, j.embedding_generated_at,
@@ -1032,7 +1117,8 @@ export async function listJobsNear(
 
   const selectCols = `
     j.id, j.company_id, j.source_id, j.external_id,
-    j.title, j.locations, j.employment_type, j.workplace_type,
+    j.title, j.locations, j.employment_type, j.workplace_type, j.seniority_level,
+    j.description_language,
     j.apply_url, j.source_url, j.source_name,
     j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
     j.job_summary, j.ai_generated_at, j.embedding_generated_at,
@@ -1062,6 +1148,7 @@ export interface FullJobRow extends ListJobsRow {
   description_raw: string | null;
   job_description: string | null;
   visa_sponsorship: import("../types.ts").VisaSponsorship | null;
+  // seniority_level is inherited from ListJobsRow
 }
 
 export async function getJobById(
@@ -1092,6 +1179,110 @@ export async function getJobById(
  * 首次懒加载描述时写入description_raw。
  * 不覆盖已有值——若已有描述则跳过（由调用方保证只在null时调用）。
  */
+/**
+ * Fetch Consider-sourced jobs that are missing a description.
+ * Returns the job id, apply_url (points to the real ATS), and any fields
+ * we may want to backfill (salary, location) alongside the description.
+ */
+export async function getConsiderJobsNeedingDescription(
+  db: D1Database,
+  limit: number
+): Promise<Array<{
+  id: string;
+  apply_url: string;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
+  salary_period: string | null;
+  locations: string | null;
+  workplace_type: string | null;
+}>> {
+  // Exclude jobs whose company already has a direct (non-Consider) source in D1 —
+  // those jobs will get their description from the direct ATS fetch instead,
+  // so fetching again here would be redundant cron work.
+  const { results } = await db
+    .prepare(`
+      SELECT j.id, j.apply_url, j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
+             j.locations, j.workplace_type
+      FROM jobs j
+      WHERE j.source_id = 'cn-a16z-portfolio'
+        AND j.description_raw IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM jobs j2
+          WHERE j2.company_id = j.company_id
+            AND j2.source_id != 'cn-a16z-portfolio'
+            AND j2.description_raw IS NOT NULL
+        )
+      ORDER BY j.first_seen_at DESC
+      LIMIT ?
+    `)
+    .bind(limit)
+    .all<{
+      id: string;
+      apply_url: string;
+      salary_min: number | null;
+      salary_max: number | null;
+      salary_currency: string | null;
+      salary_period: string | null;
+      locations: string | null;
+      workplace_type: string | null;
+    }>();
+  return results;
+}
+
+/**
+ * Backfill description + optional salary/location fields for a single job.
+ * Only writes fields that are currently null to avoid overwriting good data.
+ */
+export async function backfillJobDescription(
+  db: D1Database,
+  id: string,
+  fields: {
+    description_raw: string;
+    salary_min?: number | null;
+    salary_max?: number | null;
+    salary_currency?: string | null;
+    salary_period?: string | null;
+    locations?: string | null;
+    workplace_type?: string | null;
+    employment_type?: string | null;
+  }
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const { detectLanguage } = await import("../enrichment/language.ts");
+  const detectedLang = detectLanguage(fields.description_raw);
+  await db
+    .prepare(`
+      UPDATE jobs SET
+        description_raw        = ?,
+        description_language   = COALESCE(description_language, ?),
+        ai_generated_at        = NULL,
+        embedding_generated_at = NULL,
+        salary_min      = CASE WHEN salary_min IS NULL AND ? IS NOT NULL THEN ? ELSE salary_min END,
+        salary_max      = CASE WHEN salary_max IS NULL AND ? IS NOT NULL THEN ? ELSE salary_max END,
+        salary_currency = CASE WHEN salary_currency IS NULL AND ? IS NOT NULL THEN ? ELSE salary_currency END,
+        salary_period   = CASE WHEN salary_period IS NULL AND ? IS NOT NULL THEN ? ELSE salary_period END,
+        locations       = CASE WHEN locations IS NULL AND ? IS NOT NULL THEN ? ELSE locations END,
+        workplace_type  = CASE WHEN workplace_type IS NULL AND ? IS NOT NULL THEN ? ELSE workplace_type END,
+        employment_type = CASE WHEN employment_type IS NULL AND ? IS NOT NULL THEN ? ELSE employment_type END,
+        updated_at      = ?
+      WHERE id = ? AND description_raw IS NULL
+    `)
+    .bind(
+      fields.description_raw,
+      detectedLang,
+      fields.salary_min ?? null, fields.salary_min ?? null,
+      fields.salary_max ?? null, fields.salary_max ?? null,
+      fields.salary_currency ?? null, fields.salary_currency ?? null,
+      fields.salary_period ?? null, fields.salary_period ?? null,
+      fields.locations ?? null, fields.locations ?? null,
+      fields.workplace_type ?? null, fields.workplace_type ?? null,
+      fields.employment_type ?? null, fields.employment_type ?? null,
+      now, id
+    )
+    .run();
+}
+
 export async function updateJobDescriptionRaw(
   db: D1Database,
   id: string,
@@ -1114,6 +1305,7 @@ export async function updateJobAiFields(
     salary?: { min: number; currency: string; period: string } | null;
     workplace_type?: string | null;
     employment_type?: string | null;
+    seniority_level?: string | null;
     visa_sponsorship?: string | null;
     /**
      * AI-extracted normalized locations array, e.g. ["San Francisco, CA", "Remote"].
@@ -1121,28 +1313,34 @@ export async function updateJobAiFields(
      * unless the DB already has an exact match for the best value.
      */
     locations?: string[] | null;
+    /**
+     * ISO 639-1 language code. AI always overrides the heuristic value — it has
+     * full description context and can handle mixed-language or ambiguous posts.
+     */
+    description_language?: string | null;
   } | null
 ): Promise<void> {
-  const { salary, workplace_type, employment_type, visa_sponsorship, locations } = extras ?? {};
+  const { salary, workplace_type, employment_type, seniority_level, visa_sponsorship, locations, description_language } = extras ?? {};
 
   const locationsJson = locations && locations.length > 0 ? JSON.stringify(locations) : null;
 
-  // AI always overrides locations — it has full posting context, so its array is more accurate
-  // than the single-string normalization done at ingest time.
+  // AI always overrides locations and description_language — it has full posting context.
   // COALESCE fills gaps for other extracted fields — AI never overwrites source-provided data.
   await db
     .prepare(
       `UPDATE jobs
-       SET job_summary       = ?,
-           job_description   = ?,
-           ai_generated_at   = ?,
-           locations         = COALESCE(?, locations),
-           workplace_type    = COALESCE(workplace_type, ?),
-           employment_type   = COALESCE(employment_type, ?),
-           visa_sponsorship  = COALESCE(visa_sponsorship, ?),
-           salary_min        = COALESCE(salary_min, ?),
-           salary_currency   = COALESCE(salary_currency, ?),
-           salary_period     = COALESCE(salary_period, ?)
+       SET job_summary          = ?,
+           job_description      = ?,
+           ai_generated_at      = ?,
+           locations            = COALESCE(?, locations),
+           description_language = COALESCE(?, description_language),
+           workplace_type       = COALESCE(workplace_type, ?),
+           employment_type      = COALESCE(employment_type, ?),
+           seniority_level      = COALESCE(seniority_level, ?),
+           visa_sponsorship     = COALESCE(visa_sponsorship, ?),
+           salary_min           = COALESCE(salary_min, ?),
+           salary_currency      = COALESCE(salary_currency, ?),
+           salary_period        = COALESCE(salary_period, ?)
        WHERE id = ?`
     )
     .bind(
@@ -1150,8 +1348,10 @@ export async function updateJobAiFields(
       jobDescription,
       now,
       locationsJson,
+      description_language ?? null,
       workplace_type ?? null,
       employment_type ?? null,
+      seniority_level ?? null,
       visa_sponsorship ?? null,
       salary?.min ?? null,
       salary?.currency ?? null,
@@ -1159,6 +1359,51 @@ export async function updateJobAiFields(
       id
     )
     .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Language backfill
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch jobs that have a description but no detected language yet.
+ * The heuristic backfill processes these in batches each cron run.
+ */
+export async function getJobsNeedingLanguageDetection(
+  db: D1Database,
+  limit: number
+): Promise<Array<{ id: string; description_raw: string }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, description_raw FROM jobs
+       WHERE description_raw IS NOT NULL AND description_language IS NULL
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ id: string; description_raw: string }>();
+  return results;
+}
+
+/**
+ * Write heuristic-detected language for a batch of jobs.
+ * Only updates rows where description_language is still null — AI-set values
+ * are never overwritten by the heuristic backfill.
+ */
+export async function batchSetLanguage(
+  db: D1Database,
+  rows: Array<{ id: string; description_language: string }>
+): Promise<void> {
+  if (rows.length === 0) return;
+  const stmts = rows.map(({ id, description_language }) =>
+    db
+      .prepare("UPDATE jobs SET description_language = ? WHERE id = ? AND description_language IS NULL")
+      .bind(description_language, id)
+  );
+  const CHUNK = 500;
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    await db.batch(stmts.slice(i, i + CHUNK));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

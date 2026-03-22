@@ -72,6 +72,8 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
     locations,
     employment_type: row.employment_type,
     workplace_type: row.workplace_type,
+    seniority_level: row.seniority_level ?? null,
+    description_language: row.description_language ?? null,
     source_name: row.source_name,
     source_url: row.source_url,
     salary,
@@ -158,6 +160,8 @@ export async function handleGetJob(
           salary: salaryPayload,
           workplace_type: extracted.workplace_type,
           employment_type: extracted.employment_type,
+          seniority_level: extracted.seniority_level,
+          description_language: extracted.description_language,
           visa_sponsorship: extracted.visa_sponsorship,
           locations: extracted.locations,
         })
@@ -172,6 +176,13 @@ export async function handleGetJob(
       }
       if (row.employment_type === null && extracted.employment_type) {
         row.employment_type = extracted.employment_type;
+      }
+      if (row.seniority_level === null && extracted.seniority_level) {
+        row.seniority_level = extracted.seniority_level;
+      }
+      // AI always overrides description_language (not just fills nulls)
+      if (extracted.description_language) {
+        row.description_language = extracted.description_language;
       }
       if (row.visa_sponsorship === null && extracted.visa_sponsorship) {
         row.visa_sponsorship = extracted.visa_sponsorship;

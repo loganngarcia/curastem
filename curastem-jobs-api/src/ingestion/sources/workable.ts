@@ -25,16 +25,17 @@ import {
 } from "../../utils/normalize.ts";
 
 interface WorkableJob {
-  id: string;           // Workable shortcode / slug
+  shortcode: string;    // Workable's unique job identifier (e.g. "CCBE25DC0C")
   title: string;
   city: string | null;
   state: string | null;
   country: string | null;
   location_str: string | null;   // pre-formatted location string (may not exist)
-  type_of_employment: string | null;  // "Full-time" | "Part-time" etc.
-  workplace: string | null;      // "remote" | "hybrid" | "onsite"
+  employment_type: string | null;  // "Full-time" | "Part-time" etc.
+  telecommuting: boolean | null;   // true = remote
   published_on: string | null;   // "YYYY-MM-DD"
   url: string;                   // canonical application URL
+  locations: Array<{ country: string; city: string; region: string }> | null;
 }
 
 interface WorkableResponse {
@@ -46,10 +47,16 @@ interface WorkableResponse {
 }
 
 /**
- * Build a human-readable location string from Workable's split city/state/country fields.
+ * Build a human-readable location string from Workable's location fields.
+ * Prefers the structured `locations` array (multi-location support), falls back
+ * to the top-level city/state/country fields for older API responses.
  */
 function buildLocation(job: WorkableJob): string | null {
-  if (job.location_str) return job.location_str;
+  if (job.locations && job.locations.length > 0) {
+    const loc = job.locations[0];
+    const parts = [loc.city, loc.region, loc.country].filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : null;
+  }
   const parts = [job.city, job.state, job.country].filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : null;
 }
@@ -76,12 +83,17 @@ export const workableFetcher: JobSource = {
       try {
         const locationStr = buildLocation(job);
 
+        // Infer workplace type: telecommuting=true → remote, otherwise derive from location
+        const workplaceType = job.telecommuting
+          ? "remote"
+          : normalizeWorkplaceType(null, locationStr);
+
         jobs.push({
-          external_id: job.id,
+          external_id: job.shortcode,
           title: job.title,
           location: normalizeLocation(locationStr),
-          employment_type: normalizeEmploymentType(job.type_of_employment),
-          workplace_type: normalizeWorkplaceType(job.workplace, locationStr),
+          employment_type: normalizeEmploymentType(job.employment_type),
+          workplace_type: workplaceType,
           apply_url: job.url,
           source_url: job.url,
           // Public v1 widget does not expose description — AI extraction will skip gracefully

@@ -14,13 +14,11 @@
  * JSON-RPC 2.0 over HTTP POST — no vendor-specific extensions.
  *
  * ──────────────────────────────────────────────────────────────────────────
- * AVAILABLE TOOLS (7 total)
+ * AVAILABLE TOOLS (5 total)
  * ──────────────────────────────────────────────────────────────────────────
  *
  * Discovery & search:
- *   search_jobs          — keyword + filter search across all jobs
- *   get_recent_jobs      — latest jobs, with optional keyword + filters
- *   get_jobs_by_company  — all open roles at a specific company
+ *   search_jobs          — keyword + filter search; pass company= or posted_within_days= for recency
  *
  * Detail & comparison:
  *   get_job_details      — full job with AI-enriched structured description
@@ -57,18 +55,14 @@ import { JobsApiClient, JobsApiError } from "./client.ts";
 
 // Tool definitions (JSON Schema for tools/list)
 import { getJobDetailsTool } from "./tools/getJobDetails.ts";
-import { getRecentJobsTool } from "./tools/getRecentJobs.ts";
 import { searchJobsTool } from "./tools/searchJobs.ts";
-import { getJobsByCompanyTool } from "./tools/getJobsByCompany.ts";
 import { suggestSimilarJobsTool } from "./tools/suggestSimilarJobs.ts";
 import { getMarketOverviewTool } from "./tools/getMarketOverview.ts";
 import { getJobKeywordsTool } from "./tools/getJobKeywords.ts";
 
 // Tool runners (called on tools/call)
 import { runGetJobDetails, type GetJobDetailsArgs } from "./tools/getJobDetails.ts";
-import { runGetRecentJobs, type GetRecentJobsArgs } from "./tools/getRecentJobs.ts";
 import { runSearchJobs, type SearchJobsArgs } from "./tools/searchJobs.ts";
-import { runGetJobsByCompany, type GetJobsByCompanyArgs } from "./tools/getJobsByCompany.ts";
 import { runSuggestSimilarJobs, type SuggestSimilarJobsArgs } from "./tools/suggestSimilarJobs.ts";
 import { runGetMarketOverview } from "./tools/getMarketOverview.ts";
 import { runGetJobKeywords, type GetJobKeywordsArgs } from "./tools/getJobKeywords.ts";
@@ -92,8 +86,6 @@ import { McpErrorCode } from "./types.ts";
 
 const ALL_TOOLS = [
   searchJobsTool,
-  getRecentJobsTool,
-  getJobsByCompanyTool,
   getJobDetailsTool,
   getJobKeywordsTool,
   suggestSimilarJobsTool,
@@ -155,19 +147,6 @@ async function handleToolCall(
       case "search_jobs":
         result = await runSearchJobs(client, args as SearchJobsArgs);
         break;
-
-      case "get_recent_jobs":
-        result = await runGetRecentJobs(client, args as GetRecentJobsArgs);
-        break;
-
-      case "get_jobs_by_company": {
-        const companyArgs = args as unknown as GetJobsByCompanyArgs;
-        if (!companyArgs.company) {
-          return rpcError(req.id, McpErrorCode.InvalidParams, "company is required");
-        }
-        result = await runGetJobsByCompany(client, companyArgs);
-        break;
-      }
 
       case "get_job_details": {
         const detailArgs = args as unknown as GetJobDetailsArgs;

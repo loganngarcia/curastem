@@ -220,6 +220,8 @@ Return ONLY valid JSON (no markdown fences) with exactly this shape:
   "preferred_qualifications": ["<bullet>", ...],
   "workplace_type": "<remote|hybrid|on_site|null>",
   "employment_type": "<full_time|part_time|contract|internship|temporary|null>",
+  "seniority_level": "<new_grad|entry|mid|senior|staff|manager|director|executive|null>",
+  "description_language": "<ISO 639-1 code or null>",
   "visa_sponsorship": "<yes|no|null>",
   "salary_min": <number or null>,
   "salary_period": "<year|month|hour|null>",
@@ -232,6 +234,11 @@ Rules:
 - Return empty arrays [] for any section not clearly present in the source text.
 - workplace_type: "remote" if fully remote, "hybrid" if hybrid/flexible, "on_site" if in-office only. null if not mentioned.
 - employment_type: "full_time", "part_time", "contract", "internship", or "temporary". null if not mentioned.
+- seniority_level: career level — new_grad | entry | mid | senior | staff | manager | director | executive | null.
+    "new_grad" = explicitly targets new/recent graduates ("New Grad", "Campus Hire", etc.). "Junior"/"Associate" are entry, not new_grad.
+    "manager" = people manager with direct reports. Note: "manager" in a title (Product Manager, Account Manager) does not automatically mean manager seniority 
+    null = ambiguous or not enough information. 
+- description_language: ISO 639-1 code of the job description's primary language. null only if too short or garbled to determine.
 - visa_sponsorship: "yes" if the posting explicitly states visa sponsorship is available, "no" if it explicitly states sponsorship is NOT available or requires existing work authorization. null if not mentioned at all.
 - salary_min: the minimum salary amount in USD if explicitly stated, otherwise null. Keep per-period amount as-is (do not annualize hourly/monthly).
 - salary_period: "year", "month", or "hour" matching salary_min. null if no salary.
@@ -244,6 +251,9 @@ export interface ExtractedJobFields {
   job_description: JobDescriptionExtracted;
   workplace_type: import("../types.ts").WorkplaceType | null;
   employment_type: import("../types.ts").EmploymentType | null;
+  seniority_level: import("../types.ts").SeniorityLevel | null;
+  /** ISO 639-1 language code of the job description. AI always overrides the heuristic value. */
+  description_language: import("../types.ts").DescriptionLanguage | null;
   visa_sponsorship: import("../types.ts").VisaSponsorship | null;
   salary_min: number | null;
   salary_currency: string | null;
@@ -285,6 +295,8 @@ export async function extractJobFields(
     preferred_qualifications?: unknown[];
     workplace_type?: unknown;
     employment_type?: unknown;
+    seniority_level?: unknown;
+    description_language?: unknown;
     visa_sponsorship?: unknown;
     salary_min?: unknown;
     salary_period?: unknown;
@@ -304,12 +316,22 @@ export async function extractJobFields(
 
   const WORKPLACE_TYPES = ["remote", "hybrid", "on_site"] as const;
   const EMPLOYMENT_TYPES = ["full_time", "part_time", "contract", "internship", "temporary"] as const;
+  const SENIORITY_LEVELS = ["new_grad", "entry", "mid", "senior", "staff", "manager", "director", "executive"] as const;
+  // Accept any 2-letter ISO 639-1 code the model returns — not restricted to our heuristic set.
+  const isValidLangCode = (v: unknown): v is import("../types.ts").DescriptionLanguage =>
+    typeof v === "string" && /^[a-z]{2}$/.test(v);
 
   const workplaceType = WORKPLACE_TYPES.includes(parsed.workplace_type as never)
     ? (parsed.workplace_type as import("../types.ts").WorkplaceType)
     : null;
   const employmentType = EMPLOYMENT_TYPES.includes(parsed.employment_type as never)
     ? (parsed.employment_type as import("../types.ts").EmploymentType)
+    : null;
+  const seniorityLevel = SENIORITY_LEVELS.includes(parsed.seniority_level as never)
+    ? (parsed.seniority_level as import("../types.ts").SeniorityLevel)
+    : null;
+  const descriptionLanguage = isValidLangCode(parsed.description_language)
+    ? parsed.description_language
     : null;
   const visaSponsorship = (parsed.visa_sponsorship === "yes" || parsed.visa_sponsorship === "no")
     ? (parsed.visa_sponsorship as import("../types.ts").VisaSponsorship)
@@ -333,6 +355,8 @@ export async function extractJobFields(
     },
     workplace_type: workplaceType,
     employment_type: employmentType,
+    seniority_level: seniorityLevel,
+    description_language: descriptionLanguage,
     visa_sponsorship: visaSponsorship,
     salary_min: salaryMin,
     salary_currency: salaryMin !== null ? "USD" : null,

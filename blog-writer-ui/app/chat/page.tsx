@@ -10,6 +10,7 @@ import BlogEditor, { type BlogEditorRef } from "@/components/BlogEditor";
 import SettingsModal from "@/components/SettingsModal";
 import ErrorModal from "@/components/ErrorModal";
 import { ChatMarkdown } from "@/components/ChatMarkdown";
+import { ChatTooltip } from "@/components/ChatTooltip";
 
 interface Message {
   role: "user" | "assistant";
@@ -1489,25 +1490,16 @@ export default function ChatPage() {
               }}
             >
               {isNewChatTopRightHovered && (
-                <div
+                <ChatTooltip
                   style={{
-                    position: "absolute",
                     right: "100%",
                     top: "50%",
                     transform: "translate(-8px, -50%)",
                     whiteSpace: "nowrap",
-                    background: "var(--cs-surface)",
-                    color: "var(--cs-text-primary)",
-                    padding: "6px 10px",
-                    borderRadius: 8,
-                    fontSize: 12,
-                    fontFamily: "Inter, system-ui, sans-serif",
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
-                    pointerEvents: "none",
                   }}
                 >
                   New chat
-                </div>
+                </ChatTooltip>
               )}
               <svg
                 width="36"
@@ -1531,7 +1523,7 @@ export default function ChatPage() {
           </>
         )}
 
-        {/* Chat input area — web.tsx bottom stack: optional default suggestions, then input bar */}
+        {/* Chat input area — matches web.tsx ChatInput: wrapper → {children} suggestions → BottomControlsContainer → bar */}
         <div
           className={cn(
             "absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center",
@@ -1545,17 +1537,29 @@ export default function ChatPage() {
           style={{
             width: "100%",
             justifyContent: "flex-end",
+            alignItems: "center",
             pointerEvents: showDefaultSuggestions ? "none" : undefined,
             paddingTop: showDefaultSuggestions ? 36 : undefined,
             paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
           }}
         >
-          <form
-            onSubmit={handleSend}
-            className="w-full max-w-[816px] mx-auto relative"
-            aria-label="Chat form"
-            data-label="chat-form"
-            style={{ pointerEvents: "auto" }}
+          <div
+            data-layer="chat-input-wrapper"
+            className="ChatInputWrapper"
+            style={{
+              width: "100%",
+              maxWidth: 816,
+              position: "relative",
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "flex-end",
+              paddingBottom: 0,
+              paddingLeft: 0,
+              paddingRight: 0,
+              boxSizing: "border-box",
+              pointerEvents: "auto",
+              overflowX: "visible",
+            }}
           >
             {showDefaultSuggestions && (
               <>
@@ -1578,7 +1582,6 @@ export default function ChatPage() {
                   className="AiSuggestedReplies ai-suggested-replies-scroll"
                   style={{
                     width: "100%",
-                    maxWidth: 816,
                     display: "flex",
                     flexDirection: "row",
                     justifyContent: "flex-start",
@@ -1679,6 +1682,34 @@ export default function ChatPage() {
                 </div>
               </>
             )}
+            <div
+              data-layer="bottom-controls-container"
+              className="BottomControlsContainer"
+              style={{
+                width: isMobileLayout ? "calc(100% - 32px)" : "calc(100% - 48px)",
+                padding: "10px 0 16px 0",
+                background: "transparent",
+                justifyContent: "center",
+                alignItems: "flex-end",
+                gap: 10,
+                display: "flex",
+                marginLeft: isMobileLayout ? 16 : 24,
+                marginRight: isMobileLayout ? 16 : 24,
+                boxSizing: "border-box",
+              }}
+            >
+              <form
+                onSubmit={handleSend}
+                aria-label="Chat form"
+                data-label="chat-form"
+                style={{
+                  flex: "1 1 0",
+                  minWidth: 0,
+                  width: "100%",
+                  maxWidth: "100%",
+                  margin: 0,
+                }}
+              >
             {/* Chat input bar — exact Curastem design (web.tsx ChatInputBar) */}
             <div
               data-layer="chat-input-bar"
@@ -1862,7 +1893,9 @@ export default function ChatPage() {
                 </div>
               </div>
             </div>
-            </form>
+              </form>
+            </div>
+          </div>
         </div>
         </motion.div>
 

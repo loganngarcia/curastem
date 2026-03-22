@@ -18,7 +18,8 @@
  * All source failures are isolated — one bad source never blocks others.
  */
 
-import { batchCheckCrossSourceDups, batchGetExistingJobs, batchMarkJobsEmbedded, batchUpsertJobs, getJobsNeedingEmbedding, getLocationsNeedingGeocode, getSourceById, listEnabledSources, updateJobsWithCoords, updateSourceFetchResult, upsertCompany } from "../db/queries.ts";
+import { batchCheckCrossSourceDups, batchGetExistingJobs, batchMarkJobsEmbedded, batchSetLanguage, batchUpsertJobs, getJobsNeedingEmbedding, getJobsNeedingLanguageDetection, getLocationsNeedingGeocode, getSourceById, listEnabledSources, resolveCompanySlug, updateJobsWithCoords, updateSourceFetchResult, upsertCompany } from "../db/queries.ts";
+import { backfillConsiderDescriptions } from "../enrichment/consider-descriptions.ts";
 import { embedJob } from "../enrichment/ai.ts";
 import { runCompanyEnrichment } from "../enrichment/company.ts";
 import { getFetcher } from "./registry.ts";
@@ -87,9 +88,19 @@ async function processSource(
   // ── Phase 1: Upsert unique companies ──────────────────────────────────────
   // Cache slug → companyId so single-company sources (Greenhouse, Lever, Ashby,
   // Workday) only pay 1 D1 subrequest for the company instead of N (one per job).
-  const companyCache = new Map<string, string>();
+  // slug → canonical slug (after alias resolution) → company id
+  const aliasCache  = new Map<string, string>(); // raw slug → canonical slug
+  const companyCache = new Map<string, string>(); // canonical slug → company id
   for (const normalized of jobsToProcess) {
-    const slug = slugify(normalized.company_name);
+    const rawSlug = slugify(normalized.company_name);
+    if (!aliasCache.has(rawSlug)) {
+      try {
+        aliasCache.set(rawSlug, await resolveCompanySlug(db, rawSlug));
+      } catch {
+        aliasCache.set(rawSlug, rawSlug); // fall back to raw slug on DB error
+      }
+    }
+    const slug = aliasCache.get(rawSlug)!;
     if (!companyCache.has(slug)) {
       try {
         const id = await upsertCompany(
@@ -112,7 +123,18 @@ async function processSource(
   };
   const jobMetas: JobMeta[] = [];
   for (const normalized of jobsToProcess) {
-    const slug    = slugify(normalized.company_name);
+    // Skip jobs with missing required fields rather than letting them crash the batch
+    if (!normalized.external_id || !normalized.title || !normalized.company_name) {
+      result.failed++;
+      logger.warn("job_skipped_missing_fields", {
+        source_id: source.id,
+        external_id: normalized.external_id,
+        title: normalized.title,
+        company: normalized.company_name,
+      });
+      continue;
+    }
+    const slug    = aliasCache.get(slugify(normalized.company_name)) ?? slugify(normalized.company_name);
     const companyId = companyCache.get(slug);
     if (!companyId) { result.failed++; continue; }
     jobMetas.push({
@@ -124,10 +146,16 @@ async function processSource(
   }
 
   // ── Phase 3: Batch cross-source dedup check — 1 D1 subrequest total ───────
-  const dupSet = await batchCheckCrossSourceDups(
-    db,
-    jobMetas.map(({ dedupKey }) => ({ dedupKey, sourceId: source.id }))
-  );
+  let dupSet: Set<string>;
+  try {
+    dupSet = await batchCheckCrossSourceDups(
+      db,
+      jobMetas.map(({ dedupKey }) => ({ dedupKey, sourceId: source.id }))
+    );
+  } catch (err) {
+    logger.warn("dedup_check_failed", { source_id: source.id, error: String(err) });
+    dupSet = new Set(); // proceed without dedup rather than dropping all jobs
+  }
 
   const nonDupMetas = jobMetas.filter(({ dedupKey }) => {
     if (dupSet.has(dedupKey)) { result.deduplicated++; return false; }
@@ -135,11 +163,17 @@ async function processSource(
   });
 
   // ── Phase 4: Batch check existing jobs — 1 D1 subrequest total ────────────
-  const existingMap = await batchGetExistingJobs(
-    db,
-    source.id,
-    nonDupMetas.map((m) => m.normalized.external_id)
-  );
+  let existingMap: Map<string, { id: string; description_raw: string | null }>;
+  try {
+    existingMap = await batchGetExistingJobs(
+      db,
+      source.id,
+      nonDupMetas.map((m) => m.normalized.external_id)
+    );
+  } catch (err) {
+    logger.warn("existing_jobs_check_failed", { source_id: source.id, error: String(err) });
+    existingMap = new Map(); // treat all as new inserts
+  }
 
   // ── Phase 4b: Inline geocode unique primary locations (locations[0] = normalizeLocation(raw))
   // Coords are keyed off the normalized string, which is what ends up in locations[0] in the DB.
@@ -183,10 +217,20 @@ async function processSource(
   let upsertResults: Array<{ inserted: boolean; needsEmbedding: boolean }>;
   try {
     upsertResults = await batchUpsertJobs(db, upsertInputs, existingMap);
-  } catch (err) {
-    result.failed += upsertInputs.length;
-    logger.warn("batch_upsert_failed", { source_id: source.id, error: String(err) });
+  } catch (batchErr) {
+    // Batch failed — retry one-by-one so a single bad job doesn't drop the whole source
+    logger.warn("batch_upsert_failed_retrying_individually", { source_id: source.id, count: upsertInputs.length, error: String(batchErr) });
     upsertResults = [];
+    for (const input of upsertInputs) {
+      try {
+        const [r] = await batchUpsertJobs(db, [input], existingMap);
+        upsertResults.push(r);
+      } catch (singleErr) {
+        result.failed++;
+        logger.warn("job_upsert_failed", { source_id: source.id, external_id: input.external_id, error: String(singleErr) });
+        upsertResults.push({ inserted: false, needsEmbedding: false });
+      }
+    }
   }
 
   // ── Phase 6: Embed new/changed jobs at insert time ─────────────────────────
@@ -251,10 +295,9 @@ async function processSource(
  * Increase this number if you want the backfill to complete faster.
  * Each embedding takes ~200–400ms, so 500 ≈ 100–200 seconds of wall clock time.
  */
-// Workers Paid: 10K subrequests. Ingestion ≈ 600. Backfill 500 ≈ 1,100 total.
-// 500 × 24/day = 12,000 embeddings/day. Backlog of 22K clears in ~2 days.
-// Each embed ~250ms sequential → 500 ≈ 125s, well within the 15-min cron CPU budget.
-const EMBEDDING_BACKFILL_BATCH = 500;
+// 1000 × 24/day = 24,000 embeddings/day. Backlog of ~15k a16z jobs clears in <1 day.
+// Each embed ~250ms sequential → 1000 ≈ 250s. Total cron CPU with 50 sources ≈ 450s (50%).
+const EMBEDDING_BACKFILL_BATCH = 1000;
 
 /**
  * Backfill Vectorize embeddings for jobs that were ingested but never embedded.
@@ -327,10 +370,11 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
   return { succeeded: vectors.length, failed, total: jobs.length };
 }
 
-// Photon has no rate limit so we can process many more per run.
-// Only Nominatim fallbacks need the 1.1s delay; at ~150 locations/run
-// worst-case (all Nominatim) is ~165s — safe within Workers CPU budget.
-const GEOCODE_BACKFILL_BATCH = 150;
+// Photon (primary) has no rate limit and resolves in ~100ms — 500 locations ≈ 50s.
+// Only Nominatim fallbacks (rare, <5% of locations) add the 1.1s delay.
+// Worst case (all Nominatim): 500 × 1.1s = 550s — acceptable since it never happens in practice.
+// At 500/run × 24/day = 12,000/day, the 13k geocode backlog clears in ~1 day.
+const GEOCODE_BACKFILL_BATCH = 500;
 
 async function backfillGeocode(env: Env): Promise<void> {
   const locations = await getLocationsNeedingGeocode(env.JOBS_DB, GEOCODE_BACKFILL_BATCH);
@@ -352,6 +396,28 @@ async function backfillGeocode(env: Env): Promise<void> {
   if (updated > 0) {
     logger.info("geocode_backfill_completed", { locations_processed: locations.length, jobs_updated: updated });
   }
+}
+
+// Pure CPU — no network. 2,000 jobs × ~0.1ms each ≈ 200ms per run.
+const LANGUAGE_BACKFILL_BATCH = 2000;
+
+async function backfillLanguage(env: Env): Promise<void> {
+  const { detectLanguage } = await import("../enrichment/language.ts");
+  const jobs = await getJobsNeedingLanguageDetection(env.JOBS_DB, LANGUAGE_BACKFILL_BATCH);
+  if (jobs.length === 0) return;
+
+  const detected: Array<{ id: string; description_language: string }> = [];
+  for (const job of jobs) {
+    const lang = detectLanguage(job.description_raw);
+    if (lang) detected.push({ id: job.id, description_language: lang });
+  }
+
+  await batchSetLanguage(env.JOBS_DB, detected);
+  logger.info("language_backfill_completed", {
+    processed: jobs.length,
+    detected: detected.length,
+    null_result: jobs.length - detected.length,
+  });
 }
 
 /**
@@ -381,18 +447,43 @@ export async function runIngestion(env: Env): Promise<void> {
   const overallStart = Date.now();
   logger.info("ingestion_started");
 
-  // Process 6 sources per cron run (oldest-first via last_fetched_at ASC).
-  // Workers Paid: 10K subrequests. 6 sources + backfill ≈ 800 subrequests. See BILLING_AUDIT.md.
-  const sources = await listEnabledSources(env.JOBS_DB, 6);
+  // Fetch up to MAX_SOURCES candidates; stop early if elapsed time exceeds the
+  // SOURCE_BUDGET_MS threshold so backfill passes always get a guaranteed time slice.
+  // Workers Paid cron limit: 15 minutes (900s). We reserve 500s for backfills,
+  // leaving 400s for source ingestion. Any run that hits a cluster of slow sources
+  // (Workday ~15s, a16z ~46s) will stop early rather than starving the backfills.
+  const MAX_SOURCES = 50;
+  const SOURCE_BUDGET_MS = 400_000; // 400s — leaves 500s for embedding + desc + geocode backfills
+
+  const sources = await listEnabledSources(env.JOBS_DB, MAX_SOURCES);
   logger.info("ingestion_sources_loaded", { count: sources.length });
 
   const results: IngestionResult[] = [];
 
   for (const source of sources) {
+    const elapsed = Date.now() - overallStart;
+    if (elapsed > SOURCE_BUDGET_MS) {
+      logger.warn("ingestion_source_budget_exceeded", {
+        elapsed_ms: elapsed,
+        sources_processed: results.length,
+        sources_remaining: sources.length - results.length,
+      });
+      break;
+    }
     logger.info("ingestion_source_started", { source_id: source.id, source_name: source.name });
-    // Inline embedding: each new job gets embedded during ingestion (up to 50/source).
-    // Excess jobs go to backfill. Backfill still runs at end for any missed embeddings.
-    const result = await processSource(env, source, false);
+    let result: IngestionResult;
+    try {
+      result = await processSource(env, source, false);
+    } catch (err) {
+      // Unexpected error that escaped processSource's own error handling — log and continue
+      logger.error("ingestion_source_crashed", { source_id: source.id, error: String(err) });
+      result = {
+        source_id: source.id, source_name: source.name,
+        fetched: 0, inserted: 0, updated: 0, skipped: 0,
+        deduplicated: 0, failed: 0,
+        error: String(err), duration_ms: 0,
+      };
+    }
     logger.ingestionResult(result);
     results.push(result);
   }
@@ -438,5 +529,24 @@ export async function runIngestion(env: Env): Promise<void> {
     await backfillGeocode(env);
   } catch (err) {
     logger.error("geocode_backfill_cron_failed", { error: String(err) });
+  }
+
+  // Consider description backfill — fetches full job descriptions from the native
+  // ATS (Greenhouse/Lever/Ashby) for jobs ingested via the Consider portfolio API,
+  // which does not include descriptions in its search response.
+  // 50 jobs/run × 200ms delay = ~10s. At 24 runs/day, 15k jobs clear in ~12.5 days.
+  try {
+    await backfillConsiderDescriptions(env.JOBS_DB);
+  } catch (err) {
+    logger.error("consider_description_backfill_cron_failed", { error: String(err) });
+  }
+
+  // Language detection backfill — runs the heuristic detector on jobs that have a
+  // description but no language tag yet (e.g. jobs ingested before this feature shipped).
+  // Pure CPU, no network calls, so 2,000/run is fast (~200ms) and clears the backlog quickly.
+  try {
+    await backfillLanguage(env);
+  } catch (err) {
+    logger.error("language_backfill_cron_failed", { error: String(err) });
   }
 }

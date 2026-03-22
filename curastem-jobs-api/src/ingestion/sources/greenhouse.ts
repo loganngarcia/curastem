@@ -29,7 +29,8 @@ import {
 interface GreenhouseMetadataField {
   id: number;
   name: string;
-  value: string | null;
+  // Greenhouse metadata values can be strings, booleans, objects (currency_range), or null
+  value: string | boolean | Record<string, unknown> | null;
 }
 
 interface GreenhouseJob {
@@ -55,7 +56,7 @@ interface GreenhouseJobsResponse {
 function extractSalaryFromMetadata(metadata: GreenhouseMetadataField[]): string | null {
   for (const field of metadata) {
     const name = field.name.toLowerCase();
-    if ((name.includes("salary") || name.includes("compensation") || name.includes("pay")) && field.value) {
+    if ((name.includes("salary") || name.includes("compensation") || name.includes("pay")) && typeof field.value === "string" && field.value) {
       return field.value;
     }
   }
@@ -70,7 +71,9 @@ function extractWorkplaceFromMetadata(
   locationName: string
 ): string | null {
   for (const field of metadata) {
-    const val = field.value?.toLowerCase() ?? "";
+    // Guard against non-string values (booleans, objects) that Greenhouse sometimes returns
+    if (typeof field.value !== "string") continue;
+    const val = field.value.toLowerCase();
     if (val.includes("remote") || val.includes("hybrid") || val.includes("on-site")) {
       return val;
     }
@@ -82,7 +85,10 @@ export const greenhouseFetcher: JobSource = {
   sourceType: "greenhouse",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
-    // Append ?content=true to get full description HTML
+    // ?content=true includes full HTML job descriptions in the response.
+    // Large boards (HubSpot=277 jobs, Stripe=521 jobs) produce 3–5MB responses,
+    // but Workers handle this fine — the previous OOM was caused by the metadata
+    // type bug (boolean/object values crashing .toLowerCase()), now fixed.
     const url = `${source.base_url}?content=true`;
     const res = await fetch(url, {
       headers: {

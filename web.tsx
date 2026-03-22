@@ -305,12 +305,16 @@ const DEFAULT_DOC_CONTENT = `
 <p>You can start typing or ask Curastem to write resumes, make study guides, draft messages, and anything you can imagine </p>
 `.trim()
 
+const DEFAULT_APP_CODE = `<h1>Welcome to Apps</h1>
+<p>Ask Curastem to build presentations, quizzes, portfolios, and anything you can imagine</p>`
+
 interface ChatSession {
     id: string
     title: string
     timestamp: number
     messages: Message[]
     notes: string
+    docType?: "doc" | "resume" | "cover_letter"
     whiteboard: any
     app?: { code: string; mode: "editor" | "player" }
     isPinned?: boolean
@@ -2102,6 +2106,7 @@ interface JobSnippet {
     locations?: string[] | null
     employment_type?: string | null
     workplace_type?: string | null
+    seniority_level?: string | null
     posted_at?: string | null
     apply_url?: string | null
     summary?: string | null
@@ -3298,6 +3303,8 @@ interface DocEditorProps {
     hideLeftToolbar?: boolean
     hideContent?: boolean
     docCompany?: string
+    /** Profile name (`you_name`). Resume prefers this over the doc first line; cover letter uses it when set. */
+    userDisplayName?: string
 }
 
 const ToolbarButton = React.memo(
@@ -3584,6 +3591,45 @@ const HeaderActions = React.memo(
     }
 )
 
+function fileNameSegment(s: string, max: number): string {
+    return s
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^\w.-]/g, "")
+        .slice(0, max)
+}
+
+/** Profile name as `First_Last` or single token; empty if unset. */
+function profileNameStem(userDisplayName: string | undefined): string {
+    const nameRaw = (userDisplayName || "").trim()
+    if (!nameRaw) return ""
+    const parts = nameRaw.split(/\s+/).filter(Boolean)
+    if (parts.length >= 2) {
+        return `${fileNameSegment(parts[0], 30)}_${fileNameSegment(parts[parts.length - 1], 30)}`
+    }
+    if (parts.length === 1) return fileNameSegment(parts[0], 40)
+    return ""
+}
+
+/**
+ * Cover letter: with profile → `name_company_cover_letter` or `name_cover_letter`;
+ * without profile → `company_cover_letter` or `cover_letter`.
+ */
+function buildCoverLetterDownloadStem(
+    userDisplayName: string | undefined,
+    companyName: string
+): string {
+    const nameStem = profileNameStem(userDisplayName)
+    const companyStem = companyName.trim()
+        ? fileNameSegment(companyName, 30)
+        : ""
+    if (nameStem && companyStem)
+        return `${nameStem}_${companyStem}_cover_letter`
+    if (nameStem) return `${nameStem}_cover_letter`
+    if (companyStem) return `${companyStem}_cover_letter`
+    return "cover_letter"
+}
+
 const DocEditor = React.memo(function DocEditor({
     content,
     onChange,
@@ -3598,6 +3644,7 @@ const DocEditor = React.memo(function DocEditor({
     hideLeftToolbar = false,
     hideContent = false,
     docCompany = "",
+    userDisplayName = "",
 }: DocEditorProps) {
     const editorRef = React.useRef<HTMLDivElement>(null)
     const containerRef = React.useRef<HTMLDivElement>(null)
@@ -4350,532 +4397,264 @@ const DocEditor = React.memo(function DocEditor({
 
                 if (isOnePage) {
                     try {
-                        console.log(
-                            "[PDF] Starting pdf-lib generation, docType:",
-                            docType
-                        )
-                        // --- ATS-safe text-based PDF via pdf-lib ---
-                        // Real selectable/searchable text; no image rasterization.
-                        // Uses Standard Type 1 fonts (Helvetica + Times) which are built into every PDF reader —
-                        // no font embedding needed, zero extra bytes, perfect ATS parsing.
+                        const isCoverLetter = docType === "cover_letter"
 
-                        // pdf-lib pt dimensions: letter page = 612 x 792 pt
+                        // ATS-safe text-based PDF: selectable text, Standard Type 1 fonts (no embedding needed).
                         const PAGE_W_PT = 612
                         const PAGE_H_PT = 792
-                        const MARGIN_PT = 36 // 0.5in
+                        const MARGIN_PT = 36
                         const CONTENT_W_PT = PAGE_W_PT - MARGIN_PT * 2
                         const CONTENT_H_PT = PAGE_H_PT - MARGIN_PT * 2
-
-                        // Snapshot settings so repeated downloads always use latest values
                         const useSerif = settings.fontStyle === "serif"
 
-                        // Parse HTML into a flat list of styled blocks for layout
+                        // Spacing constants — cover letter gets slightly more air.
+                        const bodyLineMult = isCoverLetter ? 1.46 : 1.45
+                        const gapAfterParagraph = (pt: number) => pt * 0.2
+                        const gapAfterListItem = (pt: number) =>
+                            isCoverLetter ? pt * 0.35 : pt * 0.15
+                        // Small gap before the first bullet of each list / nested list.
+                        const listFirstBulletGap = (pt: number) =>
+                            isCoverLetter ? pt * 0.32 : 0
+
+                        // --- Parse HTML → flat block list ---
+                        type Run = { text: string; bold: boolean; italic: boolean }
                         type Block =
                             | { kind: "h1"; text: string }
                             | { kind: "h2"; text: string }
-                            | {
-                                  kind: "p"
-                                  runs: {
-                                      text: string
-                                      bold: boolean
-                                      italic: boolean
-                                  }[]
-                              }
-                            | {
-                                  kind: "li"
-                                  runs: {
-                                      text: string
-                                      bold: boolean
-                                      italic: boolean
-                                  }[]
-                                  indent: number
-                              }
+                            | { kind: "p"; runs: Run[] }
+                            | { kind: "li"; runs: Run[]; indent: number }
                             | { kind: "rule" }
 
                         const parseHTML = (): Block[] => {
                             const tmp = document.createElement("div")
                             tmp.innerHTML = content
-                            const blocks: Block[] = []
+                            const out: Block[] = []
 
-                            type Run = {
-                                text: string
-                                bold: boolean
-                                italic: boolean
-                            }
-
-                            // Extract only the direct inline text runs of an element — stops at nested block/list children
-                            const extractInlineRuns = (
+                            // Collect inline text runs, stopping at nested list children.
+                            const inlineRuns = (
                                 el: Element,
-                                bold = false,
-                                italic = false
+                                b = false,
+                                i = false
                             ): Run[] => {
                                 const runs: Run[] = []
-                                const walk = (
-                                    node: Node,
-                                    b: boolean,
-                                    i: boolean
-                                ) => {
+                                const walk = (node: Node, b: boolean, i: boolean) => {
                                     if (node.nodeType === Node.TEXT_NODE) {
                                         const t = node.textContent || ""
-                                        if (t)
-                                            runs.push({
-                                                text: t,
-                                                bold: b,
-                                                italic: i,
-                                            })
-                                    } else if (
-                                        node.nodeType === Node.ELEMENT_NODE
-                                    ) {
-                                        const tag = (
-                                            node as Element
-                                        ).tagName.toLowerCase()
-                                        // Stop at nested lists — those get processed as their own blocks
+                                        if (t) runs.push({ text: t, bold: b, italic: i })
+                                    } else if (node.nodeType === Node.ELEMENT_NODE) {
+                                        const tag = (node as Element).tagName.toLowerCase()
                                         if (tag === "ul" || tag === "ol") return
-                                        const nb =
-                                            b || tag === "b" || tag === "strong"
-                                        const ni =
-                                            i || tag === "i" || tag === "em"
-                                        node.childNodes.forEach((c) =>
-                                            walk(c, nb, ni)
-                                        )
+                                        const nb = b || tag === "b" || tag === "strong"
+                                        const ni = i || tag === "i" || tag === "em"
+                                        node.childNodes.forEach((c) => walk(c, nb, ni))
                                     }
                                 }
-                                walk(el, bold, italic)
+                                // Walk children, not el itself (b/i already passed in)
+                                el.childNodes.forEach((c) => walk(c, b, i))
                                 return runs
                             }
 
-                            const processNode = (
-                                node: Node,
-                                listIndent = 0
-                            ) => {
-                                if (node.nodeType !== Node.ELEMENT_NODE) return
-                                const el = node as Element
-                                const tag = el.tagName.toLowerCase()
-
-                                if (tag === "h1") {
-                                    blocks.push({
-                                        kind: "h1",
-                                        text: el.textContent?.trim() || "",
-                                    })
-                                } else if (tag === "h2") {
-                                    blocks.push({ kind: "rule" })
-                                    blocks.push({
-                                        kind: "h2",
-                                        text: el.textContent?.trim() || "",
-                                    })
-                                } else if (tag === "p") {
-                                    const runs = extractInlineRuns(el)
-                                    if (runs.some((r) => r.text.trim()))
-                                        blocks.push({ kind: "p", runs })
-                                } else if (tag === "ul" || tag === "ol") {
-                                    // Process each direct <li> child
-                                    el.childNodes.forEach((child) => {
-                                        if (
-                                            (
-                                                child as Element
-                                            ).tagName?.toLowerCase() === "li"
-                                        ) {
-                                            processLi(
-                                                child as Element,
-                                                listIndent
-                                            )
-                                        }
-                                    })
-                                } else if (tag === "li") {
-                                    processLi(el, listIndent)
-                                } else if (tag === "br") {
-                                    // skip
-                                } else {
-                                    el.childNodes.forEach((c) =>
-                                        processNode(c, listIndent)
-                                    )
-                                }
-                            }
-
-                            const processLi = (
-                                liEl: Element,
-                                indent: number
-                            ) => {
-                                // Emit the inline text of this <li> (excluding nested list children)
-                                const runs = extractInlineRuns(liEl)
-                                if (runs.some((r) => r.text.trim())) {
-                                    blocks.push({ kind: "li", runs, indent })
-                                }
-                                // Then recurse into any nested <ul>/<ol> children with increased indent
+                            const processLi = (liEl: Element, indent: number) => {
+                                const runs = inlineRuns(liEl)
+                                if (runs.some((r) => r.text.trim()))
+                                    out.push({ kind: "li", runs, indent })
                                 liEl.childNodes.forEach((child) => {
                                     if (child.nodeType === Node.ELEMENT_NODE) {
-                                        const ctag = (
-                                            child as Element
-                                        ).tagName.toLowerCase()
-                                        if (ctag === "ul" || ctag === "ol") {
+                                        const tag = (child as Element).tagName.toLowerCase()
+                                        if (tag === "ul" || tag === "ol")
                                             processNode(child, indent + 1)
-                                        }
                                     }
                                 })
                             }
 
+                            const processNode = (node: Node, listIndent = 0) => {
+                                if (node.nodeType !== Node.ELEMENT_NODE) return
+                                const el = node as Element
+                                const tag = el.tagName.toLowerCase()
+                                if (tag === "h1") {
+                                    out.push({ kind: "h1", text: el.textContent?.trim() || "" })
+                                } else if (tag === "h2") {
+                                    out.push({ kind: "rule" })
+                                    out.push({ kind: "h2", text: el.textContent?.trim() || "" })
+                                } else if (tag === "p") {
+                                    const runs = inlineRuns(el)
+                                    if (runs.some((r) => r.text.trim()))
+                                        out.push({ kind: "p", runs })
+                                } else if (tag === "ul" || tag === "ol") {
+                                    el.childNodes.forEach((child) => {
+                                        if ((child as Element).tagName?.toLowerCase() === "li")
+                                            processLi(child as Element, listIndent)
+                                    })
+                                } else if (tag === "li") {
+                                    processLi(el, listIndent)
+                                } else if (tag !== "br") {
+                                    el.childNodes.forEach((c) => processNode(c, listIndent))
+                                }
+                            }
+
                             tmp.childNodes.forEach((c) => processNode(c))
-                            return blocks
+                            return out
                         }
 
                         const blocks = parseHTML()
 
-                        // Load pdf-lib
-                        const pdfLibModule = await import(
-                            "https://esm.sh/pdf-lib@1.17.1"
-                        )
-                        const { PDFDocument, rgb, StandardFonts } = pdfLibModule
-                        console.log(
-                            "[PDF] pdf-lib loaded, PDFDocument:",
-                            typeof PDFDocument
-                        )
+                        // --- Load pdf-lib and embed fonts ---
+                        const { PDFDocument, rgb, StandardFonts } =
+                            await import("https://esm.sh/pdf-lib@1.17.1")
 
-                        // Sanitize text to only WinAnsi-safe characters (Latin-1 supplement + basic ASCII).
-                        // Replaces common Unicode punctuation with ASCII equivalents, strips the rest.
-                        const sanitize = (s: string) =>
-                            s
-                                .replace(/[\u2018\u2019]/g, "'") // curly single quotes
-                                .replace(/[\u201C\u201D]/g, '"') // curly double quotes
-                                .replace(/[\u2013\u2014]/g, "-") // en/em dash
-                                .replace(/\u2022/g, "*") // bullet • -> *
-                                .replace(/\u25E6/g, "-") // open circle bullet -> -
-                                .replace(/\u2026/g, "...") // ellipsis
-                                .replace(/[^\x20-\x7E\xA0-\xFF]/g, "") // strip anything outside Latin-1
-
-                        // Compute total layout height for a given base font size (in pt)
-                        // Pure math — no DOM needed. Uses per-character width estimates per style.
-                        const computeHeight = (basePt: number): number => {
-                            const h1Pt = basePt * 1.55
-                            const h2Pt = basePt * 1.15
-                            const lineH = basePt * 1.45
-                            const h1LineH = h1Pt * 1.3
-                            const h2LineH = h2Pt * 1.35
-                            // Helvetica/Times glyph width estimates (conservative — errs toward more lines)
-                            const charW = (
-                                pt: number,
-                                bold: boolean,
-                                italic: boolean
-                            ) =>
-                                pt *
-                                (bold && italic
-                                    ? 0.6
-                                    : bold
-                                      ? 0.6
-                                      : italic
-                                        ? 0.54
-                                        : 0.54)
-                            const spaceW = (pt: number) => pt * 0.28
-
-                            // Word-wrap a list of styled runs, counting wrapped lines
-                            const countLines = (
-                                runs: {
-                                    text: string
-                                    bold: boolean
-                                    italic: boolean
-                                }[],
-                                maxW: number,
-                                pt: number
-                            ): number => {
-                                if (runs.length === 0) return 1
-                                let lines = 1
-                                let curW = 0
-                                let firstWordOnLine = true
-                                for (const run of runs) {
-                                    const words = run.text
-                                        .split(/\s+/)
-                                        .filter(Boolean)
-                                    for (const word of words) {
-                                        const ww =
-                                            word.length *
-                                            charW(pt, run.bold, run.italic)
-                                        const gap = firstWordOnLine
-                                            ? 0
-                                            : spaceW(pt)
-                                        if (
-                                            !firstWordOnLine &&
-                                            curW + gap + ww > maxW
-                                        ) {
-                                            lines++
-                                            curW = ww
-                                        } else {
-                                            curW += gap + ww
-                                        }
-                                        firstWordOnLine = false
-                                    }
-                                }
-                                return lines
-                            }
-
-                            let totalH = 0
-
-                            for (const block of blocks) {
-                                if (block.kind === "h1") {
-                                    const n = countLines(
-                                        [
-                                            {
-                                                text: block.text,
-                                                bold: true,
-                                                italic: false,
-                                            },
-                                        ],
-                                        CONTENT_W_PT,
-                                        h1Pt
-                                    )
-                                    totalH += n * h1LineH + basePt * 0.4
-                                } else if (block.kind === "h2") {
-                                    const n = countLines(
-                                        [
-                                            {
-                                                text: block.text,
-                                                bold: true,
-                                                italic: false,
-                                            },
-                                        ],
-                                        CONTENT_W_PT,
-                                        h2Pt
-                                    )
-                                    totalH += n * h2LineH + basePt * 0.8
-                                } else if (block.kind === "rule") {
-                                    totalH += basePt * 0.5
-                                } else if (block.kind === "p") {
-                                    const n = countLines(
-                                        block.runs,
-                                        CONTENT_W_PT,
-                                        basePt
-                                    )
-                                    totalH += n * lineH + basePt * 0.2
-                                } else if (block.kind === "li") {
-                                    const bulletW =
-                                        basePt * 1.4 * (block.indent + 1)
-                                    const n = countLines(
-                                        block.runs,
-                                        CONTENT_W_PT - bulletW,
-                                        basePt
-                                    )
-                                    totalH += n * lineH + basePt * 0.15
-                                }
-                            }
-
-                            return totalH
-                        }
-
-                        // Binary search: find largest basePt where content fits in CONTENT_H_PT
-                        let lo = 6,
-                            hi = 14,
-                            bestPt = 10
-                        for (let i = 0; i < 10; i++) {
-                            const mid = (lo + hi) / 2
-                            if (computeHeight(mid) <= CONTENT_H_PT) {
-                                bestPt = mid
-                                lo = mid
-                            } else {
-                                hi = mid
-                            }
-                        }
-
-                        // Build the actual PDF with pdf-lib using the calculated font size
                         const pdfDoc = await PDFDocument.create()
                         const page = pdfDoc.addPage([PAGE_W_PT, PAGE_H_PT])
 
-                        const regularFont = await pdfDoc.embedFont(
-                            useSerif
-                                ? StandardFonts.TimesRoman
-                                : StandardFonts.Helvetica
-                        )
-                        const boldFont = await pdfDoc.embedFont(
-                            useSerif
-                                ? StandardFonts.TimesRomanBold
-                                : StandardFonts.HelveticaBold
-                        )
-                        const italicFont = await pdfDoc.embedFont(
-                            useSerif
-                                ? StandardFonts.TimesRomanItalic
-                                : StandardFonts.HelveticaOblique
-                        )
-                        const boldItalicFont = await pdfDoc.embedFont(
-                            useSerif
-                                ? StandardFonts.TimesRomanBoldItalic
-                                : StandardFonts.HelveticaBoldOblique
-                        )
+                        const [regularFont, boldFont, italicFont, boldItalicFont] =
+                            await Promise.all([
+                                pdfDoc.embedFont(useSerif ? StandardFonts.TimesRoman : StandardFonts.Helvetica),
+                                pdfDoc.embedFont(useSerif ? StandardFonts.TimesRomanBold : StandardFonts.HelveticaBold),
+                                pdfDoc.embedFont(useSerif ? StandardFonts.TimesRomanItalic : StandardFonts.HelveticaOblique),
+                                pdfDoc.embedFont(useSerif ? StandardFonts.TimesRomanBoldItalic : StandardFonts.HelveticaBoldOblique),
+                            ])
 
-                        const h1Pt = bestPt * 1.55
-                        const h2Pt = bestPt * 1.15
-                        const lineH = bestPt * 1.45
-                        const h1LineH = h1Pt * 1.3
-                        const h2LineH = h2Pt * 1.35
                         const black = rgb(0.07, 0.07, 0.07)
                         const gray = rgb(0.2, 0.2, 0.2)
 
-                        // Word-wrap using actual font metrics from pdf-lib
-                        const wrapRuns = (
-                            runs: {
-                                text: string
-                                bold: boolean
-                                italic: boolean
-                            }[],
-                            maxW: number,
-                            fontSize: number
-                        ): {
-                            text: string
-                            bold: boolean
-                            italic: boolean
-                        }[][] => {
-                            // Flatten all runs into words, each tagged with style
-                            type Word = {
-                                text: string
-                                bold: boolean
-                                italic: boolean
-                                space: boolean
-                            }
+                        // Sanitize to WinAnsi-safe characters (Standard Type 1 fonts use Latin-1 encoding).
+                        const sanitize = (s: string) =>
+                            s
+                                .replace(/[\u2018\u2019]/g, "'")
+                                .replace(/[\u201C\u201D]/g, '"')
+                                .replace(/[\u2013\u2014]/g, "-")
+                                .replace(/[\u2022\u25CF]/g, "*")
+                                .replace(/\u25E6/g, "-")
+                                .replace(/\u2026/g, "...")
+                                .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
+
+                        const pickFont = (bold: boolean, italic: boolean) =>
+                            bold && italic ? boldItalicFont
+                            : bold ? boldFont
+                            : italic ? italicFont
+                            : regularFont
+
+                        // Word-wrap styled runs using real font metrics. Returns lines of runs.
+                        const wrapRuns = (runs: Run[], maxW: number, fontSize: number): Run[][] => {
+                            type Word = Run & { space: boolean }
                             const words: Word[] = []
                             for (const run of runs) {
                                 const parts = sanitize(run.text).split(/(\s+)/)
-                                for (let i = 0; i < parts.length; i++) {
-                                    const p = parts[i]
+                                for (const p of parts) {
                                     if (!p) continue
                                     if (/^\s+$/.test(p)) {
-                                        if (words.length)
-                                            words[words.length - 1].space = true
+                                        if (words.length) words[words.length - 1].space = true
                                     } else {
-                                        words.push({
-                                            text: p,
-                                            bold: run.bold,
-                                            italic: run.italic,
-                                            space: false,
-                                        })
+                                        words.push({ text: p, bold: run.bold, italic: run.italic, space: false })
                                     }
                                 }
                             }
 
-                            const getFont = (bold: boolean, italic: boolean) =>
-                                bold && italic
-                                    ? boldItalicFont
-                                    : bold
-                                      ? boldFont
-                                      : italic
-                                        ? italicFont
-                                        : regularFont
-
-                            const lines: {
-                                text: string
-                                bold: boolean
-                                italic: boolean
-                            }[][] = []
+                            const lines: Run[][] = []
                             let curLine: Word[] = []
                             let curW = 0
 
-                            const flushLine = () => {
-                                if (curLine.length === 0) return
-                                // Merge adjacent same-style words into runs, inserting spaces between words
-                                const lineRuns: {
-                                    text: string
-                                    bold: boolean
-                                    italic: boolean
-                                }[] = []
-                                for (let wi = 0; wi < curLine.length; wi++) {
-                                    const w = curLine[wi]
+                            const flush = () => {
+                                if (!curLine.length) return
+                                const lineRuns: Run[] = []
+                                curLine.forEach((w, wi) => {
                                     const needSpace = wi > 0
                                     const last = lineRuns[lineRuns.length - 1]
-                                    if (
-                                        last &&
-                                        last.bold === w.bold &&
-                                        last.italic === w.italic
-                                    ) {
-                                        last.text +=
-                                            (needSpace ? " " : "") + w.text
+                                    if (last && last.bold === w.bold && last.italic === w.italic) {
+                                        last.text += (needSpace ? " " : "") + w.text
                                     } else {
-                                        lineRuns.push({
-                                            text:
-                                                (needSpace && last ? " " : "") +
-                                                w.text,
-                                            bold: w.bold,
-                                            italic: w.italic,
-                                        })
+                                        lineRuns.push({ text: (needSpace && last ? " " : "") + w.text, bold: w.bold, italic: w.italic })
                                     }
-                                }
+                                })
                                 lines.push(lineRuns)
+                                curLine = []
+                                curW = 0
                             }
 
                             for (const word of words) {
-                                const f = getFont(word.bold, word.italic)
-                                const spaceW = f.widthOfTextAtSize(
-                                    " ",
-                                    fontSize
-                                )
-                                const wordW = f.widthOfTextAtSize(
-                                    word.text,
-                                    fontSize
-                                )
-                                const addW =
-                                    curLine.length > 0 ? spaceW + wordW : wordW
-
-                                if (curLine.length > 0 && curW + addW > maxW) {
-                                    flushLine()
+                                const f = pickFont(word.bold, word.italic)
+                                const spW = f.widthOfTextAtSize(" ", fontSize)
+                                const wW = f.widthOfTextAtSize(word.text, fontSize)
+                                const addW = curLine.length ? spW + wW : wW
+                                if (curLine.length && curW + addW > maxW) {
+                                    flush()
                                     curLine = [word]
-                                    curW = wordW
+                                    curW = wW
                                 } else {
                                     curLine.push(word)
                                     curW += addW
                                 }
                             }
-                            flushLine()
-                            return lines.length
-                                ? lines
-                                : [[{ text: "", bold: false, italic: false }]]
+                            flush()
+                            return lines.length ? lines : [[{ text: "", bold: false, italic: false }]]
                         }
 
-                        // Draw text with mixed bold/italic runs on a single line, returning x after last char
-                        const drawRuns = (
-                            runs: {
-                                text: string
-                                bold: boolean
-                                italic: boolean
-                            }[],
-                            x: number,
-                            y: number,
-                            fontSize: number,
-                            color: typeof black
-                        ) => {
+                        // Draw a line of styled runs, returning the x position after the last character.
+                        const drawRuns = (runs: Run[], x: number, y: number, fontSize: number, color: typeof black) => {
                             let cx = x
                             for (const run of runs) {
                                 const t = sanitize(run.text)
                                 if (!t) continue
-                                const f =
-                                    run.bold && run.italic
-                                        ? boldItalicFont
-                                        : run.bold
-                                          ? boldFont
-                                          : run.italic
-                                            ? italicFont
-                                            : regularFont
-                                page.drawText(t, {
-                                    x: cx,
-                                    y,
-                                    font: f,
-                                    size: fontSize,
-                                    color,
-                                })
+                                const f = pickFont(run.bold, run.italic)
+                                page.drawText(t, { x: cx, y, font: f, size: fontSize, color })
                                 cx += f.widthOfTextAtSize(t, fontSize)
                             }
                             return cx
                         }
 
-                        let y = PAGE_H_PT - MARGIN_PT
+                        // Measure total layout height at a given base font size using real font metrics.
+                        // This is the same logic as the draw pass, just without the draw calls.
+                        const measureHeight = (basePt: number): number => {
+                            const h1Pt = basePt * 1.55
+                            const h2Pt = basePt * 1.15
+                            const lineH = basePt * bodyLineMult
+                            const h1LineH = h1Pt * 1.3
+                            const h2LineH = h2Pt * 1.35
+                            let totalH = 0
+                            let firstP = true
+                            let prev: Block | null = null
+                            for (const block of blocks) {
+                                if (block.kind === "h1") {
+                                    totalH += wrapRuns([{ text: block.text, bold: true, italic: false }], CONTENT_W_PT, h1Pt).length * h1LineH + basePt * 0.4
+                                } else if (block.kind === "rule") {
+                                    totalH += basePt * 0.5
+                                } else if (block.kind === "h2") {
+                                    totalH += wrapRuns([{ text: block.text, bold: true, italic: false }], CONTENT_W_PT, h2Pt).length * h2LineH + basePt * 0.8
+                                } else if (block.kind === "p") {
+                                    if (isCoverLetter && !firstP) totalH += basePt * bodyLineMult
+                                    totalH += wrapRuns(block.runs, CONTENT_W_PT, basePt).length * lineH + gapAfterParagraph(basePt)
+                                    firstP = false
+                                } else if (block.kind === "li") {
+                                    const newList = prev == null || prev.kind !== "li" || block.indent > (prev as { indent: number }).indent
+                                    if (isCoverLetter && newList) totalH += listFirstBulletGap(basePt)
+                                    const bulletW = basePt * 1.4 * (block.indent + 1)
+                                    totalH += wrapRuns(block.runs, CONTENT_W_PT - bulletW, basePt).length * lineH + gapAfterListItem(basePt)
+                                }
+                                prev = block
+                            }
+                            return totalH
+                        }
 
+                        // Binary-search for the largest font size that fits on one page.
+                        let lo = 6, hi = 14, bestPt = 10
+                        for (let i = 0; i < 12; i++) {
+                            const mid = (lo + hi) / 2
+                            if (measureHeight(mid) <= CONTENT_H_PT) { bestPt = mid; lo = mid }
+                            else hi = mid
+                        }
+
+                        const h1Pt = bestPt * 1.55
+                        const h2Pt = bestPt * 1.15
+                        const baseBodyLineH = bestPt * bodyLineMult
+                        const h1LineH = h1Pt * 1.3
+                        const h2LineH = h2Pt * 1.35
+
+                        // Draw all blocks onto the page.
+                        let y = PAGE_H_PT - MARGIN_PT
+                        let firstP = true
+                        let prev: Block | null = null
                         for (const block of blocks) {
                             if (block.kind === "h1") {
-                                const wrappedLines = wrapRuns(
-                                    [
-                                        {
-                                            text: sanitize(block.text),
-                                            bold: true,
-                                            italic: false,
-                                        },
-                                    ],
-                                    CONTENT_W_PT,
-                                    h1Pt
-                                )
-                                for (const line of wrappedLines) {
+                                for (const line of wrapRuns([{ text: sanitize(block.text), bold: true, italic: false }], CONTENT_W_PT, h1Pt)) {
                                     y -= h1LineH
                                     drawRuns(line, MARGIN_PT, y, h1Pt, black)
                                 }
@@ -4883,138 +4662,76 @@ const DocEditor = React.memo(function DocEditor({
                             } else if (block.kind === "rule") {
                                 y -= bestPt * 0.5
                             } else if (block.kind === "h2") {
-                                const wrappedLines = wrapRuns(
-                                    [
-                                        {
-                                            text: sanitize(block.text),
-                                            bold: true,
-                                            italic: false,
-                                        },
-                                    ],
-                                    CONTENT_W_PT,
-                                    h2Pt
-                                )
-                                // Draw underline rule
-                                page.drawLine({
-                                    start: {
-                                        x: MARGIN_PT,
-                                        y: y - bestPt * 0.2,
-                                    },
-                                    end: {
-                                        x: PAGE_W_PT - MARGIN_PT,
-                                        y: y - bestPt * 0.2,
-                                    },
-                                    thickness: 0.5,
-                                    color: gray,
-                                })
-                                for (const line of wrappedLines) {
+                                page.drawLine({ start: { x: MARGIN_PT, y: y - bestPt * 0.2 }, end: { x: PAGE_W_PT - MARGIN_PT, y: y - bestPt * 0.2 }, thickness: 0.5, color: gray })
+                                for (const line of wrapRuns([{ text: sanitize(block.text), bold: true, italic: false }], CONTENT_W_PT, h2Pt)) {
                                     y -= h2LineH
                                     drawRuns(line, MARGIN_PT, y, h2Pt, black)
                                 }
                                 y -= bestPt * 0.5
                             } else if (block.kind === "p") {
-                                const wrappedLines = wrapRuns(
-                                    block.runs,
-                                    CONTENT_W_PT,
-                                    bestPt
-                                )
-                                for (const line of wrappedLines) {
-                                    y -= lineH
+                                if (isCoverLetter && !firstP) y -= bestPt * bodyLineMult
+                                for (const line of wrapRuns(block.runs, CONTENT_W_PT, bestPt)) {
+                                    y -= baseBodyLineH
                                     drawRuns(line, MARGIN_PT, y, bestPt, black)
                                 }
-                                y -= bestPt * 0.2
+                                y -= gapAfterParagraph(bestPt)
+                                firstP = false
                             } else if (block.kind === "li") {
-                                // Match the indent sizing used in computeHeight exactly
-                                const bulletIndent =
-                                    bestPt * 1.4 * (block.indent + 1)
-                                const textW = CONTENT_W_PT - bulletIndent
-                                const wrappedLines = wrapRuns(
-                                    block.runs,
-                                    textW,
-                                    bestPt
-                                )
-                                // Use ASCII-safe bullets (Standard fonts only support WinAnsi/Latin-1)
-                                const bulletChar =
-                                    block.indent === 0 ? "*" : "-"
-                                let firstLine = true
-                                for (const line of wrappedLines) {
-                                    y -= lineH
-                                    if (firstLine) {
-                                        page.drawText(bulletChar, {
-                                            x:
-                                                MARGIN_PT +
-                                                bulletIndent -
-                                                bestPt * 1.0,
-                                            y,
-                                            font: regularFont,
-                                            size: bestPt * 0.85,
+                                const newList = prev == null || prev.kind !== "li" || block.indent > (prev as { indent: number }).indent
+                                if (isCoverLetter && newList) y -= listFirstBulletGap(bestPt)
+                                const bulletIndent = bestPt * 1.4 * (block.indent + 1)
+                                let isFirst = true
+                                for (const line of wrapRuns(block.runs, CONTENT_W_PT - bulletIndent, bestPt)) {
+                                    y -= baseBodyLineH
+                                    if (isFirst) {
+                                        const r = block.indent === 0 ? bestPt * 0.11 : bestPt * 0.085
+                                        page.drawCircle({
+                                            x: MARGIN_PT + bulletIndent - bestPt * 0.52,
+                                            y: y + bestPt * 0.32,
+                                            size: r,
                                             color: black,
                                         })
-                                        firstLine = false
+                                        isFirst = false
                                     }
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT + bulletIndent,
-                                        y,
-                                        bestPt,
-                                        black
-                                    )
+                                    drawRuns(line, MARGIN_PT + bulletIndent, y, bestPt, black)
                                 }
-                                y -= bestPt * 0.15
+                                y -= gapAfterListItem(bestPt)
                             }
+                            prev = block
                         }
 
                         const pdfBytes = await pdfDoc.save()
-                        const blob = new Blob([pdfBytes], {
-                            type: "application/pdf",
-                        })
-                        const blobUrl = URL.createObjectURL(blob)
+                        const blobUrl = URL.createObjectURL(new Blob([pdfBytes], { type: "application/pdf" }))
                         const link = document.createElement("a")
                         link.href = blobUrl
-
-                        const tmpDiv = document.createElement("div")
-                        tmpDiv.innerHTML = content
-                        const firstText = (tmpDiv.textContent || "")
-                            .trim()
-                            .split("\n")[0]
-                            .trim()
-                        const baseName = firstText
-                            ? firstText.replace(/\s+/g, "_").slice(0, 40)
-                            : "document"
-                        const companySuffix =
-                            docCompany &&
-                            (docType === "resume" ||
-                                docType === "cover_letter")
-                                ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}`
-                                : ""
-                        link.download = `${baseName}${companySuffix}.pdf`
+                        link.download = `${
+                            docType === "cover_letter"
+                                ? buildCoverLetterDownloadStem(userDisplayName, docCompany)
+                                : docType === "resume"
+                                  ? `${profileNameStem(userDisplayName) || "resume"}${docCompany ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}` : ""}`
+                                  : (blocks.find((b) => b.kind === "h1") as { text?: string })?.text?.replace(/\s+/g, "_").slice(0, 40) || "document"
+                        }.pdf`
                         link.click()
                         setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
                     } catch (pdfErr) {
-                        console.error(
-                            "pdf-lib generation failed, falling back to print dialog:",
-                            pdfErr
-                        )
-                        // Fallback: print dialog with tight CSS (not silent, but always works)
+                        console.error("pdf-lib failed, falling back to print:", pdfErr)
+                        // Print-dialog fallback — always works, not silent.
                         const fbIframe = document.createElement("iframe")
                         fbIframe.style.cssText =
                             "position:fixed;left:-9999px;top:0;width:816px;height:1056px;border:0;"
                         document.body.appendChild(fbIframe)
                         const fbDoc = fbIframe.contentWindow?.document
                         if (fbDoc) {
-                            const fbCSS = `@page{size:8.5in 11in;margin:0.45in 0.5in;}*{box-sizing:border-box;}body{margin:0;font-family:${fontFamily};font-size:10pt;line-height:1.4;color:#111;}h1{font-size:16px;font-weight:700;margin:0 0 3px;}h2{font-size:12px;font-weight:700;border-bottom:1px solid #333;margin:10px 0 3px;}p{margin:2px 0;}ul{margin:2px 0;padding-left:16px;}li{margin:1px 0;}`
+                            const fbCSS =
+                                docType === "cover_letter"
+                                    ? `@page{size:8.5in 11in;margin:0.45in 0.5in;}*{box-sizing:border-box;}body{margin:0;font-family:${fontFamily};font-size:10.5pt;line-height:1.48;color:#111;-webkit-font-smoothing:antialiased;}h1{font-size:17px;font-weight:700;margin:0 0 8px;letter-spacing:-0.01em;}h2{font-size:12px;font-weight:700;border-bottom:1px solid #333;margin:14px 0 6px;}p{margin:0;}p+p{margin-top:1.45em;}ul{margin:0 0 8px;padding-left:18px;}p+ul,h1+ul,h2+ul{margin-top:0.55em;}li>ul{margin-top:0.45em;}li{margin:4px 0;line-height:1.48;}`
+                                    : `@page{size:8.5in 11in;margin:0.45in 0.5in;}*{box-sizing:border-box;}body{margin:0;font-family:${fontFamily};font-size:10pt;line-height:1.4;color:#111;}h1{font-size:16px;font-weight:700;margin:0 0 3px;}h2{font-size:12px;font-weight:700;border-bottom:1px solid #333;margin:10px 0 3px;}p{margin:2px 0;}ul{margin:2px 0;padding-left:16px;}li{margin:1px 0;}`
                             fbDoc.open()
-                            fbDoc.write(
-                                `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${fbCSS}</style></head><body>${content}</body></html>`
-                            )
+                            fbDoc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>${fbCSS}</style></head><body>${content}</body></html>`)
                             fbDoc.close()
                             setTimeout(() => {
                                 fbIframe.contentWindow?.print()
-                                setTimeout(() => {
-                                    try {
-                                        document.body.removeChild(fbIframe)
-                                    } catch {}
-                                }, 2000)
+                                setTimeout(() => { try { document.body.removeChild(fbIframe) } catch {} }, 2000)
                             }, 400)
                         }
                     }
@@ -5052,14 +4769,23 @@ const DocEditor = React.memo(function DocEditor({
             if (editorRef.current) {
                 const text = editorRef.current.innerText.trim()
                 const firstLine = text.split("\n")[0].trim()
-                if (firstLine) {
-                    const base = firstLine.replace(/\s+/g, "_").slice(0, 40)
-                    const companySuffix =
-                        docCompany &&
-                        (docType === "resume" || docType === "cover_letter")
-                            ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}`
-                            : ""
+                if (docType === "cover_letter") {
+                    filename = `${buildCoverLetterDownloadStem(
+                        userDisplayName,
+                        docCompany
+                    )}.docx`
+                } else if (docType === "resume") {
+                    const fromDoc = firstLine
+                        ? firstLine.replace(/\s+/g, "_").slice(0, 40)
+                        : ""
+                    const base =
+                        profileNameStem(userDisplayName) || fromDoc || "document"
+                    const companySuffix = docCompany
+                        ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}`
+                        : ""
                     filename = `${base}${companySuffix}.docx`
+                } else if (firstLine) {
+                    filename = `${firstLine.replace(/\s+/g, "_").slice(0, 40)}.docx`
                 }
             }
 
@@ -5073,6 +4799,7 @@ const DocEditor = React.memo(function DocEditor({
                     HeadingLevel,
                     ExternalHyperlink,
                     UnderlineType,
+                    LineRuleType,
                 } = await import("https://esm.sh/docx@8.5.0")
 
                 // Parse HTML content to DOCX elements
@@ -5085,6 +4812,14 @@ const DocEditor = React.memo(function DocEditor({
                 // Subtract 4px from the visual size for better DOCX printing
                 const getAdjustedSize = (visualSize: number) =>
                     Math.max(1, visualSize - 4) * 2
+
+                const bodyParaSpacing = { after: 120 }
+                const coverLetterBodyLineSpacing = {
+                    line: 350,
+                    lineRule: LineRuleType.AUTO,
+                    after: 120,
+                }
+                let coverLetterDocxFirstP = docType === "cover_letter"
 
                 // Styles context type
                 type StyleOptions = {
@@ -5202,9 +4937,19 @@ const DocEditor = React.memo(function DocEditor({
                             docxChildren.push(
                                 new Paragraph({
                                     children: runs,
-                                    spacing: { after: 120 },
+                                    spacing:
+                                        docType === "cover_letter"
+                                            ? {
+                                                  ...coverLetterBodyLineSpacing,
+                                                  before: coverLetterDocxFirstP
+                                                      ? 0
+                                                      : 560,
+                                              }
+                                            : bodyParaSpacing,
                                 })
                             )
+                            if (docType === "cover_letter")
+                                coverLetterDocxFirstP = false
                         }
                         return
                     }
@@ -5254,6 +4999,7 @@ const DocEditor = React.memo(function DocEditor({
                             })
                         )
                     } else if (tagName === "ul") {
+                        let firstLiInList = true
                         el.childNodes.forEach((child) => {
                             if (child.nodeName.toLowerCase() === "li") {
                                 const runs = processInlineNodes(
@@ -5267,16 +5013,27 @@ const DocEditor = React.memo(function DocEditor({
                                         color: getHexColor(colors.surfaceBlack),
                                     }
                                 )
+                                const listSpacing =
+                                    docType === "cover_letter"
+                                        ? {
+                                              ...coverLetterBodyLineSpacing,
+                                              before: firstLiInList
+                                                  ? 280
+                                                  : 0,
+                                          }
+                                        : bodyParaSpacing
+                                firstLiInList = false
                                 docxChildren.push(
                                     new Paragraph({
                                         children: runs,
                                         bullet: { level: 0 },
-                                        spacing: { after: 120 },
+                                        spacing: listSpacing,
                                     })
                                 )
                             }
                         })
                     } else if (tagName === "ol") {
+                        let firstLiInList = true
                         el.childNodes.forEach((child) => {
                             if (child.nodeName.toLowerCase() === "li") {
                                 const runs = processInlineNodes(
@@ -5290,6 +5047,16 @@ const DocEditor = React.memo(function DocEditor({
                                         color: getHexColor(colors.surfaceBlack),
                                     }
                                 )
+                                const listSpacing =
+                                    docType === "cover_letter"
+                                        ? {
+                                              ...coverLetterBodyLineSpacing,
+                                              before: firstLiInList
+                                                  ? 280
+                                                  : 0,
+                                          }
+                                        : bodyParaSpacing
+                                firstLiInList = false
                                 docxChildren.push(
                                     new Paragraph({
                                         children: runs,
@@ -5297,7 +5064,7 @@ const DocEditor = React.memo(function DocEditor({
                                             reference: "default-numbering",
                                             level: 0,
                                         },
-                                        spacing: { after: 120 },
+                                        spacing: listSpacing,
                                     })
                                 )
                             }
@@ -5318,9 +5085,19 @@ const DocEditor = React.memo(function DocEditor({
                         docxChildren.push(
                             new Paragraph({
                                 children: runs,
-                                spacing: { after: 120 },
+                                spacing:
+                                    docType === "cover_letter"
+                                        ? {
+                                              ...coverLetterBodyLineSpacing,
+                                              before: coverLetterDocxFirstP
+                                                  ? 0
+                                                  : 560,
+                                          }
+                                        : bodyParaSpacing,
                             })
                         )
+                        if (docType === "cover_letter")
+                            coverLetterDocxFirstP = false
                     } else {
                         // Fallback for unknown block containers, just process children as blocks
                         el.childNodes.forEach((child) =>
@@ -5372,6 +5149,8 @@ const DocEditor = React.memo(function DocEditor({
         [
             content,
             docType,
+            docCompany,
+            userDisplayName,
             settings.fontStyle,
             settings.fontSize,
             settings.h1Size,
@@ -17504,10 +17283,7 @@ Extract this structure:
     // --- STATE: AGENT SIDEBAR — APP BUILDER ---
     const [isAppOpen, setIsAppOpen] = React.useState(false)
     const isAppOpenRef = React.useRef(false)
-    const [appCode, setAppCode] = React.useState(
-        `<h1>Welcome to Apps</h1>
-<p>Ask Curastem to build presentations, quizzes, portfolios, and anything you can imagine</p>`
-    )
+    const [appCode, setAppCode] = React.useState(DEFAULT_APP_CODE)
     const [appMode, setAppMode] = React.useState<"editor" | "player">("editor")
 
     React.useEffect(() => {
@@ -17820,6 +17596,11 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
     React.useEffect(() => {
         docContentRef.current = docContent
     }, [docContent])
+
+    const docTypeRef = React.useRef(docType)
+    React.useEffect(() => {
+        docTypeRef.current = docType
+    }, [docType])
 
     const appCodeRef = React.useRef(appCode)
     React.useEffect(() => {
@@ -18662,7 +18443,7 @@ Do not include markdown formatting or explanations.`
                                         {
                                             name: "search_jobs",
                                             description:
-                                                "Search Curastem's job listings by keyword, location, or job type. Use when the user asks to find or browse jobs during the voice call. Results will be shown as cards in the chat. Say something like 'I found X jobs for you — check the chat.'",
+                                                "Search Curastem's job listings by keyword, company, location, job type, seniority, or recency. Use when the user asks to find or browse jobs. Results shown as cards in the chat. Say something like 'I found X jobs for you — check the chat.'",
                                             parameters: {
                                                 type: "OBJECT",
                                                 properties: {
@@ -18670,6 +18451,11 @@ Do not include markdown formatting or explanations.`
                                                         type: "STRING",
                                                         description:
                                                             "Job title, role, skill, or company name",
+                                                    },
+                                                    company: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "Company slug, e.g. 'stripe', 'walmart', 'whole-foods-market'",
                                                     },
                                                     location: {
                                                         type: "STRING",
@@ -18685,6 +18471,21 @@ Do not include markdown formatting or explanations.`
                                                         type: "STRING",
                                                         description:
                                                             "remote, hybrid, or on_site",
+                                                    },
+                                                    seniority_level: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "new_grad, entry, mid, senior, staff, manager, director, or executive",
+                                                    },
+                                                    posted_within_days: {
+                                                        type: "NUMBER",
+                                                        description:
+                                                            "Only jobs posted within this many days. Default 3 unless the user specifies otherwise.",
+                                                    },
+                                                    salary_min: {
+                                                        type: "NUMBER",
+                                                        description:
+                                                            "Minimum annual salary (USD). Only returns jobs where salary is known and meets this threshold. E.g. 100000 for $100k+",
                                                     },
                                                     limit: {
                                                         type: "NUMBER",
@@ -19029,6 +18830,7 @@ Do not include markdown formatting or explanations.`
                                     const args = fc.args ?? {}
                                     const params = new URLSearchParams()
                                     if (args.query) params.set("q", args.query)
+                                    if (args.company) params.set("company", args.company)
                                     if (args.location)
                                         params.set("location", args.location)
                                     if (args.employment_type)
@@ -19041,6 +18843,11 @@ Do not include markdown formatting or explanations.`
                                             "workplace_type",
                                             args.workplace_type
                                         )
+                                    if (args.seniority_level)
+                                        params.set("seniority_level", args.seniority_level)
+                                    params.set("since", String(Math.floor(Date.now() / 1000) - (args.posted_within_days ?? 3) * 86400))
+                                    if (args.salary_min != null)
+                                        params.set("salary_min", String(args.salary_min))
                                     params.set(
                                         "limit",
                                         String(Math.min(args.limit ?? 6, 20))
@@ -19064,6 +18871,8 @@ Do not include markdown formatting or explanations.`
                                                 j.employment_type ?? null,
                                             workplace_type:
                                                 j.workplace_type ?? null,
+                                            seniority_level:
+                                                j.seniority_level ?? null,
                                             posted_at: j.posted_at ?? null,
                                             apply_url: j.apply_url ?? null,
                                             summary: j.job_summary ?? null,
@@ -20040,7 +19849,7 @@ Do not include markdown formatting or explanations.`
                     ? now
                     : existing?.whiteboardLastEdited
 
-                const isAppBlank = !appCodeRef.current
+                const isAppBlank = !appCodeRef.current || appCodeRef.current === DEFAULT_APP_CODE
                 const miniIdeLastEdited: number | undefined = isAppBlank
                     ? undefined // empty app → don't list in Your Stuff
                     : hasAppChanges
@@ -20053,6 +19862,7 @@ Do not include markdown formatting or explanations.`
                     timestamp: timestampToUse,
                     messages: currentMessages,
                     notes: docContentRef.current,
+                    docType: docTypeRef.current,
                     whiteboard: whiteboardData,
                     app: appCodeRef.current
                         ? { code: appCodeRef.current, mode: appModeRef.current }
@@ -20126,6 +19936,7 @@ Do not include markdown formatting or explanations.`
                 const chat = savedChats.find((c) => c.id === currentChatId)
                 if (chat) {
                     if (chat.notes) setDocContent(chat.notes)
+                    if (chat.docType) setDocType(chat.docType)
                     if (chat.app) {
                         setAppCode(chat.app.code)
                         setAppMode(chat.app.mode)
@@ -20146,7 +19957,8 @@ Do not include markdown formatting or explanations.`
                 } else {
                     // Chat not found in savedChats (likely a New Chat).
                     // We should NOT fall back to legacy storage (which mirrors previous chat).
-                    // Just mark as loaded and keep current (default) state.
+                    // Just mark as loaded and reset to defaults.
+                    setDocType("doc")
                     loadedChatIdRef.current = currentChatId
                     return
                 }
@@ -22090,10 +21902,12 @@ Do not include markdown formatting or explanations.`
             setAiGeneratedSuggestions([])
         }
 
+        setIsJobOpen(false)
+        setIsDocOpen(false)
+        setIsAppOpen(false)
+        setIsWhiteboardOpen(false)
         setDocContent(DEFAULT_DOC_CONTENT)
-        setAppCode(
-            "Welcome to Apps\nAsk Curastem to build anything you can imagine"
-        )
+        setAppCode(DEFAULT_APP_CODE)
         setAppMode("editor")
 
         // Clear Whiteboard
@@ -24117,9 +23931,10 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             {
                                 name: "search_jobs",
                                 description: [
-                                    "Search Curastem's job listings. Use this when a user asks to find, search, or browse jobs by keyword, location, job type, or work arrangement.",
-                                    "Returns a list of matching job cards displayed directly in the chat.",
-                                    "Do NOT call for general career advice — only call when the user explicitly wants to see job listings.",
+                                    "Search Curastem's job listings by keyword, company, location, job type, seniority, or recency.",
+                                    "Use for any job-finding request: 'find remote engineer roles', 'what is Stripe hiring for?', 'show me entry-level jobs posted this week'.",
+                                    "Pass company as a lowercase slug (e.g. 'stripe', 'walmart') to filter to one company.",
+                                    "Do NOT call for general career advice — only call when the user wants to see job listings.",
                                 ].join(" "),
                                 parameters: {
                                     type: "OBJECT",
@@ -24127,7 +23942,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         query: {
                                             type: "STRING",
                                             description:
-                                                "Search keywords — job title, role, skill, or company name. Examples: 'cashier', 'software engineer', 'customer service'",
+                                                "Search keywords — job title, role, skill, or company name. Examples: 'cashier', 'software engineer', 'customer service'.",
+                                        },
+                                        company: {
+                                            type: "STRING",
+                                            description:
+                                                "Filter to a specific company by lowercase slug. Examples: 'stripe', 'airbnb', 'walmart', 'whole-foods-market'. Derive from the company name the user mentioned.",
                                         },
                                         location: {
                                             type: "STRING",
@@ -24144,10 +23964,30 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                             description:
                                                 "Work arrangement: remote, hybrid, or on_site.",
                                         },
+                                        seniority_level: {
+                                            type: "STRING",
+                                            description:
+                                                "Experience level: new_grad, entry, mid, senior, staff, manager, director, or executive.",
+                                        },
+                                        posted_within_days: {
+                                            type: "NUMBER",
+                                            description:
+                                                "Only return jobs posted within this many days. Default 3 unless the user specifies otherwise. Examples: 1 (today), 7 (this week), 30 (this month).",
+                                        },
+                                        salary_min: {
+                                            type: "NUMBER",
+                                            description:
+                                                "Minimum annual salary (USD). Only returns jobs where salary is known and meets this threshold. Examples: 100000 for $100k+, 150000 for $150k+.",
+                                        },
                                         limit: {
                                             type: "NUMBER",
                                             description:
                                                 "Number of results to return (default 6, max 20).",
+                                        },
+                                        cursor: {
+                                            type: "STRING",
+                                            description:
+                                                "Pagination cursor from a previous search_jobs response to fetch the next page.",
                                         },
                                     },
                                     required: [],
@@ -24241,7 +24081,7 @@ Rules: use <b> only for job titles and company names in the <p> header. NO <i>/<
                             {
                                 name: "create_cover_letter",
                                 description: [
-                                    "Creates a polished AI-generated cover letter and opens it in the doc editor.",
+                                    "Creates a cover letter and opens it in the doc editor.",
                                     "Call when the user explicitly asks to create, write, or draft a cover letter.",
                                     "Write the full cover letter in the content parameter — address it to the employer if known, personalise it to the role.",
                                 ].join(" "),
@@ -24250,13 +24090,16 @@ Rules: use <b> only for job titles and company names in the <p> header. NO <i>/<
                                     properties: {
                                         content: {
                                             type: "STRING",
-                                            description: `The full HTML cover letter. Follow this exact structure:
+                                            description: `The full HTML cover letter. Follow this exact structure (use real company and candidate names when known):
 
-1. <h1>Hi team [Company Name]!</h1> (use the actual company name if known, otherwise "Hi team!")
-2. Three short <p> paragraphs: first about your relevant work history, second about why you're a great fit, third about your excitement for the role
-3. <p>Have a great day,<br/>[Candidate Name]</p>
+1. <h1>Hi team [Company Name]!</h1> (or "Hi team!" if the company is unknown)
+2. One <p> with a 2–3 sentence direct-talk summary of who the candidate is and why this role fits
+3. <p><b>What I've done</b></p> then a <ul> with 2–5 <li> bullets (concrete wins, skills, or experience — full sentences, not placeholders)
+4. <p><b>What I can do for [Company Name]</b></p> then a <ul> with 2–5 <li> bullets tied to that company and role
+5. <p><b>How to contact me</b></p> then a <ul> with 1–4 <li> bullets for GitHub, LinkedIn, portfolio, and/or email as relevant. Use <a href="..."> only for real links from User Context or chat — never invent URLs. Fewer bullets is fine if that is all you know
+6. <p>Thank you,<br/>[Candidate Name]</p>
 
-Keep each paragraph to 2–3 sentences max. Write the complete letter — never truncate. This will be auto-formatted to fit one page when downloaded.`,
+Write the complete letter with real bullet text — never empty bullets. PDF export formats to one page when downloaded.`,
                                         },
                                     },
                                     required: ["content"],
@@ -25738,11 +25581,18 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                         const args = accumulatedFunctionCall.args as any
                         const params = new URLSearchParams()
                         if (args.query) params.set("q", args.query)
+                        if (args.company) params.set("company", args.company)
                         if (args.location) params.set("location", args.location)
                         if (args.employment_type)
                             params.set("employment_type", args.employment_type)
                         if (args.workplace_type)
                             params.set("workplace_type", args.workplace_type)
+                        if (args.seniority_level)
+                            params.set("seniority_level", args.seniority_level)
+                        params.set("since", String(Math.floor(Date.now() / 1000) - (args.posted_within_days ?? 3) * 86400))
+                        if (args.salary_min != null)
+                            params.set("salary_min", String(args.salary_min))
+                        if (args.cursor) params.set("cursor", args.cursor)
                         params.set(
                             "limit",
                             String(Math.min(args.limit ?? 6, 20))
@@ -25769,6 +25619,8 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                             j.employment_type ?? null,
                                         workplace_type:
                                             j.workplace_type ?? null,
+                                        seniority_level:
+                                            j.seniority_level ?? null,
                                         posted_at: j.posted_at ?? null,
                                         apply_url: j.apply_url ?? null,
                                         summary: j.job_summary ?? null,
@@ -27855,6 +27707,7 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         ? selectedJob.company.name
                                         : ""
                                 }
+                                userDisplayName={youName}
                             />
                         </div>
                     ) : null}
@@ -29887,10 +29740,11 @@ Keep each paragraph to 2–3 sentences max. Write the complete letter — never 
                                         return
                                     }
 
-                                    // Only show apps that have actual code content
+                                    // Only show apps with user-edited content (not the default welcome screen)
                                     if (
                                         chat.miniIdeLastEdited &&
-                                        chat.app?.code
+                                        chat.app?.code &&
+                                        chat.app.code !== DEFAULT_APP_CODE
                                     ) {
                                         stuffItems.push({
                                             chat,

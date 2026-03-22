@@ -13,8 +13,11 @@
  *   exclude_remote  — when using near_*, exclude remote-only jobs (default true)
  *   employment_type — exact match: full_time | part_time | contract | internship | temporary
  *   workplace_type  — exact match: remote | hybrid | on_site
- *   company         — exact match on company slug
+ *   seniority_level      — exact match: new_grad | entry | mid | senior | staff | manager | director | executive
+ *   description_language — exact match: ISO 639-1 code, e.g. en | es | de | fr | pt | it | nl | pl | ja | zh
+ *   company              — exact match on company slug
  *   since           — unix timestamp; only jobs posted/seen at or after this time
+ *   salary_min      — only jobs where salary_min >= this value (annual, in job's currency)
  *   limit           — max results per page (default 20, max 50)
  *   cursor          — opaque cursor for pagination
  *
@@ -126,6 +129,8 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
     locations,
     employment_type: row.employment_type,
     workplace_type: row.workplace_type,
+    seniority_level: row.seniority_level ?? null,
+    description_language: row.description_language ?? null,
     source_name: row.source_name,
     source_url: row.source_url,
     salary,
@@ -133,6 +138,7 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
     // they are populated on the detail endpoint (GET /jobs/:id)
     job_summary: row.job_summary,
     job_description: null,
+    visa_sponsorship: null,
     company: {
       name: row.company_name,
       logo_url: row.company_logo_url,
@@ -179,10 +185,14 @@ export async function handleListJobs(
     exclude_idsRaw?.split(",").map((t) => t.trim()).filter(Boolean) ?? undefined;
   const employment_type = params.get("employment_type") ?? undefined;
   const workplace_type = params.get("workplace_type") ?? undefined;
+  const seniority_level = params.get("seniority_level") ?? undefined;
+  const description_language = params.get("description_language") ?? undefined;
   let company = params.get("company") ?? undefined;
   const cursor = params.get("cursor") ?? undefined;
   const sinceRaw = params.get("since");
   const posted_since = sinceRaw ? parseInt(sinceRaw, 10) || undefined : undefined;
+  const salaryMinRaw = params.get("salary_min");
+  const salary_min = salaryMinRaw ? parseFloat(salaryMinRaw) || undefined : undefined;
 
   const nearLatRaw = params.get("near_lat");
   const nearLngRaw = params.get("near_lng");
@@ -282,6 +292,7 @@ export async function handleListJobs(
           workplace_type,
           company,
           posted_since,
+          salary_min,
         });
 
         // Re-rank: blend similarity position with recency so newer jobs surface first
@@ -342,8 +353,11 @@ export async function handleListJobs(
     exclude_ids,
     employment_type,
     workplace_type,
+    seniority_level,
+    description_language,
     company,
     posted_since,
+    salary_min,
     limit,
     cursor,
   });

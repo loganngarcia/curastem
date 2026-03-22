@@ -95,6 +95,8 @@ export interface SourceRow {
   last_fetched_at: number | null;
   last_job_count: number | null;
   last_error: string | null;
+  /** Minimum hours between fetches. NULL = run every cron cycle (hourly). */
+  fetch_interval_hours: number | null;
   created_at: number;
 }
 
@@ -160,7 +162,18 @@ export type SourceType =
   /** Job boards with public RSS/Atom feeds (e.g. HigherEdJobs, Chronicle Jobs) */
   | "rss"
   /** USAJOBS federal government job board — requires USAJOBS_API_KEY secret */
-  | "usajobs";
+  | "usajobs"
+  /**
+   * UKG / SaaSHR tenant career portals.
+   * base_url is the public careers page (e.g. https://secure6.saashr.com/ta/6170001.careers).
+   * The fetcher derives the unauthenticated REST API URL from it.
+   */
+  | "saashr"
+  /**
+   * Consider-powered VC job boards (white-label, e.g. jobs.a16z.com/jobs/{companySlug}).
+   * base_url is the company listing page; the fetcher calls the board's /api-boards/search-jobs API.
+   */
+  | "consider";
 
 export type EmploymentType =
   | "full_time"
@@ -175,6 +188,62 @@ export type SalaryPeriod = "year" | "month" | "hour";
 
 /** "yes" / "no" only when the posting explicitly mentions visa sponsorship. null = not stated. */
 export type VisaSponsorship = "yes" | "no";
+
+/**
+ * Primary language of the job description text, as an ISO 639-1 code.
+ *
+ * Populated in two passes:
+ *   1. Heuristic detector (at ingest + backfill) — fast, zero API cost, covers
+ *      the top 10 languages by job-market volume. Returns null when ambiguous.
+ *   2. AI lazy-load (GET /jobs/:id) — overrides the heuristic and fills nulls
+ *      using the full description context.
+ *
+ * null = unknown (description missing, too short, or genuinely ambiguous).
+ *
+ * Supported values: en es de fr pt it nl pl ja zh
+ * Full list is maintained in src/enrichment/language.ts.
+ */
+export type DescriptionLanguage =
+  | "en"  // English
+  | "es"  // Spanish
+  | "de"  // German
+  | "fr"  // French
+  | "pt"  // Portuguese
+  | "it"  // Italian
+  | "nl"  // Dutch
+  | "pl"  // Polish
+  | "ja"  // Japanese
+  | "zh"; // Chinese (Simplified or Traditional)
+
+/**
+ * Career level of the role, inferred by AI from the job title and description.
+ * null = not determinable (ambiguous title, multi-level posting, etc.)
+ *
+ * Ordered from lowest to highest:
+ *   new_grad  — Explicitly targets new/recent graduates: "New Grad", "Campus Hire",
+ *               "University Grad", "Early Career" with a graduation year, or roles
+ *               that explicitly require 0 years of experience and target students/grads.
+ *               Does NOT include generic "Junior" or "Associate" titles — those are "entry".
+ *   entry     — Junior, Associate, Entry-Level, 0–2 yrs experience required (but not
+ *               explicitly a grad program)
+ *   mid       — Mid-level, no seniority qualifier in title, 2–5 yrs
+ *   senior    — Senior / Sr. individual contributor
+ *   staff     — Staff / Principal / Distinguished IC (above Senior, no direct reports)
+ *   manager   — People manager with direct reports; excludes IC titles like
+ *               "Product Manager" or "Program Manager" that use "Manager" as a
+ *               discipline name rather than a people-management level
+ *   director  — Director / Head of (when clearly a leadership level, not a startup IC)
+ *   executive — VP, SVP, EVP, C-level, President, Founder
+ */
+export type SeniorityLevel =
+  | "new_grad"
+  | "entry"
+  | "mid"
+  | "senior"
+  | "staff"
+  | "manager"
+  | "director"
+  | "executive";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AI-extracted job description structure
@@ -230,6 +299,8 @@ export interface PublicJob {
   locations: string[] | null;
   employment_type: EmploymentType | null;
   workplace_type: WorkplaceType | null;
+  seniority_level: SeniorityLevel | null;
+  description_language: DescriptionLanguage | null;
   source_name: string;
   source_url: string | null;
 
