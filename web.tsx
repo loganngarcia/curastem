@@ -11233,6 +11233,7 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     onCreateResume,
     previewOnly = false,
     fetchEnabled = true,
+    onDetailFetched,
 }: {
     job: HomepageJob
     jobsApiUrl: string
@@ -11243,6 +11244,8 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     previewOnly?: boolean
     /** When false, skip the network fetch (swipe preview slots until they become the active job). */
     fetchEnabled?: boolean
+    /** Called after a successful network fetch so the caller can relay the data to P2P peers. */
+    onDetailFetched?: (jobId: string, entry: Omit<JobDetailCacheEntry, "t" | "u">) => void
 }) {
     // Compute the correct detail state synchronously on every render so that
     // when `job.id` changes (prop update, no remount) we never show stale or
@@ -11288,7 +11291,11 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                 const visaVal = d?.visa_sponsorship ?? null
                 const kwVal = d?.keywords ?? []
                 setDetail({ desc: descVal, detailSummary: sumVal, detailCompanyDesc: coVal, detailVisaSponsorship: visaVal, apiKeywords: kwVal, loadingDesc: false })
-                if (d) writeJobDetailCache(job.id, jobsApiUrl, { desc: descVal, detailSummary: sumVal, detailCompanyDesc: coVal, detailVisaSponsorship: visaVal, apiKeywords: kwVal })
+                if (d) {
+                    const entry = { desc: descVal, detailSummary: sumVal, detailCompanyDesc: coVal, detailVisaSponsorship: visaVal, apiKeywords: kwVal }
+                    writeJobDetailCache(job.id, jobsApiUrl, entry)
+                    onDetailFetched?.(job.id, entry)
+                }
             })
             .catch(() => { if (!cancelled) setDetail((p) => ({ ...p, loadingDesc: false })) })
             .finally(() => clearTimeout(timer))
@@ -11532,6 +11539,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     onSwipeCycleJob,
     jobSwipeDeck,
     mobileToolGestureAxis = null,
+    onJobDetailFetched,
 }: {
     job: HomepageJob
     jobsApiUrl: string
@@ -11544,6 +11552,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     jobSwipeDeck?: HomepageJob[]
     /** When 'y', pull-to-dismiss owns the gesture — disable job carousel drag. */
     mobileToolGestureAxis?: null | "x" | "y"
+    onJobDetailFetched?: (jobId: string, entry: Omit<JobDetailCacheEntry, "t" | "u">) => void
 }) {
     const [isShareHovered, setIsShareHovered] = React.useState(false)
     const [isCloseHovered, setIsCloseHovered] = React.useState(false)
@@ -11716,7 +11725,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                                 style={colStyle}
                                 {...(isMobile ? { "data-pull-scroll": "1" } : {})}
                             >
-                                <JobDetailScrollBody job={job} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} onCreateResume={onCreateResume} fetchEnabled />
+                                <JobDetailScrollBody job={job} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} onCreateResume={onCreateResume} fetchEnabled onDetailFetched={onJobDetailFetched} />
                             </div>
                             {/* Next slot */}
                             <div ref={swipeColNextRef} style={colStyle}>
@@ -11730,7 +11739,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                     style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px 24px 48px" }}
                     {...(isMobile ? { "data-pull-scroll": "1" } : {})}
                 >
-                    <JobDetailScrollBody job={job} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} onCreateResume={onCreateResume} />
+                    <JobDetailScrollBody job={job} jobsApiUrl={jobsApiUrl} themeColors={themeColors} isMobile={isMobile} resumeAnimPhase={resumeAnimPhase} onCreateResume={onCreateResume} onDetailFetched={onJobDetailFetched} />
                 </div>
             )}
             </div>
@@ -17447,6 +17456,9 @@ Extract this structure:
 
     const closeJobDetail = React.useCallback(() => {
         setIsJobOpen(false)
+        dataConnectionsRef.current.forEach((conn) => {
+            if (conn.open) conn.send({ type: "job-close" })
+        })
     }, [])
 
     // Close the DocEditor — clear resume keyword state and dismiss the job
@@ -18360,9 +18372,12 @@ Do not include markdown formatting or explanations.`
 
                 if (roleRef.current === "volunteer") {
                     if (typeof window !== "undefined") {
-                        window.history.replaceState(null, "", " ")
-                        justClearedHash = true
-                        log("Volunteer manual hangup - cleared hash")
+                        // Replace with a fresh waiting hash — volunteer goes back to lobby
+                        // with a new identity so the old student's room isn't re-joined.
+                        const newVolunteerHash = generateLinkHash()
+                        window.history.replaceState(null, "", newVolunteerHash)
+                        justClearedHash = false // hash is present; skip the re-generation below
+                        log(`Volunteer manual hangup - new waiting hash: ${newVolunteerHash}`)
                     }
                 }
 
@@ -18421,15 +18436,14 @@ Do not include markdown formatting or explanations.`
             } else {
                 // Remote hangup (peer disconnected)
 
-                // If I am a VOLUNTEER and student hung up, clear my hash
+                // If I am a VOLUNTEER and student hung up, get a fresh waiting hash
                 if (roleRef.current === "volunteer") {
                     if (typeof window !== "undefined") {
-                        // For volunteers, we might want to keep the hash if they are "hosting"?
-                        // But the requirement says "dont have it keep the same hash except for user #1".
-                        // If volunteer joined user #1 (student), they are user #2.
-                        // So clearing hash is correct for them too.
-                        window.history.replaceState(null, "", " ")
-                        log("Volunteer remote disconnect - cleared hash")
+                        // Give the volunteer a new waiting hash so they're always identifiable
+                        // while they wait for the next student. The old student's hash is gone.
+                        const newVolunteerHash = generateLinkHash()
+                        window.history.replaceState(null, "", newVolunteerHash)
+                        log(`Volunteer remote disconnect - new waiting hash: ${newVolunteerHash}`)
                     }
                 }
 
@@ -19650,8 +19664,13 @@ Do not include markdown formatting or explanations.`
             const n = jobCycleDeck.length
             const base = idx >= 0 ? idx : 0
             const next = ((base + delta) % n + n) % n
-            setSelectedJob(jobCycleDeck[next])
+            const nextJob = jobCycleDeck[next]!
+            setSelectedJob(nextJob)
             haptic.light()
+            // Sync swipe/arrow navigation to peers
+            dataConnectionsRef.current.forEach((conn) => {
+                if (conn.open) conn.send({ type: "job-cycle", payload: nextJob })
+            })
         },
         [jobCycleDeck, selectedJob?.id]
     )
@@ -19672,6 +19691,10 @@ Do not include markdown formatting or explanations.`
             setIsDocOpen(false)
             setIsWhiteboardOpen(false)
             setIsAppOpen(false)
+            // Sync the open job panel to all connected peers
+            dataConnectionsRef.current.forEach((conn) => {
+                if (conn.open) conn.send({ type: "job-open", payload: job })
+            })
         },
         [homepageJobsForDeck, messages]
     )
@@ -21103,10 +21126,11 @@ Do not include markdown formatting or explanations.`
                         log(`Student keeping existing hash: ${currentHash}`)
                     }
                 } else {
-                    // Volunteer - ALWAYS clear hash to start fresh search
-                    // They only get a hash when they JOIN a student
-                    window.history.replaceState(null, "", " ")
-                    log(`Volunteer cleared hash, searching for students...`)
+                    // Volunteer - generate a waiting hash so they always have one.
+                    // When they connect to a student, this hash is replaced with the student's.
+                    const volunteerWaitHash = generateLinkHash()
+                    window.history.replaceState(null, "", volunteerWaitHash)
+                    log(`Volunteer generated waiting hash: ${volunteerWaitHash}`)
                 }
             }
 
@@ -23317,7 +23341,10 @@ Do not include markdown formatting or explanations.`
                         type: "doc-update",
                         payload: docContentRef.current,
                     })
-                    conn.send({ type: "doc-start" })
+                    conn.send({
+                        type: "doc-start",
+                        payload: { docType: docTypeRef.current },
+                    })
                 }
             }
 
@@ -23396,26 +23423,28 @@ Do not include markdown formatting or explanations.`
                 // Handle final AI response (ensure consistency)
                 setMessages((prev) => {
                     const newArr = [...prev]
+                    const msgPatch: Partial<Message> = {
+                        text: data.payload.text,
+                        functionCall: data.payload.functionCall,
+                        functionResponse: data.payload.functionResponse,
+                        // Render job cards on the peer's side when the AI ran search_jobs
+                        ...(data.payload.jobs !== undefined && {
+                            jobs: data.payload.jobs,
+                        }),
+                    }
                     if (
                         newArr.length > 0 &&
                         newArr[newArr.length - 1].role === "model"
                     ) {
                         newArr[newArr.length - 1] = {
                             ...newArr[newArr.length - 1],
-                            text: data.payload.text,
-                            functionCall: data.payload.functionCall,
-                            functionResponse: data.payload.functionResponse,
+                            ...msgPatch,
                         }
                         return newArr
                     }
                     return [
                         ...prev,
-                        {
-                            role: "model",
-                            text: data.payload.text,
-                            functionCall: data.payload.functionCall,
-                            functionResponse: data.payload.functionResponse,
-                        },
+                        { role: "model", ...msgPatch } as Message,
                     ]
                 })
             } else if (data.type === "ai-suggestions") {
@@ -23438,6 +23467,8 @@ Do not include markdown formatting or explanations.`
             } else if (data.type === "doc-start") {
                 // if (isScreenSharingRef.current) stopLocalScreenShare()
                 if (isWhiteboardOpenRef.current) setIsWhiteboardOpen(false)
+                if (data.payload?.docType) setDocType(data.payload.docType)
+                setIsJobOpen(false)
                 setIsDocOpen(true)
             } else if (data.type === "doc-stop") {
                 setIsDocOpen(false)
@@ -23561,6 +23592,67 @@ Do not include markdown formatting or explanations.`
                 //     console.log("[App] Received request for initial state")
                 // Forward to host iframe
                 handleRequestInitialState()
+            } else if (data.type === "job-open") {
+                // Peer opened a job detail panel — mirror it locally
+                const job: HomepageJob = data.payload
+                setJobDeckExtras((prev) => {
+                    if (prev.some((j) => j.id === job.id)) return prev
+                    return [...prev, job]
+                })
+                setSelectedJob(job)
+                setIsJobOpen(true)
+                setIsDocOpen(false)
+                setIsWhiteboardOpen(false)
+                setIsAppOpen(false)
+            } else if (data.type === "job-close") {
+                setIsJobOpen(false)
+            } else if (data.type === "job-cycle") {
+                // Peer swiped/arrowed to a different job — follow along
+                const job: HomepageJob = data.payload
+                setJobDeckExtras((prev) => {
+                    if (prev.some((j) => j.id === job.id)) return prev
+                    return [...prev, job]
+                })
+                setSelectedJob(job)
+            } else if (data.type === "job-detail-cache") {
+                // Peer fetched job detail from the API — write to our local cache
+                // so our JobDetailScrollBody hydrates instantly without a duplicate fetch
+                const { jobId, entry } = data.payload
+                writeJobDetailCache(jobId, jobsApiUrl, entry)
+            } else if (data.type === "resume-anim-start") {
+                // Peer clicked "Create Resume" — mirror the full keyword orbit animation.
+                // Remap normalized (0–1) positions to our own viewport pixel coords.
+                const { items, job: animJob } = data.payload
+                const vw = window.innerWidth || 1
+                const vh = window.innerHeight || 1
+                const remapped: CapturedKeyword[] = items.map((c: CapturedKeyword) => ({
+                    ...c,
+                    startX: c.startX * vw,
+                    startY: c.startY * vh,
+                }))
+                // Open the job panel briefly (fading phase keeps it visible), then
+                // transition to doc — mirrors exactly what handleCreateResume does locally
+                setSelectedJob(animJob)
+                setIsJobOpen(true)
+                setIsDocOpen(false)
+                setIsWhiteboardOpen(false)
+                setIsAppOpen(false)
+                setResumeCapturedItems(remapped)
+                setResumeUsedKeywords([])
+                setResumeAnimPhase("fading")
+                setDocContent("")
+                setDocType("resume")
+                setTimeout(() => {
+                    setIsDocOpen(true)
+                    isDocOpenRef.current = true
+                    setResumeAnimPhase("orbiting")
+                }, 250)
+            } else if (data.type === "resume-anim-land") {
+                // Peer's resume finished generating — land keywords into the doc
+                const { markedContent, usedKeywords: used } = data.payload
+                setDocContent(markedContent)
+                setResumeUsedKeywords(used)
+                setResumeAnimPhase("landing")
             } else if (data.type === "tldraw-update") {
                 if (editorRef.current) {
                     try {
@@ -24421,6 +24513,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 let accumulatedText = ""
                 let accumulatedFunctionCall: any = null
                 let accumulatedThoughtSignature: string | undefined
+                // Carries job snippets from search_jobs so they can be broadcast to peers
+                let accumulatedJobSnippets: JobSnippet[] | null = null
 
                 // --- DELIMITER STREAMING STATE ---
                 // Tracks whether we are inside a <curastem-suggestions> block.
@@ -25214,6 +25308,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             setDocContent(markedContent)
                             setResumeUsedKeywords(used)
                             setResumeAnimPhase("landing")
+                            // Relay landing data to peers so they run the same animation
+                            if (dataConnectionsRef.current.size > 0) {
+                                broadcastData({
+                                    type: "resume-anim-land",
+                                    payload: { markedContent, usedKeywords: used },
+                                })
+                            }
                         } else {
                             setDocContent(newContent)
                         }
@@ -25230,15 +25331,16 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 newContent
                             )
                         }
-                        if (
-                            !isMobileLayout &&
-                            dataConnectionsRef.current.size > 0
-                        ) {
+                        if (dataConnectionsRef.current.size > 0) {
                             broadcastData({
                                 type: "doc-update",
                                 payload: newContent,
                             })
-                            broadcastData({ type: "doc-start" })
+                            // Send docType so the peer renders the correct editor variant
+                            broadcastData({
+                                type: "doc-start",
+                                payload: { docType: toolName === "create_resume" ? "resume" : "cover_letter" },
+                            })
                         }
                         const isResume = toolName === "create_resume"
                         try {
@@ -25801,6 +25903,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     ? "Here are some matching jobs!"
                                     : "No jobs found for that search.")
                         }
+                        accumulatedJobSnippets = jobSnippets
                         setMessages((prev) => {
                             const newArr = [...prev]
                             if (
@@ -25991,6 +26094,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                       response: {},
                                   }
                                 : undefined,
+                            // Carry job cards so the peer renders them in their chat
+                            ...(accumulatedJobSnippets !== null && {
+                                jobs: accumulatedJobSnippets,
+                            }),
                         },
                     })
                 }
@@ -27375,6 +27482,21 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 setDocType("resume")
                 setIsDocOpen(true)
                 isDocOpenRef.current = true
+                // Broadcast to peers: normalize pixel positions as viewport fractions
+                // so the peer can remap to their own screen size
+                if (dataConnectionsRef.current.size > 0) {
+                    const vw = window.innerWidth || 1
+                    const vh = window.innerHeight || 1
+                    const normalizedItems = captured.map((c) => ({
+                        ...c,
+                        startX: c.startX / vw,
+                        startY: c.startY / vh,
+                    }))
+                    broadcastData({
+                        type: "resume-anim-start",
+                        payload: { items: normalizedItems, job },
+                    })
+                }
                 return setTimeout(() => {
                     setResumeAnimPhase("orbiting")
                 }, 250)
@@ -27393,6 +27515,12 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     setDocContent(markedContent)
                     setResumeUsedKeywords(used)
                     setResumeAnimPhase("landing")
+                    if (dataConnectionsRef.current.size > 0) {
+                        broadcastData({
+                            type: "resume-anim-land",
+                            payload: { markedContent, usedKeywords: used },
+                        })
+                    }
                 }, 2200)
                 return () => {
                     clearTimeout(landTimer)
@@ -27609,6 +27737,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 : undefined
                         }
                         mobileToolGestureAxis={mobileToolGestureAxis}
+                        onJobDetailFetched={(jobId, entry) => {
+                            // Relay fetched detail to peers so they hydrate from cache
+                            // instead of making a duplicate API call
+                            broadcastData({ type: "job-detail-cache", payload: { jobId, entry } })
+                        }}
                     />
                     {mobileOverlayInput}
                 </div>
