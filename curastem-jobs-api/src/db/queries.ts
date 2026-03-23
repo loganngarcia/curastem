@@ -24,6 +24,7 @@
 import type {
   ApiKeyRow,
   CompanyRow,
+  ListingQuality,
   NormalizedJob,
   SourceRow,
 } from "../types.ts";
@@ -352,6 +353,9 @@ export async function updateSourceFetchResult(
 // jobs
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Rows with listing_quality = 'placeholder' are teasers; omit from discovery APIs. */
+const JOBS_NOT_PLACEHOLDER_SQL = "(j.listing_quality IS NULL OR j.listing_quality != 'placeholder')";
+
 export interface UpsertJobInput {
   id: string;
   company_id: string;
@@ -585,8 +589,8 @@ export async function batchUpsertJobs(
     employment_type, workplace_type, apply_url, source_url, source_name,
     description_raw, description_language,
     salary_min, salary_max, salary_currency, salary_period,
-    posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    posted_at, first_seen_at, dedup_key, location_lat, location_lng, listing_quality, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const UPDATE_SQL = `UPDATE jobs SET
     company_id = ?, title = ?,
@@ -601,11 +605,16 @@ export async function batchUpsertJobs(
     description_raw        = CASE WHEN ? = 1 THEN ? ELSE description_raw END,
     description_language   = CASE WHEN ? = 1 THEN ? ELSE description_language END,
     ai_generated_at        = CASE WHEN ? = 1 THEN NULL ELSE ai_generated_at END,
-    embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END
+    embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END,
+    listing_quality        = CASE
+      WHEN ? = 1 THEN CASE WHEN ? = 1 THEN 'placeholder' ELSE NULL END
+      ELSE listing_quality
+    END
   WHERE source_id = ? AND external_id = ?`;
 
   const { normalizeLocation } = await import("../utils/normalize.ts");
   const { detectLanguage } = await import("../enrichment/language.ts");
+  const { heuristicListingQuality } = await import("../utils/listingQuality.ts");
 
   for (let i = 0; i < inputs.length; i++) {
     const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now, location_lat, location_lng } = inputs[i];
@@ -625,6 +634,8 @@ export async function batchUpsertJobs(
     // Run heuristic language detection on the raw description at ingest time.
     // AI lazy-load will override this on first GET /jobs/:id if needed.
     const detectedLang = description_raw ? detectLanguage(description_raw) : null;
+    const ingestListingQ: ListingQuality | null =
+      heuristicListingQuality(n(description_raw)) === "placeholder" ? "placeholder" : null;
 
     if (!existing) {
       inserts.push(
@@ -633,7 +644,7 @@ export async function batchUpsertJobs(
           n(employment_type), n(workplace_type), apply_url, n(source_url), source_name,
           n(description_raw), detectedLang,
           n(salary_min), n(salary_max), n(salary_currency), n(salary_period),
-          n(posted_at), now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
+          n(posted_at), now, dedup_key, location_lat ?? null, location_lng ?? null, ingestListingQ, now, now
         )
       );
       insertIndices.push(i);
@@ -642,6 +653,7 @@ export async function batchUpsertJobs(
       descChangedFlags[i] = descChanged;
       // Re-detect language when description changes; keep existing value otherwise
       const updatedLang = descChanged ? detectLanguage(description_raw) : null;
+      const heuristicPh = descChanged && heuristicListingQuality(n(description_raw)) === "placeholder" ? 1 : 0;
       updates.push(
         db.prepare(UPDATE_SQL).bind(
           company_id, title,
@@ -654,6 +666,8 @@ export async function batchUpsertJobs(
           descChanged ? 1 : 0, updatedLang,
           descChanged ? 1 : 0,
           descChanged ? 1 : 0,
+          descChanged ? 1 : 0,
+          heuristicPh,
           source_id, external_id
         )
       );
@@ -662,8 +676,8 @@ export async function batchUpsertJobs(
   }
 
   // Chunk inserts and updates to stay under D1's ~1MB batch request body limit.
-  // Each INSERT is ~500 bytes (23 params); 500 inserts ≈ 250KB — safe headroom.
-  // Each UPDATE is ~400 bytes (22 params); 500 updates ≈ 200KB.
+  // Each INSERT is ~500 bytes (25 params); 500 inserts ≈ 250KB — safe headroom.
+  // Each UPDATE is ~400 bytes (24 params); 500 updates ≈ 200KB.
   const UPSERT_CHUNK = 500;
   for (let i = 0; i < inserts.length; i += UPSERT_CHUNK) {
     await db.batch(inserts.slice(i, i + UPSERT_CHUNK));
@@ -708,6 +722,7 @@ export async function getJobsNeedingEmbedding(
       FROM jobs j
       JOIN companies c ON j.company_id = c.id
       WHERE j.embedding_generated_at IS NULL
+        AND ${JOBS_NOT_PLACEHOLDER_SQL}
       ORDER BY
         -- USAJOBS last — 10K govt jobs should never block recent tech/retail jobs
         CASE WHEN j.source_id = 'usajobs' THEN 1 ELSE 0 END,
@@ -810,7 +825,7 @@ async function listJobsByIdsChunk(
   filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min">
 ): Promise<ListJobsRow[]> {
   const placeholders = ids.map(() => "?").join(", ");
-  const conditions: string[] = [`j.id IN (${placeholders})`];
+  const conditions: string[] = [JOBS_NOT_PLACEHOLDER_SQL, `j.id IN (${placeholders})`];
   const bindings: unknown[] = [...ids];
 
   if (filter.location) {
@@ -862,10 +877,11 @@ async function listJobsByIdsChunk(
   const sql = `
     SELECT
       j.id, j.company_id, j.source_id, j.external_id,
-      j.title, j.locations, j.employment_type, j.workplace_type,
+      j.title, j.locations, j.employment_type, j.workplace_type, j.seniority_level,
+      j.description_language,
       j.apply_url, j.source_url, j.source_name,
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
-      j.job_summary, j.ai_generated_at, j.embedding_generated_at,
+      j.job_summary, j.ai_generated_at, j.embedding_generated_at, j.listing_quality,
       j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
       c.name          AS company_name,
       c.logo_url      AS company_logo_url,
@@ -932,6 +948,7 @@ export interface ListJobsRow {
   job_summary: string | null;
   ai_generated_at: number | null;
   embedding_generated_at: number | null;
+  listing_quality: ListingQuality | null;
   posted_at: number | null;
   first_seen_at: number;
   dedup_key: string;
@@ -951,7 +968,7 @@ export async function listJobs(
   db: D1Database,
   filter: ListJobsFilter
 ): Promise<{ rows: ListJobsRow[]; total: number | null }> {
-  const conditions: string[] = [];
+  const conditions: string[] = [JOBS_NOT_PLACEHOLDER_SQL];
   const bindings: unknown[] = [];
 
   if (filter.q) {
@@ -1026,7 +1043,7 @@ export async function listJobs(
     }
   }
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const where = `WHERE ${conditions.join(" AND ")}`;
 
   // Explicit column list — excludes description_raw and job_description.
   // Each of those can be 10–50 KB of raw HTML/JSON; a 20-job list response
@@ -1038,7 +1055,7 @@ export async function listJobs(
       j.description_language,
       j.apply_url, j.source_url, j.source_name,
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
-      j.job_summary, j.ai_generated_at, j.embedding_generated_at,
+      j.job_summary, j.ai_generated_at, j.embedding_generated_at, j.listing_quality,
       j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
       c.name          AS company_name,
       c.logo_url      AS company_logo_url,
@@ -1149,6 +1166,7 @@ export async function listJobsNear(
 ): Promise<{ rows: ListJobsRow[] }> {
   const { lat, lng, radius_km, exclude_remote, limit, exclude_ids, q, posted_since } = filter;
   const conditions: string[] = [
+    JOBS_NOT_PLACEHOLDER_SQL,
     "j.location_lat IS NOT NULL",
     "j.location_lng IS NOT NULL",
     "j.locations IS NOT NULL",  // exclude jobs with stale coords but no locations array
@@ -1194,7 +1212,7 @@ export async function listJobsNear(
     j.description_language,
     j.apply_url, j.source_url, j.source_name,
     j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
-    j.job_summary, j.ai_generated_at, j.embedding_generated_at,
+    j.job_summary, j.ai_generated_at, j.embedding_generated_at, j.listing_quality,
     j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
     c.name AS company_name, c.logo_url AS company_logo_url,
     c.description AS company_description, c.website_url AS company_website_url,
@@ -1391,9 +1409,12 @@ export async function updateJobAiFields(
      * full description context and can handle mixed-language or ambiguous posts.
      */
     description_language?: string | null;
+    /** Teaser postings are hidden from discovery after assessment. */
+    listing_quality?: ListingQuality | null;
   } | null
 ): Promise<void> {
-  const { salary, workplace_type, employment_type, seniority_level, visa_sponsorship, locations, description_language } = extras ?? {};
+  const { salary, workplace_type, employment_type, seniority_level, visa_sponsorship, locations, description_language, listing_quality } =
+    extras ?? {};
 
   const locationsJson = locations && locations.length > 0 ? JSON.stringify(locations) : null;
 
@@ -1413,7 +1434,8 @@ export async function updateJobAiFields(
            visa_sponsorship     = COALESCE(visa_sponsorship, ?),
            salary_min           = COALESCE(salary_min, ?),
            salary_currency      = COALESCE(salary_currency, ?),
-           salary_period        = COALESCE(salary_period, ?)
+           salary_period        = COALESCE(salary_period, ?),
+           listing_quality      = COALESCE(?, listing_quality)
        WHERE id = ?`
     )
     .bind(
@@ -1429,8 +1451,22 @@ export async function updateJobAiFields(
       salary?.min ?? null,
       salary?.currency ?? null,
       salary?.period ?? null,
+      listing_quality ?? null,
       id
     )
+    .run();
+}
+
+/** Persist listing_quality alone (e.g. heuristic at read time or backfill classify). */
+export async function updateJobListingQuality(
+  db: D1Database,
+  id: string,
+  listingQuality: ListingQuality
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await db
+    .prepare("UPDATE jobs SET listing_quality = ?, updated_at = ? WHERE id = ?")
+    .bind(listingQuality, now, id)
     .run();
 }
 

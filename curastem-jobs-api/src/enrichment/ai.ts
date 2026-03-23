@@ -19,6 +19,8 @@
  */
 
 import type { JobDescriptionExtracted } from "../types.ts";
+import type { ListingQuality } from "../types.ts";
+import { heuristicListingQuality } from "../utils/listingQuality.ts";
 import { htmlToText } from "../utils/normalize.ts";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -218,6 +220,7 @@ Return ONLY valid JSON (no markdown fences) with exactly this shape:
   "responsibilities": ["<bullet>", ...],
   "minimum_qualifications": ["<bullet>", ...],
   "preferred_qualifications": ["<bullet>", ...],
+  "listing_quality": "<ok|placeholder>",
   "workplace_type": "<remote|hybrid|on_site|null>",
   "employment_type": "<full_time|part_time|contract|internship|temporary|null>",
   "seniority_level": "<new_grad|entry|mid|senior|staff|manager|director|executive|null>",
@@ -230,6 +233,7 @@ Return ONLY valid JSON (no markdown fences) with exactly this shape:
 
 Rules:
 - job_summary: exactly two sentences. Sentence 1 describes the company. Sentence 2 describes this role.
+- listing_quality: "placeholder" if the posting is a teaser with no real role description (e.g. only "apply to learn more", empty sections, or generic CTA with no duties, requirements, or role scope). "ok" if there is enough substance that a candidate could understand the role without applying first.
 - Each array item must be a concise, standalone point. No raw HTML.
 - Return empty arrays [] for any section not clearly present in the source text.
 - workplace_type: "remote" if fully remote, "hybrid" if hybrid/flexible, "on_site" if in-office only. null if not mentioned.
@@ -260,6 +264,8 @@ export interface ExtractedJobFields {
   salary_period: import("../types.ts").SalaryPeriod | null;
   /** Normalized locations extracted from the posting; first entry is primary. */
   locations: string[] | null;
+  /** Whether this row is a substantive job posting or a teaser with no real description. */
+  listing_quality: ListingQuality;
 }
 
 /** Format a salary for display, e.g. "$120,000" or "$45/hour" */
@@ -301,6 +307,7 @@ export async function extractJobFields(
     salary_min?: unknown;
     salary_period?: unknown;
     locations?: unknown[];
+    listing_quality?: unknown;
   };
 
   try {
@@ -346,6 +353,14 @@ export async function extractJobFields(
 
   const locations = ensureStringArray(parsed.locations);
 
+  const heuristicPh = heuristicListingQuality(descriptionRaw) === "placeholder";
+  const listing_quality: ListingQuality =
+    parsed.listing_quality === "ok"
+      ? "ok"
+      : parsed.listing_quality === "placeholder" || heuristicPh
+        ? "placeholder"
+        : "ok";
+
   return {
     job_summary: typeof parsed.job_summary === "string" ? parsed.job_summary : "",
     job_description: {
@@ -362,7 +377,48 @@ export async function extractJobFields(
     salary_currency: salaryMin !== null ? "USD" : null,
     salary_period: salaryPeriod,
     locations: locations.length > 0 ? locations : null,
+    listing_quality,
   };
+}
+
+const LISTING_QUALITY_CLASSIFY_PROMPT = (companyName: string, jobTitle: string, descriptionText: string) => `
+You classify whether a job posting is a real listing or a teaser with almost no information.
+
+Company: ${companyName}
+Title: ${jobTitle}
+Text:
+---
+${descriptionText.slice(0, 6000)}
+---
+
+Return ONLY valid JSON (no markdown fences): {"listing_quality":"ok"} if the text describes the role, duties, or requirements beyond a generic "apply to learn more" CTA.
+{"listing_quality":"placeholder"} if there is no substantive job content (only apply prompts, empty marketing shell, or under ~2 sentences with no role detail).
+
+Be strict about teasers; when uncertain, prefer "placeholder".
+`.trim();
+
+/**
+ * Cheap follow-up for rows that already have cached AI extraction from before listing_quality existed.
+ */
+export async function classifyListingQuality(
+  apiKey: string,
+  companyName: string,
+  jobTitle: string,
+  descriptionRaw: string
+): Promise<ListingQuality> {
+  const descriptionText = htmlToText(descriptionRaw);
+  const h = heuristicListingQuality(descriptionRaw);
+  if (h === "placeholder") return "placeholder";
+  const raw = await callGemini(apiKey, LISTING_QUALITY_CLASSIFY_PROMPT(companyName, jobTitle, descriptionText), 256);
+  const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+  let parsed: { listing_quality?: unknown };
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return "ok";
+  }
+  if (parsed.listing_quality === "placeholder") return "placeholder";
+  return "ok";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

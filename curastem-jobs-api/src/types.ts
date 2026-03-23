@@ -126,6 +126,8 @@ export interface JobRow {
   ai_generated_at: number | null;
   /** Epoch timestamp of last embedding generation; NULL = not yet embedded */
   embedding_generated_at: number | null;
+  /** NULL = not assessed; ok = substantive posting; placeholder = teaser (excluded from list/search). */
+  listing_quality: ListingQuality | null;
   posted_at: number | null;
   first_seen_at: number;
   dedup_key: string;
@@ -192,6 +194,9 @@ export type SalaryPeriod = "year" | "month" | "hour";
 
 /** "yes" / "no" only when the posting explicitly mentions visa sponsorship. null = not stated. */
 export type VisaSponsorship = "yes" | "no";
+
+/** Set lazily or by ingest heuristic; placeholder rows are hidden from list/search. */
+export type ListingQuality = "ok" | "placeholder";
 
 /**
  * Primary language of the job description text, as an ISO 639-1 code.

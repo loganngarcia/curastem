@@ -17,11 +17,20 @@
  * still returns the job with null AI fields rather than erroring.
  */
 
-import { getJobById, updateJobAiFields, updateCompanyEnrichment, updateJobDescriptionRaw, getSourceById, type FullJobRow } from "../db/queries.ts";
-import { extractJobFields, formatSalaryDisplay } from "../enrichment/ai.ts";
+import {
+  getJobById,
+  updateJobAiFields,
+  updateCompanyEnrichment,
+  updateJobDescriptionRaw,
+  updateJobListingQuality,
+  getSourceById,
+  type FullJobRow,
+} from "../db/queries.ts";
+import { classifyListingQuality, extractJobFields, formatSalaryDisplay } from "../enrichment/ai.ts";
 import { extractKeywords } from "../enrichment/keywords.ts";
 import { fetchSmartRecruitersDescription } from "../ingestion/sources/smartrecruiters.ts";
 import type { Env, JobDescriptionExtracted, PublicJob, PublicSalary } from "../types.ts";
+import { heuristicListingQuality } from "../utils/listingQuality.ts";
 import { Errors, jsonOk } from "../utils/errors.ts";
 import { authenticate, recordKeyUsage } from "../middleware/auth.ts";
 import { checkRateLimit } from "../middleware/rateLimit.ts";
@@ -110,6 +119,10 @@ export async function handleGetJob(
   const row = await getJobById(env.JOBS_DB, jobId);
   if (!row) return Errors.notFound("Job");
 
+  if (row.listing_quality === "placeholder") {
+    return Errors.notFound("Job");
+  }
+
   // SmartRecruiters列表API不含描述体——首次请求时懒加载详情并永久缓存
   if (!row.description_raw && row.source_name === "smartrecruiters") {
     try {
@@ -128,6 +141,14 @@ export async function handleGetJob(
     } catch (err) {
       // 描述懒加载失败不影响主响应
       logger.warn("sr_description_fetch_failed", { job_id: row.id, error: String(err) });
+    }
+  }
+
+  // Obvious teaser text — hide without spending tokens; persist so list/search stay clean.
+  if (row.listing_quality === null && row.description_raw) {
+    if (heuristicListingQuality(row.description_raw) === "placeholder") {
+      ctx.waitUntil(updateJobListingQuality(env.JOBS_DB, row.id, "placeholder"));
+      return Errors.notFound("Job");
     }
   }
 
@@ -164,6 +185,7 @@ export async function handleGetJob(
           description_language: extracted.description_language,
           visa_sponsorship: extracted.visa_sponsorship,
           locations: extracted.locations,
+          listing_quality: extracted.listing_quality,
         })
       );
 
@@ -196,6 +218,7 @@ export async function handleGetJob(
       if (extracted.locations && extracted.locations.length > 0) {
         row.locations = JSON.stringify(extracted.locations);
       }
+      row.listing_quality = extracted.listing_quality;
 
       // Also cache company description if missing (uses the same job context)
       if (!row.company_description && extracted.job_summary) {
@@ -212,6 +235,32 @@ export async function handleGetJob(
         error: String(err),
       });
     }
+  } else if (
+    env.GEMINI_API_KEY &&
+    row.description_raw &&
+    row.listing_quality === null &&
+    row.ai_generated_at !== null &&
+    row.job_description !== null
+  ) {
+    try {
+      const lq = await classifyListingQuality(
+        env.GEMINI_API_KEY,
+        row.company_name,
+        row.title,
+        row.description_raw
+      );
+      ctx.waitUntil(updateJobListingQuality(env.JOBS_DB, row.id, lq));
+      row.listing_quality = lq;
+    } catch (err) {
+      logger.warn("job_listing_quality_classify_failed", {
+        job_id: row.id,
+        error: String(err),
+      });
+    }
+  }
+
+  if (row.listing_quality === "placeholder") {
+    return Errors.notFound("Job");
   }
 
   return jsonOk(rowToFullPublicJob(row));
