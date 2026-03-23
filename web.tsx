@@ -15666,11 +15666,17 @@ const MessageBubble = React.memo(
                                     height: 40,
                                     paddingLeft: 16,
                                     paddingRight: 16,
-                                    background: themeColors.surface,
+                                    // Same fill as homepage job cards (surfaceHighlight)
+                                    background: themeColors.surfaceHighlight,
                                     borderRadius: 28,
                                     alignItems: "center",
                                     gap: 6,
                                     display: "inline-flex",
+                                    // Hug logo + text; never wider than the message column
+                                    width: "max-content",
+                                    maxWidth: "100%",
+                                    minWidth: 0,
+                                    boxSizing: "border-box",
                                     alignSelf: "flex-end",
                                     cursor: onJobChipClick ? "pointer" : "default",
                                 }}
@@ -15697,7 +15703,8 @@ const MessageBubble = React.memo(
                                         whiteSpace: "nowrap",
                                         overflow: "hidden",
                                         textOverflow: "ellipsis",
-                                        maxWidth: 220,
+                                        minWidth: 0,
+                                        flex: "1 1 0%",
                                     }}
                                 >
                                     {msg.jobContext.title} at {msg.jobContext.companyName}
