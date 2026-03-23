@@ -15,6 +15,9 @@
  *
  * If GEMINI_API_KEY is not set or if AI extraction fails, the response
  * still returns the job with null AI fields rather than erroring.
+ *
+ * When source content is too thin to syndicate, returns 410 JOB_UNAVAILABLE
+ * (not 404), so unknown ids and unlisted postings are distinguishable.
  */
 
 import {
@@ -120,7 +123,7 @@ export async function handleGetJob(
   if (!row) return Errors.notFound("Job");
 
   if (row.listing_quality === "placeholder") {
-    return Errors.notFound("Job");
+    return Errors.jobUnavailable();
   }
 
   // SmartRecruiters列表API不含描述体——首次请求时懒加载详情并永久缓存
@@ -148,7 +151,7 @@ export async function handleGetJob(
   if (row.listing_quality === null && row.description_raw) {
     if (heuristicListingQuality(row.description_raw) === "placeholder") {
       ctx.waitUntil(updateJobListingQuality(env.JOBS_DB, row.id, "placeholder"));
-      return Errors.notFound("Job");
+      return Errors.jobUnavailable();
     }
   }
 
@@ -260,7 +263,7 @@ export async function handleGetJob(
   }
 
   if (row.listing_quality === "placeholder") {
-    return Errors.notFound("Job");
+    return Errors.jobUnavailable();
   }
 
   return jsonOk(rowToFullPublicJob(row));

@@ -35,6 +35,17 @@ export const Errors = {
     return jsonError("NOT_FOUND", `${resource} not found`, 404);
   },
 
+  /**
+   * Valid id, but this representation is not offered through the API (e.g. source
+   * text too thin to syndicate). Prefer over NOT_FOUND so clients are not misled
+   * into retrying as if the id were wrong.
+   */
+  jobUnavailable(
+    message = "This posting is not available in the job catalog."
+  ): Response {
+    return jsonError("JOB_UNAVAILABLE", message, 410);
+  },
+
   methodNotAllowed(): Response {
     return jsonError("METHOD_NOT_ALLOWED", "Method not allowed", 405);
   },

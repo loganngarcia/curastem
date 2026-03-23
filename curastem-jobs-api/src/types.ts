@@ -126,7 +126,7 @@ export interface JobRow {
   ai_generated_at: number | null;
   /** Epoch timestamp of last embedding generation; NULL = not yet embedded */
   embedding_generated_at: number | null;
-  /** NULL = not assessed; ok = substantive posting; placeholder = teaser (excluded from list/search). */
+  /** Internal only — never serialize on PublicJob. */
   listing_quality: ListingQuality | null;
   posted_at: number | null;
   first_seen_at: number;
@@ -292,6 +292,9 @@ export interface PublicSalary {
  * The central public Job object.
  * Required fields are always present; optional fields may be null.
  * posted_at falls back to first_seen_at when the source does not provide one.
+ *
+ * Thin source postings are omitted from list/search; GET /jobs/:id for those ids
+ * returns HTTP 410 with error.code JOB_UNAVAILABLE (not NOT_FOUND).
  */
 export interface PublicJob {
   // Required

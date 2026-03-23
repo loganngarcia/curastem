@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- This column tracks freshness: NULL = never embedded; cleared when description_raw changes.
   embedding_generated_at INTEGER,     -- epoch; NULL = not yet embedded
 
-  -- NULL = not assessed; 'ok' = real posting; 'placeholder' = teaser / no substance (hidden from list/search)
+  -- Internal ingestion flag (never returned on PublicJob / REST JSON)
   listing_quality TEXT,
 
   -- Timestamps

@@ -186,7 +186,7 @@ async function handleToolCall(
     return toolResult(req.id, result);
   } catch (err) {
     if (err instanceof JobsApiError) {
-      if (err.status === 404) {
+      if (err.status === 404 || err.status === 410) {
         return rpcError(req.id, McpErrorCode.InvalidParams, err.message);
       }
       if (err.status === 429) {
