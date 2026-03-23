@@ -14,7 +14,7 @@
  * SCHEDULED TRIGGER
  * ──────────────────────────────────────────────────────────────────────────
  *   Cron: "0 * * * *" (every hour at :00)
- *   Action: seeds sources → runs ingestion → runs company enrichment
+ *   Action: seeds sources → ensures D1 schema for company website probe → seeds → corrections → ingestion → enrichment
  *
  * ──────────────────────────────────────────────────────────────────────────
  * AUTHENTICATION
@@ -44,7 +44,8 @@ import { handleListJobs } from "./routes/jobs.ts";
 import { handleGetJob } from "./routes/job.ts";
 import { handleGetStats } from "./routes/stats.ts";
 import { runIngestion, processSourceById, backfillEmbeddings } from "./ingestion/runner.ts";
-import { seedSources, seedCompanyWebsites } from "./db/migrate.ts";
+import { ensureCompanyWebsiteProbeColumns } from "./db/queries.ts";
+import { applyCompanyMetadataCorrections, seedSources, seedCompanyWebsites } from "./db/migrate.ts";
 import type { Env } from "./types.ts";
 import { Errors, jsonOk } from "./utils/errors.ts";
 import { logger } from "./utils/logger.ts";
@@ -120,7 +121,9 @@ async function handleRequest(
       // Embeddings are skipped to fit within the 30s Worker request budget.
       try {
         await seedSources(env.JOBS_DB);
+        await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
         await seedCompanyWebsites(env.JOBS_DB);
+        await applyCompanyMetadataCorrections(env.JOBS_DB);
         const limitParam = url.searchParams.get("limit");
         const limit = limitParam ? parseInt(limitParam, 10) : undefined;
         const result = await processSourceById(env, sourceId, limit);
@@ -138,7 +141,9 @@ async function handleRequest(
     ctx.waitUntil(
       (async () => {
         await seedSources(env.JOBS_DB);
+        await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
         await seedCompanyWebsites(env.JOBS_DB);
+        await applyCompanyMetadataCorrections(env.JOBS_DB);
         await runIngestion(env);
       })()
     );
@@ -203,7 +208,9 @@ export default {
         }
         try {
           await seedSources(env.JOBS_DB);
+          await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
           await seedCompanyWebsites(env.JOBS_DB);
+          await applyCompanyMetadataCorrections(env.JOBS_DB);
           await runIngestion(env);
           await recordCronSuccess(env.RATE_LIMIT_KV);
         } catch (err) {

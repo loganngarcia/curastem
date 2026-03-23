@@ -140,11 +140,13 @@ async function enrichCompany(
       description_enriched_at: now,
     };
 
-    // Resolve the best domain for API lookups — use stored website_url if available,
-    // fall back to slug.com which works for many but not all startups.
+    // Resolve domain for Brandfetch / favicon. If a probe cleared a dead URL and set
+    // website_infer_suppressed, do not fall back to {slug}.com (often wrong or also dead).
+    const inferSuppressed = (company.website_infer_suppressed ?? 0) !== 0;
+    const slugFallbackDomain = inferSuppressed ? null : `${company.slug}.com`;
     const domain = company.website_url
       ? extractDomain(company.website_url)
-      : `${company.slug}.com`;
+      : slugFallbackDomain;
 
     // Brandfetch: one call returns logo + all social links.
     // Only fetch if at least one field is missing — avoids wasting free-tier quota
@@ -174,7 +176,7 @@ async function enrichCompany(
       fields.glassdoor_url = brandfetch.glassdoor_url;
     }
 
-    if (!company.website_url && domain) {
+    if (!company.website_url && domain && !inferSuppressed) {
       fields.website_url = `https://${domain}`;
     }
 

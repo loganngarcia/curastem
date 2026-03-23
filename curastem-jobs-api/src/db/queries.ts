@@ -151,6 +151,8 @@ export async function updateCompanyEnrichment(
     x_url?: string | null;
     description?: string | null;
     description_enriched_at?: number | null;
+    website_checked_at?: number | null;
+    website_infer_suppressed?: number;
   }
 ): Promise<void> {
   const sets: string[] = [];
@@ -173,6 +175,25 @@ export async function updateCompanyEnrichment(
     .prepare(`UPDATE companies SET ${sets.join(", ")} WHERE id = ?`)
     .bind(...bindings)
     .run();
+}
+
+/**
+ * Ensures `companies` has migration 008 columns (website probe + infer lockout).
+ * Cold or pre-migration D1 would otherwise break seed/corrections/probe SQL; this is a no-op when columns exist.
+ */
+export async function ensureCompanyWebsiteProbeColumns(db: D1Database): Promise<void> {
+  const info = await db.prepare("PRAGMA table_info(companies)").all<{ name: string }>();
+  const names = new Set((info.results ?? []).map((r) => r.name));
+  if (!names.has("website_checked_at")) {
+    await db.prepare("ALTER TABLE companies ADD COLUMN website_checked_at INTEGER").run();
+  }
+  if (!names.has("website_infer_suppressed")) {
+    await db
+      .prepare(
+        "ALTER TABLE companies ADD COLUMN website_infer_suppressed INTEGER NOT NULL DEFAULT 0"
+      )
+      .run();
+  }
 }
 
 /**
@@ -207,6 +228,58 @@ export async function listUnenrichedCompanies(
     .bind(staleBefore, retryMissingBefore)
     .all<CompanyRow>();
   return result.results ?? [];
+}
+
+/**
+ * Companies with a stored website due for an HTTP reachability probe.
+ * Re-checks periodically so parked domains and 404 homepages stop surfacing as links.
+ */
+export async function listCompaniesForWebsiteProbe(
+  db: D1Database,
+  checkedBefore: number,
+  limit: number
+): Promise<CompanyRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM companies
+       WHERE website_url IS NOT NULL AND TRIM(website_url) != ''
+         AND (website_checked_at IS NULL OR website_checked_at < ?)
+       ORDER BY website_checked_at ASC NULLS FIRST, updated_at ASC
+       LIMIT ?`
+    )
+    .bind(checkedBefore, limit)
+    .all<CompanyRow>();
+  return result.results ?? [];
+}
+
+/** Persist website probe outcome (may clear website_url and set infer suppression). */
+export async function updateCompanyWebsiteProbeResult(
+  db: D1Database,
+  id: string,
+  patch: {
+    website_checked_at: number;
+    website_infer_suppressed?: number;
+    website_url?: string | null;
+  }
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const sets: string[] = ["website_checked_at = ?"];
+  const bindings: unknown[] = [patch.website_checked_at];
+  if (patch.website_infer_suppressed !== undefined) {
+    sets.push("website_infer_suppressed = ?");
+    bindings.push(patch.website_infer_suppressed);
+  }
+  if (patch.website_url !== undefined) {
+    sets.push("website_url = ?");
+    bindings.push(patch.website_url);
+  }
+  sets.push("updated_at = ?");
+  bindings.push(now);
+  bindings.push(id);
+  await db
+    .prepare(`UPDATE companies SET ${sets.join(", ")} WHERE id = ?`)
+    .bind(...bindings)
+    .run();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

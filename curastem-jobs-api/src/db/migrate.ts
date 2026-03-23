@@ -1046,7 +1046,7 @@ const SEED_SOURCES: SeedSource[] = [
   // ─── Browser fallback ─────────────────────────────────────────────────────
   // Cloudflare Browser Rendering — for career pages with no public ATS API.
   // Budget: ~10 min CPU/day → keep to ≤30 sources at one 24 h crawl cycle.
-  // { id: "br-clay",        name: "Clay (Browser)",           source_type: "browser", company_handle: "clay",        base_url: "https://clay.earth/careers" }, // ab-claylabs
+  // br-clay disabled — clay.earth DOM scrape listed nav as jobs. That product is now Mesh (https://me.sh/); GTM Clay stays on ab-claylabs (clay.com).
   // { id: "br-hex",         name: "Hex (Browser)",            source_type: "browser", company_handle: "hex",         base_url: "https://hex.tech/careers" }, // gh-hextechnologies
   // { id: "br-augment",     name: "Augment Code (Browser)",   source_type: "browser", company_handle: "augmentcode", base_url: "https://www.augmentcode.com/careers" }, // gh-augmentcomputing
   { id: "br-hilton",      name: "Hilton (Browser)",          source_type: "browser", company_handle: "hilton",          base_url: "https://jobs.hilton.com/us/en/search-jobs" },
@@ -1197,9 +1197,106 @@ const COMPANY_HINTS: CompanyHint[] = [
   { slug: "hp-inc",           name: "HP Inc",           website_url: "https://www.hp.com"            },
   // Startups whose slug.com differs from actual domain
   { slug: "augment-code",     name: "Augment Code",     website_url: "https://www.augmentcode.com"   },
-  { slug: "clay",             name: "Clay",             website_url: "https://clay.earth"            },
+  // GTM Clay (Ashby claylabs) — separate from Mesh (personal CRM, https://me.sh/, formerly Clay Earth)
+  { slug: "clay",             name: "Clay",             website_url: "https://www.clay.com"          },
+  // Mesh — rebranded from Clay Earth; favicon/logo via me.sh (not clay.com)
+  { slug: "mesh",             name: "Mesh",             website_url: "https://me.sh"               },
   { slug: "hex",              name: "Hex",              website_url: "https://hex.tech"              },
+  // Greenhouse name slugifies to google-deepmind; enrichment otherwise guesses google-deepmind.com
+  { slug: "google-deepmind",  name: "Google DeepMind",  website_url: "https://deepmind.google"       },
+  // AoPS — real domain is artofproblemsolving.com, not art-of-problem-solving.com
+  { slug: "art-of-problem-solving", name: "Art of Problem Solving", website_url: "https://artofproblemsolving.com" },
+  // Greenhouse slug mongodb → mongodb.com is fine for favicons; canonical marketing site uses www
+  { slug: "mongodb", name: "MongoDB", website_url: "https://www.mongodb.com" },
+  // Lovable (Greenhouse/Ashby) — not lovable.com (different company in Brandfetch)
+  { slug: "lovable", name: "Lovable", website_url: "https://lovable.dev" },
 ];
+
+/** Known-good metadata when slug→domain or Brandfetch misses a niche employer. */
+interface CompanyMetadataCorrection {
+  slug: string;
+  website_url: string;
+  /** Hostname passed to the same s2/favicons URL builder as company enrichment */
+  favicon_domain: string;
+  /** When set, overwrites x_url (Brandfetch often lacks small orgs) */
+  x_url?: string;
+  /** When true, replace logo_url even if Brandfetch cached the wrong domain (e.g. lovable.com vs lovable.dev) */
+  force_logo?: boolean;
+}
+
+const COMPANY_METADATA_CORRECTIONS: CompanyMetadataCorrection[] = [
+  { slug: "google-deepmind", website_url: "https://deepmind.google", favicon_domain: "deepmind.google" },
+  {
+    slug: "art-of-problem-solving",
+    website_url: "https://artofproblemsolving.com",
+    favicon_domain: "artofproblemsolving.com",
+    x_url: "https://x.com/AoPSNews",
+  },
+  // Ensures website_url is set even when enrichment has not reached this row (50/cron cap) or Brandfetch is off
+  { slug: "mongodb", website_url: "https://www.mongodb.com", favicon_domain: "mongodb.com" },
+  // AI app builder — Brandfetch "lovable.com" is a different brand; correct site is lovable.dev
+  { slug: "lovable", website_url: "https://lovable.dev", favicon_domain: "lovable.dev" },
+  // GTM Clay (ab-claylabs) — not clay.earth / Mesh product site
+  { slug: "clay", website_url: "https://www.clay.com", favicon_domain: "clay.com" },
+  // Mesh (me.sh) — use Google favicon CDN for me.sh until Brandfetch fills on enrich
+  { slug: "mesh", website_url: "https://me.sh", favicon_domain: "me.sh" },
+];
+
+/**
+ * Force-correct company rows where enrichment or a bad domain guess stored the wrong
+ * website or logo. Safe to run every request — idempotent UPDATEs by slug.
+ */
+export async function applyCompanyMetadataCorrections(db: D1Database): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  for (const c of COMPANY_METADATA_CORRECTIONS) {
+    const faviconUrl = `https://www.google.com/s2/favicons?domain=${c.favicon_domain}&sz=64`;
+    // force_logo: swap in favicon only while website_url still mismatches canonical (wrong Brandfetch domain).
+    // Once website matches, leave logo alone so a later enrich pass can upgrade to SVG for the right domain.
+    const logoSql = c.force_logo
+      ? `logo_url = CASE
+               WHEN website_url IS DISTINCT FROM ? THEN ?
+               ELSE logo_url
+             END`
+      : `logo_url = CASE
+               WHEN logo_url IS NOT NULL AND logo_url NOT LIKE 'https://www.google.com/s2/favicons%' THEN logo_url
+               ELSE ?
+             END`;
+    if (c.x_url) {
+      await db
+        .prepare(
+          `UPDATE companies SET
+             website_url = ?,
+             ${logoSql},
+             x_url = ?,
+             website_infer_suppressed = 0,
+             website_checked_at = NULL,
+             updated_at = ?
+           WHERE slug = ?`
+        )
+        .bind(
+          c.website_url,
+          ...(c.force_logo ? [c.website_url, faviconUrl] : [faviconUrl]),
+          c.x_url,
+          now,
+          c.slug
+        )
+        .run();
+    } else {
+      await db
+        .prepare(
+          `UPDATE companies SET
+             website_url = ?,
+             ${logoSql},
+             website_infer_suppressed = 0,
+             website_checked_at = NULL,
+             updated_at = ?
+           WHERE slug = ?`
+        )
+        .bind(c.website_url, ...(c.force_logo ? [c.website_url, faviconUrl] : [faviconUrl]), now, c.slug)
+        .run();
+    }
+  }
+}
 
 export async function seedCompanyWebsites(db: D1Database): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -1212,6 +1309,14 @@ export async function seedCompanyWebsites(db: D1Database): Promise<void> {
            website_url = CASE
                            WHEN companies.website_url IS NULL THEN excluded.website_url
                            ELSE companies.website_url
+                         END,
+           website_infer_suppressed = CASE
+                           WHEN companies.website_url IS NULL AND excluded.website_url IS NOT NULL THEN 0
+                           ELSE companies.website_infer_suppressed
+                         END,
+           website_checked_at = CASE
+                           WHEN companies.website_url IS NULL AND excluded.website_url IS NOT NULL THEN NULL
+                           ELSE companies.website_checked_at
                          END,
            updated_at  = excluded.updated_at`
       )
@@ -1251,6 +1356,8 @@ const COMPANY_ALIASES: Array<{ alias: string; canonical: string }> = [
   { alias: "backflip",               canonical: "backflip-ai" },
   { alias: "mirelo-ai",              canonical: "mirelo" },
   { alias: "leona-health",           canonical: "leona" },
+  // Mesh (me.sh) was Clay Earth; some feeds still use the old name
+  { alias: "clay-earth",             canonical: "mesh" },
 ];
 
 const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
@@ -1293,6 +1400,7 @@ const DISABLED_SOURCE_IDS = [
   "br-meta",          // Disabled — wd-meta pending correct site name
   "br-bofa",          // Disabled — wd-bofa pending correct site name
   "br-fedex",         // Disabled — wd-fedex pending correct site name
+  "br-clay",          // clay.earth careers DOM listed nav as jobs; use ab-claylabs (Ashby) only
   // wd-* entries that need correct site names before they can work
   "wd-microsoft", "wd-goldmansachs", "wd-morganstanley", "wd-delta", "wd-united",
   "wd-bestbuy", "wd-pepsico", "wd-amex", "wd-volvogroup", "wd-progressive",

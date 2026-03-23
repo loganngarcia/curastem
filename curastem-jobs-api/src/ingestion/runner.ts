@@ -22,6 +22,7 @@ import { batchCheckCrossSourceDups, batchGetExistingJobs, batchMarkJobsEmbedded,
 import { backfillConsiderDescriptions } from "../enrichment/consider-descriptions.ts";
 import { embedJob } from "../enrichment/ai.ts";
 import { runCompanyEnrichment } from "../enrichment/company.ts";
+import { runCompanyWebsiteProbeBatch } from "../enrichment/websiteProbe.ts";
 import { getFetcher } from "./registry.ts";
 import { geocode } from "../utils/geocode.ts";
 import type { Env, IngestionResult, SourceRow } from "../types.ts";
@@ -511,6 +512,12 @@ export async function runIngestion(env: Env): Promise<void> {
     }
   } else {
     logger.warn("company_enrichment_skipped", { reason: "GEMINI_API_KEY not set" });
+  }
+
+  try {
+    await runCompanyWebsiteProbeBatch(env.JOBS_DB);
+  } catch (err) {
+    logger.error("website_probe_cron_failed", { error: String(err) });
   }
 
   // Embedding backfill — generates Vectorize vectors for any jobs that were

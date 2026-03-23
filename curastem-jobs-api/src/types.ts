@@ -76,6 +76,10 @@ export interface CompanyRow {
   slug: string;
   logo_url: string | null;
   website_url: string | null;
+  /** Last time `website_url` was checked with an HTTP probe (epoch seconds). */
+  website_checked_at: number | null;
+  /** When 1, enrichment must not invent `https://{slug}.com` after a dead URL was cleared. */
+  website_infer_suppressed: number;
   linkedin_url: string | null;
   glassdoor_url: string | null;
   x_url: string | null;

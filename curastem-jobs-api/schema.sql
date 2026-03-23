@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS companies (
   -- Optional enrichment fields (nullable; populated by enrichment layer, not ingestion)
   logo_url                TEXT,
   website_url             TEXT,
+  website_checked_at      INTEGER,               -- last HTTP probe of website_url (epoch)
+  website_infer_suppressed INTEGER NOT NULL DEFAULT 0, -- 1 = never auto-set website from {slug}.com
   linkedin_url            TEXT,
   glassdoor_url           TEXT,
   x_url                   TEXT,
