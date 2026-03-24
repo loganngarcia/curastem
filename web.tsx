@@ -855,6 +855,47 @@ const getHexColor = (hslColor: string): string => {
     return toHex(r) + toHex(g) + toHex(b)
 }
 
+/** Koah theme.accentColor expects #rrggbb; Framer accent may be hsl/hsla or hex. */
+function cssColorToKoahHex(css: string): string {
+    const s = (css ?? "").trim()
+    const m = s.match(
+        /^hsla?\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%/i
+    )
+    if (m) {
+        const h = parseInt(m[1], 10) / 360
+        const sat = parseInt(m[2], 10) / 100
+        const l = parseInt(m[3], 10) / 100
+        let r, g, b
+        if (sat === 0) {
+            r = g = b = l
+        } else {
+            const hue2rgb = (p: number, q: number, t: number) => {
+                if (t < 0) t += 1
+                if (t > 1) t -= 1
+                if (t < 1 / 6) return p + (q - p) * 6 * t
+                if (t < 1 / 2) return q
+                if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
+                return p
+            }
+            const q = l < 0.5 ? l * (1 + sat) : l + sat - l * sat
+            const p = 2 * l - q
+            r = hue2rgb(p, q, h + 1 / 3)
+            g = hue2rgb(p, q, h)
+            b = hue2rgb(p, q, h - 1 / 3)
+        }
+        const toHex = (n: number) => {
+            const hex = Math.round(n * 255).toString(16)
+            return hex.length === 1 ? "0" + hex : hex
+        }
+        return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+    }
+    if (/^#[0-9a-fA-F]{6}$/.test(s)) return s
+    if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+        return `#${s[1]}${s[1]}${s[2]}${s[2]}${s[3]}${s[3]}`
+    }
+    return "#3b82f6"
+}
+
 const getStyles = (theme: typeof darkColors) => ({
     flexCenter: {
         display: "flex",
@@ -1836,129 +1877,167 @@ const RESUME_DOC_REVEAL_MS = 400
 
 // --- INTERFACES ---
 
-const GoogleAd = React.forwardRef<
-    HTMLModElement,
-    {
-        client?: string
-        slot?: string
-        format?: string
-        responsive?: string
-        layoutKey?: string
-        style?: React.CSSProperties
-        className?: string
+declare global {
+    interface Window {
+        koah?: {
+            process: (
+                query: string,
+                queryResponse: string,
+                adType: string,
+                options?: Record<string, unknown>
+            ) => Promise<boolean>
+            theme?: Record<string, unknown>
+        }
+        koah_init?: { theme?: Record<string, unknown> }
     }
->(
-    (
-        {
-            client,
-            slot,
-            format = "auto",
-            responsive = "true",
-            layoutKey,
-            style,
-            className,
-        },
-        ref
-    ) => {
-        const isStatic = useIsStaticRenderer()
+}
 
-        React.useEffect(() => {
-            if (typeof window === "undefined" || isStatic || !client || !slot)
+let koahScriptLoadPromise: Promise<void> | null = null
+
+function loadKoahScript(publisherId: string): Promise<void> {
+    if (typeof window === "undefined") return Promise.resolve()
+    if (window.koah?.process) return Promise.resolve()
+    if (koahScriptLoadPromise) return koahScriptLoadPromise
+
+    koahScriptLoadPromise = new Promise((resolve, reject) => {
+        const existing = document.querySelector(
+            `script[src^="https://app.koah.ai/js"]`
+        ) as HTMLScriptElement | null
+        if (existing) {
+            if (window.koah?.process) {
+                resolve()
                 return
-            try {
-                // @ts-ignore
-                ;(window.adsbygoogle = window.adsbygoogle || []).push({})
-            } catch (e) {
-                console.error("AdSense error", e)
             }
-        }, [isStatic, client, slot])
+            const onErr = () => reject(new Error("Koah script failed"))
+            existing.addEventListener("load", () => resolve())
+            existing.addEventListener("error", onErr)
+            // Cached scripts may not fire load again; poll briefly for window.koah
+            let n = 0
+            const poll = () => {
+                if (window.koah?.process) {
+                    resolve()
+                    return
+                }
+                if (++n > 200) {
+                    resolve()
+                    return
+                }
+                setTimeout(poll, 50)
+            }
+            poll()
+            return
+        }
+        const s = document.createElement("script")
+        s.async = true
+        s.src = `https://app.koah.ai/js?token=${encodeURIComponent(
+            publisherId
+        )}`
+        s.onload = () => resolve()
+        s.onerror = () => reject(new Error("Koah script failed"))
+        document.head.appendChild(s)
+    })
+    return koahScriptLoadPromise
+}
 
-        if (!client || !slot) return null
-
-        return (
-            <div
-                className={className}
-                style={{
-                    width: "100%",
-                    display: "flex",
-                    justifyContent: "center",
-                    margin: "16px 0",
-                    minHeight: "90px",
-                    ...style,
-                }}
-            >
-                <ins
-                    ref={ref}
-                    className="adsbygoogle"
-                    style={{ display: "block", width: "100%" }}
-                    data-ad-client={client}
-                    data-ad-slot={slot}
-                    data-ad-format={format}
-                    data-full-width-responsive={responsive}
-                    data-ad-layout-key={layoutKey}
-                />
-            </div>
-        )
-    }
-)
-
-function AdCard({
-    client,
-    slot,
-    layoutKey,
+function KoahAdCard({
+    publisherId,
+    userMessage,
+    aiResponse,
+    slotSuffix,
+    messageId,
     onStatusChange,
     themeColors = darkColors,
+    colorScheme,
 }: {
-    client: string
-    slot: string
-    layoutKey: string
+    publisherId: string
+    userMessage: string
+    aiResponse: string
+    slotSuffix: "suffix" | "followup"
+    messageId: string
     onStatusChange?: (status: "filled" | "unfilled" | "loading") => void
     themeColors?: typeof darkColors
+    colorScheme: "light" | "dark"
 }) {
     const [status, setStatus] = React.useState<
         "loading" | "filled" | "unfilled"
     >("loading")
-    const insRef = React.useRef<HTMLModElement>(null)
+    const slotRef = React.useRef<HTMLDivElement>(null)
+    const isStatic = useIsStaticRenderer()
 
     React.useEffect(() => {
-        const ins = insRef.current
-        if (!ins) return
+        onStatusChange?.(status)
+    }, [status, onStatusChange])
 
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                if (
-                    mutation.type === "attributes" &&
-                    mutation.attributeName === "data-ad-status"
-                ) {
-                    const s = ins.getAttribute("data-ad-status") as
-                        | "filled"
-                        | "unfilled"
-                    if (s === "filled" || s === "unfilled") {
-                        setStatus(s)
-                        onStatusChange?.(s)
-                    }
+    React.useEffect(() => {
+        if (isStatic || !publisherId) return
+        const el = slotRef.current
+        if (!el) return
+
+        const controller = new AbortController()
+        let cancelled = false
+
+        setStatus("loading")
+
+        ;(async () => {
+            try {
+                await loadKoahScript(publisherId)
+                if (cancelled || controller.signal.aborted) return
+                if (!window.koah?.process) {
+                    setStatus("unfilled")
+                    return
                 }
-            })
-        })
+                const koahMsgId = `${messageId}-${slotSuffix}`
+                const filled = await window.koah.process(
+                    userMessage,
+                    aiResponse,
+                    slotSuffix,
+                    {
+                        target: el,
+                        messageId: koahMsgId,
+                        signal: controller.signal,
+                    }
+                )
+                if (!cancelled && !controller.signal.aborted) {
+                    setStatus(filled ? "filled" : "unfilled")
+                }
+            } catch {
+                if (!cancelled && !controller.signal.aborted)
+                    setStatus("unfilled")
+            }
+        })()
 
-        observer.observe(ins, { attributes: true })
-        return () => observer.disconnect()
-    }, [onStatusChange])
+        return () => {
+            cancelled = true
+            controller.abort()
+        }
+    }, [
+        publisherId,
+        userMessage,
+        aiResponse,
+        slotSuffix,
+        messageId,
+        isStatic,
+    ])
 
-    // Hide completely if unfilled OR still loading (to prevent empty height gap)
-    if (status === "unfilled" || status === "loading")
-        return (
-            <div style={{ display: "none" }}>
-                <GoogleAd
-                    ref={insRef}
-                    client={client}
-                    slot={slot}
-                    layoutKey={layoutKey}
-                    format={layoutKey ? "fluid" : "auto"}
-                    style={{ margin: 0, minHeight: "auto" }}
-                />
-            </div>
-        )
+    React.useEffect(() => {
+        if (typeof window === "undefined" || isStatic) return
+        window.koah_init = window.koah_init || {}
+        window.koah_init.theme = {
+            ...(window.koah_init.theme || {}),
+            colorScheme,
+            presentationMode: "card",
+            accentColor: cssColorToKoahHex(themeColors.semantic.accent),
+            maxWidth: "268px",
+        }
+        if (window.koah?.theme) {
+            window.koah.theme = {
+                ...window.koah.theme,
+                ...window.koah_init.theme,
+            }
+        }
+    }, [colorScheme, themeColors.semantic.accent, isStatic])
+
+    const showCard = status === "filled"
 
     return (
         <div
@@ -1976,7 +2055,7 @@ function AdCard({
                 justifyContent: "flex-start",
                 alignItems: "center",
                 gap: 4,
-                display: "flex",
+                display: showCard ? "flex" : "none",
             }}
         >
             <div
@@ -1987,29 +2066,30 @@ function AdCard({
                     width: "100%",
                 }}
             >
-                <GoogleAd
-                    ref={insRef}
-                    client={client}
-                    slot={slot}
-                    layoutKey={layoutKey}
-                    format={layoutKey ? "fluid" : "auto"}
-                    style={{ margin: 0, minHeight: "auto" }}
+                <div
+                    ref={slotRef}
+                    className="curastem-koah-ad-slot"
+                    style={{ width: "100%", minHeight: 46.52 }}
                 />
             </div>
         </div>
     )
 }
 
-function AdCarousel({
-    client,
-    slot,
-    layoutKey,
+function KoahAdCarousel({
+    publisherId,
+    userMessage,
+    aiResponse,
+    messageId,
     themeColors = darkColors,
+    colorScheme,
 }: {
-    client: string
-    slot: string
-    layoutKey: string
+    publisherId: string
+    userMessage: string
+    aiResponse: string
+    messageId: string
     themeColors?: typeof darkColors
+    colorScheme: "light" | "dark"
 }) {
     const [ad1Status, setAd1Status] = React.useState<
         "loading" | "filled" | "unfilled"
@@ -2018,7 +2098,6 @@ function AdCarousel({
         "loading" | "filled" | "unfilled"
     >("loading")
 
-    // Only show the carousel if at least one ad is filled
     const isVisible = ad1Status === "filled" || ad2Status === "filled"
 
     return (
@@ -2030,45 +2109,47 @@ function AdCarousel({
                 justifyContent: "flex-start",
                 alignItems: "flex-start",
                 gap: 10,
-                display: isVisible ? "flex" : "none", // Hide entire carousel if no ads
+                display: isVisible ? "flex" : "none",
                 overflowX: "auto",
-                overflowY: "hidden", // Prevent vertical scrolling
-                paddingBottom: 4, // Space for scrollbar
-                scrollbarWidth: "none", // Hide scrollbar Firefox
-                msOverflowStyle: "none", // Hide scrollbar IE/Edge
-                marginBottom: 16, // Ensure spacing below ads
-                marginTop: 8, // Ensure spacing above ads
-                // Break out of parent padding to be full width
-                marginLeft: -4, //Move left -4px to align with the chat history
+                overflowY: "hidden",
+                paddingBottom: 4,
+                scrollbarWidth: "none",
+                msOverflowStyle: "none",
+                marginBottom: 16,
+                marginTop: 8,
+                marginLeft: -4,
                 width: "calc(100% + 48px)",
-                paddingLeft: 0, // Flush left as requested
-                paddingRight: 24, // Keep right padding for scroll end
-                flexShrink: 0, // Prevent collapsing
-                minHeight: isVisible ? 76 : 0, // Force minimum height only when visible
+                paddingLeft: 0,
+                paddingRight: 24,
+                flexShrink: 0,
+                minHeight: isVisible ? 76 : 0,
             }}
         >
             <style>{`
                 .CustomAdCarousel::-webkit-scrollbar {
-                    display: none; /* Hide scrollbar Chrome/Safari */
+                    display: none;
                 }
             `}</style>
 
-            {/* Ad 1 */}
-            <AdCard
-                client={client}
-                slot={slot}
-                layoutKey={layoutKey}
+            <KoahAdCard
+                publisherId={publisherId}
+                userMessage={userMessage}
+                aiResponse={aiResponse}
+                slotSuffix="suffix"
+                messageId={messageId}
                 onStatusChange={setAd1Status}
                 themeColors={themeColors}
+                colorScheme={colorScheme}
             />
-
-            {/* Ad 2 */}
-            <AdCard
-                client={client}
-                slot={slot}
-                layoutKey={layoutKey}
+            <KoahAdCard
+                publisherId={publisherId}
+                userMessage={userMessage}
+                aiResponse={aiResponse}
+                slotSuffix="followup"
+                messageId={messageId}
                 onStatusChange={setAd2Status}
                 themeColors={themeColors}
+                colorScheme={colorScheme}
             />
         </div>
     )
@@ -2083,6 +2164,8 @@ interface Props {
     model: string
     debugMode?: boolean
     showAds?: boolean
+    /** Koah publisher ID from https://app.koah.ai/ — loads https://app.koah.ai/js?token= */
+    koahPublisherId?: string
     defaultSuggestions?: string[]
 }
 
@@ -2154,6 +2237,13 @@ interface Message {
     jobs?: JobSnippet[]
     /** Job context chip — shown above user message bubble when sent with job details open. */
     jobContext?: { id: string; title: string; companyName: string; logoUrl: string | null }
+}
+
+function findPrecedingUserText(messages: Message[], modelIdx: number): string {
+    for (let i = modelIdx - 1; i >= 0; i--) {
+        if (messages[i]?.role === "user") return messages[i].text || ""
+    }
+    return ""
 }
 
 interface FileAttachmentProps {
@@ -18005,13 +18095,9 @@ export default function OmegleMentorshipUI(props: Props) {
         model = "gemini-3.1-flash-lite-preview",
         debugMode = false,
         showAds = true,
+        koahPublisherId = "",
         defaultSuggestions = [],
     } = props
-
-    // Hardcoded AdSense values as requested
-    const googleAdsClient = "ca-pub-9747624035157768"
-    const googleAdsSlot = "9605545126"
-    const googleAdsLayoutKey = "-ic+5+1+2-3"
 
     // REF for Direct Mutation Access (Fixes P2P App Sync Lag)
     const miniIDERef = React.useRef<MiniIDEHandle>(null)
@@ -30081,8 +30167,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         const shouldShowAd =
                             adIndices.has(idx) &&
                             showAds &&
-                            googleAdsClient &&
-                            googleAdsSlot
+                            koahPublisherId
 
                         return (
                             <React.Fragment key={idx}>
@@ -30140,11 +30225,16 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     }}
                                 />
                                 {shouldShowAd && (
-                                    <AdCarousel
-                                        client={googleAdsClient}
-                                        slot={googleAdsSlot}
-                                        layoutKey={googleAdsLayoutKey}
+                                    <KoahAdCarousel
+                                        publisherId={koahPublisherId}
+                                        userMessage={findPrecedingUserText(
+                                            messages,
+                                            idx
+                                        )}
+                                        aiResponse={msg.text || ""}
+                                        messageId={`msg-${idx}`}
                                         themeColors={themeColors}
+                                        colorScheme={systemTheme}
                                     />
                                 )}
                             </React.Fragment>
@@ -34917,7 +35007,15 @@ addPropertyControls(OmegleMentorshipUI, {
         type: ControlType.Boolean,
         title: "Show Ads",
         defaultValue: true,
-        description: "Toggle Google AdSense banners in the chat.",
+        description:
+            "Toggle Koah ads in the chat. Set Koah Publisher ID (dashboard at app.koah.ai).",
+    },
+    koahPublisherId: {
+        type: ControlType.String,
+        title: "Koah Publisher ID",
+        description:
+            "Publisher token from Koah dashboard (Integration settings). Required for ads.",
+        defaultValue: "",
     },
     defaultSuggestions: {
         type: ControlType.Array,
