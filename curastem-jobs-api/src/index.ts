@@ -44,7 +44,8 @@ import { handleListJobs } from "./routes/jobs.ts";
 import { handleGetJob } from "./routes/job.ts";
 import { handleGetStats } from "./routes/stats.ts";
 import { runIngestion, processSourceById, backfillEmbeddings } from "./ingestion/runner.ts";
-import { ensureCompanyWebsiteProbeColumns } from "./db/queries.ts";
+import { runExaEnrichment } from "./enrichment/company.ts";
+import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns } from "./db/queries.ts";
 import { applyCompanyMetadataCorrections, seedSources, seedCompanyWebsites } from "./db/migrate.ts";
 import type { Env } from "./types.ts";
 import { Errors, jsonOk } from "./utils/errors.ts";
@@ -122,6 +123,7 @@ async function handleRequest(
       try {
         await seedSources(env.JOBS_DB);
         await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
+        await ensureCompanyExaColumns(env.JOBS_DB);
         await seedCompanyWebsites(env.JOBS_DB);
         await applyCompanyMetadataCorrections(env.JOBS_DB);
         const limitParam = url.searchParams.get("limit");
@@ -142,6 +144,7 @@ async function handleRequest(
       (async () => {
         await seedSources(env.JOBS_DB);
         await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
+        await ensureCompanyExaColumns(env.JOBS_DB);
         await seedCompanyWebsites(env.JOBS_DB);
         await applyCompanyMetadataCorrections(env.JOBS_DB);
         await runIngestion(env);
@@ -162,6 +165,70 @@ async function handleRequest(
     } catch (embedErr) {
       logger.error("admin_embed_failed", { error: String(embedErr) });
       return new Response(JSON.stringify({ error: String(embedErr) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /admin/enrich — synchronously run Exa enrichment for the next batch.
+  // Useful for testing and backfilling without waiting for the hourly cron.
+  // ?debug=<company_name> returns the raw Exa response for a single company.
+  if (path === "/admin/enrich" && method === "POST") {
+    if (!env.EXA_API_KEY) {
+      return new Response(JSON.stringify({ error: "EXA_API_KEY not set" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const debugName = url.searchParams.get("debug");
+    if (debugName) {
+      // Debug mode: runs both Exa passes sequentially (pass 2 uses pass 1 result to
+      // determine the dynamic fallback field). Optional ?website= passes a domain hint.
+      try {
+        const { fetchExaDeepProfileData, fetchExaDeepSocialData } = await import("./enrichment/exa.ts");
+        const websiteHint = url.searchParams.get("website") || null;
+
+        const profile = await fetchExaDeepProfileData(debugName, env.EXA_API_KEY, websiteHint);
+
+        // Mirror the production fallback-field logic from company.ts
+        let fallbackKey: string | null = null;
+        if (profile) {
+          const checks: Array<[string, unknown]> = [
+            ["industry",             profile.industry],
+            ["company_type",         profile.company_type],
+            ["hq_city",              profile.hq_city],
+            ["hq_country",           profile.hq_country],
+            ["employee_count_range", profile.employee_count_range],
+            ["founded_year",         profile.founded_year],
+            ["total_funding_usd",    profile.total_funding_usd],
+            ["hq_address",           profile.hq_address],
+            ["linkedin_url",         profile.linkedin_url],
+          ];
+          for (const [key, val] of checks) {
+            const isOther = key === "industry" || key === "company_type";
+            if (!val || (isOther && val === "other")) { fallbackKey = key; break; }
+          }
+        }
+
+        // Prefer Pass 1's resolved website URL over the raw hint — it may have
+        // found the canonical domain (e.g. a corrected .mil or .org URL).
+        const pass2Website = profile?.website_url ?? websiteHint;
+        const social = await fetchExaDeepSocialData(
+          debugName, env.EXA_API_KEY, pass2Website, fallbackKey, profile?.industry,
+        );
+        return jsonOk({ company: debugName, website_hint: websiteHint, fallback_key: fallbackKey, profile, social });
+      } catch (dbgErr) {
+        return jsonOk({ company: debugName, error: String(dbgErr) });
+      }
+    }
+    try {
+      await ensureCompanyExaColumns(env.JOBS_DB);
+      await runExaEnrichment(env.JOBS_DB, env.EXA_API_KEY);
+      return jsonOk({ status: "completed" });
+    } catch (enrichErr) {
+      logger.error("admin_enrich_failed", { error: String(enrichErr) });
+      return new Response(JSON.stringify({ error: String(enrichErr) }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });
@@ -209,6 +276,7 @@ export default {
         try {
           await seedSources(env.JOBS_DB);
           await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
+          await ensureCompanyExaColumns(env.JOBS_DB);
           await seedCompanyWebsites(env.JOBS_DB);
           await applyCompanyMetadataCorrections(env.JOBS_DB);
           await runIngestion(env);

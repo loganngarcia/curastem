@@ -144,6 +144,7 @@ export async function updateCompanyEnrichment(
   db: D1Database,
   id: string,
   fields: {
+    // Existing enrichment fields
     logo_url?: string | null;
     website_url?: string | null;
     linkedin_url?: string | null;
@@ -153,6 +154,26 @@ export async function updateCompanyEnrichment(
     description_enriched_at?: number | null;
     website_checked_at?: number | null;
     website_infer_suppressed?: number;
+    // Exa enrichment gates
+    exa_company_enriched_at?: number | null;
+    exa_social_enriched_at?: number | null;
+    // New social links
+    instagram_url?: string | null;
+    youtube_url?: string | null;
+    github_url?: string | null;
+    huggingface_url?: string | null;
+    tiktok_url?: string | null;
+    crunchbase_url?: string | null;
+    facebook_url?: string | null;
+    // Company profile
+    employee_count_range?: string | null;
+    founded_year?: number | null;
+    hq_address?: string | null;
+    hq_city?: string | null;
+    hq_country?: string | null;
+    industry?: string | null;
+    company_type?: string | null;
+    total_funding_usd?: number | null;
   }
 ): Promise<void> {
   const sets: string[] = [];
@@ -197,6 +218,65 @@ export async function ensureCompanyWebsiteProbeColumns(db: D1Database): Promise<
 }
 
 /**
+ * Ensures `companies` has all migration 009 columns (Exa enrichment + extended profile).
+ * Self-healing: runs on every cron/admin path so the worker never fails on a cold D1.
+ */
+export async function ensureCompanyExaColumns(db: D1Database): Promise<void> {
+  const info = await db.prepare("PRAGMA table_info(companies)").all<{ name: string }>();
+  const names = new Set((info.results ?? []).map((r) => r.name));
+
+  const missing: Array<[string, string]> = [
+    ["exa_company_enriched_at","INTEGER"],
+    ["exa_social_enriched_at", "INTEGER"],
+    ["instagram_url",         "TEXT"],
+    ["youtube_url",           "TEXT"],
+    ["github_url",            "TEXT"],
+    ["huggingface_url",       "TEXT"],
+    ["tiktok_url",            "TEXT"],
+    ["crunchbase_url",        "TEXT"],
+    ["facebook_url",          "TEXT"],
+    ["employee_count_range",  "TEXT"],
+    ["founded_year",          "INTEGER"],
+    ["hq_address",            "TEXT"],
+    ["hq_city",               "TEXT"],
+    ["hq_country",            "TEXT"],
+    ["industry",              "TEXT"],
+    ["company_type",          "TEXT"],
+    ["total_funding_usd",     "INTEGER"],
+  ];
+
+  for (const [col, type] of missing) {
+    if (!names.has(col)) {
+      await db.prepare(`ALTER TABLE companies ADD COLUMN ${col} ${type}`).run();
+    }
+  }
+}
+
+/**
+ * Companies that have never had the Exa deep social pass run.
+ * Run-once: once exa_social_enriched_at is set it never re-runs automatically.
+ */
+export async function listCompaniesForSocialEnrichment(
+  db: D1Database,
+  limit: number
+): Promise<CompanyRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT c.* FROM companies c
+       LEFT JOIN (
+         SELECT company_id, MAX(COALESCE(posted_at, first_seen_at)) AS newest_job
+         FROM jobs GROUP BY company_id
+       ) j ON j.company_id = c.id
+       WHERE c.exa_social_enriched_at IS NULL
+       ORDER BY j.newest_job DESC NULLS LAST
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<CompanyRow>();
+  return result.results ?? [];
+}
+
+/**
  * List companies that need enrichment.
  * Covers three cases:
  *   1. Never enriched (description_enriched_at IS NULL)
@@ -226,6 +306,30 @@ export async function listUnenrichedCompanies(
        LIMIT 50`
     )
     .bind(staleBefore, retryMissingBefore)
+    .all<CompanyRow>();
+  return result.results ?? [];
+}
+
+/**
+ * Companies that have never had the Exa category pass run.
+ * Run-once: once exa_company_enriched_at is set it never re-runs automatically.
+ */
+export async function listCompaniesForExaEnrichment(
+  db: D1Database,
+  limit: number
+): Promise<CompanyRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT c.* FROM companies c
+       LEFT JOIN (
+         SELECT company_id, MAX(COALESCE(posted_at, first_seen_at)) AS newest_job
+         FROM jobs GROUP BY company_id
+       ) j ON j.company_id = c.id
+       WHERE c.exa_company_enriched_at IS NULL
+       ORDER BY j.newest_job DESC NULLS LAST
+       LIMIT ?`
+    )
+    .bind(limit)
     .all<CompanyRow>();
   return result.results ?? [];
 }
@@ -867,13 +971,28 @@ async function listJobsByIdsChunk(
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
       j.job_summary, j.ai_generated_at, j.embedding_generated_at,
       j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
-      c.name          AS company_name,
-      c.logo_url      AS company_logo_url,
-      c.description   AS company_description,
-      c.website_url   AS company_website_url,
-      c.linkedin_url  AS company_linkedin_url,
-      c.glassdoor_url AS company_glassdoor_url,
-      c.x_url         AS company_x_url
+      c.name                AS company_name,
+      c.logo_url            AS company_logo_url,
+      c.description         AS company_description,
+      c.website_url         AS company_website_url,
+      c.linkedin_url        AS company_linkedin_url,
+      c.glassdoor_url       AS company_glassdoor_url,
+      c.x_url               AS company_x_url,
+      c.instagram_url       AS company_instagram_url,
+      c.youtube_url         AS company_youtube_url,
+      c.github_url          AS company_github_url,
+      c.huggingface_url     AS company_huggingface_url,
+      c.tiktok_url          AS company_tiktok_url,
+      c.crunchbase_url      AS company_crunchbase_url,
+      c.facebook_url        AS company_facebook_url,
+      c.employee_count_range AS company_employee_count_range,
+      c.founded_year        AS company_founded_year,
+      c.hq_address          AS company_hq_address,
+      c.hq_city             AS company_hq_city,
+      c.hq_country          AS company_hq_country,
+      c.industry            AS company_industry,
+      c.company_type        AS company_type,
+      c.total_funding_usd   AS company_total_funding_usd
     FROM jobs j
     JOIN companies c ON j.company_id = c.id
     WHERE ${where}
@@ -945,6 +1064,21 @@ export interface ListJobsRow {
   company_linkedin_url: string | null;
   company_glassdoor_url: string | null;
   company_x_url: string | null;
+  company_instagram_url: string | null;
+  company_youtube_url: string | null;
+  company_github_url: string | null;
+  company_huggingface_url: string | null;
+  company_tiktok_url: string | null;
+  company_crunchbase_url: string | null;
+  company_facebook_url: string | null;
+  company_employee_count_range: string | null;
+  company_founded_year: number | null;
+  company_hq_address: string | null;
+  company_hq_city: string | null;
+  company_hq_country: string | null;
+  company_industry: string | null;
+  company_type: string | null;
+  company_total_funding_usd: number | null;
 }
 
 export async function listJobs(
@@ -1040,13 +1174,28 @@ export async function listJobs(
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
       j.job_summary, j.ai_generated_at, j.embedding_generated_at,
       j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
-      c.name          AS company_name,
-      c.logo_url      AS company_logo_url,
-      c.description   AS company_description,
-      c.website_url   AS company_website_url,
-      c.linkedin_url  AS company_linkedin_url,
-      c.glassdoor_url AS company_glassdoor_url,
-      c.x_url         AS company_x_url
+      c.name                AS company_name,
+      c.logo_url            AS company_logo_url,
+      c.description         AS company_description,
+      c.website_url         AS company_website_url,
+      c.linkedin_url        AS company_linkedin_url,
+      c.glassdoor_url       AS company_glassdoor_url,
+      c.x_url               AS company_x_url,
+      c.instagram_url       AS company_instagram_url,
+      c.youtube_url         AS company_youtube_url,
+      c.github_url          AS company_github_url,
+      c.huggingface_url     AS company_huggingface_url,
+      c.tiktok_url          AS company_tiktok_url,
+      c.crunchbase_url      AS company_crunchbase_url,
+      c.facebook_url        AS company_facebook_url,
+      c.employee_count_range AS company_employee_count_range,
+      c.founded_year        AS company_founded_year,
+      c.hq_address          AS company_hq_address,
+      c.hq_city             AS company_hq_city,
+      c.hq_country          AS company_hq_country,
+      c.industry            AS company_industry,
+      c.company_type        AS company_type,
+      c.total_funding_usd   AS company_total_funding_usd
     FROM jobs j
     JOIN companies c ON c.id = j.company_id
     ${where}
@@ -1199,7 +1348,16 @@ export async function listJobsNear(
     c.name AS company_name, c.logo_url AS company_logo_url,
     c.description AS company_description, c.website_url AS company_website_url,
     c.linkedin_url AS company_linkedin_url, c.glassdoor_url AS company_glassdoor_url,
-    c.x_url AS company_x_url`;
+    c.x_url AS company_x_url,
+    c.instagram_url AS company_instagram_url, c.youtube_url AS company_youtube_url,
+    c.github_url AS company_github_url, c.huggingface_url AS company_huggingface_url,
+    c.tiktok_url AS company_tiktok_url, c.crunchbase_url AS company_crunchbase_url,
+    c.facebook_url AS company_facebook_url,
+    c.employee_count_range AS company_employee_count_range,
+    c.founded_year AS company_founded_year,
+    c.hq_address AS company_hq_address, c.hq_city AS company_hq_city,
+    c.hq_country AS company_hq_country, c.industry AS company_industry,
+    c.company_type AS company_type, c.total_funding_usd AS company_total_funding_usd`;
 
   const sql = `
     SELECT ${selectCols}
@@ -1232,13 +1390,28 @@ export async function getJobById(
     .prepare(
       `SELECT
         j.*,
-        c.name          AS company_name,
-        c.logo_url      AS company_logo_url,
-        c.description   AS company_description,
-        c.website_url   AS company_website_url,
-        c.linkedin_url  AS company_linkedin_url,
-        c.glassdoor_url AS company_glassdoor_url,
-        c.x_url         AS company_x_url
+        c.name                AS company_name,
+        c.logo_url            AS company_logo_url,
+        c.description         AS company_description,
+        c.website_url         AS company_website_url,
+        c.linkedin_url        AS company_linkedin_url,
+        c.glassdoor_url       AS company_glassdoor_url,
+        c.x_url               AS company_x_url,
+        c.instagram_url       AS company_instagram_url,
+        c.youtube_url         AS company_youtube_url,
+        c.github_url          AS company_github_url,
+        c.huggingface_url     AS company_huggingface_url,
+        c.tiktok_url          AS company_tiktok_url,
+        c.crunchbase_url      AS company_crunchbase_url,
+        c.facebook_url        AS company_facebook_url,
+        c.employee_count_range AS company_employee_count_range,
+        c.founded_year        AS company_founded_year,
+        c.hq_address          AS company_hq_address,
+        c.hq_city             AS company_hq_city,
+        c.hq_country          AS company_hq_country,
+        c.industry            AS company_industry,
+        c.company_type        AS company_type,
+        c.total_funding_usd   AS company_total_funding_usd
        FROM jobs j
        JOIN companies c ON c.id = j.company_id
        WHERE j.id = ?`

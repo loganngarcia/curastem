@@ -1210,6 +1210,19 @@ const COMPANY_HINTS: CompanyHint[] = [
   { slug: "mongodb", name: "MongoDB", website_url: "https://www.mongodb.com" },
   // Lovable (Greenhouse/Ashby) — not lovable.com (different company in Brandfetch)
   { slug: "lovable", name: "Lovable", website_url: "https://lovable.dev" },
+  // Remote.com — canonical domain is remote.com not remotecom.com
+  { slug: "remotecom", name: "Remote.com", website_url: "https://remote.com" },
+  // Inflection AI — canonical domain is inflection.ai not inflection-ai.com
+  { slug: "inflection-ai", name: "Inflection AI", website_url: "https://inflection.ai" },
+  // Swan (French fintech) — swan.com is an unrelated company; swan.io is correct
+  { slug: "swan", name: "Swan", website_url: "https://swan.io" },
+  // Slingshot AI — slingshot.xyz is wrong; slingshotai.com is correct
+  { slug: "slingshot-ai", name: "Slingshot AI", website_url: "https://slingshotai.com" },
+  // Warner Bros Discovery — fragmented brand; wbd.com is the canonical parent
+  { slug: "warner-bros", name: "Warner Bros", website_url: "https://wbd.com" },
+  { slug: "warner-bros-discovery", name: "Warner Bros. Discovery", website_url: "https://wbd.com" },
+  // Promise (civic payments) — promise.com is unrelated; joinpromise.com is correct
+  { slug: "promise", name: "Promise", website_url: "https://joinpromise.com" },
 ];
 
 /** Known-good metadata when slug→domain or Brandfetch misses a niche employer. */

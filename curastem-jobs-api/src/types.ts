@@ -64,6 +64,12 @@ export interface Env {
    * Free at developer.usajobs.gov. Set via wrangler secret put USAJOBS_API_KEY.
    */
   USAJOBS_API_KEY?: string;
+  /**
+   * Exa API key for company enrichment (website, social links, profile fields).
+   * Primary enrichment source — Brandfetch is fallback only.
+   * Set via: wrangler secret put EXA_API_KEY
+   */
+  EXA_API_KEY?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,11 +84,31 @@ export interface CompanyRow {
   website_url: string | null;
   /** Last time `website_url` was checked with an HTTP probe (epoch seconds). */
   website_checked_at: number | null;
-  /** When 1, enrichment must not invent `https://{slug}.com` after a dead URL was cleared. */
+  /** When non-zero, enrichment must not invent `https://{slug}.com` after a dead URL was cleared. */
   website_infer_suppressed: number;
+  // Social / professional links
   linkedin_url: string | null;
   glassdoor_url: string | null;
   x_url: string | null;
+  instagram_url: string | null;
+  youtube_url: string | null;
+  github_url: string | null;
+  huggingface_url: string | null;
+  tiktok_url: string | null;
+  crunchbase_url: string | null;
+  facebook_url: string | null;
+  /** Epoch when Exa enrichment last ran for this company. NULL = never enriched. */
+  exa_company_enriched_at: number | null;
+  exa_social_enriched_at: number | null;
+  // Company profile
+  employee_count_range: string | null;
+  founded_year: number | null;
+  hq_address: string | null;
+  hq_city: string | null;
+  hq_country: string | null;
+  industry: string | null;
+  company_type: string | null;
+  total_funding_usd: number | null;
   description: string | null;
   description_enriched_at: number | null;
   created_at: number;
@@ -268,10 +294,30 @@ export interface PublicCompany {
   logo_url: string | null;
   description: string | null;
   website_url: string | null;
+  // Social links
   linkedin_url: string | null;
   glassdoor_url: string | null;
   /** X (formerly Twitter) profile URL */
   x_url: string | null;
+  instagram_url: string | null;
+  youtube_url: string | null;
+  github_url: string | null;
+  huggingface_url: string | null;
+  tiktok_url: string | null;
+  crunchbase_url: string | null;
+  facebook_url: string | null;
+  // Company profile
+  employee_count_range: string | null;
+  founded_year: number | null;
+  /** Full street address, no PO Box */
+  headquarters: {
+    address: string | null;
+    city: string | null;
+    country: string | null;
+  } | null;
+  industry: string | null;
+  company_type: string | null;
+  total_funding_usd: number | null;
 }
 
 export interface PublicSalary {

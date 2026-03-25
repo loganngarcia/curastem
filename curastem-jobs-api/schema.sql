@@ -22,9 +22,32 @@ CREATE TABLE IF NOT EXISTS companies (
   website_url             TEXT,
   website_checked_at      INTEGER,               -- last HTTP probe of website_url (epoch)
   website_infer_suppressed INTEGER NOT NULL DEFAULT 0, -- 1 = never auto-set website from {slug}.com
+
+  -- Social / professional links (Exa primary, Brandfetch fallback)
   linkedin_url            TEXT,
   glassdoor_url           TEXT,
   x_url                   TEXT,
+  instagram_url           TEXT,
+  youtube_url             TEXT,
+  github_url              TEXT,
+  huggingface_url         TEXT,
+  tiktok_url              TEXT,
+  crunchbase_url          TEXT,
+  facebook_url            TEXT,
+
+  -- Exa enrichment gate — NULL = never enriched via Exa
+  exa_company_enriched_at INTEGER,
+  exa_social_enriched_at  INTEGER,
+
+  -- Company profile (all from Exa)
+  employee_count_range    TEXT,    -- "1"|"2-10"|"11-50"|"51-200"|"201-500"|"501-1000"|"1001-5000"|"5001-10000"|"10000+"
+  founded_year            INTEGER,
+  hq_address              TEXT,    -- full street address, no PO Box
+  hq_city                 TEXT,    -- "San Francisco, CA" or "London, UK"
+  hq_country              TEXT,    -- ISO 3166-1 alpha-2, e.g. "US"
+  industry                TEXT,    -- normalized taxonomy: see src/enrichment/exa.ts INDUSTRY_MAP
+  company_type            TEXT,    -- "startup"|"enterprise"|"agency"|"nonprofit"|"government"|"university"|"other"
+  total_funding_usd       INTEGER,
 
   -- AI-generated one-sentence company description (lazy, cached)
   description             TEXT,

@@ -21,7 +21,7 @@
 import { batchCheckCrossSourceDups, batchGetExistingJobs, batchMarkJobsEmbedded, batchSetLanguage, batchUpsertJobs, getJobsNeedingEmbedding, getJobsNeedingLanguageDetection, getLocationsNeedingGeocode, getSourceById, listEnabledSources, resolveCompanySlug, updateJobsWithCoords, updateSourceFetchResult, upsertCompany } from "../db/queries.ts";
 import { backfillConsiderDescriptions } from "../enrichment/consider-descriptions.ts";
 import { embedJob } from "../enrichment/ai.ts";
-import { runCompanyEnrichment } from "../enrichment/company.ts";
+import { runCompanyEnrichment, runExaEnrichment } from "../enrichment/company.ts";
 import { runCompanyWebsiteProbeBatch } from "../enrichment/websiteProbe.ts";
 import { getFetcher } from "./registry.ts";
 import { geocode } from "../utils/geocode.ts";
@@ -502,8 +502,19 @@ export async function runIngestion(env: Env): Promise<void> {
   };
   logger.ingestionSummary(summary);
 
-  // Company enrichment runs after ingestion as a best-effort background task.
-  // Failures here do not affect the ingestion success status.
+  // Exa enrichment — primary source for company profile, social links, HQ, etc.
+  // Runs before Brandfetch so Brandfetch only fills what Exa left null.
+  if (env.EXA_API_KEY) {
+    try {
+      await runExaEnrichment(env.JOBS_DB, env.EXA_API_KEY);
+    } catch (err) {
+      logger.error("exa_enrichment_cron_failed", { error: String(err) });
+    }
+  } else {
+    logger.warn("exa_enrichment_skipped", { reason: "EXA_API_KEY not set" });
+  }
+
+  // Brandfetch + AI description — fallback for fields Exa left null.
   if (env.GEMINI_API_KEY) {
     try {
       await runCompanyEnrichment(env.JOBS_DB, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID);

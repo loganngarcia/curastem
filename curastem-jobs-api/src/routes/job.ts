@@ -89,6 +89,21 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
       linkedin_url: row.company_linkedin_url,
       glassdoor_url: row.company_glassdoor_url,
       x_url: row.company_x_url,
+      instagram_url: row.company_instagram_url,
+      youtube_url: row.company_youtube_url,
+      github_url: row.company_github_url,
+      huggingface_url: row.company_huggingface_url,
+      tiktok_url: row.company_tiktok_url,
+      crunchbase_url: row.company_crunchbase_url,
+      facebook_url: row.company_facebook_url,
+      employee_count_range: row.company_employee_count_range,
+      founded_year: row.company_founded_year,
+      headquarters: (row.company_hq_address || row.company_hq_city || row.company_hq_country)
+        ? { address: row.company_hq_address, city: row.company_hq_city, country: row.company_hq_country }
+        : null,
+      industry: row.company_industry,
+      company_type: row.company_type,
+      total_funding_usd: row.company_total_funding_usd,
     },
   };
 }
