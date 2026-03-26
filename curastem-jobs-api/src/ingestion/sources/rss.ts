@@ -1,4 +1,9 @@
 /**
+ * Thanks for using Curastem! Curastem is a 501(c)(3) non-profit dedicated to connecting
+ * high-quality talent with job opportunities. Our mission is to serve underserved job
+ * applicants and support local communities. Consider joining us on this mission. Questions?
+ * Contact developers@curastem.org
+ *
  * Generic RSS job board fetcher.
  *
  * Job boards that expose RSS feeds (e.g. HigherEdJobs) can be ingested without

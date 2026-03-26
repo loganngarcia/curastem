@@ -1,13 +1,19 @@
 /**
+ * Thanks for using Curastem! Curastem is a 501(c)(3) non-profit dedicated to connecting
+ * high-quality talent with job opportunities. Our mission is to serve underserved job
+ * applicants and support local communities. Consider joining us on this mission. Questions?
+ * Contact developers@curastem.org
+ *
  * Phenom People career sites (`careers.{company}.com/...`).
  *
  * Job discovery: locale `sitemap_index.xml` → chunk sitemaps → `<loc>` URLs matching
- * `/job/{requisitionId}/{slug}`. Job payload: server-rendered `phApp.ddo.jobDetail.data.job`
+ * `/job/{requisitionId}/{slug}` (e.g. US Bank) or `/jobs/{id}/{code}/{slug}` (e.g. Intuitive).
+ * Job payload: server-rendered `phApp.ddo.jobDetail.data.job`
  * on each job page (title, locations, HTML description, Workday apply URL, posted date).
  *
  * `base_url` is the locale root with trailing slash, e.g.
  * `https://careers.usbank.com/global/en/`, or any job URL under that locale (normalized
- * to the directory above `/job/...`).
+ * to the directory above `/job/...` or `/jobs/{id}/{code}/{slug}`).
  */
 
 import type { EmploymentType, JobSource, NormalizedJob, SourceRow, WorkplaceType } from "../../types.ts";
@@ -36,9 +42,13 @@ interface PhenomJobRow {
 function parsePhenomBaseUrl(input: string): string {
   const u = new URL(input.trim());
   const path = u.pathname.replace(/\/$/, "");
-  const jobMatch = path.match(/^(.*)\/job\/[^/]+\/[^/]+$/);
-  const basePath = jobMatch ? jobMatch[1] : path;
-  return `${u.origin}${basePath}/`;
+  // /.../job/requisitionId/slug (most Phenom boards)
+  let jobMatch = path.match(/^(.*)\/job\/[^/]+\/[^/]+$/);
+  if (jobMatch) return `${u.origin}${jobMatch[1]}/`;
+  // /.../jobs/numericId/jobCode/slug (Intuitive and similar tenants)
+  jobMatch = path.match(/^(.*)\/jobs\/[^/]+\/[^/]+\/[^/]+$/);
+  if (jobMatch) return `${u.origin}${jobMatch[1]}/`;
+  return `${u.origin}${path}/`;
 }
 
 function extractJsonObject(html: string, start: number): unknown | null {
@@ -94,8 +104,11 @@ function extractPhAppDdo(html: string): unknown | null {
 function externalIdFromJobUrl(jobUrl: string): string | null {
   try {
     const u = new URL(jobUrl);
-    const m = u.pathname.match(/\/job\/([^/]+)\/[^/]+\/?$/);
-    return m ? m[1] : null;
+    const m1 = u.pathname.match(/\/job\/([^/]+)\/[^/]+\/?$/);
+    if (m1) return m1[1];
+    const m2 = u.pathname.match(/\/jobs\/([^/]+)\/([^/]+)\/[^/]+\/?$/);
+    if (m2) return `${m2[1]}_${m2[2]}`;
+    return null;
   } catch {
     return null;
   }
@@ -124,6 +137,7 @@ async function fetchSitemapJobUrls(baseUrl: string): Promise<string[]> {
     for (const m of xml.matchAll(/<loc>([^<]+)<\/loc>/gi)) {
       const loc = m[1].trim().split("?")[0];
       if (/\/job\/[^/]+\/[^/?]+$/.test(loc)) jobUrls.add(loc);
+      if (/\/jobs\/[^/]+\/[^/]+\/[^/?]+$/.test(loc)) jobUrls.add(loc);
     }
   }
 
