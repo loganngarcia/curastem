@@ -39,11 +39,13 @@ export const JOB_HIGHLIGHT_PHRASES: readonly string[] = [
   "UX research",
   "UI/UX",
   "UI",
+  "UX",
   "Figma",
   "prototyping",
   "prototypes",
   "handoffs",
   "intuitive",
+  "user-friendly",
   "design",
 
   // Cross-functional
@@ -57,6 +59,7 @@ export const JOB_HIGHLIGHT_PHRASES: readonly string[] = [
   "Collaborate",
   "leading",
   "Mentor",
+  "mentorship",
 
   // Strategy & growth
   "strategy",
@@ -71,6 +74,12 @@ export const JOB_HIGHLIGHT_PHRASES: readonly string[] = [
   "enterprise",
   "SaaS",
   "B2B",
+  "fintech",
+  "crypto",
+  "web3",
+  "early stage",
+  "zero-to-one",
+  "0 to 1",
 
   // Data & analytics
   "data-driven",
@@ -100,7 +109,7 @@ export const JOB_HIGHLIGHT_PHRASES: readonly string[] = [
   "budgets",
 
   // Engineering
-  "algorithms",
+  "full-stack",
   "object-oriented design",
   "design patterns",
   "schema design",
@@ -120,12 +129,31 @@ export const JOB_HIGHLIGHT_PHRASES: readonly string[] = [
   "production",
   "production-ready",
   "low-latency",
+  "real-time",
   "testing",
+  "debugging",
   "debug",
   "performance",
+  "maintainable",
+  "efficient",
   "WebSockets",
+  "RESTful APIs",
+  "RESTful",
   "API",
   "pipelines",
+  "algorithms",
+  "backend",
+  "codebase",
+
+  // Mobile
+  "SwiftUI",
+  "Swift",
+  "UIKit",
+  "Xcode",
+  "iOS",
+  "Android",
+  "SDK",
+  "apps",
 
   // AI / ML
   "generative AI",
@@ -179,6 +207,37 @@ export const JOB_HIGHLIGHT_PHRASES: readonly string[] = [
   "C++",
   "WebGL",
 
+  // Creative / 3D / games / media
+  "visual effects",
+  "content creation",
+  "Unreal Engine",
+  "Unity",
+  "AAA",
+  "high-poly",
+  "characters",
+  "animation",
+  "rigging",
+  "modeling",
+  "texturing",
+  "lighting",
+  "Photoshop",
+  "EmberGen",
+  "Houdini",
+  "streaming",
+  "ZBrush",
+  "Maya",
+  "character",
+  "inclusive",
+  "emotional",
+  "games",
+  "VFX",
+  "3D",
+  "audio",
+  "video",
+  "art",
+  "social",
+  "visual",
+
   // Cloud & infra
   "PostgreSQL",
   "AWS",
@@ -220,6 +279,13 @@ export const JOB_HIGHLIGHT_PHRASES: readonly string[] = [
   "marketing",
   "engagement",
   "campaigns",
+  "inventory management",
+  "outreach",
+  "voicemails",
+  "receptionist",
+  "vendors",
+  "email",
+  "phone",
 
   // Product
   "product development lifecycle",
