@@ -32,6 +32,7 @@ import {
   listCompaniesForSocialEnrichment,
   updateCompanyEnrichment,
 } from "../db/queries.ts";
+import { geocode } from "../utils/geocode.ts";
 import { logger } from "../utils/logger.ts";
 import type { CompanyRow } from "../types.ts";
 
@@ -144,15 +145,15 @@ const PASS1_BACKFILL_PRIORITY: Array<{
   key: keyof CompanyRow;
   stale: (v: unknown) => boolean;
 }> = [
-  { key: "industry",             stale: (v) => !v || v === "other" },
-  { key: "company_type",         stale: (v) => !v || v === "other" },
-  { key: "hq_city",              stale: (v) => !v },
-  { key: "hq_country",           stale: (v) => !v },
-  { key: "employee_count_range", stale: (v) => !v },
-  { key: "founded_year",         stale: (v) => !v },
-  { key: "total_funding_usd",    stale: (v) => !v },
-  { key: "hq_address",           stale: (v) => !v },
-  { key: "linkedin_url",         stale: (v) => !v },
+  { key: "industry",       stale: (v) => !v || v === "other" },
+  { key: "company_type",   stale: (v) => !v || v === "other" },
+  { key: "hq_city",        stale: (v) => !v },
+  { key: "hq_country",     stale: (v) => !v },
+  { key: "employee_count", stale: (v) => !v },
+  { key: "founded_year",   stale: (v) => !v },
+  { key: "total_funding_usd", stale: (v) => !v },
+  { key: "hq_address",     stale: (v) => !v },
+  { key: "linkedin_url",   stale: (v) => !v },
 ];
 
 /**
@@ -202,6 +203,7 @@ export async function runExaEnrichment(
 
           if (!company.linkedin_url && profile.linkedin_url)                   fields.linkedin_url         = profile.linkedin_url;
           if (!company.employee_count_range && profile.employee_count_range)   fields.employee_count_range = profile.employee_count_range;
+          if (!company.employee_count && profile.employee_count)               fields.employee_count       = profile.employee_count;
           if (!company.founded_year && profile.founded_year)                   fields.founded_year         = profile.founded_year;
           if (!company.hq_address && profile.hq_address)                       fields.hq_address           = profile.hq_address;
           if (!company.hq_city && profile.hq_city)                             fields.hq_city              = profile.hq_city;
@@ -209,6 +211,21 @@ export async function runExaEnrichment(
           if (!company.industry && profile.industry)                           fields.industry             = profile.industry;
           if (!company.company_type && profile.company_type)                   fields.company_type         = profile.company_type;
           if (!company.total_funding_usd && profile.total_funding_usd)         fields.total_funding_usd    = profile.total_funding_usd;
+
+          // Geocode HQ city if we just got a city and don't already have coords
+          const needsGeocode = !company.hq_lat && !company.hq_lng;
+          const geocodeTarget = fields.hq_city ?? company.hq_city;
+          if (needsGeocode && geocodeTarget) {
+            try {
+              const coords = await geocode(geocodeTarget);
+              if (coords) {
+                fields.hq_lat = coords.lat;
+                fields.hq_lng = coords.lng;
+              }
+            } catch {
+              // Non-fatal — coords are enrichment metadata
+            }
+          }
         }
 
         await updateCompanyEnrichment(db, company.id, fields);
@@ -266,8 +283,14 @@ export async function runExaEnrichment(
                 fields.hq_city = String(raw).trim() || null; break;
               case "hq_country":
                 fields.hq_country = normalizeCountryCode(raw as string) ?? (String(raw).trim() || null); break;
-              case "employee_count_range":
-                fields.employee_count_range = normalizeEmployeeCount(raw as string); break;
+              case "employee_count": {
+                const n = Math.round(Number(raw));
+                if (n > 0) {
+                  fields.employee_count       = n;
+                  fields.employee_count_range = normalizeEmployeeCount(n);
+                }
+                break;
+              }
               case "founded_year":
                 fields.founded_year = Number(raw) || null; break;
               case "total_funding_usd":

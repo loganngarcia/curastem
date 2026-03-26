@@ -3406,6 +3406,7 @@ const HeaderActions = React.memo(
         downloadMenu,
         downloadTooltip = "Download",
         closeTooltip = "Close",
+        shareMode = false,
     }: {
         themeColors: any
         onDownloadClick: (e: React.MouseEvent) => void
@@ -3418,6 +3419,8 @@ const HeaderActions = React.memo(
         downloadMenu?: React.ReactNode
         downloadTooltip?: string
         closeTooltip?: string
+        /** Swaps the download arrow to point up (share/upload) */
+        shareMode?: boolean
     }) => {
         return (
             <div
@@ -3468,7 +3471,10 @@ const HeaderActions = React.memo(
                         xmlns="http://www.w3.org/2000/svg"
                     >
                         <path
-                            d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M19.9987 13.5V22.7258M19.9987 22.7258L22.9342 19.7903M19.9987 22.7258L17.0633 19.7903"
+                            d={shareMode
+                                ? "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
+                                : "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M19.9987 13.5V22.7258M19.9987 22.7258L22.9342 19.7903M19.9987 22.7258L17.0633 19.7903"
+                            }
                             stroke={themeColors.text.primary}
                             strokeOpacity="0.95"
                             strokeWidth="1.2"
@@ -10396,6 +10402,7 @@ interface HomepageJob {
     salary: { display: string } | null
     job_summary: string | null
     visa_sponsorship?: string | null
+    seniority_level?: string | null
 }
 
 interface JobDescriptionDetail {
@@ -10405,7 +10412,7 @@ interface JobDescriptionDetail {
 }
 
 /** Persist opened job detail so swiping away and back does not refetch. */
-const JOB_DETAIL_CACHE_STORAGE_KEY = "curastem_job_detail_cache_v1"
+const JOB_DETAIL_CACHE_STORAGE_KEY = "curastem_job_detail_cache_v2"
 const JOB_DETAIL_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const JOB_DETAIL_CACHE_MAX_JOBS = 48
 
@@ -10413,11 +10420,21 @@ type JobDetailCacheEntry = {
     t: number
     /** jobsApiUrl used for fetch — ignore entry if it changed */
     u: string
+    /** true once AI enrichment fields are confirmed populated in this entry */
+    aiDone: boolean
     desc: JobDescriptionDetail | null
     detailSummary: string | null
     detailCompanyDesc: string | null
     detailVisaSponsorship: string | null
     apiKeywords: string[]
+    /** AI-extracted per-job location fields */
+    detailExperienceYearsMin: number | null
+    detailJobAddress: string | null
+    detailJobCity: string | null
+    detailJobState: string | null
+    detailJobCountry: string | null
+    /** Full company object from the detail API response — fills gaps when opened from a chat snippet */
+    company: HomepageJob["company"] | null
 }
 
 type JobDetailCacheRoot = Record<string, JobDetailCacheEntry>
@@ -10454,6 +10471,7 @@ function writeJobDetailCache(
         root[jobId] = {
             t: Date.now(),
             u: jobsApiUrl,
+            aiDone: payload.aiDone,
             desc: payload.desc,
             detailSummary: payload.detailSummary,
             detailCompanyDesc: payload.detailCompanyDesc,
@@ -10461,6 +10479,10 @@ function writeJobDetailCache(
             apiKeywords: Array.isArray(payload.apiKeywords)
                 ? payload.apiKeywords
                 : [],
+            detailExperienceYearsMin: payload.detailExperienceYearsMin ?? null,
+            detailJobAddress: payload.detailJobAddress ?? null,
+            detailJobCity: payload.detailJobCity ?? null,
+            detailJobCountry: payload.detailJobCountry ?? null,
         }
         const ids = Object.keys(root)
         if (ids.length > JOB_DETAIL_CACHE_MAX_JOBS) {
@@ -10514,6 +10536,11 @@ type JobDetailHydrationState = {
     detailVisaSponsorship: string | null
     loadingDesc: boolean
     apiKeywords: string[]
+    detailExperienceYearsMin: number | null
+    detailJobAddress: string | null
+    detailJobCity: string | null
+    detailJobState: string | null
+    detailJobCountry: string | null
 }
 
 function jobDetailFetchPendingState(): JobDetailHydrationState {
@@ -10524,6 +10551,11 @@ function jobDetailFetchPendingState(): JobDetailHydrationState {
         detailVisaSponsorship: null,
         apiKeywords: [],
         loadingDesc: true,
+        detailExperienceYearsMin: null,
+        detailJobAddress: null,
+        detailJobCity: null,
+        detailJobState: null,
+        detailJobCountry: null,
     }
 }
 
@@ -10537,6 +10569,11 @@ function jobDetailStateFromCacheEntry(
         detailVisaSponsorship: c.detailVisaSponsorship,
         apiKeywords: Array.isArray(c.apiKeywords) ? c.apiKeywords : [],
         loadingDesc: false,
+        detailExperienceYearsMin: c.detailExperienceYearsMin ?? null,
+        detailJobAddress: c.detailJobAddress ?? null,
+        detailJobCity: c.detailJobCity ?? null,
+        detailJobState: c.detailJobState ?? null,
+        detailJobCountry: c.detailJobCountry ?? null,
     }
 }
 
@@ -10549,6 +10586,11 @@ function jobDetailDeferredState(): JobDetailHydrationState {
         detailVisaSponsorship: null,
         apiKeywords: [],
         loadingDesc: false,
+        detailExperienceYearsMin: null,
+        detailJobAddress: null,
+        detailJobCity: null,
+        detailJobState: null,
+        detailJobCountry: null,
     }
 }
 
@@ -10620,6 +10662,7 @@ function jobSnippetToHomepageJob(job: JobSnippet): HomepageJob {
         workplace_type: job.workplace_type ?? null,
         salary: null,
         job_summary: job.summary ?? null,
+        seniority_level: job.seniority_level ?? null,
     }
 }
 
@@ -11711,6 +11754,14 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     const [detail, setDetail] =
         React.useState<JobDetailHydrationState>(desiredState)
 
+    // Company fields fetched from the detail API override the prop when the job
+    // was opened from a chat snippet (which only has name + logo).
+    // Seed from cache so social links are visible immediately on second open.
+    const [companyOverride, setCompanyOverride] =
+        React.useState<HomepageJob["company"] | null>(
+            () => readJobDetailCache(job.id, jobsApiUrl)?.company ?? null
+        )
+
     // Keep detail in sync when the job changes without unmounting.
     const lastJobIdRef = React.useRef(job.id)
     if (lastJobIdRef.current !== job.id) {
@@ -11718,6 +11769,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         // Synchronous state update during render — safe in React 18 because it
         // re-renders immediately and never shows the stale frame.
         setDetail(desiredState)
+        setCompanyOverride(
+            readJobDetailCache(job.id, jobsApiUrl)?.company ?? null
+        )
     }
 
     const {
@@ -11727,12 +11781,19 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         detailVisaSponsorship,
         loadingDesc,
         apiKeywords,
+        detailExperienceYearsMin,
+        detailJobCity,
+        detailJobState,
+        detailJobCountry,
     } = detail
 
     React.useEffect(() => {
         if (!fetchEnabled) return
         const cached = readJobDetailCache(job.id, jobsApiUrl)
-        if (cached) return // already hydrated synchronously above
+        // If the cache has a fully-enriched entry, skip the network round-trip.
+        // If it exists but AI fields were absent (enrichment hadn't run yet),
+        // do a silent background re-fetch to replace stale data in-place.
+        if (cached?.aiDone) return
         let cancelled = false
         const ctrl = new AbortController()
         const timer = setTimeout(() => ctrl.abort(), 8000)
@@ -11741,11 +11802,45 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
             .then(
                 (
                     d: {
-                        job_description?: JobDescriptionDetail | null
+                        title?: string | null
+                        locations?: string[] | null
+                        employment_type?: string | null
+                        workplace_type?: string | null
+                        seniority_level?: string | null
+                        salary?: { display: string } | null
+                        posted_at?: string | null
+                        apply_url?: string | null
                         job_summary?: string | null
+                        job_description?: JobDescriptionDetail | null
                         visa_sponsorship?: string | null
-                        company?: { description?: string | null }
                         keywords?: string[]
+                        experience_years_min?: number | null
+                        job_address?: string | null
+                        job_city?: string | null
+                        job_state?: string | null
+                        job_country?: string | null
+                        company?: {
+                            name?: string | null
+                            description?: string | null
+                            logo_url?: string | null
+                            website_url?: string | null
+                            linkedin_url?: string | null
+                            x_url?: string | null
+                            instagram_url?: string | null
+                            tiktok_url?: string | null
+                            github_url?: string | null
+                            youtube_url?: string | null
+                            glassdoor_url?: string | null
+                            crunchbase_url?: string | null
+                            huggingface_url?: string | null
+                            facebook_url?: string | null
+                            employee_count_range?: string | null
+                            founded_year?: number | null
+                            headquarters?: { address: string | null; city: string | null; country: string | null } | null
+                            industry?: string | null
+                            company_type?: string | null
+                            total_funding_usd?: number | null
+                        } | null
                     } | null
                 ) => {
                     if (cancelled) return
@@ -11754,6 +11849,13 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                     const coVal = d?.company?.description ?? null
                     const visaVal = d?.visa_sponsorship ?? null
                     const kwVal = d?.keywords ?? []
+                    const expMin = d?.experience_years_min ?? null
+                    const jobAddr = d?.job_address ?? null
+                    const jobCity = d?.job_city ?? null
+                    const jobState = d?.job_state ?? null
+                    const jobCountry = d?.job_country ?? null
+                    // AI enrichment is considered done once at least one AI field is populated.
+                    const aiDone = !!(descVal || sumVal || kwVal.length > 0)
                     setDetail({
                         desc: descVal,
                         detailSummary: sumVal,
@@ -11761,17 +11863,33 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                         detailVisaSponsorship: visaVal,
                         apiKeywords: kwVal,
                         loadingDesc: false,
+                        detailExperienceYearsMin: expMin,
+                        detailJobAddress: jobAddr,
+                        detailJobCity: jobCity,
+                        detailJobState: jobState,
+                        detailJobCountry: jobCountry,
                     })
                     if (d) {
                         const entry = {
+                            aiDone,
                             desc: descVal,
                             detailSummary: sumVal,
                             detailCompanyDesc: coVal,
                             detailVisaSponsorship: visaVal,
                             apiKeywords: kwVal,
+                            detailExperienceYearsMin: expMin,
+                            detailJobAddress: jobAddr,
+                            detailJobCity: jobCity,
+                            detailJobState: jobState,
+                            detailJobCountry: jobCountry,
+                            company: (d.company as HomepageJob["company"]) ?? null,
                         }
                         writeJobDetailCache(job.id, jobsApiUrl, entry)
                         onDetailFetched?.(job.id, entry)
+                        // Populate company social links locally — no callback needed.
+                        // When opened from a chat snippet the prop has nulls for everything;
+                        // the detail response has the full company object.
+                        if (d.company) setCompanyOverride(d.company as HomepageJob["company"])
                     }
                 }
             )
@@ -11804,8 +11922,11 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         setMapsProvider(appleUA ? "apple" : "google")
     }, [])
 
+    // When opened from a chat snippet, job.company has nulls for social links.
+    // companyOverride is set from the first full API fetch, filling the gaps.
+    const effectiveCompany = companyOverride ?? job.company
     const effectiveSummary = job.job_summary || detailSummary
-    const effectiveCompanyDesc = job.company.description || detailCompanyDesc
+    const effectiveCompanyDesc = effectiveCompany.description || detailCompanyDesc
 
     const hasCachedDetail = readJobDetailCache(job.id, jobsApiUrl) !== null
     const showLazyDetailBody = !loadingDesc && (fetchEnabled || hasCachedDetail)
@@ -11843,19 +11964,46 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         })
     }
 
-    const fmtType = (t: string | null) =>
-        t ? t.replace(/_/g, "-").replace(/\b\w/g, (c) => c.toUpperCase()) : null
     const fmtPlace = (t: string | null) =>
         t
             ? t === "on_site"
                 ? "On-site"
                 : t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
             : null
+    const fmtSeniority = (s: string | null | undefined) => {
+        if (!s) return null
+        const map: Record<string, string> = {
+            new_grad: "New grad",
+            entry: "Entry-level",
+            mid: "Mid-level",
+            senior: "Senior",
+            staff: "Staff",
+            manager: "Manager",
+            director: "Director",
+            executive: "Executive",
+        }
+        return map[s] ?? null
+    }
+    const isRemote = job.workplace_type === "remote"
+    // For remote jobs the workplace pill already says "Remote" — skip the location to avoid duplicates.
+    // US jobs: "City, ST" — international: "City, Country" — fall back to locations[0] from source.
+    const locationDisplay = isRemote
+        ? null
+        : detailJobCity && detailJobState
+            ? `${detailJobCity}, ${detailJobState}`
+            : detailJobCity && detailJobCountry
+                ? `${detailJobCity}, ${detailJobCountry}`
+                : detailJobCity || job.locations?.[0] || null
     const metaItems = [
         jobTimeAgo(job.posted_at),
-        job.locations?.[0] ?? null,
-        fmtType(job.employment_type),
-        fmtPlace(job.workplace_type),
+        locationDisplay,
+        // On-site is the default assumption — only surface Hybrid and Remote
+        job.workplace_type !== "on_site" ? fmtPlace(job.workplace_type) : null,
+        // Full-time is the default expectation — omit it to reduce noise
+        job.employment_type !== "full_time" && job.employment_type
+            ? job.employment_type.replace(/_/g, "-").replace(/\b\w/g, (c) => c.toUpperCase())
+            : null,
+        fmtSeniority(job.seniority_level),
         job.salary?.display,
         detailVisaSponsorship === "yes" ? "Sponsors visa" : null,
     ].filter(Boolean)
@@ -11933,9 +12081,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                 justifyContent: "center",
             }}
         >
-            {job.company.logo_url && (
+            {effectiveCompany.logo_url && (
                 <img
-                    src={job.company.logo_url}
+                    src={effectiveCompany.logo_url}
                     style={{
                         width: "100%",
                         height: "100%",
@@ -11982,13 +12130,13 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                 {/* Company */}
                 <div
-                    onClick={() => openUrl(job.company.website_url)}
+                    onClick={() => openUrl(effectiveCompany.website_url)}
                     style={{
                         display: "flex",
                         alignItems: "center",
                         gap: 12,
                         flexWrap: "wrap",
-                        cursor: job.company.website_url ? "pointer" : "default",
+                        cursor: effectiveCompany.website_url ? "pointer" : "default",
                     }}
                 >
                     <CompanyLogo size={32} />
@@ -12009,7 +12157,7 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 lineHeight: "21px",
                             }}
                         >
-                            {job.company.name}
+                            {effectiveCompany.name}
                         </span>
                         <div
                             data-company-chevron
@@ -12299,13 +12447,13 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             About the company
                         </div>
                         <div
-                            onClick={() => openUrl(job.company.website_url)}
+                            onClick={() => openUrl(effectiveCompany.website_url)}
                             style={{
                                 display: "flex",
                                 alignItems: "center",
                                 gap: 12,
                                 flexWrap: "wrap",
-                                cursor: job.company.website_url
+                                cursor: effectiveCompany.website_url
                                     ? "pointer"
                                     : "default",
                             }}
@@ -12327,7 +12475,7 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         lineHeight: "21px",
                                     }}
                                 >
-                                    {job.company.name}
+                                    {effectiveCompany.name}
                                 </span>
                                 <div
                                     data-company-chevron
@@ -12351,17 +12499,17 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 {effectiveCompanyDesc}
                             </div>
                         ) : null}
-                        {(job.company.website_url ||
-                            job.company.linkedin_url ||
-                            job.company.huggingface_url ||
-                            job.company.github_url ||
-                            job.company.x_url ||
-                            job.company.instagram_url ||
-                            job.company.facebook_url ||
-                            job.company.youtube_url ||
-                            job.company.crunchbase_url ||
-                            job.company.glassdoor_url ||
-                            job.company.tiktok_url) && (
+                        {(effectiveCompany.website_url ||
+                            effectiveCompany.linkedin_url ||
+                            effectiveCompany.huggingface_url ||
+                            effectiveCompany.github_url ||
+                            effectiveCompany.x_url ||
+                            effectiveCompany.instagram_url ||
+                            effectiveCompany.facebook_url ||
+                            effectiveCompany.youtube_url ||
+                            effectiveCompany.crunchbase_url ||
+                            effectiveCompany.glassdoor_url ||
+                            effectiveCompany.tiktok_url) && (
                             <div
                                 style={{
                                     display: "flex",
@@ -12371,17 +12519,17 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                     alignContent: "center",
                                 }}
                             >
-                                {job.company.website_url && (
+                                {effectiveCompany.website_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.website_url)}
+                                        onClick={() => openUrl(effectiveCompany.website_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", cursor: "pointer" }}
                                     >
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Website</span>
                                     </div>
                                 )}
-                                {job.company.linkedin_url && (
+                                {effectiveCompany.linkedin_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.linkedin_url)}
+                                        onClick={() => openUrl(effectiveCompany.linkedin_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12390,9 +12538,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>LinkedIn</span>
                                     </div>
                                 )}
-                                {job.company.huggingface_url && (
+                                {effectiveCompany.huggingface_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.huggingface_url)}
+                                        onClick={() => openUrl(effectiveCompany.huggingface_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="18" height="16" viewBox="0 0 18 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12405,9 +12553,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>HuggingFace</span>
                                     </div>
                                 )}
-                                {job.company.github_url && (
+                                {effectiveCompany.github_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.github_url)}
+                                        onClick={() => openUrl(effectiveCompany.github_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="17" height="16" viewBox="0 0 17 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12417,9 +12565,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>GitHub</span>
                                     </div>
                                 )}
-                                {job.company.x_url && (
+                                {effectiveCompany.x_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.x_url)}
+                                        onClick={() => openUrl(effectiveCompany.x_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12428,9 +12576,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>X/Twitter</span>
                                     </div>
                                 )}
-                                {job.company.tiktok_url && (
+                                {effectiveCompany.tiktok_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.tiktok_url)}
+                                        onClick={() => openUrl(effectiveCompany.tiktok_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="14" height="16" viewBox="0 0 14 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12439,9 +12587,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>TikTok</span>
                                     </div>
                                 )}
-                                {job.company.instagram_url && (
+                                {effectiveCompany.instagram_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.instagram_url)}
+                                        onClick={() => openUrl(effectiveCompany.instagram_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12450,9 +12598,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Instagram</span>
                                     </div>
                                 )}
-                                {job.company.facebook_url && (
+                                {effectiveCompany.facebook_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.facebook_url)}
+                                        onClick={() => openUrl(effectiveCompany.facebook_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="9" height="14" viewBox="0 0 9 14" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12461,9 +12609,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Facebook</span>
                                     </div>
                                 )}
-                                {job.company.youtube_url && (
+                                {effectiveCompany.youtube_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.youtube_url)}
+                                        onClick={() => openUrl(effectiveCompany.youtube_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="19" height="13" viewBox="0 0 19 13" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12472,9 +12620,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>YouTube</span>
                                     </div>
                                 )}
-                                {job.company.crunchbase_url && (
+                                {effectiveCompany.crunchbase_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.crunchbase_url)}
+                                        onClick={() => openUrl(effectiveCompany.crunchbase_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12485,9 +12633,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Crunchbase</span>
                                     </div>
                                 )}
-                                {job.company.glassdoor_url && (
+                                {effectiveCompany.glassdoor_url && (
                                     <div
-                                        onClick={() => openUrl(job.company.glassdoor_url)}
+                                        onClick={() => openUrl(effectiveCompany.glassdoor_url)}
                                         style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
                                     >
                                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -12866,7 +13014,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         overflowY: "auto" as const,
         // Don't clip x — the negative-margin CTA bleed row needs to paint outside column padding.
         overflowX: "visible" as const,
-        padding: `24px 24px ${bottomPad}`,
+        padding: `16px 16px ${bottomPad}`,
         boxSizing: "border-box" as const,
         touchAction: "pan-y" as const,
     }
@@ -12911,121 +13059,31 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
             <div
                 style={{
                     position: "absolute",
-                    top: 16,
-                    left: 0,
-                    right: 0,
-                    paddingLeft: 16,
-                    paddingRight: 16,
+                    top: 12,
+                    left: 12,
+                    right: 12,
                     display: "flex",
                     justifyContent: "flex-end",
-                    alignItems: "center",
-                    gap: 8,
+                    alignItems: "flex-start",
                     zIndex: 10,
                     opacity: resumeAnimPhase === "idle" ? 1 : 0,
                     pointerEvents: "none",
                 }}
             >
-                <div
-                    style={{
-                        paddingLeft: 4,
-                        paddingRight: 4,
-                        background: themeColors.surface,
-                        borderRadius: 31,
-                        display: "flex",
-                        alignItems: "center",
-                        pointerEvents: "auto",
+                <HeaderActions
+                    themeColors={themeColors}
+                    onDownloadClick={shareJob}
+                    onCloseClick={() => {
+                        setIsCloseHovered(false)
+                        onClose()
                     }}
-                >
-                    <div
-                        onClick={shareJob}
-                        onMouseEnter={() => setIsShareHovered(true)}
-                        onMouseLeave={() => setIsShareHovered(false)}
-                        style={{
-                            width: 40,
-                            height: 40,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            cursor: "pointer",
-                            position: "relative",
-                        }}
-                        aria-label="Share"
-                    >
-                        {isShareHovered && (
-                            <Tooltip
-                                style={{
-                                    top: "100%",
-                                    left: "50%",
-                                    transform: "translate(-50%, 8px)",
-                                    zIndex: 100,
-                                }}
-                            >
-                                Share
-                            </Tooltip>
-                        )}
-                        <svg
-                            width="40"
-                            height="40"
-                            viewBox="0 0 40 40"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
-                        >
-                            <path
-                                d="M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
-                                stroke={themeColors.text.primary}
-                                strokeWidth="1.2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            />
-                        </svg>
-                    </div>
-                    <div
-                        onClick={() => {
-                            setIsCloseHovered(false)
-                            onClose()
-                        }}
-                        onMouseEnter={() => setIsCloseHovered(true)}
-                        onMouseLeave={() => setIsCloseHovered(false)}
-                        style={{
-                            width: 40,
-                            height: 40,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            cursor: "pointer",
-                            position: "relative",
-                        }}
-                        aria-label="Close"
-                    >
-                        {isCloseHovered && (
-                            <Tooltip
-                                style={{
-                                    top: "100%",
-                                    left: "50%",
-                                    transform: "translate(-50%, 8px)",
-                                    zIndex: 100,
-                                }}
-                            >
-                                Close
-                            </Tooltip>
-                        )}
-                        <svg
-                            width="40"
-                            height="40"
-                            viewBox="0 0 40 40"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
-                        >
-                            <path
-                                d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25"
-                                stroke={themeColors.text.primary}
-                                strokeWidth="1.2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            />
-                        </svg>
-                    </div>
-                </div>
+                    isDownloadHovered={isShareHovered}
+                    onDownloadHoverChange={setIsShareHovered}
+                    isCloseHovered={isCloseHovered}
+                    onCloseHoverChange={setIsCloseHovered}
+                    downloadTooltip="Share"
+                    shareMode
+                />
             </div>
 
             <div
@@ -20176,7 +20234,7 @@ Do not include markdown formatting or explanations.`
                                         {
                                             name: "search_jobs",
                                             description:
-                                                "Search Curastem's job listings by keyword, company, location, job type, seniority, or recency. Use when the user asks to find or browse jobs. Results shown as cards in the chat. Say something like 'I found X jobs for you — check the chat.'",
+                                                "Search Curastem's job listings. Use for ANY job request including colloquial ones like 'big tech jobs', 'startup roles', 'patient now jobs'. Expand vague terms: 'big tech' → query software/engineering roles; 'startup' → relevant role title. When company search returns 0 results, IMMEDIATELY retry without company filter using role keywords — never ask the user to rephrase. Results shown as cards in the chat.",
                                             parameters: {
                                                 type: "OBJECT",
                                                 properties: {
@@ -20188,7 +20246,7 @@ Do not include markdown formatting or explanations.`
                                                     company: {
                                                         type: "STRING",
                                                         description:
-                                                            "Company slug, e.g. 'stripe', 'walmart', 'whole-foods-market'",
+                                                            "Company slug. Convert user words to lowercase-hyphenated: 'patient now' → 'patient-now', 'PatientNow' → 'patientnow', 'Whole Foods' → 'whole-foods-market'. If 0 results, drop this and retry with query keywords instead.",
                                                     },
                                                     location: {
                                                         type: "STRING",
@@ -20683,26 +20741,37 @@ Do not include markdown formatting or explanations.`
                                                 jobId,
                                                 jobsApiUrl
                                             )
-                                            const j: any = cached
-                                                ? {
-                                                      job_description:
-                                                          cached.desc,
-                                                      job_summary:
-                                                          cached.detailSummary,
-                                                      visa_sponsorship:
-                                                          cached.detailVisaSponsorship,
-                                                      company: {
-                                                          description:
-                                                              cached.detailCompanyDesc,
-                                                      },
-                                                      keywords:
-                                                          cached.apiKeywords,
-                                                  }
-                                                : await fetch(
-                                                      `${jobsApiUrl}/jobs/${jobId}`
-                                                  ).then((r) =>
-                                                      r.ok ? r.json() : null
-                                                  )
+                                            // Only serve from cache when AI enrichment is confirmed done;
+                                            // otherwise fetch fresh so the AI gets the latest enriched data.
+                                            const j: any =
+                                                cached?.aiDone
+                                                    ? {
+                                                          job_description:
+                                                              cached.desc,
+                                                          job_summary:
+                                                              cached.detailSummary,
+                                                          visa_sponsorship:
+                                                              cached.detailVisaSponsorship,
+                                                          company: {
+                                                              description:
+                                                                  cached.detailCompanyDesc,
+                                                          },
+                                                          keywords:
+                                                              cached.apiKeywords,
+                                                          experience_years_min:
+                                                              cached.detailExperienceYearsMin,
+                                                          job_city:
+                                                              cached.detailJobCity,
+                                                          job_state:
+                                                              cached.detailJobState,
+                                                          job_country:
+                                                              cached.detailJobCountry,
+                                                      }
+                                                    : await fetch(
+                                                          `${jobsApiUrl}/jobs/${jobId}`
+                                                      ).then((r) =>
+                                                          r.ok ? r.json() : null
+                                                      )
                                             if (j) {
                                                 responsePayload = {
                                                     title: j.title,
@@ -25870,10 +25939,10 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             {
                                 name: "search_jobs",
                                 description: [
-                                    "Search Curastem's job listings by keyword, company, location, job type, seniority, or recency.",
-                                    "Use for any job-finding request: 'find remote engineer roles', 'what is Stripe hiring for?', 'show me entry-level jobs posted this week'.",
-                                    "Pass company as a lowercase slug (e.g. 'stripe', 'walmart') to filter to one company.",
-                                    "Do NOT call for general career advice — only call when the user wants to see job listings.",
+                                    "Search Curastem's job listings. Use for ANY job request including colloquial ones like 'big tech jobs', 'startup roles', 'patient now jobs'.",
+                                    "Expand vague terms: 'big tech' → search software/engineering roles; 'startup' → relevant role title.",
+                                    "When a company search returns 0 results, IMMEDIATELY retry without company filter using role keywords — never ask the user to rephrase.",
+                                    "Do NOT call for general career advice — only when the user wants to see job listings.",
                                 ].join(" "),
                                 parameters: {
                                     type: "OBJECT",
@@ -25881,12 +25950,12 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         query: {
                                             type: "STRING",
                                             description:
-                                                "Search keywords — job title, role, skill, or company name. Examples: 'cashier', 'software engineer', 'customer service'.",
+                                                "Search keywords. Expand colloquial terms: 'big tech' → 'software engineer', 'startup' → relevant role. Examples: 'cashier', 'software engineer', 'customer service'.",
                                         },
                                         company: {
                                             type: "STRING",
                                             description:
-                                                "Filter to a specific company by lowercase slug. Examples: 'stripe', 'airbnb', 'walmart', 'whole-foods-market'. Derive from the company name the user mentioned.",
+                                                "Company slug. Convert user words to lowercase-hyphenated: 'patient now' → 'patient-now', 'PatientNow' → 'patientnow', 'Whole Foods' → 'whole-foods-market'. If 0 results, drop this and retry with query keywords instead.",
                                         },
                                         location: {
                                             type: "STRING",
@@ -27719,8 +27788,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         let jobDetail: any = null
                         if (jobId) {
                             const cached = readJobDetailCache(jobId, jobsApiUrl)
-                            if (cached) {
-                                // Reconstruct the shape the model expects from the cache entry.
+                            // Only serve from cache when AI enrichment is confirmed done.
+                            if (cached?.aiDone) {
                                 jobDetail = {
                                     id: jobId,
                                     job_description: cached.desc,
@@ -27731,6 +27800,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         description: cached.detailCompanyDesc,
                                     },
                                     keywords: cached.apiKeywords,
+                                    experience_years_min:
+                                        cached.detailExperienceYearsMin,
+                                    job_city: cached.detailJobCity,
+                                    job_state: cached.detailJobState,
+                                    job_country: cached.detailJobCountry,
                                 }
                             } else {
                                 try {

@@ -112,6 +112,15 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
     }
   }
 
+  let companyLocations: string[] | null = null;
+  if (row.company_locations) {
+    try {
+      companyLocations = JSON.parse(row.company_locations) as string[];
+    } catch {
+      // Malformed JSON — treat as none
+    }
+  }
+
   return {
     id: row.id,
     title: row.title,
@@ -130,6 +139,11 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
     job_summary: row.job_summary,
     job_description: null,
     visa_sponsorship: null,
+    experience_years_min: row.experience_years_min ?? null,
+    job_address: row.job_address ?? null,
+    job_city: row.job_city ?? null,
+    job_state: row.job_state ?? null,
+    job_country: row.job_country ?? null,
     company: {
       name: row.company_name,
       logo_url: row.company_logo_url,
@@ -146,13 +160,21 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
       crunchbase_url: row.company_crunchbase_url,
       facebook_url: row.company_facebook_url,
       employee_count_range: row.company_employee_count_range,
+      employee_count: row.company_employee_count ?? null,
       founded_year: row.company_founded_year,
       headquarters: (row.company_hq_address || row.company_hq_city || row.company_hq_country)
-        ? { address: row.company_hq_address, city: row.company_hq_city, country: row.company_hq_country }
+        ? {
+            address: row.company_hq_address,
+            city: row.company_hq_city,
+            country: row.company_hq_country,
+            lat: row.company_hq_lat ?? null,
+            lng: row.company_hq_lng ?? null,
+          }
         : null,
       industry: row.company_industry,
       company_type: row.company_type,
       total_funding_usd: row.company_total_funding_usd,
+      locations: companyLocations,
     },
   };
 }

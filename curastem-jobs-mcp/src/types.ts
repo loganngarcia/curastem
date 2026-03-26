@@ -30,6 +30,21 @@ export interface JobCompany {
   linkedin_url: string | null;
   glassdoor_url: string | null;
   x_url: string | null;
+  employee_count_range: string | null;
+  employee_count: number | null;
+  founded_year: number | null;
+  headquarters: {
+    address: string | null;
+    city: string | null;
+    country: string | null;
+    lat: number | null;
+    lng: number | null;
+  } | null;
+  industry: string | null;
+  company_type: string | null;
+  total_funding_usd: number | null;
+  /** Unique job locations aggregated from all open postings. */
+  locations: string[] | null;
 }
 
 export interface JobSalary {
@@ -61,6 +76,14 @@ export interface Job {
   salary: JobSalary | null;
   job_summary: string | null;
   job_description: JobDescription | null;
+  /** Minimum years of experience required; e.g. "2-3 years" → 2. */
+  experience_years_min: number | null;
+  /** Street address from the posting. */
+  job_address: string | null;
+  /** Normalized city from the posting. */
+  job_city: string | null;
+  /** Country from the posting. */
+  job_country: string | null;
   /** Skill/technology keywords extracted from the description. Present on detail endpoint only. */
   keywords?: string[];
 }

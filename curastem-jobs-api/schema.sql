@@ -41,13 +41,17 @@ CREATE TABLE IF NOT EXISTS companies (
 
   -- Company profile (all from Exa)
   employee_count_range    TEXT,    -- "1"|"2-10"|"11-50"|"51-200"|"201-500"|"501-1000"|"1001-5000"|"5001-10000"|"10000+"
+  employee_count          INTEGER, -- exact headcount when known (Exa; more precise than the range bucket)
   founded_year            INTEGER,
   hq_address              TEXT,    -- full street address, no PO Box
   hq_city                 TEXT,    -- "San Francisco, CA" or "London, UK"
   hq_country              TEXT,    -- ISO 3166-1 alpha-2, e.g. "US"
+  hq_lat                  REAL,    -- geocoded latitude of HQ
+  hq_lng                  REAL,    -- geocoded longitude of HQ
   industry                TEXT,    -- normalized taxonomy: see src/enrichment/exa.ts INDUSTRY_MAP
   company_type            TEXT,    -- "startup"|"enterprise"|"agency"|"nonprofit"|"government"|"university"|"other"
   total_funding_usd       INTEGER,
+  locations               TEXT,    -- JSON array of unique job locations aggregated from the jobs table
 
   -- AI-generated one-sentence company description (lazy, cached)
   description             TEXT,
@@ -119,6 +123,14 @@ CREATE TABLE IF NOT EXISTS jobs (
   salary_currency TEXT,               -- ISO 4217, e.g. "USD"
   salary_period   TEXT,               -- "year" | "month" | "hour" | null
 
+  -- Experience requirement extracted by AI
+  experience_years_min INTEGER,       -- minimum years required, e.g. 2 for "2+ years" or "2-3 years"
+
+  -- Per-job physical location (extracted by AI from posting text)
+  job_address     TEXT,               -- street address mentioned in the posting
+  job_city        TEXT,               -- city mentioned in the posting (normalized)
+  job_country     TEXT,               -- country from the posting (ISO-2 or full name)
+
   -- Language of the job description text (ISO 639-1).
   -- Populated in two passes: heuristic at ingest/backfill (fast, zero cost),
   -- then AI lazy-load on GET /jobs/:id which overrides and fills remaining nulls.
@@ -159,6 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_employment_type ON jobs (employment_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_workplace_type ON jobs (workplace_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_seniority_level ON jobs (seniority_level);
 CREATE INDEX IF NOT EXISTS idx_jobs_description_language ON jobs (description_language);
+CREATE INDEX IF NOT EXISTS idx_jobs_experience_years ON jobs (experience_years_min);
 
 -- Composite index for the embedding backfill query:
 --   WHERE embedding_generated_at IS NULL ORDER BY first_seen_at DESC

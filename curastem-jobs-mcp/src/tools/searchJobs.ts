@@ -13,9 +13,9 @@ export const searchJobsTool: McpTool = {
   name: "search_jobs",
   description: [
     "Search Curastem's job listings by keyword, company, location, job type, seniority, or recency.",
-    "Use for any job-finding request: 'find remote software engineer roles', 'what is Stripe hiring for?',",
-    "'show me entry-level marketing jobs posted this week'.",
-    "Pass company as a lowercase slug (e.g. 'stripe', 'whole-foods-market') to filter to one company.",
+    "Use for ANY job-finding request, including colloquial ones like 'big tech jobs', 'startup roles', 'patient now jobs'.",
+    "Expand vague or colloquial terms into concrete search parameters: 'big tech' → query='software engineer' at Google/Meta/Apple/Amazon/Microsoft/NVIDIA/OpenAI.",
+    "When a company search returns 0 results, IMMEDIATELY retry with a broader query (remove company filter, use role keywords instead) — never just ask the user to rephrase.",
     "Pass cursor from a previous response to paginate.",
   ].join(" "),
   inputSchema: {
@@ -24,12 +24,12 @@ export const searchJobsTool: McpTool = {
       query: {
         type: "string",
         description:
-          "Search keywords — job title, role, skill, or company name. Examples: 'cashier', 'software engineer', 'customer service'.",
+          "Search keywords — job title, role, skill, or company name. Expand colloquial terms: 'big tech' → 'software engineer', 'startup' → relevant role title. Examples: 'cashier', 'software engineer', 'customer service'.",
       },
       company: {
         type: "string",
         description:
-          "Filter to a specific company by lowercase hyphenated slug. Examples: 'stripe', 'airbnb', 'walmart', 'whole-foods-market'. Derive from the company name the user mentioned.",
+          "Filter to a specific company. Convert the user's words to a lowercase hyphenated slug: 'patient now' → 'patient-now', 'PatientNow' → 'patientnow', 'Whole Foods' → 'whole-foods-market'. Try the most likely slug first; if 0 results, drop this filter and use query instead.",
       },
       location: {
         type: "string",
@@ -112,11 +112,20 @@ function formatJobSnippet(job: Job): Record<string, unknown> {
       name: job.company.name,
       website: job.company.website_url ?? null,
       logo: job.company.logo_url ?? null,
+      industry: job.company.industry ?? null,
+      employee_count: job.company.employee_count ?? null,
+      employee_count_range: job.company.employee_count_range ?? null,
+      hq: job.company.headquarters
+        ? { city: job.company.headquarters.city, country: job.company.headquarters.country }
+        : null,
     },
-    location: job.locations?.[0] ?? null,
+    locations: job.locations ?? [],
     employment_type: job.employment_type ?? null,
     workplace_type: job.workplace_type ?? null,
     seniority_level: job.seniority_level ?? null,
+    experience_years_min: job.experience_years_min ?? null,
+    job_city: job.job_city ?? null,
+    job_country: job.job_country ?? null,
     posted_at: job.posted_at,
     apply_url: job.apply_url,
     summary: job.job_summary ?? null,
@@ -159,6 +168,15 @@ export async function runSearchJobs(
           description: firstJob.company.description ?? null,
           website: firstJob.company.website_url ?? null,
           linkedin: firstJob.company.linkedin_url ?? null,
+          glassdoor: firstJob.company.glassdoor_url ?? null,
+          industry: firstJob.company.industry ?? null,
+          company_type: firstJob.company.company_type ?? null,
+          employee_count: firstJob.company.employee_count ?? null,
+          employee_count_range: firstJob.company.employee_count_range ?? null,
+          founded_year: firstJob.company.founded_year ?? null,
+          total_funding_usd: firstJob.company.total_funding_usd ?? null,
+          headquarters: firstJob.company.headquarters ?? null,
+          office_locations: firstJob.company.locations ?? [],
         }
       : null;
 
@@ -172,8 +190,8 @@ export async function runSearchJobs(
     empty_note:
       jobs.length === 0
         ? args.company
-          ? `No open roles found for company '${args.company}'. The slug may differ slightly — try a variation.`
-          : "No jobs found matching those criteria. Try broader keywords or remove some filters."
+          ? `No open roles found for '${args.company}'. ACTION REQUIRED: immediately call search_jobs again without the company filter, using relevant role keywords as query instead. Do not ask the user — just show them related results.`
+          : "No jobs matched. ACTION REQUIRED: immediately retry with broader keywords or remove filters — do not ask the user to rephrase."
         : null,
   };
 }

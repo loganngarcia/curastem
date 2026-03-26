@@ -440,6 +440,8 @@ export interface ExaDeepProfileResult {
   industry:             IndustryValue | null;
   company_type:         CompanyTypeValue | null;
   employee_count_range: EmployeeCountRange | null;
+  /** Exact headcount when Exa returns a precise number (vs a range). */
+  employee_count:       number | null;
   founded_year:         number | null;
   total_funding_usd:    number | null;
   hq_address:           string | null;
@@ -512,10 +514,9 @@ const DEEP_PROFILE_SCHEMA = {
         "- 'university': colleges, universities, academic institutions\n" +
         "- 'other': only if none of the above fit",
     },
-    employee_count_range: {
-      type: "string",
-      enum: ["1","2-10","11-50","51-200","201-500","501-1000","1001-5000","5001-10000","10000+"],
-      description: "Employee headcount range. Choose the best matching range. Return empty string if unknown.",
+    employee_count: {
+      type: "number",
+      description: "Current employee headcount as an integer. Use the most precise number available (e.g. 4800, 12000). If only an approximate range is known, return the midpoint or lower bound (e.g. for '1001-5000 employees' return 1001). Return 0 if completely unknown.",
     },
     founded_year: {
       type: "number",
@@ -546,15 +547,15 @@ const DEEP_PROFILE_SCHEMA = {
  * fetchExaDeepSocialData, which injects it into the schema at runtime.
  */
 export const PASS1_FALLBACK_SCHEMA_DEFS: Record<string, object> = {
-  industry:             DEEP_PROFILE_SCHEMA.properties.industry,
-  company_type:         DEEP_PROFILE_SCHEMA.properties.company_type,
-  hq_city:              DEEP_PROFILE_SCHEMA.properties.hq_city,
-  hq_country:           DEEP_PROFILE_SCHEMA.properties.hq_country,
-  employee_count_range: DEEP_PROFILE_SCHEMA.properties.employee_count_range,
-  founded_year:         DEEP_PROFILE_SCHEMA.properties.founded_year,
-  total_funding_usd:    DEEP_PROFILE_SCHEMA.properties.total_funding_usd,
-  hq_address:           DEEP_PROFILE_SCHEMA.properties.hq_address,
-  linkedin_url:         DEEP_PROFILE_SCHEMA.properties.linkedin_url,
+  industry:       DEEP_PROFILE_SCHEMA.properties.industry,
+  company_type:   DEEP_PROFILE_SCHEMA.properties.company_type,
+  hq_city:        DEEP_PROFILE_SCHEMA.properties.hq_city,
+  hq_country:     DEEP_PROFILE_SCHEMA.properties.hq_country,
+  employee_count: DEEP_PROFILE_SCHEMA.properties.employee_count,
+  founded_year:   DEEP_PROFILE_SCHEMA.properties.founded_year,
+  total_funding_usd: DEEP_PROFILE_SCHEMA.properties.total_funding_usd,
+  hq_address:     DEEP_PROFILE_SCHEMA.properties.hq_address,
+  linkedin_url:   DEEP_PROFILE_SCHEMA.properties.linkedin_url,
 };
 
 /**
@@ -594,12 +595,16 @@ export async function fetchExaDeepProfileData(
     const c = data.output?.content;
     if (!c) return null;
 
+    const rawEmployeeCount = c.employee_count ? Math.round(Number(c.employee_count)) : 0;
+    const employeeCount = rawEmployeeCount > 0 ? rawEmployeeCount : null;
+
     return {
       website_url:          normalizeUrl(c.website_url as string) ?? null,
       linkedin_url:         normalizeUrl(c.linkedin_url as string) ?? null,
       industry:             normalizeIndustry(c.industry as string),
       company_type:         normalizeCompanyType(c.company_type as string),
-      employee_count_range: normalizeEmployeeCount(c.employee_count_range as string),
+      employee_count_range: employeeCount !== null ? bucketByCount(employeeCount) : null,
+      employee_count:       employeeCount,
       founded_year:         c.founded_year ? Number(c.founded_year) || null : null,
       // Cap at $25B — anything above is almost certainly a valuation leak, not rounds raised.
       total_funding_usd:    (() => {

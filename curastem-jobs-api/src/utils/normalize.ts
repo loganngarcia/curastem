@@ -6,7 +6,7 @@
  * normalization logic lives in one place and is testable independently.
  */
 
-import type { EmploymentType, SalaryPeriod, WorkplaceType } from "../types.ts";
+import type { EmploymentType, SalaryPeriod, SeniorityLevel, WorkplaceType } from "../types.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Company slug
@@ -3052,4 +3052,24 @@ export function htmlToText(html: string): string {
     .replace(/&nbsp;/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seniority from experience years
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Derive a SeniorityLevel from a minimum-years-of-experience integer.
+ * Used as a fallback when the AI didn't extract an explicit seniority label.
+ * Thresholds match typical industry conventions:
+ *   0–1  → entry
+ *   2–4  → mid
+ *   5–7  → senior
+ *   8+   → staff
+ */
+export function seniorityFromExperienceYears(years: number): SeniorityLevel {
+  if (years >= 8) return "staff";
+  if (years >= 5) return "senior";
+  if (years >= 2) return "mid";
+  return "entry";
 }

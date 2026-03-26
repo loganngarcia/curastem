@@ -167,10 +167,13 @@ export async function updateCompanyEnrichment(
     facebook_url?: string | null;
     // Company profile
     employee_count_range?: string | null;
+    employee_count?: number | null;
     founded_year?: number | null;
     hq_address?: string | null;
     hq_city?: string | null;
     hq_country?: string | null;
+    hq_lat?: number | null;
+    hq_lng?: number | null;
     industry?: string | null;
     company_type?: string | null;
     total_funding_usd?: number | null;
@@ -195,6 +198,43 @@ export async function updateCompanyEnrichment(
   await db
     .prepare(`UPDATE companies SET ${sets.join(", ")} WHERE id = ?`)
     .bind(...bindings)
+    .run();
+}
+
+/**
+ * Aggregate unique normalized job locations for a company and write them to
+ * `companies.locations`. Called after every batch upsert so the company record
+ * always reflects the current open-job office footprint.
+ */
+export async function updateCompanyLocations(
+  db: D1Database,
+  companyId: string
+): Promise<void> {
+  // Pull every non-null locations JSON array from active jobs for this company
+  const { results } = await db
+    .prepare("SELECT locations FROM jobs WHERE company_id = ? AND locations IS NOT NULL")
+    .bind(companyId)
+    .all<{ locations: string }>();
+
+  const seen = new Set<string>();
+  for (const row of results ?? []) {
+    try {
+      const arr = JSON.parse(row.locations) as unknown[];
+      for (const loc of arr) {
+        if (typeof loc === "string" && loc.trim() && loc.toLowerCase() !== "remote") {
+          seen.add(loc.trim());
+        }
+      }
+    } catch {
+      // Skip malformed rows
+    }
+  }
+
+  if (seen.size === 0) return;
+
+  await db
+    .prepare("UPDATE companies SET locations = ?, updated_at = ? WHERE id = ?")
+    .bind(JSON.stringify([...seen].sort()), Math.floor(Date.now() / 1000), companyId)
     .run();
 }
 
@@ -236,13 +276,17 @@ export async function ensureCompanyExaColumns(db: D1Database): Promise<void> {
     ["crunchbase_url",        "TEXT"],
     ["facebook_url",          "TEXT"],
     ["employee_count_range",  "TEXT"],
+    ["employee_count",        "INTEGER"],
     ["founded_year",          "INTEGER"],
     ["hq_address",            "TEXT"],
     ["hq_city",               "TEXT"],
     ["hq_country",            "TEXT"],
+    ["hq_lat",                "REAL"],
+    ["hq_lng",                "REAL"],
     ["industry",              "TEXT"],
     ["company_type",          "TEXT"],
     ["total_funding_usd",     "INTEGER"],
+    ["locations",             "TEXT"],
   ];
 
   for (const [col, type] of missing) {
@@ -253,7 +297,8 @@ export async function ensureCompanyExaColumns(db: D1Database): Promise<void> {
 }
 
 /**
- * Companies that have never had the Exa deep social pass run.
+ * Companies that have never had the Exa deep social pass run AND have at
+ * least 1 job — avoids Exa spend on empty company records.
  * Run-once: once exa_social_enriched_at is set it never re-runs automatically.
  */
 export async function listCompaniesForSocialEnrichment(
@@ -263,17 +308,42 @@ export async function listCompaniesForSocialEnrichment(
   const result = await db
     .prepare(
       `SELECT c.* FROM companies c
-       LEFT JOIN (
-         SELECT company_id, MAX(COALESCE(posted_at, first_seen_at)) AS newest_job
+       INNER JOIN (
+         SELECT company_id, MAX(COALESCE(posted_at, first_seen_at)) AS newest_job,
+                COUNT(*) AS job_count
          FROM jobs GROUP BY company_id
        ) j ON j.company_id = c.id
        WHERE c.exa_social_enriched_at IS NULL
+         AND j.job_count >= 1
        ORDER BY j.newest_job DESC NULLS LAST
        LIMIT ?`
     )
     .bind(limit)
     .all<CompanyRow>();
   return result.results ?? [];
+}
+
+/**
+ * Ensures `jobs` has migration 011 columns (experience_years_min, job address fields).
+ * Self-healing: runs on every cron/admin path so the worker never fails on a cold D1.
+ */
+export async function ensureNewJobColumns(db: D1Database): Promise<void> {
+  const info = await db.prepare("PRAGMA table_info(jobs)").all<{ name: string }>();
+  const names = new Set((info.results ?? []).map((r) => r.name));
+
+  const missing: Array<[string, string]> = [
+    ["experience_years_min", "INTEGER"],
+    ["job_address",          "TEXT"],
+    ["job_city",             "TEXT"],
+    ["job_state",            "TEXT"],
+    ["job_country",          "TEXT"],
+  ];
+
+  for (const [col, type] of missing) {
+    if (!names.has(col)) {
+      await db.prepare(`ALTER TABLE jobs ADD COLUMN ${col} ${type}`).run();
+    }
+  }
 }
 
 /**
@@ -311,7 +381,8 @@ export async function listUnenrichedCompanies(
 }
 
 /**
- * Companies that have never had the Exa category pass run.
+ * Companies that have never had the Exa category pass run AND have at least
+ * one job — avoids burning Exa credits on empty shell companies.
  * Run-once: once exa_company_enriched_at is set it never re-runs automatically.
  */
 export async function listCompaniesForExaEnrichment(
@@ -321,11 +392,13 @@ export async function listCompaniesForExaEnrichment(
   const result = await db
     .prepare(
       `SELECT c.* FROM companies c
-       LEFT JOIN (
-         SELECT company_id, MAX(COALESCE(posted_at, first_seen_at)) AS newest_job
+       INNER JOIN (
+         SELECT company_id, MAX(COALESCE(posted_at, first_seen_at)) AS newest_job,
+                COUNT(*) AS job_count
          FROM jobs GROUP BY company_id
        ) j ON j.company_id = c.id
        WHERE c.exa_company_enriched_at IS NULL
+         AND j.job_count >= 1
        ORDER BY j.newest_job DESC NULLS LAST
        LIMIT ?`
     )
@@ -333,6 +406,10 @@ export async function listCompaniesForExaEnrichment(
     .all<CompanyRow>();
   return result.results ?? [];
 }
+
+/**
+ * Also gate social enrichment the same way — only companies with at least 1 job.
+ */
 
 /**
  * Companies with a stored website due for an HTTP reachability probe.
@@ -1131,6 +1208,11 @@ export interface ListJobsRow {
   dedup_key: string;
   created_at: number;
   updated_at: number;
+  experience_years_min: number | null;
+  job_address: string | null;
+  job_city: string | null;
+  job_state: string | null;
+  job_country: string | null;
   // joined company fields
   company_name: string;
   company_logo_url: string | null;
@@ -1147,13 +1229,17 @@ export interface ListJobsRow {
   company_crunchbase_url: string | null;
   company_facebook_url: string | null;
   company_employee_count_range: string | null;
+  company_employee_count: number | null;
   company_founded_year: number | null;
   company_hq_address: string | null;
   company_hq_city: string | null;
   company_hq_country: string | null;
+  company_hq_lat: number | null;
+  company_hq_lng: number | null;
   company_industry: string | null;
   company_type: string | null;
   company_total_funding_usd: number | null;
+  company_locations: string | null;
 }
 
 export async function listJobs(
@@ -1247,30 +1333,35 @@ export async function listJobs(
       j.description_language,
       j.apply_url, j.source_url, j.source_name,
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
+      j.experience_years_min, j.job_address, j.job_city, j.job_state, j.job_country,
       j.job_summary, j.ai_generated_at, j.embedding_generated_at,
       j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
-      c.name                AS company_name,
-      c.logo_url            AS company_logo_url,
-      c.description         AS company_description,
-      c.website_url         AS company_website_url,
-      c.linkedin_url        AS company_linkedin_url,
-      c.glassdoor_url       AS company_glassdoor_url,
-      c.x_url               AS company_x_url,
-      c.instagram_url       AS company_instagram_url,
-      c.youtube_url         AS company_youtube_url,
-      c.github_url          AS company_github_url,
-      c.huggingface_url     AS company_huggingface_url,
-      c.tiktok_url          AS company_tiktok_url,
-      c.crunchbase_url      AS company_crunchbase_url,
-      c.facebook_url        AS company_facebook_url,
+      c.name                 AS company_name,
+      c.logo_url             AS company_logo_url,
+      c.description          AS company_description,
+      c.website_url          AS company_website_url,
+      c.linkedin_url         AS company_linkedin_url,
+      c.glassdoor_url        AS company_glassdoor_url,
+      c.x_url                AS company_x_url,
+      c.instagram_url        AS company_instagram_url,
+      c.youtube_url          AS company_youtube_url,
+      c.github_url           AS company_github_url,
+      c.huggingface_url      AS company_huggingface_url,
+      c.tiktok_url           AS company_tiktok_url,
+      c.crunchbase_url       AS company_crunchbase_url,
+      c.facebook_url         AS company_facebook_url,
       c.employee_count_range AS company_employee_count_range,
-      c.founded_year        AS company_founded_year,
-      c.hq_address          AS company_hq_address,
-      c.hq_city             AS company_hq_city,
-      c.hq_country          AS company_hq_country,
-      c.industry            AS company_industry,
-      c.company_type        AS company_type,
-      c.total_funding_usd   AS company_total_funding_usd
+      c.employee_count       AS company_employee_count,
+      c.founded_year         AS company_founded_year,
+      c.hq_address           AS company_hq_address,
+      c.hq_city              AS company_hq_city,
+      c.hq_country           AS company_hq_country,
+      c.hq_lat               AS company_hq_lat,
+      c.hq_lng               AS company_hq_lng,
+      c.industry             AS company_industry,
+      c.company_type         AS company_type,
+      c.total_funding_usd    AS company_total_funding_usd,
+      c.locations            AS company_locations
     FROM jobs j
     JOIN companies c ON c.id = j.company_id
     ${where}
@@ -1465,28 +1556,32 @@ export async function getJobById(
     .prepare(
       `SELECT
         j.*,
-        c.name                AS company_name,
-        c.logo_url            AS company_logo_url,
-        c.description         AS company_description,
-        c.website_url         AS company_website_url,
-        c.linkedin_url        AS company_linkedin_url,
-        c.glassdoor_url       AS company_glassdoor_url,
-        c.x_url               AS company_x_url,
-        c.instagram_url       AS company_instagram_url,
-        c.youtube_url         AS company_youtube_url,
-        c.github_url          AS company_github_url,
-        c.huggingface_url     AS company_huggingface_url,
-        c.tiktok_url          AS company_tiktok_url,
-        c.crunchbase_url      AS company_crunchbase_url,
-        c.facebook_url        AS company_facebook_url,
+        c.name                 AS company_name,
+        c.logo_url             AS company_logo_url,
+        c.description          AS company_description,
+        c.website_url          AS company_website_url,
+        c.linkedin_url         AS company_linkedin_url,
+        c.glassdoor_url        AS company_glassdoor_url,
+        c.x_url                AS company_x_url,
+        c.instagram_url        AS company_instagram_url,
+        c.youtube_url          AS company_youtube_url,
+        c.github_url           AS company_github_url,
+        c.huggingface_url      AS company_huggingface_url,
+        c.tiktok_url           AS company_tiktok_url,
+        c.crunchbase_url       AS company_crunchbase_url,
+        c.facebook_url         AS company_facebook_url,
         c.employee_count_range AS company_employee_count_range,
-        c.founded_year        AS company_founded_year,
-        c.hq_address          AS company_hq_address,
-        c.hq_city             AS company_hq_city,
-        c.hq_country          AS company_hq_country,
-        c.industry            AS company_industry,
-        c.company_type        AS company_type,
-        c.total_funding_usd   AS company_total_funding_usd
+        c.employee_count       AS company_employee_count,
+        c.founded_year         AS company_founded_year,
+        c.hq_address           AS company_hq_address,
+        c.hq_city              AS company_hq_city,
+        c.hq_country           AS company_hq_country,
+        c.hq_lat               AS company_hq_lat,
+        c.hq_lng               AS company_hq_lng,
+        c.industry             AS company_industry,
+        c.company_type         AS company_type,
+        c.total_funding_usd    AS company_total_funding_usd,
+        c.locations            AS company_locations
        FROM jobs j
        JOIN companies c ON c.id = j.company_id
        WHERE j.id = ?`
@@ -1623,30 +1718,33 @@ export async function updateJobAiFields(
   jobDescription: string, // serialized JSON
   now: number,
   extras?: {
-    salary?: { min: number; currency: string; period: string } | null;
+    salary?: { min: number | null; max: number | null; currency: string; period: string } | null;
+    /** AI overrides workplace_type — it has full description context, including remote/hybrid signals the ATS may have missed. */
     workplace_type?: string | null;
+    /** AI overrides employment_type — reads the full description, not just the ATS metadata field. */
     employment_type?: string | null;
     seniority_level?: string | null;
     visa_sponsorship?: string | null;
-    /**
-     * AI-extracted normalized locations array, e.g. ["San Francisco, CA", "Remote"].
-     * Written to `locations` (JSON) and used to set/override `location` (best single value)
-     * unless the DB already has an exact match for the best value.
-     */
     locations?: string[] | null;
-    /**
-     * ISO 639-1 language code. AI always overrides the heuristic value — it has
-     * full description context and can handle mixed-language or ambiguous posts.
-     */
     description_language?: string | null;
+    experience_years_min?: number | null;
+    job_address?: string | null;
+    job_city?: string | null;
+    job_state?: string | null;
+    job_country?: string | null;
   } | null
 ): Promise<void> {
-  const { salary, workplace_type, employment_type, seniority_level, visa_sponsorship, locations, description_language } = extras ?? {};
+  const {
+    salary, workplace_type, employment_type, seniority_level,
+    visa_sponsorship, locations, description_language,
+    experience_years_min, job_address, job_city, job_state, job_country,
+  } = extras ?? {};
 
   const locationsJson = locations && locations.length > 0 ? JSON.stringify(locations) : null;
 
-  // AI always overrides locations and description_language — it has full posting context.
-  // COALESCE fills gaps for other extracted fields — AI never overwrites source-provided data.
+  // AI overrides workplace_type and employment_type — it reads the full description
+  // and correctly handles remote/hybrid and contract/full-time signals that ATS metadata fields miss.
+  // COALESCE used for fields where source wins if already populated (salary, seniority, visa).
   await db
     .prepare(
       `UPDATE jobs
@@ -1655,13 +1753,19 @@ export async function updateJobAiFields(
            ai_generated_at      = ?,
            locations            = COALESCE(?, locations),
            description_language = COALESCE(?, description_language),
-           workplace_type       = COALESCE(workplace_type, ?),
-           employment_type      = COALESCE(employment_type, ?),
+           workplace_type       = COALESCE(?, workplace_type),
+           employment_type      = COALESCE(?, employment_type),
            seniority_level      = COALESCE(seniority_level, ?),
            visa_sponsorship     = COALESCE(visa_sponsorship, ?),
            salary_min           = COALESCE(salary_min, ?),
+           salary_max           = COALESCE(salary_max, ?),
            salary_currency      = COALESCE(salary_currency, ?),
-           salary_period        = COALESCE(salary_period, ?)
+           salary_period        = COALESCE(salary_period, ?),
+           experience_years_min = COALESCE(experience_years_min, ?),
+           job_address          = COALESCE(job_address, ?),
+           job_city             = COALESCE(job_city, ?),
+           job_state            = COALESCE(job_state, ?),
+           job_country          = COALESCE(job_country, ?)
        WHERE id = ?`
     )
     .bind(
@@ -1675,8 +1779,14 @@ export async function updateJobAiFields(
       seniority_level ?? null,
       visa_sponsorship ?? null,
       salary?.min ?? null,
+      salary?.max ?? null,
       salary?.currency ?? null,
       salary?.period ?? null,
+      experience_years_min ?? null,
+      job_address ?? null,
+      job_city ?? null,
+      job_state ?? null,
+      job_country ?? null,
       id
     )
     .run();

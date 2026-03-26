@@ -45,7 +45,7 @@ import { handleGetJob } from "./routes/job.ts";
 import { handleGetStats } from "./routes/stats.ts";
 import { runIngestion, processSourceById, backfillEmbeddings } from "./ingestion/runner.ts";
 import { runExaEnrichment } from "./enrichment/company.ts";
-import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns } from "./db/queries.ts";
+import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns, ensureNewJobColumns } from "./db/queries.ts";
 import { applyCompanyMetadataCorrections, seedSources, seedCompanyWebsites } from "./db/migrate.ts";
 import type { Env } from "./types.ts";
 import { Errors, jsonOk } from "./utils/errors.ts";
@@ -124,6 +124,7 @@ async function handleRequest(
         await seedSources(env.JOBS_DB);
         await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
         await ensureCompanyExaColumns(env.JOBS_DB);
+        await ensureNewJobColumns(env.JOBS_DB);
         await seedCompanyWebsites(env.JOBS_DB);
         await applyCompanyMetadataCorrections(env.JOBS_DB);
         const limitParam = url.searchParams.get("limit");
@@ -145,6 +146,7 @@ async function handleRequest(
         await seedSources(env.JOBS_DB);
         await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
         await ensureCompanyExaColumns(env.JOBS_DB);
+        await ensureNewJobColumns(env.JOBS_DB);
         await seedCompanyWebsites(env.JOBS_DB);
         await applyCompanyMetadataCorrections(env.JOBS_DB);
         await runIngestion(env);
@@ -277,6 +279,7 @@ export default {
           await seedSources(env.JOBS_DB);
           await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
           await ensureCompanyExaColumns(env.JOBS_DB);
+          await ensureNewJobColumns(env.JOBS_DB);
           await seedCompanyWebsites(env.JOBS_DB);
           await applyCompanyMetadataCorrections(env.JOBS_DB);
           await runIngestion(env);

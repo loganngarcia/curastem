@@ -26,6 +26,7 @@ import { Errors, jsonOk } from "../utils/errors.ts";
 import { authenticate, recordKeyUsage } from "../middleware/auth.ts";
 import { checkRateLimit } from "../middleware/rateLimit.ts";
 import { logger } from "../utils/logger.ts";
+import { seniorityFromExperienceYears } from "../utils/normalize.ts";
 
 function rowToFullPublicJob(row: FullJobRow): PublicJob {
   const bestPostedAt = row.posted_at ?? row.first_seen_at;
@@ -55,6 +56,15 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
     }
   }
 
+  let companyLocations: string[] | null = null;
+  if (row.company_locations) {
+    try {
+      companyLocations = JSON.parse(row.company_locations) as string[];
+    } catch {
+      // Malformed JSON — treat as none
+    }
+  }
+
   return {
     id: row.id,
     title: row.title,
@@ -71,6 +81,11 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
     job_summary: row.job_summary,
     job_description: jobDescription,
     visa_sponsorship: row.visa_sponsorship ?? null,
+    experience_years_min: row.experience_years_min ?? null,
+    job_address: row.job_address ?? null,
+    job_city: row.job_city ?? null,
+    job_state: row.job_state ?? null,
+    job_country: row.job_country ?? null,
     keywords,
     company: {
       name: row.company_name,
@@ -88,13 +103,21 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
       crunchbase_url: row.company_crunchbase_url,
       facebook_url: row.company_facebook_url,
       employee_count_range: row.company_employee_count_range,
+      employee_count: row.company_employee_count ?? null,
       founded_year: row.company_founded_year,
       headquarters: (row.company_hq_address || row.company_hq_city || row.company_hq_country)
-        ? { address: row.company_hq_address, city: row.company_hq_city, country: row.company_hq_country }
+        ? {
+            address: row.company_hq_address,
+            city: row.company_hq_city,
+            country: row.company_hq_country,
+            lat: row.company_hq_lat ?? null,
+            lng: row.company_hq_lng ?? null,
+          }
         : null,
       industry: row.company_industry,
       company_type: row.company_type,
       total_funding_usd: row.company_total_funding_usd,
+      locations: companyLocations,
     },
   };
 }
@@ -145,20 +168,32 @@ export async function handleGetJob(
 
   if (needsAi) {
     try {
+      // Pass source-provided locations as hints so the AI can derive job_city/job_country
+      // even when the description text doesn't mention them (e.g. Domino's store addresses).
+      const sourceLocations: string[] = row.locations
+        ? (() => { try { return JSON.parse(row.locations) as string[]; } catch { return []; } })()
+        : [];
       const extracted = await extractJobFields(
         env.GEMINI_API_KEY,
         row.company_name,
         row.title,
-        row.description_raw!
+        row.description_raw!,
+        sourceLocations
       );
 
       const now = Math.floor(Date.now() / 1000);
       const jobDescJson = JSON.stringify(extracted.job_description);
 
       const salaryPayload =
-        extracted.salary_min !== null && extracted.salary_currency && extracted.salary_period
-          ? { min: extracted.salary_min, currency: extracted.salary_currency, period: extracted.salary_period }
+        (extracted.salary_min !== null || extracted.salary_max !== null) && extracted.salary_currency && extracted.salary_period
+          ? { min: extracted.salary_min, max: extracted.salary_max, currency: extracted.salary_currency, period: extracted.salary_period }
           : null;
+
+      // Derive seniority from years before persisting — so the DB value is also complete.
+      const derivedSeniority = extracted.seniority_level
+        ?? (extracted.experience_years_min !== null
+            ? seniorityFromExperienceYears(extracted.experience_years_min)
+            : null);
 
       // Cache results — fire-and-forget so we don't block the response
       ctx.waitUntil(
@@ -166,10 +201,15 @@ export async function handleGetJob(
           salary: salaryPayload,
           workplace_type: extracted.workplace_type,
           employment_type: extracted.employment_type,
-          seniority_level: extracted.seniority_level,
+          seniority_level: derivedSeniority,
           description_language: extracted.description_language,
           visa_sponsorship: extracted.visa_sponsorship,
           locations: extracted.locations,
+          experience_years_min: extracted.experience_years_min,
+          job_address: extracted.job_address,
+          job_city: extracted.job_city,
+          job_state: extracted.job_state,
+          job_country: extracted.job_country,
         })
       );
 
@@ -177,31 +217,40 @@ export async function handleGetJob(
       row.job_summary = extracted.job_summary;
       row.job_description = jobDescJson;
       row.ai_generated_at = now;
-      if (row.workplace_type === null && extracted.workplace_type) {
-        row.workplace_type = extracted.workplace_type;
-      }
-      if (row.employment_type === null && extracted.employment_type) {
-        row.employment_type = extracted.employment_type;
-      }
+      // AI overrides workplace_type and employment_type — it reads the full description
+      if (extracted.workplace_type) row.workplace_type = extracted.workplace_type;
+      if (extracted.employment_type) row.employment_type = extracted.employment_type;
       if (row.seniority_level === null && extracted.seniority_level) {
         row.seniority_level = extracted.seniority_level;
       }
-      // AI always overrides description_language (not just fills nulls)
       if (extracted.description_language) {
         row.description_language = extracted.description_language;
       }
       if (row.visa_sponsorship === null && extracted.visa_sponsorship) {
         row.visa_sponsorship = extracted.visa_sponsorship;
       }
-      if (salaryPayload && row.salary_min === null) {
-        row.salary_min = salaryPayload.min;
-        row.salary_currency = salaryPayload.currency;
-        row.salary_period = salaryPayload.period as import("../types.ts").SalaryPeriod;
+      if (salaryPayload) {
+        if (row.salary_min === null) {
+          row.salary_min = salaryPayload.min;
+          row.salary_currency = salaryPayload.currency;
+          row.salary_period = salaryPayload.period as import("../types.ts").SalaryPeriod;
+        }
+        if (row.salary_max === null) row.salary_max = salaryPayload.max;
       }
-      // Patch in-memory locations so this response reflects AI-enhanced values immediately
       if (extracted.locations && extracted.locations.length > 0) {
         row.locations = JSON.stringify(extracted.locations);
       }
+      if (row.experience_years_min === null && extracted.experience_years_min !== null) {
+        row.experience_years_min = extracted.experience_years_min;
+      }
+      // Derive seniority from years when AI didn't extract an explicit label.
+      if (row.seniority_level === null && row.experience_years_min !== null) {
+        row.seniority_level = seniorityFromExperienceYears(row.experience_years_min);
+      }
+      if (row.job_address === null && extracted.job_address) row.job_address = extracted.job_address;
+      if (row.job_city === null && extracted.job_city) row.job_city = extracted.job_city;
+      if (row.job_state === null && extracted.job_state) row.job_state = extracted.job_state;
+      if (row.job_country === null && extracted.job_country) row.job_country = extracted.job_country;
 
       // Also cache company description if missing (uses the same job context)
       if (!row.company_description && extracted.job_summary) {

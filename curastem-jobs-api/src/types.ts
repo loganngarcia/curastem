@@ -102,13 +102,19 @@ export interface CompanyRow {
   exa_social_enriched_at: number | null;
   // Company profile
   employee_count_range: string | null;
+  /** Exact headcount from Exa when available; more precise than the range bucket. */
+  employee_count: number | null;
   founded_year: number | null;
   hq_address: string | null;
   hq_city: string | null;
   hq_country: string | null;
+  hq_lat: number | null;
+  hq_lng: number | null;
   industry: string | null;
   company_type: string | null;
   total_funding_usd: number | null;
+  /** JSON array of unique normalized job locations aggregated from the jobs table. */
+  locations: string | null;
   description: string | null;
   description_enriched_at: number | null;
   created_at: number;
@@ -147,6 +153,16 @@ export interface JobRow {
   salary_max: number | null;
   salary_currency: string | null;
   salary_period: SalaryPeriod | null;
+  /** Minimum years of experience required, extracted by AI. e.g. "2-3 years" → 2. */
+  experience_years_min: number | null;
+  /** Street address mentioned in the job posting. */
+  job_address: string | null;
+  /** Normalized city mentioned in the job posting. */
+  job_city: string | null;
+  /** US state abbreviation (e.g. "CA", "IN") — populated for US jobs. */
+  job_state: string | null;
+  /** Country from the job posting (ISO-2 or full name). */
+  job_country: string | null;
   job_summary: string | null;
   job_description: string | null; // serialized JSON: JobDescriptionExtracted
   ai_generated_at: number | null;
@@ -359,16 +375,22 @@ export interface PublicCompany {
   facebook_url: string | null;
   // Company profile
   employee_count_range: string | null;
+  /** Exact headcount when known (more precise than the range bucket). */
+  employee_count: number | null;
   founded_year: number | null;
   /** Full street address, no PO Box */
   headquarters: {
     address: string | null;
     city: string | null;
     country: string | null;
+    lat: number | null;
+    lng: number | null;
   } | null;
   industry: string | null;
   company_type: string | null;
   total_funding_usd: number | null;
+  /** Unique job locations aggregated from all open postings. Useful for office footprint. */
+  locations: string[] | null;
 }
 
 export interface PublicSalary {
@@ -410,6 +432,16 @@ export interface PublicJob {
   job_summary: string | null;
   job_description: JobDescriptionExtracted | null;
   visa_sponsorship: VisaSponsorship | null;
+  /** Minimum years of experience required (AI-extracted). e.g. "2-3 years" or "2+" → 2. */
+  experience_years_min: number | null;
+  /** Per-job physical address extracted from the posting text. */
+  job_address: string | null;
+  /** Normalized city from the posting (may differ from the company HQ). */
+  job_city: string | null;
+  /** US state abbreviation (e.g. "CA", "IN") — populated for US jobs. */
+  job_state: string | null;
+  /** Country from the posting (ISO-2 or full name for international). */
+  job_country: string | null;
 
   /**
    * Skill and technology keywords extracted from the job description.

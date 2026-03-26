@@ -44,21 +44,24 @@ export async function runGetJobDetails(
 ): Promise<unknown> {
   const job = await client.getJob(args.job_id);
 
-  // Return the full structured job — agent can use any field to answer user questions
   return {
     id: job.id,
     title: job.title,
     posted_at: job.posted_at,
     apply_url: job.apply_url,
-    location: job.locations?.[0] ?? "Not specified",
+    locations: job.locations ?? [],
     employment_type: job.employment_type ?? null,
     workplace_type: job.workplace_type ?? null,
+    seniority_level: job.seniority_level ?? null,
+    experience_years_min: job.experience_years_min ?? null,
+    // Per-job physical location (extracted from posting text)
+    job_address: job.job_address ?? null,
+    job_city: job.job_city ?? null,
+    job_country: job.job_country ?? null,
     source_name: job.source_name,
+    visa_sponsorship: (job as unknown as { visa_sponsorship?: string | null }).visa_sponsorship ?? null,
     salary: job.salary
-      ? {
-          range: formatSalaryRange(job.salary),
-          ...job.salary,
-        }
+      ? { range: formatSalaryRange(job.salary), ...job.salary }
       : null,
     summary: job.job_summary ?? null,
     description: job.job_description
@@ -68,6 +71,7 @@ export async function runGetJobDetails(
           preferred_qualifications: job.job_description.preferred_qualifications,
         }
       : null,
+    keywords: job.keywords ?? [],
     company: {
       name: job.company.name,
       description: job.company.description ?? null,
@@ -76,6 +80,15 @@ export async function runGetJobDetails(
       glassdoor: job.company.glassdoor_url ?? null,
       x: job.company.x_url ?? null,
       logo: job.company.logo_url ?? null,
+      industry: job.company.industry ?? null,
+      company_type: job.company.company_type ?? null,
+      employee_count: job.company.employee_count ?? null,
+      employee_count_range: job.company.employee_count_range ?? null,
+      founded_year: job.company.founded_year ?? null,
+      total_funding_usd: job.company.total_funding_usd ?? null,
+      headquarters: job.company.headquarters ?? null,
+      // All office locations aggregated from open job postings
+      office_locations: job.company.locations ?? [],
     },
   };
 }

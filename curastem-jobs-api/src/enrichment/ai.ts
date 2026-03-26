@@ -155,6 +155,10 @@ interface GeminiRequest {
   generationConfig?: {
     temperature?: number;
     maxOutputTokens?: number;
+    /** Forces JSON-only output — model skips format-decision overhead. */
+    response_mime_type?: string;
+    /** Explicitly disable thinking — keeps extraction fast and cheap. thinkingBudget: 0 = off. */
+    thinkingConfig?: { thinkingBudget: number };
   };
 }
 
@@ -166,13 +170,19 @@ interface GeminiResponse {
   }>;
 }
 
-async function callGemini(apiKey: string, prompt: string, maxOutputTokens = 2048): Promise<string> {
+async function callGemini(apiKey: string, prompt: string, maxOutputTokens = 900): Promise<string> {
   const url = `${GEMINI_API_BASE}/models/${MODEL}:generateContent?key=${apiKey}`;
   const body: GeminiRequest = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens,
+      // JSON mode: model outputs pure JSON without format-decision overhead.
+      // ~20-30% faster generation; our delimiter parser still handles edge cases.
+      response_mime_type: "application/json",
+      // thinkingBudget: 0 pins thinking off — Flash-Lite supports it but we
+      // never want it for pure extraction (adds latency + cost, zero benefit).
+      thinkingConfig: { thinkingBudget: 0 },
     },
   };
 
@@ -201,49 +211,54 @@ async function callGemini(apiKey: string, prompt: string, maxOutputTokens = 2048
 // part with no text part, causing the extraction to silently fail.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const JOB_EXTRACTION_PROMPT = (companyName: string, jobTitle: string, descriptionText: string) => `
-You are an assistant that extracts structured information from job postings.
+// Delimiter tokens used to wrap the JSON payload in the model response.
+// They allow robust extraction even when the model adds prose before/after.
+const JSON_START = "<<<JOB_DATA>>>";
+const JSON_END   = "<<<END_JOB_DATA>>>";
+
+const JOB_EXTRACTION_PROMPT = (companyName: string, jobTitle: string, descriptionText: string, sourceLocations: string[]) => `
+Extract structured data from this job posting. Return only the JSON object below — no prose, no markdown.
 
 Company: ${companyName}
-Job title: ${jobTitle}
+Title: ${jobTitle}
+${sourceLocations.length > 0 ? `ATS locations (hints for city/state/country): ${sourceLocations.join(", ")}` : ""}
 
-Raw job description:
+Description:
 ---
 ${descriptionText.slice(0, 8000)}
 ---
 
-Return ONLY valid JSON (no markdown fences) with exactly this shape:
 {
-  "job_summary": "<two sentences>",
-  "responsibilities": ["<bullet>", ...],
-  "minimum_qualifications": ["<bullet>", ...],
-  "preferred_qualifications": ["<bullet>", ...],
-  "workplace_type": "<remote|hybrid|on_site|null>",
-  "employment_type": "<full_time|part_time|contract|internship|temporary|null>",
-  "seniority_level": "<new_grad|entry|mid|senior|staff|manager|director|executive|null>",
-  "description_language": "<ISO 639-1 code or null>",
-  "visa_sponsorship": "<yes|no|null>",
-  "salary_min": <number or null>,
-  "salary_period": "<year|month|hour|null>",
-  "locations": ["<City, ST or City, Country>", ...]
+  "job_summary": "<2 sentences: company description, then role description>",
+  "responsibilities": ["<concise bullet>"],
+  "minimum_qualifications": ["<concise bullet>"],
+  "preferred_qualifications": ["<concise bullet>"],
+  "workplace_type": "remote|hybrid|on_site|null",
+  "employment_type": "full_time|part_time|contract|internship|temporary|null",
+  "seniority_level": "new_grad|entry|mid|senior|staff|manager|director|executive|null",
+  "description_language": "<ISO 639-1>|null",
+  "visa_sponsorship": "yes|no|null",
+  "salary_min": <number|null>,
+  "salary_max": <number|null>,
+  "salary_period": "year|month|hour|null",
+  "experience_years_min": <integer|null>,
+  "locations": ["City, ST" or "City, Country"],
+  "job_address": "<street address from description body>|null",
+  "job_city": "<full city name>|null",
+  "job_state": "<2-letter US state>|null",
+  "job_country": "<ISO-2 country code>|null"
 }
 
 Rules:
-- job_summary: exactly two sentences. Sentence 1 describes the company. Sentence 2 describes this role.
-- Each array item must be a concise, standalone point. No raw HTML.
-- Return empty arrays [] for any section not clearly present in the source text.
-- workplace_type: "remote" if fully remote, "hybrid" if hybrid/flexible, "on_site" if in-office only. null if not mentioned.
-- employment_type: "full_time", "part_time", "contract", "internship", or "temporary". null if not mentioned.
-- seniority_level: career level — new_grad | entry | mid | senior | staff | manager | director | executive | null.
-    "new_grad" = explicitly targets new/recent graduates ("New Grad", "Campus Hire", etc.). "Junior"/"Associate" are entry, not new_grad.
-    "manager" = people manager with direct reports. Note: "manager" in a title (Product Manager, Account Manager) does not automatically mean manager seniority 
-    null = ambiguous or not enough information. 
-- description_language: ISO 639-1 code of the job description's primary language. null only if too short or garbled to determine.
-- visa_sponsorship: "yes" if the posting explicitly states visa sponsorship is available, "no" if it explicitly states sponsorship is NOT available or requires existing work authorization. null if not mentioned at all.
-- salary_min: the minimum salary amount in USD if explicitly stated, otherwise null. Keep per-period amount as-is (do not annualize hourly/monthly).
-- salary_period: "year", "month", or "hour" matching salary_min. null if no salary.
-- locations: array of all work locations extracted from the posting. Use canonical format "City, ST" for US cities (e.g. "San Francisco, CA") or "City, Country" for international. Include "Remote" as a location if the role is remote. Return [] if no location is mentioned. First entry should be the primary/most specific location.
-- Do NOT invent information not present in the text.
+- workplace_type: "remote" = 100% remote, no office. "hybrid" = has specific city + some remote, or "X days in office". "on_site" = in-person only. If a physical location is given alongside remote, use "hybrid" not "remote". null = not mentioned.
+- employment_type: "full_time" includes "Regular"/"Permanent"/no qualifier. "contract" includes freelance/C2C/1099/fixed-term. null = genuinely ambiguous.
+- seniority_level: "new_grad" only if explicitly targeting new graduates. "Junior"/"Associate" = entry. IC roles with "Manager" in title = not manager seniority. null = not enough info.
+- salary: USD numbers only, exact as stated. Do NOT annualize. null if not mentioned.
+- experience_years_min: lowest number from ranges ("2-5 years" → 2, "5+ years" → 5). null if not mentioned.
+- locations: city-level only ("City, ST" for US, "City, Country" for intl). Never include street addresses or road suffixes. Prefer ATS location hints over job title text. "Remote" only if truly 100% remote.
+- job_address: only if a full street address appears in the description body — never from the job title.
+- job_city/job_state/job_country: prefer ATS location hints. job_state = 2-letter US abbrev only. job_country = ISO-2 (e.g. "US", "GB").
+- Empty arrays [] for missing sections. null for missing scalar fields. Do not invent facts.
 `.trim();
 
 export interface ExtractedJobFields {
@@ -256,10 +271,21 @@ export interface ExtractedJobFields {
   description_language: import("../types.ts").DescriptionLanguage | null;
   visa_sponsorship: import("../types.ts").VisaSponsorship | null;
   salary_min: number | null;
+  salary_max: number | null;
   salary_currency: string | null;
   salary_period: import("../types.ts").SalaryPeriod | null;
+  /** Minimum years of experience required; e.g. "2-3 years" → 2. */
+  experience_years_min: number | null;
   /** Normalized locations extracted from the posting; first entry is primary. */
   locations: string[] | null;
+  /** Street address extracted from posting text. */
+  job_address: string | null;
+  /** Normalized city extracted from posting text. */
+  job_city: string | null;
+  /** US state abbreviation (e.g. "CA", "IN") — null for non-US jobs. */
+  job_state: string | null;
+  /** Country from posting text (ISO-2 or full name). */
+  job_country: string | null;
 }
 
 /** Format a salary for display, e.g. "$120,000" or "$45/hour" */
@@ -301,7 +327,8 @@ export function buildPublicSalary(row: {
   if (min !== null && max !== null && max > min) {
     display = `${nf(min)}–${nf(max)}${period === "year" ? "" : `/${period}`}`;
   } else if (min !== null) {
-    display = formatSalaryDisplay(min, period);
+    const base = formatSalaryDisplay(min, period);
+    display = `${base}+`;
   } else {
     display = `Up to ${nf(max!)}${period === "year" ? "" : `/${period}`}`;
   }
@@ -310,20 +337,63 @@ export function buildPublicSalary(row: {
 }
 
 /**
- * Extract job_summary, job_description, and optionally salary from raw description text.
- * Single Gemini call returning flat JSON — no function calling.
+ * Extract the JSON payload from a Gemini response that may contain delimiter
+ * markers (<<<JOB_DATA>>> / <<<END_JOB_DATA>>>), markdown code fences, or
+ * raw JSON. Returns the first valid JSON object found in the response.
+ */
+function extractJsonFromResponse(raw: string): string {
+  // Primary: delimiter block
+  const delimMatch = raw.match(/<<<JOB_DATA>>>\s*([\s\S]*?)\s*<<<END_JOB_DATA>>>/);
+  if (delimMatch) return delimMatch[1].trim();
+
+  // Fallback: strip markdown code fences
+  const fenceStripped = raw.replace(/^```(?:json)?\s*/im, "").replace(/\s*```\s*$/im, "").trim();
+
+  // Fallback: find outermost `{ ... }` block
+  const braceStart = fenceStripped.indexOf("{");
+  const braceEnd   = fenceStripped.lastIndexOf("}");
+  if (braceStart !== -1 && braceEnd > braceStart) {
+    return fenceStripped.slice(braceStart, braceEnd + 1);
+  }
+
+  return fenceStripped;
+}
+
+/**
+ * Post-process AI workplace_type: if the job has specific physical locations
+ * AND the AI said "remote", demote to "hybrid" because a real-office location
+ * means it cannot be fully remote.
+ */
+function reconcileWorkplaceType(
+  workplaceType: import("../types.ts").WorkplaceType | null,
+  locations: string[]
+): import("../types.ts").WorkplaceType | null {
+  if (workplaceType !== "remote") return workplaceType;
+  // Physical locations other than "Remote" are present
+  const hasPhysicalLocation = locations.some(
+    (l) => l.toLowerCase() !== "remote" && l.trim() !== ""
+  );
+  if (hasPhysicalLocation) return "hybrid";
+  return workplaceType;
+}
+
+/**
+ * Extract job_summary, job_description, and all structured fields from raw
+ * description text. Single Gemini call with delimiter-wrapped JSON response.
  */
 export async function extractJobFields(
   apiKey: string,
   companyName: string,
   jobTitle: string,
-  descriptionRaw: string
+  descriptionRaw: string,
+  sourceLocations: string[] = []
 ): Promise<ExtractedJobFields> {
   const descriptionText = htmlToText(descriptionRaw);
-  const prompt = JOB_EXTRACTION_PROMPT(companyName, jobTitle, descriptionText);
-  const raw = await callGemini(apiKey, prompt, 2048);
+  const prompt = JOB_EXTRACTION_PROMPT(companyName, jobTitle, descriptionText, sourceLocations);
+  // 900 tokens covers the full JSON response with headroom; actual output is ~300-500 tokens.
+  const raw = await callGemini(apiKey, prompt, 900);
 
-  const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+  const cleaned = extractJsonFromResponse(raw);
 
   let parsed: {
     job_summary?: string;
@@ -336,8 +406,14 @@ export async function extractJobFields(
     description_language?: unknown;
     visa_sponsorship?: unknown;
     salary_min?: unknown;
+    salary_max?: unknown;
     salary_period?: unknown;
+    experience_years_min?: unknown;
     locations?: unknown[];
+    job_address?: unknown;
+    job_city?: unknown;
+    job_state?: unknown;
+    job_country?: unknown;
   };
 
   try {
@@ -354,11 +430,10 @@ export async function extractJobFields(
   const WORKPLACE_TYPES = ["remote", "hybrid", "on_site"] as const;
   const EMPLOYMENT_TYPES = ["full_time", "part_time", "contract", "internship", "temporary"] as const;
   const SENIORITY_LEVELS = ["new_grad", "entry", "mid", "senior", "staff", "manager", "director", "executive"] as const;
-  // Accept any 2-letter ISO 639-1 code the model returns — not restricted to our heuristic set.
   const isValidLangCode = (v: unknown): v is import("../types.ts").DescriptionLanguage =>
     typeof v === "string" && /^[a-z]{2}$/.test(v);
 
-  const workplaceType = WORKPLACE_TYPES.includes(parsed.workplace_type as never)
+  const workplaceTypeRaw = WORKPLACE_TYPES.includes(parsed.workplace_type as never)
     ? (parsed.workplace_type as import("../types.ts").WorkplaceType)
     : null;
   const employmentType = EMPLOYMENT_TYPES.includes(parsed.employment_type as never)
@@ -377,11 +452,35 @@ export async function extractJobFields(
   const salaryMin = typeof parsed.salary_min === "number" && parsed.salary_min > 0
     ? parsed.salary_min
     : null;
-  const salaryPeriod = salaryMin !== null && (parsed.salary_period === "year" || parsed.salary_period === "month" || parsed.salary_period === "hour")
-    ? parsed.salary_period
+  const salaryMax = typeof parsed.salary_max === "number" && parsed.salary_max > 0
+    ? parsed.salary_max
+    : null;
+  const salaryPeriod = (salaryMin !== null || salaryMax !== null) &&
+    (parsed.salary_period === "year" || parsed.salary_period === "month" || parsed.salary_period === "hour")
+    ? (parsed.salary_period as import("../types.ts").SalaryPeriod)
+    : null;
+
+  const experienceYearsMin = typeof parsed.experience_years_min === "number" && parsed.experience_years_min > 0
+    ? Math.floor(parsed.experience_years_min)
     : null;
 
   const locations = ensureStringArray(parsed.locations);
+
+  // Reconcile workplace_type: demote "remote" → "hybrid" when a physical location is present
+  const workplaceType = reconcileWorkplaceType(workplaceTypeRaw, locations);
+
+  const jobAddress = typeof parsed.job_address === "string" && parsed.job_address.trim()
+    ? parsed.job_address.trim()
+    : null;
+  const jobCity = typeof parsed.job_city === "string" && parsed.job_city.trim()
+    ? parsed.job_city.trim()
+    : null;
+  const jobState = typeof parsed.job_state === "string" && parsed.job_state.trim()
+    ? parsed.job_state.trim().toUpperCase().slice(0, 2)  // enforce 2-letter abbreviation
+    : null;
+  const jobCountry = typeof parsed.job_country === "string" && parsed.job_country.trim()
+    ? parsed.job_country.trim()
+    : null;
 
   return {
     job_summary: typeof parsed.job_summary === "string" ? parsed.job_summary : "",
@@ -396,9 +495,15 @@ export async function extractJobFields(
     description_language: descriptionLanguage,
     visa_sponsorship: visaSponsorship,
     salary_min: salaryMin,
-    salary_currency: salaryMin !== null ? "USD" : null,
+    salary_max: salaryMax,
+    salary_currency: (salaryMin !== null || salaryMax !== null) ? "USD" : null,
     salary_period: salaryPeriod,
+    experience_years_min: experienceYearsMin,
     locations: locations.length > 0 ? locations : null,
+    job_address: jobAddress,
+    job_city: jobCity,
+    job_state: jobState,
+    job_country: jobCountry,
   };
 }
 
@@ -413,7 +518,7 @@ Company name: ${companyName}
 
 Context (from a job posting by this company):
 ---
-${contextText.slice(0, 4000)}
+${contextText.slice(0, 2000)}
 ---
 
 Write ONE sentence that directly describes what ${companyName} is and what it does. 

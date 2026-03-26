@@ -31,6 +31,7 @@ import {
   getSourceById,
   listEnabledSources,
   resolveCompanySlug,
+  updateCompanyLocations,
   updateJobsWithCoords,
   updateSourceFetchResult,
   upsertCompany,
@@ -324,6 +325,16 @@ async function processSource(
         count: pendingVectors.length,
         error: String(flushErr),
       });
+    }
+  }
+
+  // Aggregate job locations into each affected company record
+  const uniqueCompanyIds = new Set(nonDupMetas.map((m) => m.companyId));
+  for (const cid of uniqueCompanyIds) {
+    try {
+      await updateCompanyLocations(db, cid);
+    } catch (locErr) {
+      logger.warn("company_locations_update_failed", { source_id: source.id, company_id: cid, error: String(locErr) });
     }
   }
 
