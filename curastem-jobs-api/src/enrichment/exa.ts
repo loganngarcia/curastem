@@ -29,6 +29,11 @@ export type IndustryValue =
   | "healthtech"
   | "edtech"
   | "ecommerce"
+  | "retail"
+  | "food_beverage"
+  | "automotive"
+  | "construction"
+  | "hospitality"
   | "media"
   | "cybersecurity"
   | "hardware"
@@ -42,9 +47,11 @@ export type IndustryValue =
   | "gaming"
   | "legal"
   | "manufacturing"
+  | "agriculture"
   | "other";
 
 const INDUSTRY_MAP: Record<string, IndustryValue> = {
+  // ── Software / Tech ──────────────────────────────────────────────────────────
   "software": "software",
   "saas": "software",
   "internet": "software",
@@ -59,6 +66,13 @@ const INDUSTRY_MAP: Record<string, IndustryValue> = {
   "data analytics": "software",
   "cloud computing": "software",
   "devops": "software",
+  "human resources": "software",
+  "hr software": "software",
+  "hr platform": "software",
+  "employer of record": "software",
+  "workforce management": "software",
+  "talent management": "software",
+  // ── AI / ML ──────────────────────────────────────────────────────────────────
   "artificial intelligence": "ai_ml",
   "machine learning": "ai_ml",
   "ai": "ai_ml",
@@ -71,8 +85,7 @@ const INDUSTRY_MAP: Record<string, IndustryValue> = {
   "foundation model": "ai_ml",
   "natural language processing": "ai_ml",
   "nlp": "ai_ml",
-  // "research services" is Exa's generic catch-all — too broad for ai_ml
-  // Only map explicitly named AI/research areas above
+  // ── Fintech ──────────────────────────────────────────────────────────────────
   "fintech": "fintech",
   "financial services": "fintech",
   "banking": "fintech",
@@ -80,46 +93,166 @@ const INDUSTRY_MAP: Record<string, IndustryValue> = {
   "payments": "fintech",
   "finance": "fintech",
   "investment": "fintech",
+  "investment management": "fintech",
+  "capital markets": "fintech",
+  "wealth management": "fintech",
+  "accounting": "fintech",
+  "tax": "fintech",
+  // ── Healthtech / Life Sciences ───────────────────────────────────────────────
   "healthcare": "healthtech",
   "health": "healthtech",
   "biotech": "healthtech",
   "biotechnology": "healthtech",
   "pharmaceutical": "healthtech",
+  "pharmaceuticals": "healthtech",
   "medical": "healthtech",
+  "medical devices": "healthtech",
   "life sciences": "healthtech",
+  "clinical": "healthtech",
+  "hospital": "healthtech",
+  "hospitals and health care": "healthtech",
+  "mental health": "healthtech",
+  "dental": "healthtech",
+  "veterinary": "healthtech",
+  // ── EdTech / Education ───────────────────────────────────────────────────────
   "education": "edtech",
   "edtech": "edtech",
   "e-learning": "edtech",
+  "higher education": "edtech",
+  "primary education": "edtech",
+  "k-12": "edtech",
+  "tutoring": "edtech",
+  // ── Ecommerce (online-first) ─────────────────────────────────────────────────
   "ecommerce": "ecommerce",
   "e-commerce": "ecommerce",
-  "retail": "ecommerce",
-  "retail apparel": "ecommerce",
-  "apparel": "ecommerce",
-  "fashion": "ecommerce",
-  "consumer goods": "ecommerce",
-  "food and beverages": "ecommerce",
-  "food & beverages": "ecommerce",
-  "food production": "ecommerce",
-  "wholesale": "ecommerce",
+  "online retail": "ecommerce",
+  "marketplace": "ecommerce",
+  "direct to consumer": "ecommerce",
+  "dtc": "ecommerce",
+  // ── Retail (physical / omnichannel) ─────────────────────────────────────────
+  "retail": "retail",
+  "retail apparel": "retail",
+  "apparel": "retail",
+  "fashion": "retail",
+  "consumer goods": "retail",
+  "consumer products": "retail",
+  "home improvement": "retail",
+  "building materials": "retail",
+  "hardware store": "retail",
+  "home furnishings": "retail",
+  "furniture": "retail",
+  "sporting goods": "retail",
+  "toy": "retail",
+  "toys": "retail",
+  "beauty": "retail",
+  "cosmetics": "retail",
+  "personal care": "retail",
+  "pharmacy": "retail",
+  "drug stores": "retail",
+  "grocery": "retail",
+  "supermarket": "retail",
+  "convenience stores": "retail",
+  "department stores": "retail",
+  "wholesale": "retail",
+  "dollar store": "retail",
+  "luxury goods": "retail",
+  "luxury": "retail",
+  // ── Food & Beverage ──────────────────────────────────────────────────────────
+  "food and beverages": "food_beverage",
+  "food & beverages": "food_beverage",
+  "food production": "food_beverage",
+  "food and beverage": "food_beverage",
+  "food & beverage": "food_beverage",
+  "food service": "food_beverage",
+  "foodservice": "food_beverage",
+  "restaurants": "food_beverage",
+  "restaurant": "food_beverage",
+  "fast food": "food_beverage",
+  "quick service restaurant": "food_beverage",
+  "qsr": "food_beverage",
+  "food manufacturing": "food_beverage",
+  "beverages": "food_beverage",
+  "brewery": "food_beverage",
+  "wine and spirits": "food_beverage",
+  "coffee": "food_beverage",
+  "bakery": "food_beverage",
+  "catering": "food_beverage",
+  // ── Automotive ───────────────────────────────────────────────────────────────
+  "automotive": "automotive",
+  "automobile": "automotive",
+  "car dealership": "automotive",
+  "motor vehicles": "automotive",
+  "auto parts": "automotive",
+  "electric vehicles": "automotive",
+  "ev": "automotive",
+  "mobility": "automotive",
+  "autonomous vehicles": "automotive",
+  // ── Construction ─────────────────────────────────────────────────────────────
+  "construction": "construction",
+  "homebuilding": "construction",
+  "home building": "construction",
+  "architecture": "construction",
+  "engineering and construction": "construction",
+  "civil engineering": "construction",
+  "infrastructure": "construction",
+  "facilities": "construction",
+  "facilities management": "construction",
+  "building services": "construction",
+  // ── Hospitality / Travel ─────────────────────────────────────────────────────
+  "hospitality": "hospitality",
+  "hotels": "hospitality",
+  "hotel": "hospitality",
+  "travel": "hospitality",
+  "tourism": "hospitality",
+  "travel and tourism": "hospitality",
+  "travel & tourism": "hospitality",
+  "leisure": "hospitality",
+  "resorts": "hospitality",
+  "casinos": "hospitality",
+  "cruise": "hospitality",
+  "events": "hospitality",
+  "event management": "hospitality",
+  // ── Media / Entertainment ────────────────────────────────────────────────────
   "media": "media",
   "entertainment": "media",
   "publishing": "media",
   "news": "media",
   "streaming": "media",
+  "broadcast": "media",
+  "advertising": "media",
+  "marketing services": "media",
+  "public relations": "media",
+  "music": "media",
+  "film": "media",
+  "animation": "media",
+  "sports": "media",
+  // ── Cybersecurity ────────────────────────────────────────────────────────────
   "cybersecurity": "cybersecurity",
   "security": "cybersecurity",
   "information security": "cybersecurity",
+  "network security": "cybersecurity",
+  // ── Hardware / Semiconductors ────────────────────────────────────────────────
   "hardware": "hardware",
   "semiconductors": "hardware",
   "electronics": "hardware",
+  "consumer electronics": "hardware",
+  "telecom": "hardware",
+  "telecommunications": "hardware",
+  // ── Aerospace / Defense ──────────────────────────────────────────────────────
   "aerospace": "aerospace",
   "defense": "aerospace",
   "aviation": "aerospace",
+  "space": "aerospace",
+  // ── Energy ───────────────────────────────────────────────────────────────────
   "energy": "energy",
   "cleantech": "energy",
   "renewable energy": "energy",
   "oil and gas": "energy",
   "utilities": "energy",
+  "solar": "energy",
+  "wind energy": "energy",
+  "nuclear": "energy",
+  // ── Logistics / Transportation ───────────────────────────────────────────────
   "logistics": "logistics",
   "supply chain": "logistics",
   "transportation": "logistics",
@@ -127,29 +260,61 @@ const INDUSTRY_MAP: Record<string, IndustryValue> = {
   "airlines": "logistics",
   "trucking": "logistics",
   "freight": "logistics",
+  "delivery": "logistics",
+  "last mile": "logistics",
+  "warehousing": "logistics",
+  // ── Real Estate ──────────────────────────────────────────────────────────────
   "real estate": "real_estate",
   "proptech": "real_estate",
+  "commercial real estate": "real_estate",
+  "residential real estate": "real_estate",
+  "property management": "real_estate",
+  // ── Consulting / Professional Services ──────────────────────────────────────
   "consulting": "consulting",
   "professional services": "consulting",
   "staffing": "consulting",
-  "human resources": "software",
-  "hr software": "software",
-  "hr platform": "software",
-  "employer of record": "software",
-  "workforce management": "software",
-  "talent management": "software",
+  "management consulting": "consulting",
+  "accounting services": "consulting",
+  "audit": "consulting",
+  // ── Government ───────────────────────────────────────────────────────────────
   "government": "government",
   "public sector": "government",
+  "federal": "government",
+  "military": "government",
+  "public administration": "government",
+  // ── Nonprofit ────────────────────────────────────────────────────────────────
   "nonprofit": "nonprofit",
   "non-profit": "nonprofit",
   "ngo": "nonprofit",
+  "charity": "nonprofit",
+  "foundation": "nonprofit",
+  "social enterprise": "nonprofit",
+  // ── Gaming ───────────────────────────────────────────────────────────────────
   "gaming": "gaming",
   "video games": "gaming",
+  "esports": "gaming",
+  "game development": "gaming",
+  // ── Legal ────────────────────────────────────────────────────────────────────
   "legal": "legal",
   "law": "legal",
+  "law firm": "legal",
+  "legaltech": "legal",
+  // ── Manufacturing / Industrial ───────────────────────────────────────────────
   "manufacturing": "manufacturing",
   "industrial": "manufacturing",
-  "automotive": "manufacturing",
+  "chemical": "manufacturing",
+  "chemicals": "manufacturing",
+  "plastics": "manufacturing",
+  "paper": "manufacturing",
+  "textile": "manufacturing",
+  "packaging": "manufacturing",
+  "printing": "manufacturing",
+  // ── Agriculture ──────────────────────────────────────────────────────────────
+  "agriculture": "agriculture",
+  "agtech": "agriculture",
+  "farming": "agriculture",
+  "agribusiness": "agriculture",
+  "crop": "agriculture",
 };
 
 // Short ambiguous keys require word boundaries to avoid false positives like
@@ -174,6 +339,7 @@ export function normalizeIndustry(raw: string | null | undefined): IndustryValue
 export type CompanyTypeValue =
   | "startup"
   | "enterprise"
+  | "public_company"
   | "agency"
   | "nonprofit"
   | "government"
@@ -188,8 +354,13 @@ const COMPANY_TYPE_MAP: Record<string, CompanyTypeValue> = {
   "enterprise": "enterprise",
   "large company": "enterprise",
   "corporation": "enterprise",
-  "public company": "enterprise",
-  "publicly traded": "enterprise",
+  "public company": "public_company",
+  "publicly traded": "public_company",
+  "publicly listed": "public_company",
+  "listed company": "public_company",
+  "nasdaq": "public_company",
+  "nyse": "public_company",
+  "ftse": "public_company",
   "partnership": "startup", // Exa uses "Partnership" for OpenAI-type structures
   "agency": "agency",
   "consultancy": "agency",
@@ -291,15 +462,55 @@ const DEEP_PROFILE_SCHEMA = {
     },
     industry: {
       type: "string",
-      enum: ["software","ai_ml","fintech","healthtech","edtech","ecommerce","media",
-             "cybersecurity","hardware","aerospace","energy","logistics","real_estate",
-             "consulting","government","nonprofit","gaming","legal","manufacturing","other"],
-      description: "Primary industry. Use 'ai_ml' for AI/ML/LLM companies, 'software' for SaaS/dev tools, 'fintech' for payments/banking/insurance, 'healthtech' for medical/biotech, 'cybersecurity' for security. Return 'other' if unknown.",
+      enum: [
+        "software","ai_ml","fintech","healthtech","edtech",
+        "ecommerce","retail","food_beverage","automotive","construction","hospitality",
+        "media","cybersecurity","hardware","aerospace","energy","logistics",
+        "real_estate","consulting","government","nonprofit","gaming","legal",
+        "manufacturing","agriculture","other",
+      ],
+      description:
+        "Primary industry vertical. Choose the most specific match:\n" +
+        "- 'software': SaaS, dev tools, cloud, HR tech, data platforms\n" +
+        "- 'ai_ml': AI/ML/LLM/foundation model companies\n" +
+        "- 'fintech': banking, payments, insurance, investment\n" +
+        "- 'healthtech': hospitals, biotech, pharma, medical devices, mental health\n" +
+        "- 'edtech': schools, online learning, tutoring\n" +
+        "- 'ecommerce': online-first marketplaces and DTC brands\n" +
+        "- 'retail': physical or omnichannel stores (grocery, home improvement, department stores, pharmacy, fashion, sporting goods)\n" +
+        "- 'food_beverage': restaurants, fast food, food manufacturing, breweries, coffee\n" +
+        "- 'automotive': car makers, dealerships, EV, auto parts\n" +
+        "- 'construction': contractors, homebuilders, architecture, civil engineering\n" +
+        "- 'hospitality': hotels, travel, tourism, casinos, events\n" +
+        "- 'media': news, entertainment, publishing, advertising, sports, music\n" +
+        "- 'cybersecurity': security products and services\n" +
+        "- 'hardware': semiconductors, electronics, telecom equipment\n" +
+        "- 'aerospace': aerospace, defense, aviation, space\n" +
+        "- 'energy': oil/gas, utilities, renewables, cleantech\n" +
+        "- 'logistics': shipping, trucking, freight, delivery, airlines\n" +
+        "- 'real_estate': property, proptech, real estate services\n" +
+        "- 'consulting': management consulting, staffing, professional services\n" +
+        "- 'government': federal, state, local agencies, military\n" +
+        "- 'nonprofit': charities, NGOs, foundations\n" +
+        "- 'gaming': video games, esports\n" +
+        "- 'legal': law firms, legaltech\n" +
+        "- 'manufacturing': industrial manufacturing, chemicals, packaging\n" +
+        "- 'agriculture': farming, agtech, agribusiness\n" +
+        "- 'other': only if none of the above clearly apply",
     },
     company_type: {
       type: "string",
-      enum: ["startup","enterprise","agency","nonprofit","government","university","other"],
-      description: "Company type. Use 'startup' for early-stage/VC-backed, 'enterprise' for large public or Fortune-500 companies, 'agency' for consulting/marketing firms, 'nonprofit' for NGOs/charities. Return 'other' if unclear.",
+      enum: ["startup","enterprise","public_company","agency","nonprofit","government","university","other"],
+      description:
+        "Company type:\n" +
+        "- 'startup': early-stage, VC-backed, or growth-stage private company\n" +
+        "- 'enterprise': large private company — 1000+ employees but NOT publicly traded\n" +
+        "- 'public_company': publicly traded on a stock exchange (NYSE, NASDAQ, LSE, etc.) — Fortune-500, S&P 500, or any listed firm\n" +
+        "- 'agency': consulting, marketing, staffing, or services firm\n" +
+        "- 'nonprofit': NGOs, charities, foundations\n" +
+        "- 'government': federal, state, local, or military agencies\n" +
+        "- 'university': colleges, universities, academic institutions\n" +
+        "- 'other': only if none of the above fit",
     },
     employee_count_range: {
       type: "string",
