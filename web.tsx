@@ -21241,8 +21241,18 @@ Do not include markdown formatting or explanations.`
 
     const [isYourStuffExpanded, setIsYourStuffExpanded] = React.useState(false)
     const [isYourStuffHovered, setIsYourStuffHovered] = React.useState(false)
-    const [isYourChatsExpanded, setIsYourChatsExpanded] = React.useState(true)
+    const [isYourChatsExpanded, setIsYourChatsExpanded] = React.useState(() => {
+        try {
+            const saved = localStorage.getItem("sidebar_chats_expanded")
+            return saved === null ? true : saved === "true"
+        } catch {
+            return true
+        }
+    })
     const [isYourChatsHovered, setIsYourChatsHovered] = React.useState(false)
+    React.useEffect(() => {
+        try { localStorage.setItem("sidebar_chats_expanded", String(isYourChatsExpanded)) } catch {}
+    }, [isYourChatsExpanded])
 
     React.useEffect(() => {
         if (!isSidebarOpen) {
@@ -32421,7 +32431,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             )
                                     )
                                     const canCollapseChats =
-                                        visibleChats.length > 3
+                                        visibleChats.length > 0
                                     if (visibleChats.length === 0) return null
                                     return (
                                         <div
@@ -32544,7 +32554,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     )
                                     .slice(
                                         0,
-                                        isYourChatsExpanded ? undefined : 3
+                                        isYourChatsExpanded ? undefined : 0
                                     )
                                     .map((chat, chatIndex) => {
                                         // Calculate stuff items count for tabIndex offset
