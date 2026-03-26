@@ -18,10 +18,10 @@
  */
 
 import { getJobById, updateJobAiFields, updateCompanyEnrichment, updateJobDescriptionRaw, getSourceById, type FullJobRow } from "../db/queries.ts";
-import { extractJobFields, formatSalaryDisplay } from "../enrichment/ai.ts";
+import { buildPublicSalary, extractJobFields } from "../enrichment/ai.ts";
 import { extractKeywords } from "../enrichment/keywords.ts";
 import { fetchSmartRecruitersDescription } from "../ingestion/sources/smartrecruiters.ts";
-import type { Env, JobDescriptionExtracted, PublicJob, PublicSalary } from "../types.ts";
+import type { Env, JobDescriptionExtracted, PublicJob } from "../types.ts";
 import { Errors, jsonOk } from "../utils/errors.ts";
 import { authenticate, recordKeyUsage } from "../middleware/auth.ts";
 import { checkRateLimit } from "../middleware/rateLimit.ts";
@@ -31,16 +31,7 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
   const bestPostedAt = row.posted_at ?? row.first_seen_at;
   const postedAtIso = new Date(bestPostedAt * 1000).toISOString();
 
-  let salary: PublicSalary | null = null;
-  if (row.salary_min !== null && row.salary_period) {
-    salary = {
-      min: row.salary_min,
-      max: row.salary_max,
-      currency: row.salary_currency ?? "USD",
-      period: row.salary_period,
-      display: formatSalaryDisplay(row.salary_min, row.salary_period as "year" | "month" | "hour"),
-    };
-  }
+  const salary = buildPublicSalary(row);
 
   let jobDescription: JobDescriptionExtracted | null = null;
   if (row.job_description) {

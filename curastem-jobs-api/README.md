@@ -214,6 +214,15 @@ Jobs are ingested hourly from public ATS boards. Each source is a row in the `so
 | `ashby` | `GET jobs.ashbyhq.com/api/non-authenticated-open-application/...` | None — fully public |
 | `workday` | `POST {tenant}.myworkdayjobs.com/wday/cxs/{company}/{board}/jobs` | None — public board endpoint |
 | `smartrecruiters` | `GET api.smartrecruiters.com/v1/companies/{handle}/postings` | None — fully public |
+| `framer` | `GET` Framer CDN `searchIndex-*.json` (see `framer.ts`); `site_origin` query builds `/careers/...` URLs | None — fully public |
+| `easyapply` | Tenant `*.easyapply.co` index HTML + per-job `JobPosting` JSON-LD (see `easyapply.ts`) | None — fully public |
+| `metacareers` | `GET` official `jobsearch/sitemap.xml` + per-role `JobPosting` JSON-LD on `profile/job_details/{id}` (see `metacareers.ts`) | None — fully public |
+| `rippling` | `GET` `ats.rippling.com/{slug}/jobs` HTML — `__NEXT_DATA__` listing + per-job `apiData` (`jobPost`, `payRangeDetails`, `workLocations`, `department`; listing `locations` / `workplaceType`) (see `rippling.ts`) | None — fully public |
+| `catsone` | `GET` `{tenant}.catsone.com/careers/{dept}` listing HTML + per-job `JobPosting` JSON-LD and `window.__PRELOADED_STATE__` (`remoteType`, `category`, engagement `type`, salary range when set) (see `catsone.ts`) | None — fully public |
+| `oracle_ce` | List: `GET` `.../recruitingCEJobRequisitions` (`finder=findReqs`). Full HTML: `GET` `.../recruitingCEJobRequisitionDetails` (`finder=ById`). Apply URL is not in JSON — the CE job page (`/.../sites/{site}/job/{id}`) is the posting + apply entry point (see `oracle_ce.ts`) | None — fully public |
+| `brillio` | `GET` careers.brillio.com job listing HTML — regex parse of `job-details?job-id=` + title + location (see `brillio.ts`) | None — fully public |
+| `phenom` | `GET` locale `sitemap_index.xml` → job URLs; each page has `phApp.ddo.jobDetail.data.job` (description HTML, apply URL, etc.) (see `phenom.ts`) | None — fully public |
+| `jobvite` | `GET` `jobs.jobvite.com/{slug}/jobs` static HTML listing (title + location per row) + per-job `div.jv-job-detail-description` for full description (see `jobvite.ts`) | None — fully public |
 
 ### Adding a new source
 
@@ -247,7 +256,7 @@ VALUES (
 Two levels:
 
 1. **Exact match** — same `source_id` + `external_id` = update in place. No duplicate.
-2. **Cross-source match** — same normalized title + company slug across different sources. The higher-priority source wins (Greenhouse/Lever/Ashby > Workday > SmartRecruiters).
+2. **Cross-source match** — `dedup_key` = normalized title + `|` + company slug (`buildDedupKey`). If another source already has that key with **higher** `SOURCE_PRIORITY` (see `registry.ts`), the incoming row is skipped. If the incoming source is **higher** priority than existing rows with the same key, those lower-priority rows are **deleted** before upsert so the feed does not double-list the role. Equal priority keeps both rows. Use `company_aliases` when the same employer appears under different name spellings (e.g. `us-bank` → `us-bancorp`).
 
 ---
 

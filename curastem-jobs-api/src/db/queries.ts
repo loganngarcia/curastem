@@ -507,9 +507,9 @@ export async function upsertJob(
     posted_at,
   } = normalized;
 
-  const { normalizeLocation } = await import("../utils/normalize.ts");
-  const locNorm = normalizeLocation(locationRaw);
-  const locationsJson = locNorm ? JSON.stringify([locNorm]) : null;
+  const { normalizeLocationsList } = await import("../utils/normalize.ts");
+  const locs = normalizeLocationsList(locationRaw);
+  const locationsJson = locs && locs.length > 0 ? JSON.stringify(locs) : null;
 
   const existing = await db
     .prepare("SELECT id, description_raw FROM jobs WHERE source_id = ? AND external_id = ?")
@@ -634,34 +634,104 @@ export async function batchGetExistingJobs(
 }
 
 /**
- * Batch cross-source dedup check in a single D1 subrequest.
- * Returns a Set of dedup_keys that already exist from a different source.
+ * Batch cross-source dedup check.
+ *
+ * Returns dedup_keys that the **incoming** source should skip because another source
+ * already holds the same key with **strictly higher** priority.
+ * Equal priority → both rows may coexist. Lower-priority conflicts are cleared by
+ * {@link batchDeleteJobsSupersededByHigherPriority} immediately before upsert.
+ *
+ * `incomingPriority` is the caller's already-resolved priority number.
+ * `priorityOf` maps source_type strings (as stored in `jobs.source_name`) to their
+ * priority numbers — both are passed in from the runner so this layer has no
+ * dependency on the ingestion registry.
  */
-// D1 batch() request body limit is ~1MB. Each dedup-check statement is ~120 bytes,
-// so chunks of 1000 stay well under that (~120KB each).
-const DEDUP_CHUNK = 1000;
+// SQLite allows at most 999 bound parameters per statement.
+// IN() queries also bind one extra `source_id != ?` → cap at 998 keys per chunk.
+const DEDUP_CHUNK = 1000;   // for db.batch() paths (one param per statement)
+const SQL_IN_CHUNK = 998;   // for IN(?) paths with one extra bound param
 
 export async function batchCheckCrossSourceDups(
   db: D1Database,
-  checks: Array<{ dedupKey: string; sourceId: string }>
+  sourceId: string,
+  incomingPriority: number,
+  priorityOf: (sourceType: string) => number,
+  dedupKeys: string[]
 ): Promise<Set<string>> {
-  if (checks.length === 0) return new Set();
+  if (dedupKeys.length === 0) return new Set();
 
+  const uniqueKeys = [...new Set(dedupKeys)];
   const dupes = new Set<string>();
-  for (let i = 0; i < checks.length; i += DEDUP_CHUNK) {
-    const chunk = checks.slice(i, i + DEDUP_CHUNK);
-    const stmts = chunk.map(({ dedupKey, sourceId }) =>
-      db
-        .prepare("SELECT dedup_key FROM jobs WHERE dedup_key = ? AND source_id != ? LIMIT 1")
-        .bind(dedupKey, sourceId)
-    );
-    const results = await db.batch<{ dedup_key: string }>(stmts);
-    for (const r of results) {
-      const row = r.results?.[0];
-      if (row) dupes.add(row.dedup_key);
+
+  for (let i = 0; i < uniqueKeys.length; i += SQL_IN_CHUNK) {
+    const chunk = uniqueKeys.slice(i, i + SQL_IN_CHUNK);
+    const placeholders = chunk.map(() => "?").join(",");
+    const res = await db
+      .prepare(
+        `SELECT dedup_key, source_name FROM jobs WHERE dedup_key IN (${placeholders}) AND source_id != ?`
+      )
+      .bind(...chunk, sourceId)
+      .all<{ dedup_key: string; source_name: string }>();
+
+    // Track highest competing priority per key.
+    const maxPByKey = new Map<string, number>();
+    for (const row of res.results ?? []) {
+      const p = priorityOf(row.source_name);
+      const cur = maxPByKey.get(row.dedup_key) ?? -1;
+      if (p > cur) maxPByKey.set(row.dedup_key, p);
+    }
+    for (const key of chunk) {
+      const maxP = maxPByKey.get(key) ?? -1;
+      if (maxP > incomingPriority) dupes.add(key);
     }
   }
   return dupes;
+}
+
+/**
+ * Delete job rows from **other** sources that share a dedup_key with an incoming batch
+ * but have **lower** priority. Lets a higher-priority ingest replace listings previously
+ * stored from a lower-priority feed (e.g. Workday 80 supersedes Phenom 77).
+ * Equal or higher priority rows on other sources are left untouched.
+ *
+ * `incomingPriority` and `priorityOf` mirror the parameters of {@link batchCheckCrossSourceDups}.
+ * Stale Vectorize vectors for deleted job ids are not cleaned up (harmless for search).
+ */
+export async function batchDeleteJobsSupersededByHigherPriority(
+  db: D1Database,
+  incomingSourceId: string,
+  incomingPriority: number,
+  priorityOf: (sourceType: string) => number,
+  dedupKeys: string[]
+): Promise<number> {
+  if (dedupKeys.length === 0) return 0;
+
+  const uniqueKeys = [...new Set(dedupKeys)];
+  let deleted = 0;
+
+  for (let i = 0; i < uniqueKeys.length; i += SQL_IN_CHUNK) {
+    const chunk = uniqueKeys.slice(i, i + SQL_IN_CHUNK);
+    const placeholders = chunk.map(() => "?").join(",");
+    const res = await db
+      .prepare(
+        `SELECT id, source_name FROM jobs WHERE dedup_key IN (${placeholders}) AND source_id != ?`
+      )
+      .bind(...chunk, incomingSourceId)
+      .all<{ id: string; source_name: string }>();
+
+    const idsToDelete = (res.results ?? [])
+      .filter((row) => priorityOf(row.source_name) < incomingPriority)
+      .map((row) => row.id);
+
+    // Batch the DELETE statements in groups of DEDUP_CHUNK (pure id params, no extra param).
+    for (let j = 0; j < idsToDelete.length; j += DEDUP_CHUNK) {
+      const idChunk = idsToDelete.slice(j, j + DEDUP_CHUNK);
+      const delPh = idChunk.map(() => "?").join(",");
+      await db.prepare(`DELETE FROM jobs WHERE id IN (${delPh})`).bind(...idChunk).run();
+      deleted += idChunk.length;
+    }
+  }
+  return deleted;
 }
 
 /**
@@ -708,7 +778,7 @@ export async function batchUpsertJobs(
     embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END
   WHERE source_id = ? AND external_id = ?`;
 
-  const { normalizeLocation } = await import("../utils/normalize.ts");
+  const { normalizeLocationsList } = await import("../utils/normalize.ts");
   const { detectLanguage } = await import("../enrichment/language.ts");
 
   for (let i = 0; i < inputs.length; i++) {
@@ -718,8 +788,8 @@ export async function batchUpsertJobs(
       description_raw, salary_min, salary_max, salary_currency, salary_period, posted_at,
     } = normalized;
 
-    const locNorm = normalizeLocation(locationRaw);
-    const locationsJson = locNorm ? JSON.stringify([locNorm]) : null;
+    const locs = normalizeLocationsList(locationRaw);
+    const locationsJson = locs && locs.length > 0 ? JSON.stringify(locs) : null;
     const existing = existingMap.get(external_id);
 
     // D1 rejects `undefined` bindings with a cryptic type error — coerce every
@@ -801,13 +871,17 @@ export async function getJobsNeedingEmbedding(
   id: string;
   title: string;
   company_name: string;
-  location: string | null;
+  /** Full locations JSON array — preferred for embedding text (all cities). */
+  locations: string | null;
+  /** Primary location fallback when `locations` is null. */
+  location_primary: string | null;
   description_raw: string | null;
 }>> {
   const { results } = await db
     .prepare(`
       SELECT j.id, j.title, c.name AS company_name,
-             json_extract(j.locations, '$[0]') AS location,
+             j.locations,
+             json_extract(j.locations, '$[0]') AS location_primary,
              j.description_raw
       FROM jobs j
       JOIN companies c ON j.company_id = c.id
@@ -824,7 +898,8 @@ export async function getJobsNeedingEmbedding(
       id: string;
       title: string;
       company_name: string;
-      location: string | null;
+      locations: string | null;
+      location_primary: string | null;
       description_raw: string | null;
     }>();
   return results ?? [];

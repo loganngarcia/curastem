@@ -18,7 +18,7 @@
  * this module focused on the Gemini call itself.
  */
 
-import type { JobDescriptionExtracted } from "../types.ts";
+import type { JobDescriptionExtracted, PublicSalary, SalaryPeriod } from "../types.ts";
 import { htmlToText } from "../utils/normalize.ts";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -270,6 +270,43 @@ export function formatSalaryDisplay(amount: number, period: "year" | "month" | "
     maximumFractionDigits: 0,
   }).format(amount);
   return period === "year" ? formatted : `${formatted}/${period}`;
+}
+
+/**
+ * Build the public salary object from D1 columns — supports min-only, max-only,
+ * and min–max ranges when the ATS provides them.
+ */
+export function buildPublicSalary(row: {
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
+  salary_period: string | null;
+}): PublicSalary | null {
+  const p = row.salary_period;
+  if (p !== "year" && p !== "month" && p !== "hour") return null;
+  const period = p as SalaryPeriod;
+  const min = row.salary_min;
+  const max = row.salary_max;
+  if (min === null && max === null) return null;
+
+  const currency = row.salary_currency ?? "USD";
+  const nf = (n: number) =>
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(n);
+
+  let display: string;
+  if (min !== null && max !== null && max > min) {
+    display = `${nf(min)}–${nf(max)}${period === "year" ? "" : `/${period}`}`;
+  } else if (min !== null) {
+    display = formatSalaryDisplay(min, period);
+  } else {
+    display = `Up to ${nf(max!)}${period === "year" ? "" : `/${period}`}`;
+  }
+
+  return { min, max, currency, period, display };
 }
 
 /**

@@ -7201,21 +7201,11 @@ const ChatInput = React.memo(function ChatInput({
         const text = getEditableText(editableRef.current)
 
         // -----------------------------------------------------------------------
-        // Real-time censorship: apply sanitizeMessage() to the contenteditable
-        // DOM in-place so the user sees censored text immediately, AND so the
-        // HTML broadcast to the P2P partner via input-sync is already sanitized.
-        //
-        // WHY this is safe without cursor adjustment:
-        //   sanitizeMessage() is length-preserving — every matched pattern is
-        //   replaced with the exact same number of '*' characters. This means
-        //   each text node's character count stays the same, so the browser's
-        //   existing caret offset remains valid after the substitution.
-        //
-        // WHY we walk text nodes instead of setting innerHTML:
-        //   Overwriting innerHTML resets skill chip <span> elements. Walking
-        //   NodeFilter.SHOW_TEXT touches only the raw text in between chips.
+        // Real-time censorship: only active during P2P calls / waiting to join.
+        // In normal solo chat we leave the text untouched.
         // -----------------------------------------------------------------------
-        const sanitized = sanitizeMessage(text)
+        const isP2PContext = (status !== "idle" || !!role) && !isLiveMode
+        const sanitized = isP2PContext ? sanitizeMessage(text) : text
         if (sanitized !== text && editableRef.current) {
             // Save the caret offset BEFORE mutating the DOM.
             // Changing textNode.textContent — even with the same character count — triggers
@@ -12586,6 +12576,28 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 ) as string[]
                                 return parts.length ? parts.join(", ") : null
                             }
+                            /** Canonical API values like "501-1000", "10000+" — add thousands separators + " employees". */
+                            const fmtEmployeeCountRange = (raw: string) => {
+                                const commaNum = (part: string) => {
+                                    const n = parseInt(
+                                        part.replace(/,/g, ""),
+                                        10
+                                    )
+                                    if (Number.isNaN(n)) return part.trim()
+                                    return n.toLocaleString("en-US")
+                                }
+                                const s = raw.trim()
+                                if (s.endsWith("+")) {
+                                    return `${commaNum(s.slice(0, -1))}+ employees`
+                                }
+                                if (s.includes("-")) {
+                                    const [a, b] = s.split("-")
+                                    return `${commaNum(a)}-${commaNum(b)} employees`
+                                }
+                                const only = parseInt(s.replace(/,/g, ""), 10)
+                                if (only === 1) return "1 employee"
+                                return `${commaNum(s)} employees`
+                            }
                             const mapsSearchUrl = (q: string) =>
                                 mapsProvider === "apple"
                                     ? `https://maps.apple.com/?q=${encodeURIComponent(q)}`
@@ -12595,16 +12607,12 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 value: string
                                 maps?: boolean
                             }[] = [
-                                c.founded_year
-                                    ? {
-                                          label: "Founded",
-                                          value: String(c.founded_year),
-                                      }
-                                    : null,
                                 c.employee_count_range
                                     ? {
                                           label: "Company size",
-                                          value: c.employee_count_range,
+                                          value: fmtEmployeeCountRange(
+                                              c.employee_count_range
+                                          ),
                                       }
                                     : null,
                                 fmtHQ(c.headquarters)
@@ -12612,6 +12620,12 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                           label: "Headquarters",
                                           value: fmtHQ(c.headquarters)!,
                                           maps: true,
+                                      }
+                                    : null,
+                                c.founded_year
+                                    ? {
+                                          label: "Founded",
+                                          value: String(c.founded_year),
                                       }
                                     : null,
                                 labelField(INDUSTRY_LABELS, c.industry) &&
@@ -13989,6 +14003,10 @@ const ModalSheet = ({
                                 : "center",
                             overflow: "hidden",
                             ...(dragY ? outerSheetStyle : sheet),
+                            // Keep border radius on the outer so overflow:hidden clips to rounded corners
+                            ...(dragY && sheetBorderRadius != null
+                                ? { borderRadius: sheetBorderRadius }
+                                : {}),
                         }}
                         onClick={(e) => e.stopPropagation()}
                     >
@@ -19524,6 +19542,9 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
     const [isLiveMode, setIsLiveMode] = React.useState(false)
     const lastLiveUpdateRef = React.useRef(Date.now())
 
+    // True whenever the user is in or waiting for a P2P call — censoring is only active then.
+    const isP2PContext = (status !== "idle" || !!role) && !isLiveMode
+
     const wasInP2PRef = React.useRef(false)
     React.useEffect(() => {
         const inP2P = (status !== "idle" || !!role) && !isLiveMode
@@ -21248,6 +21269,18 @@ Do not include markdown formatting or explanations.`
 
     const [isYourStuffExpanded, setIsYourStuffExpanded] = React.useState(false)
     const [isYourStuffHovered, setIsYourStuffHovered] = React.useState(false)
+    const [isYourChatsExpanded, setIsYourChatsExpanded] = React.useState(() => {
+        try {
+            const saved = localStorage.getItem("sidebar_chats_expanded")
+            return saved === null ? true : saved === "true"
+        } catch {
+            return true
+        }
+    })
+    const [isYourChatsHovered, setIsYourChatsHovered] = React.useState(false)
+    React.useEffect(() => {
+        try { localStorage.setItem("sidebar_chats_expanded", String(isYourChatsExpanded)) } catch {}
+    }, [isYourChatsExpanded])
 
     React.useEffect(() => {
         if (!isSidebarOpen) {
@@ -28214,7 +28247,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
 
             // aiOverrideText lets callers show a friendly display message while
             // sending a more explicit instruction to the AI (e.g. "Create resume" button)
-            let textToSend = sanitizeMessage(aiOverrideText ?? textToCheck)
+            let textToSend = isP2PContext ? sanitizeMessage(aiOverrideText ?? textToCheck) : (aiOverrideText ?? textToCheck)
             // Inject selected skills context (Skills API) so the model can use them
             if (selectedSkills.length > 0) {
                 const skillContext = selectedSkills
@@ -29365,7 +29398,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             const aiText =
                 `Call create_resume immediately with a complete, tailored HTML resume.\n\n` +
                 contextParts.join("\n\n") +
-                `\n\nWrite every section in full — do not ask questions, do not call any other tools first.`
+                `\n\nWrite every section in full — do not ask questions, do not call any other tools first. The candidate is applying TO GET this job.`
 
             const orbitTimer = startResumeOrbitAnimation()
             const sentOk = await handleSendMessage(displayText, aiText)
@@ -29429,7 +29462,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     gradientBackground={overlayGradientBg}
                     value={inputText}
                     onChange={(e) => {
-                        const newValue = sanitizeMessage(e.target.value)
+                        const newValue = isP2PContext ? sanitizeMessage(e.target.value) : e.target.value
                         inputTextRef.current = newValue
                         setInputText(newValue)
                         if (
@@ -30164,9 +30197,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     hideGradient={true}
                                     value={inputText}
                                     onChange={(e) => {
-                                        const newValue = sanitizeMessage(
-                                            e.target.value
-                                        )
+                                        const newValue = isP2PContext ? sanitizeMessage(e.target.value) : e.target.value
                                         inputTextRef.current = newValue
                                         setInputText(newValue)
                                         if (
@@ -30575,7 +30606,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         }
                         value={inputText}
                         onChange={(e) => {
-                            const newValue = sanitizeMessage(e.target.value)
+                            const newValue = isP2PContext ? sanitizeMessage(e.target.value) : e.target.value
                             inputTextRef.current = newValue
                             setInputText(newValue)
                             const now = Date.now()
@@ -31782,6 +31813,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             left: 0,
                             bottom: 0,
                             background: themeColors.background,
+                            borderRadius: isMobileLayout
+                                ? "0 28px 28px 0"
+                                : 0,
                             overflow: "visible",
                             flexDirection: "column",
                             justifyContent: "flex-start",
@@ -31789,9 +31823,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             gap: 0,
                             display: "inline-flex",
                             zIndex: 10000,
-                            // On mobile, if closed, we want it offscreen but draggable?
-                            // Actually if it's offscreen (-260), we can't drag IT. We drag the main content.
-                            // But we need to be able to drag IT to close it.
                         }}
                         onPan={(event, info) => {
                             if (!isMobileLayout) return
@@ -32417,49 +32448,127 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     display: "flex",
                                 }}
                             >
-                                {savedChats.filter(
-                                    (chat) =>
-                                        !searchQuery ||
-                                        chat.title
-                                            .toLowerCase()
-                                            .includes(searchQuery.toLowerCase())
-                                ).length > 0 && (
-                                    <div
-                                        data-layer="Chat title"
-                                        className="ChatTitle"
-                                        style={{
-                                            alignSelf: "stretch",
-                                            paddingLeft: 10,
-                                            paddingRight: 10,
-                                            paddingTop: 8,
-                                            paddingBottom: 8,
-                                            borderRadius: 12,
-                                            justifyContent: "flex-start",
-                                            alignItems: "center",
-                                            gap: 8,
-                                            display: "inline-flex",
-                                        }}
-                                    >
+                                {(() => {
+                                    const visibleChats = savedChats.filter(
+                                        (chat) =>
+                                            !searchQuery ||
+                                            chatMatchesSidebarSearch(
+                                                chat,
+                                                searchQuery,
+                                                youName
+                                            )
+                                    )
+                                    const canCollapseChats =
+                                        visibleChats.length > 0
+                                    if (visibleChats.length === 0) return null
+                                    return (
                                         <div
-                                            data-layer="Your chats"
-                                            className="YourChats"
+                                            data-layer="Chat title"
+                                            className="ChatTitle"
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                if (canCollapseChats)
+                                                    setIsYourChatsExpanded(
+                                                        !isYourChatsExpanded
+                                                    )
+                                            }}
+                                            onMouseEnter={() =>
+                                                setIsYourChatsHovered(true)
+                                            }
+                                            onMouseLeave={() =>
+                                                setIsYourChatsHovered(false)
+                                            }
                                             style={{
-                                                justifyContent: "center",
-                                                display: "flex",
-                                                flexDirection: "column",
-                                                color: themeColors.text
-                                                    .secondary,
-                                                fontSize: 14,
-                                                fontFamily: "Inter",
-                                                fontWeight: "400",
-                                                lineHeight: "19.32px",
-                                                wordWrap: "break-word",
+                                                alignSelf: "stretch",
+                                                paddingLeft: 10,
+                                                paddingRight: 10,
+                                                paddingTop: 8,
+                                                paddingBottom: 8,
+                                                borderRadius: 12,
+                                                justifyContent: "flex-start",
+                                                alignItems: "center",
+                                                gap: 5,
+                                                display: "inline-flex",
+                                                cursor: canCollapseChats
+                                                    ? "pointer"
+                                                    : "default",
                                             }}
                                         >
-                                            Your chats
+                                            <div
+                                                data-layer="Your chats"
+                                                className="YourChats"
+                                                style={{
+                                                    justifyContent: "center",
+                                                    display: "flex",
+                                                    flexDirection: "column",
+                                                    color: themeColors.text
+                                                        .secondary,
+                                                    fontSize: 14,
+                                                    fontFamily: "Inter",
+                                                    fontWeight: "400",
+                                                    lineHeight: "19.32px",
+                                                    wordWrap: "break-word",
+                                                }}
+                                            >
+                                                Your chats
+                                            </div>
+                                            {/* Expand icon — show on hover when collapsed */}
+                                            {canCollapseChats &&
+                                                isYourChatsHovered &&
+                                                !isYourChatsExpanded && (
+                                                    <div data-svg-wrapper style={{ position: "relative", top: 2 }}>
+                                                        <svg
+                                                            width="6"
+                                                            height="10"
+                                                            viewBox="0 0 6 10"
+                                                            fill="none"
+                                                            xmlns="http://www.w3.org/2000/svg"
+                                                        >
+                                                            <path
+                                                                d="M0.601562 8.60001L4.60156 4.60001L0.601562 0.600006"
+                                                                stroke={
+                                                                    themeColors
+                                                                        .text
+                                                                        .secondary
+                                                                }
+                                                                strokeOpacity="1"
+                                                                strokeWidth="1.2"
+                                                                strokeLinecap="round"
+                                                                strokeLinejoin="round"
+                                                            />
+                                                        </svg>
+                                                    </div>
+                                                )}
+                                            {/* Collapse icon — show only on hover when expanded */}
+                                            {canCollapseChats &&
+                                                isYourChatsExpanded &&
+                                                isYourChatsHovered && (
+                                                    <div data-svg-wrapper style={{ position: "relative", top: 2 }}>
+                                                        <svg
+                                                            width="10"
+                                                            height="6"
+                                                            viewBox="0 0 10 6"
+                                                            fill="none"
+                                                            xmlns="http://www.w3.org/2000/svg"
+                                                        >
+                                                            <path
+                                                                d="M0.601562 0.600006L4.60156 4.60001L8.60156 0.600006"
+                                                                stroke={
+                                                                    themeColors
+                                                                        .text
+                                                                        .secondary
+                                                                }
+                                                                strokeOpacity="1"
+                                                                strokeWidth="1.2"
+                                                                strokeLinecap="round"
+                                                                strokeLinejoin="round"
+                                                            />
+                                                        </svg>
+                                                    </div>
+                                                )}
                                         </div>
-                                    </div>
-                                )}
+                                    )
+                                })()}
 
                                 {savedChats
                                     .filter(
@@ -32470,6 +32579,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                 searchQuery,
                                                 youName
                                             )
+                                    )
+                                    .slice(
+                                        0,
+                                        isYourChatsExpanded ? undefined : 0
                                     )
                                     .map((chat, chatIndex) => {
                                         // Calculate stuff items count for tabIndex offset
@@ -32839,6 +32952,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 top: 0,
                                 position: "absolute",
                                 background: themeColors.background,
+                                borderRadius: isMobileLayout
+                                    ? "0 28px 0 0"
+                                    : 0,
                                 flexDirection: "column",
                                 justifyContent: "flex-start",
                                 alignItems: "flex-start",

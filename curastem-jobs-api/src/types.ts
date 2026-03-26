@@ -203,7 +203,58 @@ export type SourceType =
    * Consider-powered VC job boards (white-label, e.g. jobs.a16z.com/jobs/{companySlug}).
    * base_url is the company listing page; the fetcher calls the board's /api-boards/search-jobs API.
    */
-  | "consider";
+  | "consider"
+  /**
+   * Jobright.ai native postings (Next.js `/_next/data/.../jobs/info/{id}.json`).
+   * `base_url` must include `jr_ingest_ids` (comma-separated job ids). See jobright.ts.
+   */
+  | "jobright"
+  /**
+   * Framer Search index JSON (CDN) for sites built on Framer. `base_url` is the
+   * `searchIndex-*.json` URL with `?site_origin=https://` for public job URLs. See framer.ts.
+   */
+  | "framer"
+  /**
+   * EasyApply tenant boards (HTML index + schema.org JobPosting JSON-LD per role).
+   * `base_url` is the tenant root, e.g. `https://{company}.easyapply.co/`. See easyapply.ts.
+   */
+  | "easyapply"
+  /**
+   * Meta careers — official `jobsearch/sitemap.xml` plus per-role `JobPosting` JSON-LD on static HTML.
+   * `base_url` is the sitemap URL (see metacareers.ts).
+   */
+  | "metacareers"
+  /**
+   * Rippling Recruiting public boards — Next.js `__NEXT_DATA__` on `ats.rippling.com/{slug}/jobs`.
+   * `base_url` is the board root (a single-job URL is normalized). See rippling.ts.
+   */
+  | "rippling"
+  /**
+   * CATS One career sites — department listing HTML + per-job `JobPosting` JSON-LD.
+   * `base_url` is `https://{tenant}.catsone.com/careers/{department}` (a job URL is normalized). See catsone.ts.
+   */
+  | "catsone"
+  /**
+   * Brillio WordPress careers site — HTML listing at `careers.brillio.com/job-listing/` (see brillio.ts).
+   */
+  | "brillio"
+  /**
+   * Phenom People career sites — locale `sitemap_index.xml` for job URLs; each job page embeds
+   * `phApp.ddo.jobDetail.data.job` (HTML description, apply URL). `base_url` is the locale root or a job URL under it (see phenom.ts).
+   */
+  | "phenom"
+  /**
+   * Jobvite career sites (`jobs.jobvite.com/{slug}/jobs`).
+   * Listing: static HTML `<tr>` rows — title + location per job, no pagination.
+   * Detail: full description from `div.jv-job-detail-description`. See jobvite.ts.
+   */
+  | "jobvite"
+  /**
+   * Oracle Fusion HCM Candidate Experience — public ADF REST `recruitingCEJobRequisitions`
+   * (`/hcmRestApi/resources/latest/...`). `base_url` is the CE sites URL with locale, e.g.
+   * `https://tenant.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001`. See oracle_ce.ts.
+   */
+  | "oracle_ce";
 
 export type EmploymentType =
   | "full_time"

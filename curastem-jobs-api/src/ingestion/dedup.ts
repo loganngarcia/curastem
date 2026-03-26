@@ -5,36 +5,34 @@
  *
  * 1. EXACT MATCH (primary, per-source)
  *    Detected by: source_id + external_id UNIQUE constraint in D1.
- *    Handled by: upsertJob in queries.ts — same record = update in place.
- *    This covers the normal case of re-ingesting the same source.
+ *    Handled by: batch upsert in queries.ts — same record = update in place.
  *
  * 2. CROSS-SOURCE MATCH (secondary, across sources)
- *    Detected by: dedup_key = lower(title) + "|" + company_slug
- *    Logic: If a job with the same dedup_key already exists from a
- *    higher-priority source, skip insertion of the lower-priority duplicate.
- *    This prevents the same role from appearing twice in results (e.g. a
- *    company's Greenhouse posting and a SmartRecruiters aggregated copy).
+ *    Detected by: dedup_key = lower(title) + "|" + company_slug (see buildDedupKey).
+ *    The batch path lives entirely in queries.ts:
+ *    - batchCheckCrossSourceDups — skip incoming rows when another source already
+ *      holds the same key with strictly higher SOURCE_PRIORITY.
+ *    - batchDeleteJobsSupersededByHigherPriority — before upsert, delete rows from
+ *      lower-priority sources that share a dedup_key so the higher-priority feed wins.
  *
- * Source priority is defined in registry.ts. Higher priority always wins.
- * Equal-priority sources are both kept (e.g. two different Greenhouse boards
- * for the same company but different regions — these are legitimately distinct).
+ *    Both functions accept a `priorityOf` callback rather than importing the registry
+ *    directly — keeps the DB layer free of ingestion-layer dependencies.
+ *
+ * Rules:
+ *   - Higher priority strictly wins (incoming priority > existing → supersede).
+ *   - Equal priority → both rows coexist (different boards for the same company are
+ *     legitimately distinct postings).
+ *   - Lower priority → skip incoming, leave existing untouched.
+ *
+ * Company name variants (e.g. "US Bancorp" vs "U.S. Bank") must resolve to the same
+ * canonical slug via company_aliases in migrate.ts, or dedup keys will not match.
  */
 
 import { getSourcePriority } from "./registry.ts";
 
-interface DedupCheckRow {
-  id: string;
-  source_name: string;
-}
-
 /**
- * Check whether a cross-source duplicate of higher or equal priority already
- * exists for the given dedup_key.
- *
- * Returns true if the incoming job should be SKIPPED (i.e. a better or equal
- * record already exists).
- *
- * Returns false if the job should be inserted/updated normally.
+ * Single-row ad-hoc check: true if the incoming job should be skipped.
+ * Production path uses the batch functions in queries.ts for efficiency.
  */
 export async function isCrossSourceDuplicate(
   db: D1Database,
@@ -42,21 +40,18 @@ export async function isCrossSourceDuplicate(
   incomingSourceType: string,
   incomingSourceId: string
 ): Promise<boolean> {
-  const existing = await db
+  const res = await db
     .prepare(
-      `SELECT id, source_name FROM jobs
-       WHERE dedup_key = ? AND source_id != ?
-       LIMIT 1`
+      `SELECT source_name FROM jobs WHERE dedup_key = ? AND source_id != ?`
     )
     .bind(dedupKey, incomingSourceId)
-    .first<DedupCheckRow>();
+    .all<{ source_name: string }>();
 
-  if (!existing) return false;
-
-  const existingPriority = getSourcePriority(existing.source_name);
-  const incomingPriority = getSourcePriority(incomingSourceType);
-
-  // Skip the incoming job if the existing one came from a higher-priority source.
-  // If priorities are equal, we keep both (they may be legitimately different postings).
-  return existingPriority > incomingPriority;
+  let maxP = -1;
+  for (const row of res.results ?? []) {
+    const p = getSourcePriority(row.source_name);
+    if (p > maxP) maxP = p;
+  }
+  if (maxP < 0) return false;
+  return maxP > getSourcePriority(incomingSourceType);
 }

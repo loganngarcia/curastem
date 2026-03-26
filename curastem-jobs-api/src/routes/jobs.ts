@@ -45,8 +45,8 @@
  */
 
 import { listJobs, listJobsByIds, listJobsNear, findCompanyByQuery, type ListJobsRow } from "../db/queries.ts";
-import { embedQuery, formatSalaryDisplay } from "../enrichment/ai.ts";
-import type { Env, PublicJob, PublicSalary } from "../types.ts";
+import { buildPublicSalary, embedQuery } from "../enrichment/ai.ts";
+import type { Env, PublicJob } from "../types.ts";
 import { jsonOk } from "../utils/errors.ts";
 import { authenticate, recordKeyUsage } from "../middleware/auth.ts";
 import { checkRateLimit } from "../middleware/rateLimit.ts";
@@ -101,16 +101,7 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
   const bestPostedAt = row.posted_at ?? row.first_seen_at;
   const postedAtIso = new Date(bestPostedAt * 1000).toISOString();
 
-  let salary: PublicSalary | null = null;
-  if (row.salary_min !== null && row.salary_period) {
-    salary = {
-      min: row.salary_min,
-      max: row.salary_max,
-      currency: row.salary_currency ?? "USD",
-      period: row.salary_period,
-      display: formatSalaryDisplay(row.salary_min, row.salary_period as "year" | "month" | "hour"),
-    };
-  }
+  const salary = buildPublicSalary(row);
 
   let locations: string[] | null = null;
   if (row.locations) {
