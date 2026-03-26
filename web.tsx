@@ -19633,17 +19633,12 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
                 const date = new Date()
                 const timeContext = `[System Update] Current Date: ${date.toLocaleDateString()}, Current Time: ${date.toLocaleTimeString()}`
 
-                // Send invisible context update to model via clientContent
+                // gemini-3.1-flash-live: clientContent is only for initial history seeding;
+                // mid-conversation text injections must use realtimeInput.
                 liveClientRef.current.send(
                     JSON.stringify({
-                        clientContent: {
-                            turns: [
-                                {
-                                    role: "user",
-                                    parts: [{ text: timeContext }],
-                                },
-                            ],
-                            turnComplete: true,
+                        realtimeInput: {
+                            text: timeContext,
                         },
                     })
                 )
@@ -19871,6 +19866,11 @@ Do not include markdown formatting or explanations.`
         }
         stopAllAudio()
         if (liveClientRef.current) {
+            if (liveClientRef.current.readyState === WebSocket.OPEN) {
+                liveClientRef.current.send(
+                    JSON.stringify({ realtimeInput: { audioStreamEnd: true } })
+                )
+            }
             liveClientRef.current.close()
             liveClientRef.current = null
         }
@@ -20183,12 +20183,11 @@ Do not include markdown formatting or explanations.`
         }
         haptic.medium()
 
-        // Use the exact model string that works in gemini.tsx
-        const liveModel = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+        const liveModel = "models/gemini-3.1-flash-live-preview"
         log(`Using Live Model: ${liveModel}`)
 
         try {
-            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${geminiApiKey}`
+            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${geminiApiKey}`
             const ws = new WebSocket(url)
             liveClientRef.current = ws
 
@@ -20206,7 +20205,7 @@ Do not include markdown formatting or explanations.`
                             generationConfig: {
                                 responseModalities: ["AUDIO"],
                                 thinkingConfig: {
-                                    thinkingBudget: 0,
+                                    thinkingLevel: "minimal",
                                 },
                                 speechConfig: {
                                     voiceConfig: {
@@ -20307,6 +20306,9 @@ Do not include markdown formatting or explanations.`
                             ],
                             inputAudioTranscription: {},
                             outputAudioTranscription: {},
+                            // Sliding-window compression removes the 2-min audio+video
+                            // session cap; sessions run until explicitly stopped.
+                            contextWindowCompression: { slidingWindow: {} },
                         },
                     })
                 )
@@ -20395,13 +20397,10 @@ Do not include markdown formatting or explanations.`
                                         ws.send(
                                             JSON.stringify({
                                                 realtimeInput: {
-                                                    mediaChunks: [
-                                                        {
-                                                            mimeType:
-                                                                "image/jpeg",
-                                                            data: b64,
-                                                        },
-                                                    ],
+                                                    video: {
+                                                        mimeType: "image/jpeg",
+                                                        data: b64,
+                                                    },
                                                 },
                                             })
                                         )
@@ -20419,13 +20418,10 @@ Do not include markdown formatting or explanations.`
                                         liveClientRef.current.send(
                                             JSON.stringify({
                                                 realtimeInput: {
-                                                    mediaChunks: [
-                                                        {
-                                                            mimeType:
-                                                                "image/jpeg",
-                                                            data: b64,
-                                                        },
-                                                    ],
+                                                    video: {
+                                                        mimeType: "image/jpeg",
+                                                        data: b64,
+                                                    },
                                                 },
                                             })
                                         )
@@ -20467,12 +20463,10 @@ Do not include markdown formatting or explanations.`
                             ws.send(
                                 JSON.stringify({
                                     realtimeInput: {
-                                        mediaChunks: [
-                                            {
-                                                mimeType: `audio/pcm;rate=${INPUT_TARGET_SAMPLE_RATE}`,
-                                                data: b64,
-                                            },
-                                        ],
+                                        audio: {
+                                            mimeType: `audio/pcm;rate=${INPUT_TARGET_SAMPLE_RATE}`,
+                                            data: b64,
+                                        },
                                     },
                                 })
                             )
