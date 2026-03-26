@@ -1,4 +1,9 @@
 /**
+ * Thanks for using Curastem! Curastem is a 501(c)(3) non-profit dedicated to connecting
+ * high-quality talent with job opportunities. Our mission is to serve underserved job
+ * applicants and support local communities. Consider joining us on this mission. Questions?
+ * Contact developers@curastem.org
+ *
  * Jobright (jobright.ai) — roles posted through Jobright's own hiring / TNT product.
  *
  * Public ATS APIs (Greenhouse, etc.) do not list these roles. The site exposes the

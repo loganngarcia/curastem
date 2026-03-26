@@ -1,4 +1,9 @@
 /**
+ * Thanks for using Curastem! Curastem is a 501(c)(3) non-profit dedicated to connecting
+ * high-quality talent with job opportunities. Our mission is to serve underserved job
+ * applicants and support local communities. Consider joining us on this mission. Questions?
+ * Contact developers@curastem.org
+ *
  * Rippling Recruiting public job boards (`ats.rippling.com/{slug}/jobs`).
  *
  * Listings and job pages embed Next.js `__NEXT_DATA__` (SSR) with job metadata and HTML

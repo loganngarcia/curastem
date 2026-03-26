@@ -541,6 +541,13 @@ const SEED_SOURCES: SeedSource[] = [
     company_handle: "usbank_phenom",
     base_url: "https://careers.usbank.com/global/en/job/UBNAGLOBAL20260004582EXTERNALENGLOBAL/Digital-Product-Manager",
   },
+  {
+    id: "ph-intuitive",
+    name: "Intuitive (Phenom)",
+    source_type: "phenom",
+    company_handle: "intuitive",
+    base_url: "https://careers.intuitive.com/en/jobs/744000112787247/JOB212842/product-manager-portfolio-operations-da-vinci-sp/",
+  },
 
   // ─── Jobvite (static listing HTML + per-job description) ─────────────────
   // Board root: `jobs.jobvite.com/{slug}/jobs`. Single-job URLs are normalized.
@@ -626,6 +633,7 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "wd-cocacola",    name: "Coca-Cola",        source_type: "workday", company_handle: "coke",           base_url: "https://coke.wd1.myworkdayjobs.com/wday/cxs/coke/coca-cola-careers/jobs" },
   { id: "wd-pg",          name: "Procter & Gamble", source_type: "workday", company_handle: "pg",             base_url: "https://pg.wd5.myworkdayjobs.com/wday/cxs/pg/1000/jobs" },
   { id: "wd-mondelez",    name: "Mondelez",         source_type: "workday", company_handle: "mdlz",           base_url: "https://mdlz.wd3.myworkdayjobs.com/wday/cxs/mdlz/external/jobs" },
+  { id: "wd-motorolasolutions", name: "Motorola Solutions", source_type: "workday", company_handle: "motorolasolutions", base_url: "https://motorolasolutions.wd5.myworkdayjobs.com/wday/cxs/motorolasolutions/Careers/jobs" },
   { id: "wd-tyson",       name: "Tyson Foods",      source_type: "workday", company_handle: "tysonfoods",     base_url: "https://tysonfoods.wd5.myworkdayjobs.com/wday/cxs/tysonfoods/TSN/jobs" },
   { id: "wd-nike",        name: "Nike",             source_type: "workday", company_handle: "nike",           base_url: "https://nike.wd1.myworkdayjobs.com/wday/cxs/nike/nke/jobs" },
   { id: "wd-gap",         name: "Gap Inc",          source_type: "workday", company_handle: "gapinc",         base_url: "https://gapinc.wd1.myworkdayjobs.com/wday/cxs/gapinc/GAPINC/jobs" },

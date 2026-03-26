@@ -1,4 +1,9 @@
 /**
+ * Thanks for using Curastem! Curastem is a 501(c)(3) non-profit dedicated to connecting
+ * high-quality talent with job opportunities. Our mission is to serve underserved job
+ * applicants and support local communities. Consider joining us on this mission. Questions?
+ * Contact developers@curastem.org
+ *
  * Meta careers — public jobsearch sitemap + per-role HTML with schema.org JobPosting JSON-LD.
  *
  * `base_url` is the sitemap URL (default below). The official sitemap is listed in

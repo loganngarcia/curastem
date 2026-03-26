@@ -1,4 +1,9 @@
 /**
+ * Thanks for using Curastem! Curastem is a 501(c)(3) non-profit dedicated to connecting
+ * high-quality talent with job opportunities. Our mission is to serve underserved job
+ * applicants and support local communities. Consider joining us on this mission. Questions?
+ * Contact developers@curastem.org
+ *
  * Framer-hosted sites — job pages are listed in the same search index JSON the
  * published site uses for Framer Search (static CDN URL, no headless browser).
  *

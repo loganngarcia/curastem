@@ -1,4 +1,9 @@
 /**
+ * Thanks for using Curastem! Curastem is a 501(c)(3) non-profit dedicated to connecting
+ * high-quality talent with job opportunities. Our mission is to serve underserved job
+ * applicants and support local communities. Consider joining us on this mission. Questions?
+ * Contact developers@curastem.org
+ *
  * Browser source fetcher — for career pages whose jobs only appear after JS runs.
  *
  * Intercepts embedded Ashby/Greenhouse/Lever widget API calls for structured data.
