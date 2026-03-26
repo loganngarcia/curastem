@@ -69,6 +69,7 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "gh-coinbase",   name: "Coinbase (Greenhouse)",   source_type: "greenhouse", company_handle: "coinbase",   base_url: "https://boards-api.greenhouse.io/v1/boards/coinbase/jobs" },
   { id: "gh-chime",      name: "Chime (Greenhouse)",      source_type: "greenhouse", company_handle: "chime",      base_url: "https://boards-api.greenhouse.io/v1/boards/chime/jobs" },
   { id: "gh-coursera",   name: "Coursera (Greenhouse)",   source_type: "greenhouse", company_handle: "coursera",   base_url: "https://boards-api.greenhouse.io/v1/boards/coursera/jobs" },
+  { id: "gh-cresta",     name: "Cresta (Greenhouse)",     source_type: "greenhouse", company_handle: "cresta",     base_url: "https://boards-api.greenhouse.io/v1/boards/cresta/jobs" },
   { id: "gh-disney",   name: "Disney (Greenhouse)",   source_type: "greenhouse", company_handle: "disney",   base_url: "https://boards-api.greenhouse.io/v1/boards/disney/jobs" },
   { id: "gh-coupang",  name: "Coupang (Greenhouse)",  source_type: "greenhouse", company_handle: "coupang",  base_url: "https://boards-api.greenhouse.io/v1/boards/coupang/jobs" },
   { id: "gh-sweetgreen",    name: "Sweetgreen (Greenhouse)",    source_type: "greenhouse", company_handle: "sweetgreen",    base_url: "https://boards-api.greenhouse.io/v1/boards/sweetgreen/jobs" },
@@ -106,6 +107,7 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "gh-roblox",     name: "Roblox (Greenhouse)",      source_type: "greenhouse", company_handle: "roblox",     base_url: "https://boards-api.greenhouse.io/v1/boards/roblox/jobs" },
   { id: "gh-intercom",   name: "Intercom (Greenhouse)",    source_type: "greenhouse", company_handle: "intercom",   base_url: "https://boards-api.greenhouse.io/v1/boards/intercom/jobs" },
   { id: "gh-twilio",     name: "Twilio (Greenhouse)",      source_type: "greenhouse", company_handle: "twilio",     base_url: "https://boards-api.greenhouse.io/v1/boards/twilio/jobs" },
+  { id: "gh-uberfreight", name: "Uber Freight (Greenhouse)", source_type: "greenhouse", company_handle: "uberfreight", base_url: "https://boards-api.greenhouse.io/v1/boards/uberfreight/jobs" },
   { id: "gh-lyft",    name: "Lyft (Greenhouse)",    source_type: "greenhouse", company_handle: "lyft",         base_url: "https://boards-api.greenhouse.io/v1/boards/lyft/jobs" },
   { id: "gh-doordashusa", name: "DoorDash (Greenhouse)", source_type: "greenhouse", company_handle: "doordashusa", base_url: "https://boards-api.greenhouse.io/v1/boards/doordashusa/jobs" },
   { id: "gh-reddit",  name: "Reddit (Greenhouse)",  source_type: "greenhouse", company_handle: "reddit",       base_url: "https://boards-api.greenhouse.io/v1/boards/reddit/jobs" },
@@ -189,6 +191,9 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "gh-shopmy",           name: "ShopMy (Greenhouse)",            source_type: "greenhouse", company_handle: "shopmy",           base_url: "https://boards-api.greenhouse.io/v1/boards/shopmy/jobs" },
   { id: "gh-hebbia",           name: "Hebbia (Greenhouse)",            source_type: "greenhouse", company_handle: "hebbia",           base_url: "https://boards-api.greenhouse.io/v1/boards/hebbia/jobs" },
   { id: "gh-hextechnologies",  name: "Hex (Greenhouse)",               source_type: "greenhouse", company_handle: "hextechnologies",  base_url: "https://boards-api.greenhouse.io/v1/boards/hextechnologies/jobs" },
+  { id: "gh-hiddenlayer",      name: "HiddenLayer (Greenhouse)",       source_type: "greenhouse", company_handle: "hiddenlayer",      base_url: "https://boards-api.greenhouse.io/v1/boards/hiddenlayer/jobs" },
+  { id: "gh-imagentechnologies", name: "Imagen Technologies (Greenhouse)", source_type: "greenhouse", company_handle: "imagentechnologies", base_url: "https://boards-api.greenhouse.io/v1/boards/imagentechnologies/jobs" },
+  { id: "gh-medrio",           name: "Medrio (Greenhouse)",            source_type: "greenhouse", company_handle: "medrio",           base_url: "https://boards-api.greenhouse.io/v1/boards/medrio/jobs" },
   { id: "gh-armada",           name: "Armada (Greenhouse)",            source_type: "greenhouse", company_handle: "armada",           base_url: "https://boards-api.greenhouse.io/v1/boards/armada/jobs" },
   { id: "gh-arenaai",          name: "Arena AI (Greenhouse)",          source_type: "greenhouse", company_handle: "arenaai",          base_url: "https://boards-api.greenhouse.io/v1/boards/arenaai/jobs" },
   { id: "gh-contextualai",     name: "Contextual AI (Greenhouse)",     source_type: "greenhouse", company_handle: "contextualai",     base_url: "https://boards-api.greenhouse.io/v1/boards/contextualai/jobs" },
@@ -228,6 +233,9 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "gh-foratravel",  name: "Fora Travel (Greenhouse)", source_type: "greenhouse", company_handle: "foratravel", base_url: "https://boards-api.greenhouse.io/v1/boards/foratravel/jobs" },
   { id: "gh-forbes",      name: "Forbes (Greenhouse)",      source_type: "greenhouse", company_handle: "forbes",     base_url: "https://boards-api.greenhouse.io/v1/boards/forbes/jobs" },
   { id: "gh-xai",         name: "xAI (Greenhouse)",        source_type: "greenhouse", company_handle: "xai",         base_url: "https://boards-api.greenhouse.io/v1/boards/xai/jobs" },
+  { id: "gh-samsara",     name: "Samsara (Greenhouse)",    source_type: "greenhouse", company_handle: "samsara",     base_url: "https://boards-api.greenhouse.io/v1/boards/samsara/jobs" },
+  // Board id `abodo` (legacy domain) — ApartmentIQ / getapartmentiq.com
+  { id: "gh-apartmentiq", name: "ApartmentIQ (Greenhouse)", source_type: "greenhouse", company_handle: "apartmentiq", base_url: "https://boards-api.greenhouse.io/v1/boards/abodo/jobs" },
 
   // ─── Ashby ────────────────────────────────────────────────────────────
   // Public posting API: https://api.ashbyhq.com/posting-api/job-board/{handle}
@@ -435,6 +443,8 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "ab-counsel",          name: "Counsel Health (Ashby)",         source_type: "ashby", company_handle: "counsel",          base_url: "https://api.ashbyhq.com/posting-api/job-board/counsel?includeCompensation=true" },
   { id: "ab-triggerdev",       name: "Trigger.dev (Ashby)",            source_type: "ashby", company_handle: "triggerdev",       base_url: "https://api.ashbyhq.com/posting-api/job-board/triggerdev?includeCompensation=true" },
   { id: "ab-writer",           name: "Writer (Ashby)",                 source_type: "ashby", company_handle: "writer",           base_url: "https://api.ashbyhq.com/posting-api/job-board/writer?includeCompensation=true" },
+  // wordly.ai careers embed — board slug is "Wordly.ai Careers" (not "wordly")
+  { id: "ab-wordly",           name: "Wordly (Ashby)",                 source_type: "ashby", company_handle: "Wordly.ai Careers", base_url: "https://api.ashbyhq.com/posting-api/job-board/Wordly.ai%20Careers?includeCompensation=true" },
   { id: "ab-wordware",         name: "Wordware (Ashby)",               source_type: "ashby", company_handle: "wordware.ai",      base_url: "https://api.ashbyhq.com/posting-api/job-board/wordware.ai?includeCompensation=true" },
   { id: "ab-backflip",         name: "Backflip AI (Ashby)",            source_type: "ashby", company_handle: "backflip",         base_url: "https://api.ashbyhq.com/posting-api/job-board/backflip?includeCompensation=true" },
   { id: "ab-twelve-labs",      name: "TwelveLabs (Ashby)",             source_type: "ashby", company_handle: "twelve-labs",      base_url: "https://api.ashbyhq.com/posting-api/job-board/twelve-labs?includeCompensation=true" },
@@ -446,6 +456,7 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "ab-rothys",      name: "Rothy's",          source_type: "ashby", company_handle: "rothys",           base_url: "https://api.ashbyhq.com/posting-api/job-board/rothys" },
   { id: "ab-anyscale",    name: "Anyscale (Ashby)", source_type: "ashby", company_handle: "anyscale",         base_url: "https://api.ashbyhq.com/posting-api/job-board/anyscale?includeCompensation=true" },
   { id: "ab-airops",      name: "AirOps (Ashby)",   source_type: "ashby", company_handle: "airops",           base_url: "https://api.ashbyhq.com/posting-api/job-board/airops?includeCompensation=true" },
+  { id: "ab-airapps",     name: "AirApps (Ashby)",  source_type: "ashby", company_handle: "airapps",          base_url: "https://api.ashbyhq.com/posting-api/job-board/airapps?includeCompensation=true" },
   { id: "ab-cohere",      name: "Cohere (Ashby)",   source_type: "ashby", company_handle: "cohere",           base_url: "https://api.ashbyhq.com/posting-api/job-board/cohere?includeCompensation=true" },
   { id: "ab-hadrian-automation", name: "Hadrian Automation (Ashby)", source_type: "ashby", company_handle: "hadrian-automation", base_url: "https://api.ashbyhq.com/posting-api/job-board/hadrian-automation?includeCompensation=true" },
   { id: "ab-haus",             name: "Haus Analytics (Ashby)",         source_type: "ashby", company_handle: "haus",             base_url: "https://api.ashbyhq.com/posting-api/job-board/haus?includeCompensation=true" },
@@ -463,6 +474,10 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "ab-puzzle-io",   name: "Puzzle.io (Ashby)", source_type: "ashby", company_handle: "puzzle.io",   base_url: "https://api.ashbyhq.com/posting-api/job-board/puzzle.io?includeCompensation=true" },
   { id: "ab-squint-ai",   name: "Squint (Ashby)",   source_type: "ashby", company_handle: "squint.ai",    base_url: "https://api.ashbyhq.com/posting-api/job-board/squint.ai?includeCompensation=true" },
   { id: "ab-spellbook-legal", name: "Spellbook (Ashby)", source_type: "ashby", company_handle: "spellbook.legal", base_url: "https://api.ashbyhq.com/posting-api/job-board/spellbook.legal?includeCompensation=true" },
+  { id: "ab-atticus",    name: "Atticus (Ashby)",    source_type: "ashby", company_handle: "atticus",    base_url: "https://api.ashbyhq.com/posting-api/job-board/atticus?includeCompensation=true" },
+  { id: "ab-avida",       name: "AVIDA (Ashby)",      source_type: "ashby", company_handle: "avida",      base_url: "https://api.ashbyhq.com/posting-api/job-board/avida?includeCompensation=true" },
+  // Public Ashby board — may be empty between hiring waves (still the canonical listing endpoint).
+  { id: "ab-crunchbase",  name: "Crunchbase (Ashby)", source_type: "ashby", company_handle: "crunchbase", base_url: "https://api.ashbyhq.com/posting-api/job-board/crunchbase?includeCompensation=true" },
 
   // ─── Lever ────────────────────────────────────────────────────────────
   // Public posting API: https://api.lever.co/v0/postings/{handle}
@@ -476,6 +491,7 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "lv-tryjeeves",        name: "Jeeves (Lever)",                source_type: "lever", company_handle: "tryjeeves",              base_url: "https://api.lever.co/v0/postings/tryjeeves" },
   { id: "lv-truv",             name: "Truv (Lever)",                   source_type: "lever", company_handle: "truv",                   base_url: "https://api.lever.co/v0/postings/truv" },
   { id: "lv-moonpay",          name: "MoonPay (Lever)",                source_type: "lever", company_handle: "moonpay",                base_url: "https://api.lever.co/v0/postings/moonpay" },
+  { id: "lv-onit",             name: "Onit (Lever)",                   source_type: "lever", company_handle: "onit",                   base_url: "https://api.lever.co/v0/postings/onit" },
   { id: "lv-spotify",          name: "Spotify (Lever)",                source_type: "lever", company_handle: "spotify",                base_url: "https://api.lever.co/v0/postings/spotify" },
   { id: "lv-encord",       name: "Encord (Lever)",       source_type: "lever", company_handle: "CordTechnologies",        base_url: "https://api.lever.co/v0/postings/CordTechnologies" },        // legal entity name
   { id: "lv-unstructured", name: "Unstructured (Lever)", source_type: "lever", company_handle: "unstructuredtechnologies", base_url: "https://api.lever.co/v0/postings/unstructuredtechnologies" }, // handle: unstructuredtechnologies
@@ -494,6 +510,46 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "wb-insperity",   name: "Insperity",                 source_type: "workable", company_handle: "insperity",       base_url: "https://apply.workable.com/api/v1/widget/accounts/insperity" },
   { id: "wb-huggingface", name: "Hugging Face (Workable)",   source_type: "workable", company_handle: "huggingface",     base_url: "https://apply.workable.com/api/v1/widget/accounts/huggingface" },
   { id: "wb-curology",    name: "Curology (Workable)",       source_type: "workable", company_handle: "curology",        base_url: "https://apply.workable.com/api/v1/widget/accounts/curology" },
+
+  // ─── Jobright (native) ────────────────────────────────────────────────
+  // Next.js data route per job id; buildId scraped from homepage. Append ids to
+  // jr_ingest_ids when new roles go live. apply_url = public /jobs/info/{id} page.
+  { id: "jr-jobright-ai", name: "Jobright.ai (Jobright)", source_type: "jobright", company_handle: "jobright", base_url: "https://jobright.ai/?jr_ingest_ids=b2b_1770933708185_265,b2b_1770934904391_331,b2b_1770935515039_172,b2b_1770936109040_2,b2b_1770936743518_149,external_1749849277195_529,698ff2610cc8ea15f1da8a40" },
+
+  // ─── Framer (search index JSON) ───────────────────────────────────────
+  // Public searchIndex URL from page <meta name="framer-search-index"> + site_origin for job links.
+  { id: "framer-nace", name: "Nace.AI (Framer)", source_type: "framer", company_handle: "nace", base_url: "https://framerusercontent.com/sites/5su6r99XrpKioK6gULASMV/searchIndex-FTk17CTt6776.json?site_origin=https%3A%2F%2Fnace.ai" },
+
+  // ─── EasyApply (HTML + JSON-LD) ─────────────────────────────────────────
+  { id: "ea-snaplii", name: "Snaplii (EasyApply)", source_type: "easyapply", company_handle: "snaplii", base_url: "https://snaplii.easyapply.co/" },
+
+  // ─── Rippling (Next.js __NEXT_DATA__) ─────────────────────────────────
+  // Board root: listing + pagination; per-job page has full description HTML.
+  { id: "rp-patientnow", name: "PatientNow (Rippling)", source_type: "rippling", company_handle: "patientnow", base_url: "https://ats.rippling.com/patientnow/jobs" },
+  { id: "rp-vouch-inc", name: "Vouch (Rippling)", source_type: "rippling", company_handle: "vouch-inc", base_url: "https://ats.rippling.com/vouch-inc/jobs" },
+  { id: "rp-partnerco", name: "PartnerCo (Rippling)", source_type: "rippling", company_handle: "partnerco", base_url: "https://ats.rippling.com/partnerco/jobs" },
+
+  // ─── Brillio (WordPress listing HTML — see brillio.ts) ───────────────────
+  { id: "br-brillio", name: "Brillio (Careers)", source_type: "brillio", company_handle: "brillio", base_url: "https://careers.brillio.com/job-listing/" },
+
+  // ─── Phenom (sitemap + phApp.ddo job payload) ───────────────────────────
+  // Locale root; single-job URLs are normalized. Same employer may also use Workday (`wd-usbank`).
+  {
+    id: "ph-usbank",
+    name: "U.S. Bank (Phenom)",
+    source_type: "phenom",
+    company_handle: "usbank_phenom",
+    base_url: "https://careers.usbank.com/global/en/job/UBNAGLOBAL20260004582EXTERNALENGLOBAL/Digital-Product-Manager",
+  },
+
+  // ─── Jobvite (static listing HTML + per-job description) ─────────────────
+  // Board root: `jobs.jobvite.com/{slug}/jobs`. Single-job URLs are normalized.
+  { id: "jv-legalzoom", name: "LegalZoom (Jobvite)", source_type: "jobvite", company_handle: "legalzoom", base_url: "https://jobs.jobvite.com/legalzoom/jobs" },
+  { id: "jv-ninjaone", name: "NinjaOne (Jobvite)", source_type: "jobvite", company_handle: "ninjaone", base_url: "https://jobs.jobvite.com/ninjaone/jobs" },
+
+  // ─── CATS One (HTML + JobPosting JSON-LD) ─────────────────────────────
+  // Department listing; per-job pages embed schema.org JobPosting.
+  { id: "cats-sphereinc", name: "Sphere Partners (CATS)", source_type: "catsone", company_handle: "sphereinc", base_url: "https://sphereinc.catsone.com/careers/90438-General" },
 
   // ─── Personio ─────────────────────────────────────────────────────────
   // Public XML feed: https://{handle}.jobs.personio.com/api/xml/?language=en
@@ -774,6 +830,7 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "gh-matic", name: "Matic (Greenhouse)", source_type: "greenhouse", company_handle: "matic", base_url: "https://boards-api.greenhouse.io/v1/boards/matic/jobs" },
   { id: "gh-modern-animal", name: "Modern Animal (Greenhouse)", source_type: "greenhouse", company_handle: "modernanimal", base_url: "https://boards-api.greenhouse.io/v1/boards/modernanimal/jobs" },
   { id: "lv-collate", name: "Collate (Lever)", source_type: "lever", company_handle: "collate", base_url: "https://api.lever.co/v0/postings/collate" },
+  { id: "lv-corbalt", name: "Corbalt (Lever)", source_type: "lever", company_handle: "corbalt", base_url: "https://api.lever.co/v0/postings/corbalt" },
   { id: "lv-eternal", name: "Eternal (Lever)", source_type: "lever", company_handle: "eternal", base_url: "https://api.lever.co/v0/postings/eternal" },
   { id: "lv-loop", name: "Loop (Returns) (Lever)", source_type: "lever", company_handle: "loopreturns", base_url: "https://api.lever.co/v0/postings/loopreturns" },
   { id: "lv-paradigm-health", name: "Paradigm Health (Lever)", source_type: "lever", company_handle: "paradigm-health", base_url: "https://api.lever.co/v0/postings/paradigm-health" },
@@ -1029,6 +1086,8 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "rss-he-faculty",  name: "HigherEdJobs (Faculty)",          source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=26" },
   { id: "rss-he-admin",    name: "HigherEdJobs (Administrative)",   source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=24" },
   { id: "rss-he-it",       name: "HigherEdJobs (IT)",               source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=160" },
+  // SAP SuccessFactors career site — `sitemap.xml` is a Google Jobs RSS with `g:location`, `g:id`, `g:employer`.
+  { id: "rss-foundever",   name: "Foundever (RSS)",                 source_type: "rss", company_handle: "foundever",    base_url: "https://jobs.foundever.com/sitemap.xml" },
 
   // ─── Sector job boards — roadmap ────────────────────────────────────────
   // These boards have no public API or RSS. Custom fetchers would require
@@ -1056,12 +1115,14 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "br-lululemon",   name: "Lululemon (Browser)",       source_type: "browser", company_handle: "lululemon",       base_url: "https://careers.lululemon.com/en_US/careers" },
   { id: "br-pepsico",     name: "PepsiCo (Browser)",         source_type: "browser", company_handle: "pepsico",         base_url: "https://www.pepsicojobs.com/main/jobs" },
   { id: "br-jpmorgan",    name: "JPMorgan Chase (Browser)",  source_type: "browser", company_handle: "jpmorgan",        base_url: "https://careers.jpmorgan.com/us/en/jobs" },
+  // Supersedes br-jpmorgan — Oracle CE public REST (see oracle_ce.ts); site from Candidate Experience URL
+  { id: "oc-jpmorgan",    name: "JPMorgan Chase (Oracle CE)", source_type: "oracle_ce", company_handle: "jpmorgan",   base_url: "https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
   { id: "br-bofa",        name: "Bank of America (Browser)", source_type: "browser", company_handle: "bankofamerica",   base_url: "https://careers.bankofamerica.com/en-us/job-search" },
   { id: "br-morganstanley",name:"Morgan Stanley (Browser)",  source_type: "browser", company_handle: "morganstanley",   base_url: "https://jobs.morganstanley.com/search" },
   { id: "br-volvogroup",  name: "Volvo Group (Browser)",     source_type: "browser", company_handle: "volvogroup",      base_url: "https://jobs.volvogroup.com/" },
   { id: "br-microsoft",   name: "Microsoft (Browser)",       source_type: "browser", company_handle: "microsoft",       base_url: "https://apply.careers.microsoft.com/careers" },
   { id: "br-google",      name: "Google (Browser)",          source_type: "browser", company_handle: "google",          base_url: "https://careers.google.com/jobs/results" },
-  { id: "br-meta",        name: "Meta (Browser)",            source_type: "browser", company_handle: "meta",            base_url: "https://www.metacareers.com/jobs" },
+  { id: "mc-meta", name: "Meta (Metacareers)", source_type: "metacareers", company_handle: "meta", base_url: "https://www.metacareers.com/jobsearch/sitemap.xml" },
   { id: "br-ibm",         name: "IBM (Browser)",             source_type: "browser", company_handle: "ibm",             base_url: "https://www.ibm.com/careers/search" },
   { id: "br-oracle",      name: "Oracle (Browser)",          source_type: "browser", company_handle: "oracle",          base_url: "https://careers.oracle.com/jobs" },
   { id: "br-bestbuy",     name: "Best Buy (Browser)",        source_type: "browser", company_handle: "bestbuy",         base_url: "https://jobs.bestbuy.com/bby/jobs" },
@@ -1371,6 +1432,8 @@ const COMPANY_ALIASES: Array<{ alias: string; canonical: string }> = [
   { alias: "leona-health",           canonical: "leona" },
   // Mesh (me.sh) was Clay Earth; some feeds still use the old name
   { alias: "clay-earth",             canonical: "mesh" },
+  // U.S. Bank: Workday seed uses "US Bancorp" (us-bancorp); Phenom uses "U.S. Bank" (us-bank)
+  { alias: "us-bank",                canonical: "us-bancorp" },
 ];
 
 const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
@@ -1410,7 +1473,6 @@ const DISABLED_SOURCE_IDS = [
   "br-adp",           // Disabled — wd-adp pending correct site name
   "br-qualcomm",      // Disabled — wd-qualcomm pending correct site name
   "br-ibm",           // Disabled — wd-ibm pending correct site name
-  "br-meta",          // Disabled — wd-meta pending correct site name
   "br-bofa",          // Disabled — wd-bofa pending correct site name
   "br-fedex",         // Disabled — wd-fedex pending correct site name
   "br-clay",          // clay.earth careers DOM listed nav as jobs; use ab-claylabs (Ashby) only
@@ -1419,7 +1481,7 @@ const DISABLED_SOURCE_IDS = [
   "wd-bestbuy", "wd-pepsico", "wd-amex", "wd-volvogroup", "wd-progressive",
   "wd-adp", "wd-qualcomm", "wd-ibm", "wd-meta", "wd-bofa", "wd-fedex",
   // Browser sources with no viable public API
-  "br-jpmorgan",      // Oracle Cloud HCM — no fetcher; jpmc.fa.oraclecloud.com
+  "br-jpmorgan",      // Superseded by oc-jpmorgan (oracle_ce)
   "br-kroger",        // Oracle Cloud HCM — no fetcher; krogerfamilycareers.com
   "br-hilton",        // Taleo — no fetcher
   "br-marriott",      // Oracle Cloud HCM — no fetcher
@@ -1462,6 +1524,9 @@ export async function seedSources(db: D1Database): Promise<void> {
   for (const id of DISABLED_SOURCE_IDS) {
     await db.prepare("UPDATE sources SET enabled = 0 WHERE id = ?").bind(id).run();
   }
+
+  // Meta: browser source superseded by metacareers (sitemap + JSON-LD)
+  await db.prepare("UPDATE sources SET enabled = 0 WHERE id = 'br-meta'").run();
 
   // Seed company aliases (INSERT OR IGNORE — safe to re-run)
   const aliasStmt = db.prepare(

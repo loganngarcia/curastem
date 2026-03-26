@@ -12576,6 +12576,28 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 ) as string[]
                                 return parts.length ? parts.join(", ") : null
                             }
+                            /** Canonical API values like "501-1000", "10000+" — add thousands separators + " employees". */
+                            const fmtEmployeeCountRange = (raw: string) => {
+                                const commaNum = (part: string) => {
+                                    const n = parseInt(
+                                        part.replace(/,/g, ""),
+                                        10
+                                    )
+                                    if (Number.isNaN(n)) return part.trim()
+                                    return n.toLocaleString("en-US")
+                                }
+                                const s = raw.trim()
+                                if (s.endsWith("+")) {
+                                    return `${commaNum(s.slice(0, -1))}+ employees`
+                                }
+                                if (s.includes("-")) {
+                                    const [a, b] = s.split("-")
+                                    return `${commaNum(a)}-${commaNum(b)} employees`
+                                }
+                                const only = parseInt(s.replace(/,/g, ""), 10)
+                                if (only === 1) return "1 employee"
+                                return `${commaNum(s)} employees`
+                            }
                             const mapsSearchUrl = (q: string) =>
                                 mapsProvider === "apple"
                                     ? `https://maps.apple.com/?q=${encodeURIComponent(q)}`
@@ -12585,16 +12607,12 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 value: string
                                 maps?: boolean
                             }[] = [
-                                c.founded_year
-                                    ? {
-                                          label: "Founded",
-                                          value: String(c.founded_year),
-                                      }
-                                    : null,
                                 c.employee_count_range
                                     ? {
                                           label: "Company size",
-                                          value: c.employee_count_range,
+                                          value: fmtEmployeeCountRange(
+                                              c.employee_count_range
+                                          ),
                                       }
                                     : null,
                                 fmtHQ(c.headquarters)
@@ -12602,6 +12620,12 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                           label: "Headquarters",
                                           value: fmtHQ(c.headquarters)!,
                                           maps: true,
+                                      }
+                                    : null,
+                                c.founded_year
+                                    ? {
+                                          label: "Founded",
+                                          value: String(c.founded_year),
                                       }
                                     : null,
                                 labelField(INDUSTRY_LABELS, c.industry) &&
@@ -13979,6 +14003,10 @@ const ModalSheet = ({
                                 : "center",
                             overflow: "hidden",
                             ...(dragY ? outerSheetStyle : sheet),
+                            // Keep border radius on the outer so overflow:hidden clips to rounded corners
+                            ...(dragY && sheetBorderRadius != null
+                                ? { borderRadius: sheetBorderRadius }
+                                : {}),
                         }}
                         onClick={(e) => e.stopPropagation()}
                     >

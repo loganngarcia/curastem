@@ -2,8 +2,12 @@
  * Generic RSS job board fetcher.
  *
  * Job boards that expose RSS feeds (e.g. HigherEdJobs) can be ingested without
- * scraping. Standard RSS 2.0 format is supported. Company name is extracted
- * from title or description when possible; otherwise the source name is used.
+ * scraping. Standard RSS 2.0 format is supported. Google Jobs extensions
+ * (`g:id`, `g:location`, `g:employer`) are read when present — used by SAP
+ * SuccessFactors career sites whose `sitemap.xml` is a job RSS feed.
+ *
+ * Company name is taken from `g:employer` when present; otherwise extracted
+ * from title or description; otherwise the source name is used.
  *
  * Uses regex parsing instead of DOMParser — Workers runtime lacks DOMParser.
  *
@@ -21,7 +25,7 @@ import {
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 
-/** Extract tag content from XML string; handles CDATA. */
+/** Extract tag content from XML string; handles CDATA. `tag` may include a namespace (e.g. `g:location`). */
 function getTagContent(xml: string, tag: string): string | null {
   const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
   const match = xml.match(regex);
@@ -30,6 +34,17 @@ function getTagContent(xml: string, tag: string): string | null {
   const cdataMatch = content.match(/^<!\[CDATA\[([\s\S]*)\]\]>$/);
   if (cdataMatch) content = cdataMatch[1];
   return content || null;
+}
+
+function decodeXmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
 }
 
 /**
@@ -66,10 +81,22 @@ function parseItem(itemXml: string, sourceName: string): NormalizedJob | null {
   if (!link) return null;
 
   const description = getTagContent(itemXml, "description");
-  const externalId = getTagContent(itemXml, "guid");
+  const guid = getTagContent(itemXml, "guid");
   const pubDate = getTagContent(itemXml, "pubDate");
 
-  const companyName = extractCompany(title, description, sourceName);
+  // Google Jobs RSS extensions (e.g. Foundever / SAP SuccessFactors career sites)
+  const gId = getTagContent(itemXml, "g:id");
+  const gLocation = getTagContent(itemXml, "g:location");
+  const gEmployer = getTagContent(itemXml, "g:employer");
+
+  const externalId = gId ?? guid ?? link;
+  const locationRaw = gLocation ?? null;
+  const location =
+    normalizeLocation(locationRaw ?? "") ?? normalizeLocation(description ?? "");
+
+  const companyName = gEmployer
+    ? decodeXmlEntities(gEmployer).replace(/\u00ae/g, "").trim()
+    : extractCompany(title, description, sourceName);
   const salary = parseSalary(description);
 
   let postedAt: number | null = null;
@@ -79,9 +106,9 @@ function parseItem(itemXml: string, sourceName: string): NormalizedJob | null {
   }
 
   return {
-    external_id: externalId ?? link,
+    external_id: externalId,
     title,
-    location: normalizeLocation(description ?? ""),
+    location,
     employment_type: normalizeEmploymentType(null),
     workplace_type: normalizeWorkplaceType(null, description ?? undefined),
     apply_url: link,

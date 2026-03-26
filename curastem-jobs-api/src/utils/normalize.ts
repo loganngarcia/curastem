@@ -2929,6 +2929,54 @@ export function normalizeLocation(raw: string | null | undefined): string | null
   return cleaned || null;
 }
 
+/**
+ * Split multi-location strings (same delimiters as {@link normalizeLocation}) and
+ * normalize each segment. Dedupes case-insensitively while preserving order.
+ * Used at ingest so `jobs.locations` JSON can list every city (e.g. Meta JSON-LD).
+ */
+export function normalizeLocationsList(raw: string | null | undefined): string[] | null {
+  if (!raw?.trim()) return null;
+  const segments = raw.split(/\s*[•\/|;]\s*/).map((s) => s.trim()).filter(Boolean);
+  if (segments.length === 0) return null;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const seg of segments) {
+    const n = normalizeLocation(seg);
+    if (n && !seen.has(n.toLowerCase())) {
+      seen.add(n.toLowerCase());
+      out.push(n);
+    }
+  }
+  return out.length ? out : null;
+}
+
+/** Primary city for geocoding — first normalized segment, or full-string fallback. */
+export function primaryNormalizedLocation(raw: string | null | undefined): string | null {
+  const list = normalizeLocationsList(raw);
+  if (list != null && list.length > 0) return list[0];
+  return normalizeLocation(raw);
+}
+
+/** Text passed to embedding API: all cities when multi-location, else single normalized string. */
+export function locationsRawToEmbedString(raw: string | null | undefined): string | null {
+  const list = normalizeLocationsList(raw);
+  if (list != null && list.length > 0) return list.join("; ");
+  return normalizeLocation(raw);
+}
+
+/** Join stored locations JSON for embedding text so vectors reflect every listed city. */
+export function locationsJsonToEmbedString(locationsJson: string | null): string | null {
+  if (!locationsJson) return null;
+  try {
+    const arr = JSON.parse(locationsJson) as unknown;
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    const strs = arr.filter((x): x is string => typeof x === "string" && Boolean(x.trim()));
+    return strs.length ? strs.join("; ") : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Date parsing
 // ─────────────────────────────────────────────────────────────────────────────

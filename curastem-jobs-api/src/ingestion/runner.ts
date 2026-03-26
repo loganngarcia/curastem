@@ -18,15 +18,39 @@
  * All source failures are isolated — one bad source never blocks others.
  */
 
-import { batchCheckCrossSourceDups, batchGetExistingJobs, batchMarkJobsEmbedded, batchSetLanguage, batchUpsertJobs, getJobsNeedingEmbedding, getJobsNeedingLanguageDetection, getLocationsNeedingGeocode, getSourceById, listEnabledSources, resolveCompanySlug, updateJobsWithCoords, updateSourceFetchResult, upsertCompany } from "../db/queries.ts";
+import {
+  batchCheckCrossSourceDups,
+  batchDeleteJobsSupersededByHigherPriority,
+  batchGetExistingJobs,
+  batchMarkJobsEmbedded,
+  batchSetLanguage,
+  batchUpsertJobs,
+  getJobsNeedingEmbedding,
+  getJobsNeedingLanguageDetection,
+  getLocationsNeedingGeocode,
+  getSourceById,
+  listEnabledSources,
+  resolveCompanySlug,
+  updateJobsWithCoords,
+  updateSourceFetchResult,
+  upsertCompany,
+} from "../db/queries.ts";
 import { backfillConsiderDescriptions } from "../enrichment/consider-descriptions.ts";
 import { embedJob } from "../enrichment/ai.ts";
 import { runCompanyEnrichment, runExaEnrichment } from "../enrichment/company.ts";
 import { runCompanyWebsiteProbeBatch } from "../enrichment/websiteProbe.ts";
-import { getFetcher } from "./registry.ts";
+import { getFetcher, getSourcePriority } from "./registry.ts";
 import { geocode } from "../utils/geocode.ts";
 import type { Env, IngestionResult, SourceRow } from "../types.ts";
-import { buildDedupKey, buildJobId, normalizeLocation, slugify, uuidv4 } from "../utils/normalize.ts";
+import {
+  buildDedupKey,
+  buildJobId,
+  locationsJsonToEmbedString,
+  locationsRawToEmbedString,
+  primaryNormalizedLocation,
+  slugify,
+  uuidv4,
+} from "../utils/normalize.ts";
 import { logger } from "../utils/logger.ts";
 
 /**
@@ -146,12 +170,19 @@ async function processSource(
     });
   }
 
-  // ── Phase 3: Batch cross-source dedup check — 1 D1 subrequest total ───────
+  // ── Phase 3: Cross-source dedup ───────────────────────────────────────────
+  // Resolve priority once; pass a resolver callback so queries.ts stays free
+  // of any dependency on the ingestion registry.
+  const incomingPriority = getSourcePriority(source.source_type);
+
   let dupSet: Set<string>;
   try {
     dupSet = await batchCheckCrossSourceDups(
       db,
-      jobMetas.map(({ dedupKey }) => ({ dedupKey, sourceId: source.id }))
+      source.id,
+      incomingPriority,
+      getSourcePriority,
+      jobMetas.map((m) => m.dedupKey)
     );
   } catch (err) {
     logger.warn("dedup_check_failed", { source_id: source.id, error: String(err) });
@@ -162,6 +193,22 @@ async function processSource(
     if (dupSet.has(dedupKey)) { result.deduplicated++; return false; }
     return true;
   });
+
+  // ── Phase 3b: Drop lower-priority rows so this source can own the dedup_key ─
+  try {
+    const superseded = await batchDeleteJobsSupersededByHigherPriority(
+      db,
+      source.id,
+      incomingPriority,
+      getSourcePriority,
+      nonDupMetas.map((m) => m.dedupKey)
+    );
+    if (superseded > 0) {
+      logger.info("dedup_superseded_lower_priority", { source_id: source.id, deleted: superseded });
+    }
+  } catch (err) {
+    logger.warn("dedup_supersede_failed", { source_id: source.id, error: String(err) });
+  }
 
   // ── Phase 4: Batch check existing jobs — 1 D1 subrequest total ────────────
   let existingMap: Map<string, { id: string; description_raw: string | null }>;
@@ -181,7 +228,7 @@ async function processSource(
   const INLINE_GEOCODE_CAP = 50;
   const uniqueLocations = [...new Set(
     nonDupMetas
-      .map((m) => normalizeLocation(m.normalized.location))
+      .map((m) => primaryNormalizedLocation(m.normalized.location))
       .filter((l): l is string => Boolean(l?.trim()))
   )].slice(0, INLINE_GEOCODE_CAP);
   const locationToCoords = new Map<string, { lat: number; lng: number }>();
@@ -199,7 +246,7 @@ async function processSource(
 
   // ── Phase 5: Batch INSERT new + UPDATE existing — 2 D1 subrequests total ──
   const upsertInputs = nonDupMetas.map(({ jobId, companyId, dedupKey, normalized }) => {
-    const normLoc = normalizeLocation(normalized.location);
+    const normLoc = primaryNormalizedLocation(normalized.location);
     const coords = normLoc ? locationToCoords.get(normLoc) : null;
     return {
       id:           jobId,
@@ -253,7 +300,7 @@ async function processSource(
           env.GEMINI_API_KEY,
           normalized.title,
           normalized.company_name,
-          normalized.location,
+          locationsRawToEmbedString(normalized.location),
           normalized.description_raw
         );
         pendingVectors.push({ id: jobId, values: vector });
@@ -341,11 +388,12 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
 
   for (const job of jobs) {
     try {
+      const locText = locationsJsonToEmbedString(job.locations) ?? job.location_primary;
       const values = await embedJob(
         env.GEMINI_API_KEY,
         job.title,
         job.company_name,
-        job.location,
+        locText,
         job.description_raw
       );
       vectors.push({ id: job.id, values });

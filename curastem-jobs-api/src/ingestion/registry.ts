@@ -29,6 +29,16 @@ import { rssFetcher } from "./sources/rss.ts";
 import { usajobsFetcher } from "./sources/usajobs.ts";
 import { saashrFetcher } from "./sources/saashr.ts";
 import { considerFetcher } from "./sources/consider.ts";
+import { jobrightFetcher } from "./sources/jobright.ts";
+import { framerFetcher } from "./sources/framer.ts";
+import { easyapplyFetcher } from "./sources/easyapply.ts";
+import { metacareersFetcher } from "./sources/metacareers.ts";
+import { ripplingFetcher } from "./sources/rippling.ts";
+import { catsoneFetcher } from "./sources/catsone.ts";
+import { oracleCeFetcher } from "./sources/oracle_ce.ts";
+import { brillioFetcher } from "./sources/brillio.ts";
+import { phenomFetcher } from "./sources/phenom.ts";
+import { jobviteFetcher } from "./sources/jobvite.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -48,6 +58,16 @@ const REGISTRY: Record<SourceType, JobSource> = {
   usajobs: usajobsFetcher,
   saashr: saashrFetcher,
   consider: considerFetcher,
+  jobright: jobrightFetcher,
+  framer: framerFetcher,
+  easyapply: easyapplyFetcher,
+  metacareers: metacareersFetcher,
+  rippling: ripplingFetcher,
+  catsone: catsoneFetcher,
+  oracle_ce: oracleCeFetcher,
+  brillio: brillioFetcher,
+  phenom: phenomFetcher,
+  jobvite: jobviteFetcher,
 };
 
 /**
@@ -94,6 +114,26 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   saashr: 100,
   // VC portfolio boards (Consider) — structured API but syndicated listings
   consider: 68,
+  // Jobright-native listings (structured Next.js payload; id list is manually curated)
+  jobright: 58,
+  // Framer search index (static JSON; same content as the live marketing site)
+  framer: 84,
+  // EasyApply JSON-LD on static HTML (tenant-hosted apply flows)
+  easyapply: 78,
+  // Meta official sitemap + JSON-LD (same trust model as EasyApply)
+  metacareers: 78,
+  // Rippling board SSR payloads (same trust model as EasyApply / Meta JSON-LD)
+  rippling: 78,
+  // CATS One static HTML + JSON-LD (same trust model as EasyApply)
+  catsone: 78,
+  // Employer Oracle FA career site — same trust as browser; structured REST from their tenant
+  oracle_ce: 86,
+  // WordPress HTML listing — structured parse, no third-party ATS
+  brillio: 72,
+  // Phenom SSR — sitemap discovery + embedded `phApp.ddo` job payload (apply often redirects to Workday)
+  phenom: 77,
+  // Jobvite static HTML listing + per-job description (employer's own ATS — high trust)
+  jobvite: 100,
 };
 
 export function getSourcePriority(sourceType: string): number {
