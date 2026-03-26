@@ -319,6 +319,8 @@ interface ChatSession {
     messages: Message[]
     notes: string
     docType?: "doc" | "resume" | "cover_letter"
+    /** Job company when doc is resume/cover letter — used for sidebar title and exports. */
+    docCompany?: string
     whiteboard: any
     app?: { code: string; mode: "editor" | "player" }
     isPinned?: boolean
@@ -3582,6 +3584,47 @@ function buildCoverLetterDownloadStem(
     if (nameStem) return `${nameStem}_cover_letter`
     if (companyStem) return `${companyStem}_cover_letter`
     return "cover_letter"
+}
+
+/** Left sidebar label for resume/cover letter: "Company Resume Name" / "Company Cover Letter Name". */
+function buildResumeCoverSidebarTitle(
+    docType: "resume" | "cover_letter",
+    company: string | undefined,
+    personName: string | undefined
+): string {
+    const toTitleCase = (s: string) =>
+        s.replace(/\b\w/g, (c) => c.toUpperCase())
+    const kind = docType === "resume" ? "Resume" : "Cover Letter"
+    const co = toTitleCase((company || "").trim())
+    const name = toTitleCase((personName || "").trim())
+    const parts: string[] = []
+    if (co) parts.push(co)
+    parts.push(kind)
+    if (name) parts.push(name)
+    return parts.join(" ")
+}
+
+function chatMatchesSidebarSearch(
+    chat: ChatSession,
+    query: string,
+    profileName: string
+): boolean {
+    const q = query.trim().toLowerCase()
+    if (!q) return true
+    if (chat.title.toLowerCase().includes(q)) return true
+    if (
+        (chat.docType === "resume" || chat.docType === "cover_letter") &&
+        buildResumeCoverSidebarTitle(
+            chat.docType,
+            chat.docCompany,
+            profileName
+        )
+            .toLowerCase()
+            .includes(q)
+    ) {
+        return true
+    }
+    return false
 }
 
 const DocEditor = React.memo(function DocEditor({
@@ -10348,6 +10391,12 @@ interface HomepageJob {
         crunchbase_url?: string | null
         huggingface_url?: string | null
         facebook_url?: string | null
+        employee_count_range?: string | null
+        founded_year?: number | null
+        headquarters?: { address: string | null; city: string | null; country: string | null } | null
+        industry?: string | null
+        company_type?: string | null
+        total_funding_usd?: number | null
     }
     posted_at: string | null
     apply_url: string
@@ -11750,6 +11799,21 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         if (url && typeof window !== "undefined") window.open(url, "_blank")
     }
 
+    /** HQ links: Apple Maps on iOS / macOS Safari-class UAs; Google elsewhere. */
+    const [mapsProvider, setMapsProvider] = React.useState<"apple" | "google">(
+        "google"
+    )
+    React.useEffect(() => {
+        if (typeof navigator === "undefined") return
+        const ua = navigator.userAgent
+        const appleUA =
+            /iPhone|iPad|iPod/i.test(ua) ||
+            /Macintosh/i.test(ua) ||
+            (typeof navigator.platform === "string" &&
+                navigator.platform.includes("Mac"))
+        setMapsProvider(appleUA ? "apple" : "google")
+    }, [])
+
     const effectiveSummary = job.job_summary || detailSummary
     const effectiveCompanyDesc = job.company.description || detailCompanyDesc
 
@@ -12284,6 +12348,19 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 </div>
                             </div>
                         </div>
+                        {effectiveCompanyDesc ? (
+                            <div
+                                style={{
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    fontFamily: "Inter",
+                                    fontWeight: 400,
+                                    lineHeight: "21px",
+                                }}
+                            >
+                                {effectiveCompanyDesc}
+                            </div>
+                        ) : null}
                         {(job.company.website_url ||
                             job.company.linkedin_url ||
                             job.company.huggingface_url ||
@@ -12431,19 +12508,214 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 )}
                             </div>
                         )}
-                        {effectiveCompanyDesc ? (
-                            <div
-                                style={{
-                                    color: themeColors.text.primary,
-                                    fontSize: 14,
-                                    fontFamily: "Inter",
-                                    fontWeight: 400,
-                                    lineHeight: "21px",
-                                }}
-                            >
-                                {effectiveCompanyDesc}
-                            </div>
-                        ) : null}
+                        {(() => {
+                            const c = job.company
+                            const INDUSTRY_LABELS: Record<string, string> = {
+                                software: "Software",
+                                ai_ml: "AI / ML",
+                                fintech: "Fintech",
+                                healthtech: "Health & Biotech",
+                                edtech: "Education",
+                                ecommerce: "E-Commerce",
+                                retail: "Retail",
+                                food_beverage: "Food & Beverage",
+                                automotive: "Automotive",
+                                construction: "Construction",
+                                hospitality: "Hospitality & Travel",
+                                media: "Media & Entertainment",
+                                cybersecurity: "Cybersecurity",
+                                hardware: "Hardware & Electronics",
+                                aerospace: "Aerospace & Defense",
+                                energy: "Energy & Utilities",
+                                logistics: "Logistics & Transportation",
+                                real_estate: "Real Estate",
+                                consulting: "Consulting",
+                                government: "Government",
+                                nonprofit: "Nonprofit",
+                                gaming: "Gaming",
+                                legal: "Legal",
+                                manufacturing: "Manufacturing",
+                                agriculture: "Agriculture",
+                                other: "Other",
+                            }
+                            const COMPANY_TYPE_LABELS: Record<string, string> = {
+                                startup: "Startup",
+                                enterprise: "Enterprise",
+                                public_company: "Public Company",
+                                agency: "Agency",
+                                nonprofit: "Nonprofit",
+                                government: "Government",
+                                university: "University",
+                                other: "Other",
+                            }
+                            const labelField = (
+                                map: Record<string, string>,
+                                val: string | null | undefined
+                            ) => {
+                                if (!val) return null
+                                const key = val.trim().toLowerCase()
+                                return (
+                                    map[key] ??
+                                    val
+                                        .trim()
+                                        .replace(/_/g, " ")
+                                        .replace(/\b\w/g, (c) =>
+                                            c.toUpperCase()
+                                        )
+                                )
+                            }
+                            const fmtFundingPretty = (
+                                n: number | null | undefined
+                            ) => {
+                                if (n == null || n <= 0) return null
+                                if (n >= 1_000_000_000)
+                                    return `$${+(n / 1_000_000_000).toFixed(1)}B`
+                                if (n >= 1_000_000)
+                                    return `$${+(n / 1_000_000).toFixed(0)}M`
+                                if (n >= 1_000)
+                                    return `$${+(n / 1_000).toFixed(0)}K`
+                                return `$${n}`
+                            }
+                            /** Prefer street address alone — API often duplicates city/country in address + city + country. */
+                            const fmtHQ = (hq: typeof c.headquarters) => {
+                                if (!hq) return null
+                                const addr = hq.address?.trim()
+                                if (addr) return addr
+                                const parts = [hq.city?.trim(), hq.country?.trim()].filter(
+                                    Boolean
+                                ) as string[]
+                                return parts.length ? parts.join(", ") : null
+                            }
+                            const mapsSearchUrl = (q: string) =>
+                                mapsProvider === "apple"
+                                    ? `https://maps.apple.com/?q=${encodeURIComponent(q)}`
+                                    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`
+                            const rows: {
+                                label: string
+                                value: string
+                                maps?: boolean
+                            }[] = [
+                                c.founded_year
+                                    ? {
+                                          label: "Founded",
+                                          value: String(c.founded_year),
+                                      }
+                                    : null,
+                                c.employee_count_range
+                                    ? {
+                                          label: "Company size",
+                                          value: c.employee_count_range,
+                                      }
+                                    : null,
+                                fmtHQ(c.headquarters)
+                                    ? {
+                                          label: "Headquarters",
+                                          value: fmtHQ(c.headquarters)!,
+                                          maps: true,
+                                      }
+                                    : null,
+                                labelField(INDUSTRY_LABELS, c.industry) &&
+                                c.industry !== "other"
+                                    ? {
+                                          label: "Industry",
+                                          value: labelField(
+                                              INDUSTRY_LABELS,
+                                              c.industry
+                                          )!,
+                                      }
+                                    : null,
+                                labelField(COMPANY_TYPE_LABELS, c.company_type) &&
+                                c.company_type !== "enterprise" &&
+                                c.company_type !== "other"
+                                    ? {
+                                          label: "Type",
+                                          value: labelField(
+                                              COMPANY_TYPE_LABELS,
+                                              c.company_type
+                                          )!,
+                                      }
+                                    : null,
+                                fmtFundingPretty(c.total_funding_usd) &&
+                                c.company_type === "startup"
+                                    ? {
+                                          label: "Total funding",
+                                          value: fmtFundingPretty(
+                                              c.total_funding_usd
+                                          )!,
+                                      }
+                                    : null,
+                            ].filter(Boolean) as {
+                                label: string
+                                value: string
+                                maps?: boolean
+                            }[]
+                            if (!rows.length) return null
+                            return (
+                                <div
+                                    style={{
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: 16,
+                                    }}
+                                >
+                                    {rows.map(({ label, value, maps }) => (
+                                        <div
+                                            key={label}
+                                            style={{
+                                                display: "flex",
+                                                flexDirection: "column",
+                                                gap: 2,
+                                            }}
+                                        >
+                                            <span
+                                                style={{
+                                                    color: themeColors.text
+                                                        .primary,
+                                                    fontSize: 14,
+                                                    fontFamily: "Inter",
+                                                    fontWeight: 600,
+                                                    lineHeight: "21px",
+                                                }}
+                                            >
+                                                {label}
+                                            </span>
+                                            {maps ? (
+                                                <a
+                                                    href={mapsSearchUrl(value)}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    style={{
+                                                        color: themeColors.text
+                                                            .primary,
+                                                        fontSize: 14,
+                                                        fontFamily: "Inter",
+                                                        fontWeight: 400,
+                                                        lineHeight: "21px",
+                                                        cursor: "pointer",
+                                                        textDecoration: "none",
+                                                    }}
+                                                >
+                                                    {value}
+                                                </a>
+                                            ) : (
+                                                <span
+                                                    style={{
+                                                        color: themeColors.text
+                                                            .primary,
+                                                        fontSize: 14,
+                                                        fontFamily: "Inter",
+                                                        fontWeight: 400,
+                                                        lineHeight: "21px",
+                                                    }}
+                                                >
+                                                    {value}
+                                                </span>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )
+                        })()}
                     </div>
                 </>
             ) : null}
@@ -12572,6 +12844,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         [swipeMode, colW, trackX, onSwipeCycleJob]
     )
 
+    const bottomPad = isMobile ? "140px" : "48px"
     const colStyle = {
         flexShrink: 0,
         width: colW,
@@ -12579,7 +12852,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         overflowY: "auto" as const,
         // Don't clip x — the negative-margin CTA bleed row needs to paint outside column padding.
         overflowX: "visible" as const,
-        padding: "24px 24px 48px",
+        padding: `24px 24px ${bottomPad}`,
         boxSizing: "border-box" as const,
         touchAction: "pan-y" as const,
     }
@@ -12838,7 +13111,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                             flex: 1,
                             minHeight: 0,
                             overflowY: "auto",
-                            padding: "24px 24px 48px",
+                            padding: `24px 24px ${bottomPad}`,
                         }}
                         {...(isMobile ? { "data-pull-scroll": "1" } : {})}
                     >
@@ -12857,6 +13130,26 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         </div>
     )
 })
+
+/**
+ * Return up to `limit` jobs with at most one per company.
+ * If unique companies don't fill `limit`, backfill with remaining duplicates.
+ */
+function dedupeByCompany(jobs: HomepageJob[], limit: number): HomepageJob[] {
+    const seen = new Set<string>()
+    const unique: HomepageJob[] = []
+    const dupes: HomepageJob[] = []
+    for (const j of jobs) {
+        const key = j.company.name.trim().toLowerCase()
+        if (!seen.has(key)) {
+            seen.add(key)
+            unique.push(j)
+        } else {
+            dupes.push(j)
+        }
+    }
+    return [...unique, ...dupes].slice(0, limit)
+}
 
 const HomepageJobs = React.memo(function HomepageJobs({
     jobsApiUrl,
@@ -12935,17 +13228,21 @@ const HomepageJobs = React.memo(function HomepageJobs({
         const picksPromise = api(`q=${encodeURIComponent(primaryQuery)}`).then(
             (picks) => {
                 if (cancelled) return []
-                setNextJobs(picks.slice(0, 3))
-                if (picks.length >= 6) {
-                    setTopJobs(picks.slice(3, 6))
+                const dedupedPicks = dedupeByCompany(picks, 6)
+                setNextJobs(dedupedPicks.slice(0, 3))
+                if (dedupedPicks.length >= 6) {
+                    setTopJobs(dedupedPicks.slice(3, 6))
                     setLoadingPicks(false)
                 } else {
-                    // Fewer than 6 picks — pull fallback results to fill the top row.
+                    // Fewer than 6 deduped picks — pull fallback results to fill the top row.
                     getFallback().then((fallback) => {
                         if (cancelled) return
-                        if (picks.length === 0)
-                            setNextJobs(fallback.slice(0, 3))
-                        setTopJobs(fallback.slice(0, 3))
+                        const deduped = dedupeByCompany(
+                            [...picks, ...fallback],
+                            6
+                        )
+                        setNextJobs(deduped.slice(0, 3))
+                        setTopJobs(deduped.slice(3, 6))
                         setLoadingPicks(false)
                     })
                 }
@@ -12977,14 +13274,15 @@ const HomepageJobs = React.memo(function HomepageJobs({
 
         const nearPromise = Promise.all([picksPromise, geoPromise]).then(
             async ([picks, { lat, lng }]) => {
-                const next3 = picks.slice(0, 3)
-                // Use fallback results for top row only if already fetched (picks < 6 path above).
                 const fallback = fallbackPromise ? await fallbackPromise : []
-                const top3 =
-                    picks.length >= 6 ? picks.slice(3, 6) : fallback.slice(0, 3)
+                const allPicks = dedupeByCompany([...picks, ...fallback], 6)
                 const excludeIds = [
-                    ...new Set([...next3, ...top3].map((j) => j.id)),
+                    ...new Set(allPicks.map((j) => j.id)),
                 ]
+                // Companies already shown above — avoid repeating them in Near You.
+                const excludeCompanies = new Set(
+                    allPicks.map((j) => j.company.name.trim().toLowerCase())
+                )
 
                 const hasCoords =
                     !isNaN(lat) &&
@@ -12997,12 +13295,13 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 if (!hasCoords) {
                     setNearbyBasedOnLocation(false)
                     // Reuse already-in-flight fallback fetch rather than making a new request.
-                    return getFallback()
+                    const fb = await getFallback()
+                    return dedupeByCompany(fb, 5)
                 }
 
                 const buildNearParams = (withQ: boolean) => {
                     const params = new URLSearchParams({
-                        limit: "5",
+                        limit: "8",
                         near_lat: String(lat),
                         near_lng: String(lng),
                         radius_km: "75",
@@ -13016,10 +13315,22 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     return params.toString()
                 }
 
+                const dedupeNear = (results: HomepageJob[]) =>
+                    dedupeByCompany(
+                        results.filter(
+                            (j) =>
+                                !excludeCompanies.has(
+                                    j.company.name.trim().toLowerCase()
+                                )
+                        ),
+                        5
+                    )
+
                 const nearResults = await api(buildNearParams(true))
-                if (nearResults.length >= 5 || !userQuery.trim())
-                    return nearResults
-                return api(buildNearParams(false))
+                const deduped = dedupeNear(nearResults)
+                if (deduped.length >= 5 || !userQuery.trim()) return deduped
+                const nearResults2 = await api(buildNearParams(false))
+                return dedupeNear([...nearResults, ...nearResults2])
             }
         )
 
@@ -13037,7 +13348,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
         nearPromise
             .then((near) => {
                 if (!cancelled) {
-                    setNearJobs(near.slice(0, 5))
+                    setNearJobs(near)
                     setLoadingNear(false)
                 }
             })
@@ -18809,6 +19120,8 @@ Extract this structure:
     const [docType, setDocType] = React.useState<
         "doc" | "resume" | "cover_letter"
     >("doc")
+    /** Company for job-scoped resume/cover — restored from chat; live job overrides in DocEditor. */
+    const [docCompany, setDocCompany] = React.useState("")
     interface DocSettings {
         fontStyle: "serif" | "sans"
         fontSize: number // Base font size
@@ -18965,6 +19278,11 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
     React.useEffect(() => {
         docTypeRef.current = docType
     }, [docType])
+
+    const docCompanyRef = React.useRef(docCompany)
+    React.useEffect(() => {
+        docCompanyRef.current = docCompany
+    }, [docCompany])
 
     const appCodeRef = React.useRef(appCode)
     React.useEffect(() => {
@@ -21317,6 +21635,13 @@ Do not include markdown formatting or explanations.`
                     messages: currentMessages,
                     notes: docContentRef.current,
                     docType: docTypeRef.current,
+                    docCompany:
+                        docTypeRef.current === "resume" ||
+                        docTypeRef.current === "cover_letter"
+                            ? selectedJobRef.current?.company?.name?.trim() ||
+                              docCompanyRef.current ||
+                              ""
+                            : undefined,
                     whiteboard: whiteboardData,
                     app: appCodeRef.current
                         ? { code: appCodeRef.current, mode: appModeRef.current }
@@ -21391,6 +21716,8 @@ Do not include markdown formatting or explanations.`
                 if (chat) {
                     if (chat.notes) setDocContent(chat.notes)
                     if (chat.docType) setDocType(chat.docType)
+                    else setDocType("doc")
+                    setDocCompany(chat.docCompany ?? "")
                     if (chat.app) {
                         setAppCode(chat.app.code)
                         setAppMode(chat.app.mode)
@@ -21413,6 +21740,7 @@ Do not include markdown formatting or explanations.`
                     // We should NOT fall back to legacy storage (which mirrors previous chat).
                     // Just mark as loaded and reset to defaults.
                     setDocType("doc")
+                    setDocCompany("")
                     loadedChatIdRef.current = currentChatId
                     return
                 }
@@ -23416,6 +23744,8 @@ Do not include markdown formatting or explanations.`
         setIsAppOpen(false)
         setIsWhiteboardOpen(false)
         setDocContent(DEFAULT_DOC_CONTENT)
+        setDocType("doc")
+        setDocCompany("")
         setAppCode(DEFAULT_APP_CODE)
         setAppMode("editor")
 
@@ -29434,10 +29764,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             resumeAnimPhase === "orbiting"
                                         }
                                         docCompany={
-                                            (docType === "resume" ||
-                                                docType === "cover_letter") &&
-                                            selectedJob
-                                                ? selectedJob.company.name
+                                            docType === "resume" ||
+                                            docType === "cover_letter"
+                                                ? selectedJob?.company?.name?.trim() ||
+                                                  docCompany
                                                 : ""
                                         }
                                         userDisplayName={youName}
@@ -31451,7 +31781,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             top: 0,
                             left: 0,
                             bottom: 0,
-                            background: chatThemeColors.backgroundDark,
+                            background: themeColors.background,
                             overflow: "visible",
                             flexDirection: "column",
                             justifyContent: "flex-start",
@@ -31521,9 +31851,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 savedChats.forEach((chat) => {
                                     if (
                                         searchQuery &&
-                                        !chat.title
-                                            .toLowerCase()
-                                            .includes(searchQuery.toLowerCase())
+                                        !chatMatchesSidebarSearch(
+                                            chat,
+                                            searchQuery,
+                                            youName
+                                        )
                                     ) {
                                         return
                                     }
@@ -31751,24 +32083,49 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                 type === "doceditor" &&
                                                 chat.notes
                                             ) {
-                                                // First line of document, stripping HTML using regex for SSR safety
-                                                const text = chat.notes
-                                                    .replace(/<[^>]*>/g, " ")
-                                                    .replace(/\s+/g, " ")
-                                                    .trim()
-                                                const firstLine = text
-                                                    .split(". ")[0]
-                                                    .split("\n")[0]
-                                                    .trim() // Try to get first sentence or line
-                                                if (firstLine) {
-                                                    // Limit length just in case
+                                                if (
+                                                    chat.docType ===
+                                                        "resume" ||
+                                                    chat.docType ===
+                                                        "cover_letter"
+                                                ) {
+                                                    const jobTitle =
+                                                        buildResumeCoverSidebarTitle(
+                                                            chat.docType,
+                                                            chat.docCompany,
+                                                            youName
+                                                        )
                                                     displayTitle =
-                                                        firstLine.length > 40
-                                                            ? firstLine.substring(
+                                                        jobTitle.length > 50
+                                                            ? jobTitle.substring(
                                                                   0,
-                                                                  40
+                                                                  50
                                                               ) + "..."
-                                                            : firstLine
+                                                            : jobTitle
+                                                } else {
+                                                    // First line of document, stripping HTML using regex for SSR safety
+                                                    const text = chat.notes
+                                                        .replace(
+                                                            /<[^>]*>/g,
+                                                            " "
+                                                        )
+                                                        .replace(/\s+/g, " ")
+                                                        .trim()
+                                                    const firstLine = text
+                                                        .split(". ")[0]
+                                                        .split("\n")[0]
+                                                        .trim() // Try to get first sentence or line
+                                                    if (firstLine) {
+                                                        // Limit length just in case
+                                                        displayTitle =
+                                                            firstLine.length >
+                                                            40
+                                                                ? firstLine.substring(
+                                                                      0,
+                                                                      40
+                                                                  ) + "..."
+                                                                : firstLine
+                                                    }
                                                 }
                                             } else if (type === "whiteboard") {
                                                 displayTitle =
@@ -31901,18 +32258,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                             hoveredChatId ===
                                                                 uniqueId ||
                                                             menuOpenChatId ===
-                                                                uniqueId // Use uniqueId for menu check too? No, menuOpenChatId stores chat ID usually.
-                                                                ? // But here we need to distinguish items.
-                                                                  // Let's use uniqueId for menuOpenChatId when it's a stuff item?
-                                                                  // If I do that, I need to make sure the menu rendering logic handles it.
-                                                                  // The menu rendering logic does `savedChats.find((c) => c.id === menuOpenChatId)`.
-                                                                  // If menuOpenChatId is `stuff-...`, this find will fail.
-                                                                  // So I should stick to menuOpenChatId = chat.id, but maybe add a check for menuOpenToolType?
-                                                                  // If menuOpenChatId === chat.id AND menuOpenToolType === type, then highlight this item.
-                                                                  // AND make sure the main chat list item doesn't get highlighted if menuOpenToolType is set.
-                                                                  themeColors
+                                                                uniqueId
+                                                                ? themeColors
                                                                       .hover
-                                                                      .medium
+                                                                      .default
                                                                 : "transparent",
                                                     }}
                                                 >
@@ -32116,11 +32465,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     .filter(
                                         (chat) =>
                                             !searchQuery ||
-                                            chat.title
-                                                .toLowerCase()
-                                                .includes(
-                                                    searchQuery.toLowerCase()
-                                                )
+                                            chatMatchesSidebarSearch(
+                                                chat,
+                                                searchQuery,
+                                                youName
+                                            )
                                     )
                                     .map((chat, chatIndex) => {
                                         // Calculate stuff items count for tabIndex offset
@@ -32128,11 +32477,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             savedChats.reduce((count, c) => {
                                                 if (
                                                     searchQuery &&
-                                                    !c.title
-                                                        .toLowerCase()
-                                                        .includes(
-                                                            searchQuery.toLowerCase()
-                                                        )
+                                                    !chatMatchesSidebarSearch(
+                                                        c,
+                                                        searchQuery,
+                                                        youName
+                                                    )
                                                 )
                                                     return count
                                                 let itemCount = 0
@@ -32233,18 +32582,16 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                     background:
                                                         hoveredChatId ===
                                                             chat.id ||
-                                                        currentChatId ===
-                                                            chat.id ||
                                                         menuOpenChatId ===
                                                             chat.id
-                                                            ? hoveredChatId ===
+                                                            ? themeColors
+                                                                  .hover
+                                                                  .default
+                                                            : currentChatId ===
                                                               chat.id
-                                                                ? themeColors
-                                                                      .hover
-                                                                      .strong
-                                                                : themeColors
-                                                                      .hover
-                                                                      .medium
+                                                            ? themeColors
+                                                                  .hover
+                                                                  .medium
                                                             : "transparent",
                                                 }}
                                             >
@@ -32491,7 +32838,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 left: 0,
                                 top: 0,
                                 position: "absolute",
-                                background: chatThemeColors.backgroundDark,
+                                background: themeColors.background,
                                 flexDirection: "column",
                                 justifyContent: "flex-start",
                                 alignItems: "flex-start",
@@ -32542,7 +32889,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         cursor: "ew-resize",
                                         borderRadius: 28,
                                         background: isCloseSidebarHovered
-                                            ? themeColors.hover.medium
+                                            ? themeColors.hover.default
                                             : "transparent",
                                         position: "relative",
                                     }}
@@ -32572,7 +32919,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     alignSelf: "stretch",
                                     height: 36,
                                     paddingLeft: 12,
-                                    background: themeColors.surface,
+                                    background: themeColors.hover.medium,
                                     overflow: "hidden",
                                     borderRadius: 50,
                                     justifyContent: "flex-start",
@@ -32692,7 +33039,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         display: "inline-flex",
                                         cursor: "pointer",
                                         background: isTopNewChatHovered
-                                            ? themeColors.hover.strong
+                                            ? themeColors.hover.default
                                             : "transparent",
                                     }}
                                 >
@@ -32777,7 +33124,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         display: "inline-flex",
                                         cursor: "pointer",
                                         background: isYouHovered
-                                            ? themeColors.hover.strong
+                                            ? themeColors.hover.default
                                             : "transparent",
                                     }}
                                 >
@@ -32869,7 +33216,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         display: "inline-flex",
                                         cursor: "pointer",
                                         background: isOpenCurastemHovered
-                                            ? themeColors.hover.strong
+                                            ? themeColors.hover.default
                                             : "transparent",
                                     }}
                                 >
@@ -33057,7 +33404,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             alignItems: "center",
                             justifyContent: "center",
                             background: isSettingsCloseHovered
-                                ? themeColors.hover.strong
+                                ? themeColors.hover.default
                                 : "transparent",
                             borderRadius: "50%",
                             transition: "background 0.2s",
