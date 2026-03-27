@@ -7,6 +7,7 @@
  *   GET  /health          Unauthenticated health check. Returns { status: "ok" }.
  *   GET  /stats           Aggregate market stats (counts, top companies, etc.).
  *   GET  /jobs            Paginated, filterable job listing.
+ *   GET  /jobs/map        One chip entry per company (for map, no 50-job limit).
  *   GET  /jobs/:id        Single job with lazy AI enrichment.
  *   POST /admin/trigger   Manually trigger ingestion (requires valid API key).
  *
@@ -42,10 +43,12 @@
 
 import { handleListJobs } from "./routes/jobs.ts";
 import { handleGetJob } from "./routes/job.ts";
+import { authenticate, recordKeyUsage } from "./middleware/auth.ts";
+import { checkRateLimit } from "./middleware/rateLimit.ts";
 import { handleGetStats } from "./routes/stats.ts";
 import { runIngestion, processSourceById, backfillEmbeddings } from "./ingestion/runner.ts";
 import { runExaEnrichment } from "./enrichment/company.ts";
-import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns, ensureNewJobColumns } from "./db/queries.ts";
+import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns, ensureNewJobColumns, listJobsForMap, type MapBbox, type MapCenter } from "./db/queries.ts";
 import { applyCompanyMetadataCorrections, seedSources, seedCompanyWebsites } from "./db/migrate.ts";
 import type { Env } from "./types.ts";
 import { Errors, jsonOk } from "./utils/errors.ts";
@@ -99,6 +102,62 @@ async function handleRequest(
   // GET /stats — aggregate market overview (job counts, top companies, etc.)
   if (path === "/stats" && method === "GET") {
     return handleGetStats(request, env, ctx);
+  }
+
+  // GET /jobs/map — one chip entry per (company × ~10km location bucket).
+  // chip_lat/chip_lng = centroid of jobs in that bucket (per-job coords when
+  // geocoded, company HQ otherwise).  headquarters is the company's canonical HQ
+  // (used for address-precision check and fallback display).
+  if (path === "/jobs/map" && method === "GET") {
+    const auth = await authenticate(request, env.JOBS_DB);
+    if (!auth.ok) return auth.response;
+    const rateCheck = await checkRateLimit(env.RATE_LIMIT_KV, auth.key);
+    if (!rateCheck.allowed) return rateCheck.response;
+    recordKeyUsage(env.JOBS_DB, auth.key.id, ctx);
+
+    const sinceRaw = url.searchParams.get("since");
+    const since = sinceRaw ? parseInt(sinceRaw, 10) || 0 : 0;
+
+    // Optional viewport bbox — when provided, restricts results to companies
+    // whose HQ falls inside the box (frontend sends map viewport + buffer).
+    const minLat = parseFloat(url.searchParams.get("min_lat") ?? "");
+    const maxLat = parseFloat(url.searchParams.get("max_lat") ?? "");
+    const minLng = parseFloat(url.searchParams.get("min_lng") ?? "");
+    const maxLng = parseFloat(url.searchParams.get("max_lng") ?? "");
+    const bbox: MapBbox | undefined =
+      !isNaN(minLat) && !isNaN(maxLat) && !isNaN(minLng) && !isNaN(maxLng)
+        ? { minLat, maxLat, minLng, maxLng }
+        : undefined;
+
+    const centerLat = parseFloat(url.searchParams.get("center_lat") ?? "");
+    const centerLng = parseFloat(url.searchParams.get("center_lng") ?? "");
+    const center: MapCenter | undefined =
+      !isNaN(centerLat) && !isNaN(centerLng)
+        ? { lat: centerLat, lng: centerLng }
+        : undefined;
+
+    const limitRaw = parseInt(url.searchParams.get("limit") ?? "", 10);
+    const limit = !isNaN(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
+
+    const rows = await listJobsForMap(env.JOBS_DB, since, bbox, center, limit);
+    return jsonOk({
+      data: rows.map((r) => ({
+        company_id: r.company_id,
+        company_name: r.company_name,
+        company_logo_url: r.company_logo_url,
+        company_slug: r.company_slug,
+        chip_lat: r.chip_lat,
+        chip_lng: r.chip_lng,
+        headquarters: {
+          lat: r.company_hq_lat,
+          lng: r.company_hq_lng,
+          city: r.company_hq_city,
+          country: r.company_hq_country,
+          address: r.company_hq_address,
+        },
+        job_count: r.job_count,
+      })),
+    });
   }
 
   // GET /jobs — list with filtering and cursor pagination
@@ -237,8 +296,178 @@ async function handleRequest(
     }
   }
 
+  // POST /admin/geocode — backfill hq_lat/hq_lng for companies that have a city but no coords.
+  // Process ?limit= companies per call (default 50). Safe to call repeatedly until done.
+  if (path === "/admin/geocode" && method === "POST") {
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
+    try {
+      const { geocode } = await import("./utils/geocode.ts");
+      const rows = await env.JOBS_DB.prepare(
+        `SELECT id, hq_city, hq_country FROM companies
+         WHERE hq_lat IS NULL AND hq_city IS NOT NULL AND hq_city != ''
+         LIMIT ?`
+      ).bind(limit).all<{ id: number; hq_city: string; hq_country: string | null }>();
+
+      let updated = 0;
+      let failed = 0;
+      for (const row of rows.results ?? []) {
+        const query = row.hq_country ? `${row.hq_city}, ${row.hq_country}` : row.hq_city;
+        const coords = await geocode(query, env.RATE_LIMIT_KV);
+        if (coords) {
+          await env.JOBS_DB.prepare(
+            `UPDATE companies SET hq_lat = ?, hq_lng = ? WHERE id = ?`
+          ).bind(coords.lat, coords.lng, row.id).run();
+          updated++;
+          // Nominatim requires 1s between requests to respect ToS
+          if (coords.usedNominatim) await new Promise(r => setTimeout(r, 1100));
+        } else {
+          failed++;
+        }
+      }
+      const remaining = await env.JOBS_DB.prepare(
+        `SELECT COUNT(*) as c FROM companies WHERE hq_lat IS NULL AND hq_city IS NOT NULL AND hq_city != ''`
+      ).first<{ c: number }>();
+      return jsonOk({ status: "completed", updated, failed, remaining: remaining?.c ?? 0 });
+    } catch (geoErr) {
+      logger.error("admin_geocode_failed", { error: String(geoErr) });
+      return new Response(JSON.stringify({ error: String(geoErr) }), {
+        status: 500, headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /admin/places-geocode — fill hq_lat/hq_lng/hq_address for companies with no coords
+  // using Places API (New) Text Search. Searches by hq_address if available, else company name.
+  // Requires ?key=<GOOGLE_MAPS_API_KEY>. Safe to call repeatedly.
+  if (path === "/admin/places-geocode" && method === "POST") {
+    const mapsKey = url.searchParams.get("key");
+    if (!mapsKey) {
+      return new Response(JSON.stringify({ error: "Missing ?key= param" }), {
+        status: 400, headers: { "Content-Type": "application/json" },
+      });
+    }
+    try {
+      const rows = await env.JOBS_DB.prepare(
+        `SELECT id, name, hq_address, hq_city, hq_country
+         FROM companies WHERE hq_lat IS NULL
+         ORDER BY name`
+      ).all<{ id: string; name: string; hq_address: string | null; hq_city: string | null; hq_country: string | null }>();
+
+      let updated = 0, failed = 0, skipped = 0;
+      const results: Array<{ company: string; query: string; address?: string; lat?: number; lng?: number; status: string }> = [];
+
+      for (const row of rows.results ?? []) {
+        // Build the best query: prefer existing address, then name+city, then just name
+        const query = row.hq_address
+          ? row.hq_address
+          : row.hq_city
+            ? `${row.name} ${row.hq_city}${row.hq_country ? ` ${row.hq_country}` : ""}`
+            : row.name;
+
+        try {
+          const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Goog-Api-Key": mapsKey,
+              "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location",
+            },
+            body: JSON.stringify({ textQuery: query, maxResultCount: 1 }),
+          });
+          const data = await res.json() as { places?: Array<{ formattedAddress?: string; location?: { latitude: number; longitude: number } }> };
+          const place = data.places?.[0];
+          if (place?.location?.latitude != null && place?.location?.longitude != null) {
+            await env.JOBS_DB.prepare(
+              `UPDATE companies SET hq_lat = ?, hq_lng = ?, hq_address = COALESCE(hq_address, ?) WHERE id = ?`
+            ).bind(place.location.latitude, place.location.longitude, place.formattedAddress ?? null, row.id).run();
+            results.push({ company: row.name, query, address: place.formattedAddress, lat: place.location.latitude, lng: place.location.longitude, status: "ok" });
+            updated++;
+          } else {
+            results.push({ company: row.name, query, status: "no_result" });
+            failed++;
+          }
+          // Respect Places API rate limits
+          await new Promise(r => setTimeout(r, 50));
+        } catch (e) {
+          results.push({ company: row.name, query, status: `error: ${String(e)}` });
+          skipped++;
+        }
+      }
+
+      return jsonOk({ status: "completed", updated, failed, skipped, results });
+    } catch (err) {
+      logger.error("admin_places_geocode_failed", { error: String(err) });
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500, headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /admin/job-geocode — backfill location_lat/lng for whitelisted retail companies
+  // using Places API. Pass ?company_slug=cvs-health to target a single company,
+  // or omit for all whitelisted companies. ?limit= controls max jobs per call (default 200).
+  if (path === "/admin/job-geocode" && method === "POST") {
+    if (!env.GOOGLE_MAPS_API_KEY) {
+      return new Response(JSON.stringify({ error: "GOOGLE_MAPS_API_KEY not set" }), {
+        status: 503, headers: { "Content-Type": "application/json" },
+      });
+    }
+    try {
+      const { PER_JOB_GEOCODE_COMPANY_SLUGS } = await import("./enrichment/placesGeocodeCompanies.ts");
+      const { listJobsNeedingPlacesGeocode, updateJobsWithCoords } = await import("./db/queries.ts");
+      const { placesGeocode } = await import("./utils/placesGeocode.ts");
+
+      const slugParam = url.searchParams.get("company_slug");
+      const slugs = slugParam
+        ? [slugParam]
+        : [...PER_JOB_GEOCODE_COMPANY_SLUGS];
+      const limitParam = url.searchParams.get("limit");
+      // Default 50: each Places call ~200ms → 50 calls ≈ 10s, well within 30s request budget
+      const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
+
+      const jobs = await listJobsNeedingPlacesGeocode(env.JOBS_DB, slugs, limit);
+      const seen = new Map<string, { lat: number; lng: number } | null>();
+      let jobsUpdated = 0;
+
+      for (const job of jobs) {
+        const cacheKey = `${job.company_name}|${job.location_primary}`;
+        if (!seen.has(cacheKey)) {
+          const result = await placesGeocode(`${job.company_name} ${job.location_primary}`, env.GOOGLE_MAPS_API_KEY);
+          seen.set(cacheKey, result ? { lat: result.lat, lng: result.lng } : null);
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        const coords = seen.get(cacheKey);
+        if (coords) {
+          jobsUpdated += await updateJobsWithCoords(env.JOBS_DB, job.location_primary, coords.lat, coords.lng);
+        }
+      }
+
+      const remaining = await env.JOBS_DB.prepare(
+        `SELECT COUNT(*) AS c FROM jobs j
+         JOIN companies c ON c.id = j.company_id
+         WHERE c.slug IN (${slugs.map(() => "?").join(", ")})
+           AND j.location_lat IS NULL
+           AND j.locations IS NOT NULL
+           AND json_extract(j.locations, '$[0]') IS NOT NULL`
+      ).bind(...slugs).first<{ c: number }>();
+
+      return jsonOk({
+        status: "completed",
+        unique_locations_queried: seen.size,
+        jobs_updated: jobsUpdated,
+        remaining: remaining?.c ?? 0,
+      });
+    } catch (err) {
+      logger.error("admin_job_geocode_failed", { error: String(err) });
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500, headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
   // Fallthrough: method not allowed for known paths, 404 for unknown paths
-  if (path === "/jobs" || path === "/stats" || jobMatch) {
+  if (path === "/jobs" || path === "/jobs/map" || path === "/stats" || jobMatch) {
     return Errors.methodNotAllowed();
   }
 

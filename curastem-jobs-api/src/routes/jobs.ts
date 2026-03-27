@@ -144,6 +144,8 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
     job_city: row.job_city ?? null,
     job_state: row.job_state ?? null,
     job_country: row.job_country ?? null,
+    location_lat: row.location_lat ?? null,
+    location_lng: row.location_lng ?? null,
     company: {
       name: row.company_name,
       logo_url: row.company_logo_url,

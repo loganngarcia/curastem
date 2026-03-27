@@ -2018,6 +2018,7 @@ interface Props {
     geminiApiKey: string
     skillsApiUrl?: string
     jobsApiUrl?: string
+    googleMapsApiKey?: string
     systemPrompt: string
     accentColor: string
     model: string
@@ -6228,6 +6229,8 @@ interface ChatInputProps {
     isAppOpen?: boolean
     toggleApp?: () => void
     isJobOpen?: boolean
+    isMapOpen?: boolean
+    toggleMap?: () => void
     isConnected?: boolean
     status?: string
     isMobileLayout?: boolean
@@ -6602,6 +6605,8 @@ const ChatInput = React.memo(function ChatInput({
     isAppOpen = false,
     toggleApp,
     isJobOpen = false,
+    isMapOpen = false,
+    toggleMap,
     isConnected = false,
     status = "idle",
     isMobileLayout = false,
@@ -7442,7 +7447,7 @@ const ChatInput = React.memo(function ChatInput({
     // is the overlay-embedded bar (`overlayToolComposer`), which exists precisely to type over the tool.
     const mobileToolSuppressEditor =
         isMobileLayout &&
-        (isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen) &&
+        (isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen || isMapOpen) &&
         !overlayToolComposer
 
     // On mobile overlay bars, block typing while AI is streaming
@@ -7950,6 +7955,37 @@ const ChatInput = React.memo(function ChatInput({
             isDestructive: false,
         })
 
+        items.push({
+            id: "map",
+            label: "Jobs map",
+            icon: (
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"
+                        fill={
+                            isMapOpen
+                                ? themeColors.semantic.accent
+                                : themeColors.text.primary
+                        }
+                        fillOpacity="0.95"
+                    />
+                </svg>
+            ),
+            trailingCheck: isMapOpen,
+            onClick: () => {
+                toggleMap?.()
+                setShowMenu(false)
+            },
+            className: "JobsMap",
+            isDestructive: false,
+        })
+
         // Show "New Chat" button logic removed as per user request
 
         return items
@@ -7961,12 +7997,14 @@ const ChatInput = React.memo(function ChatInput({
         isWhiteboardOpen,
         isDocOpen,
         isAppOpen,
+        isMapOpen,
         isConnected,
         onFileSelect,
         onScreenShare,
         toggleWhiteboard,
         toggleDoc,
         toggleApp,
+        toggleMap,
         onReport,
         themeColors,
         role,
@@ -10389,7 +10427,7 @@ interface HomepageJob {
         facebook_url?: string | null
         employee_count_range?: string | null
         founded_year?: number | null
-        headquarters?: { address: string | null; city: string | null; country: string | null } | null
+        headquarters?: { address: string | null; city: string | null; country: string | null; lat?: number | null; lng?: number | null } | null
         industry?: string | null
         company_type?: string | null
         total_funding_usd?: number | null
@@ -10403,12 +10441,40 @@ interface HomepageJob {
     job_summary: string | null
     visa_sponsorship?: string | null
     seniority_level?: string | null
+    /** Geocoded coordinates of the primary job location. Present for most jobs. */
+    location_lat?: number | null
+    location_lng?: number | null
 }
 
 interface JobDescriptionDetail {
     responsibilities: string[]
     minimum_qualifications: string[]
     preferred_qualifications: string[]
+}
+
+/**
+ * One entry per company from GET /jobs/map.
+ * Replaces the old HomepageJob[] approach for the map — avoids the 50-job MAX_LIMIT
+ * and always returns all ~200-300 companies with recent jobs in one request.
+ */
+interface MapCompanyEntry {
+    company_id: string
+    company_name: string
+    company_logo_url: string | null
+    company_slug: string
+    /** Centroid of the job-location bucket — where the chip is placed on the map.
+     *  Uses per-job geocoded coords when available, falls back to company HQ. */
+    chip_lat: number
+    chip_lng: number
+    /** Company canonical HQ — used for address-precision check + fallback display. */
+    headquarters: {
+        lat: number
+        lng: number
+        city: string | null
+        country: string | null
+        address: string | null
+    } | null
+    job_count: number
 }
 
 /** Persist opened job detail so swiping away and back does not refetch. */
@@ -13203,6 +13269,957 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     )
 })
 
+// ─── MAP AGENT PANEL ──────────────────────────────────────────────────────────
+// Haversine distance between two coordinates in km.
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 6371
+    const dLat = ((lat2 - lat1) * Math.PI) / 180
+    const dLng = ((lng2 - lng1) * Math.PI) / 180
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos((lat1 * Math.PI) / 180) *
+            Math.cos((lat2 * Math.PI) / 180) *
+            Math.sin(dLng / 2) ** 2
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+const FIFTY_MILES_KM = 80.47
+
+// Minimal dark roadmap style — avoids needing a cloud-based map ID.
+// Map is always light mode.
+
+// POI filter — raster renderer supports the legacy styles array, so we keep
+// mapId out of the Map constructor. All POIs are off by default; only the
+// categories relevant to a job-commute context are re-enabled.
+// OverlayView is used instead of AdvancedMarkerElement (which requires mapId).
+const MAP_POI_STYLES = [
+    { featureType: "poi",               stylers: [{ visibility: "off" }] }, // hide everything
+    { featureType: "poi.business",      stylers: [{ visibility: "on"  }] }, // restaurants, cafes, bars, gyms, grocery
+    { featureType: "poi.park",          stylers: [{ visibility: "on"  }] }, // parks, beaches
+    { featureType: "poi.attraction",    stylers: [{ visibility: "on"  }] }, // tourist spots
+    { featureType: "poi.sports_complex",stylers: [{ visibility: "on"  }] }, // stadiums, sports venues
+]
+
+// Script load state shared across instances — avoids duplicate injection.
+let _gmapsScriptState: "idle" | "loading" | "ready" = "idle"
+const _gmapsReadyCallbacks: Array<() => void> = []
+function loadGoogleMapsScript(apiKey: string): void {
+    if (typeof window === "undefined") return
+    const g = (window as any).google
+    // Maps JS + places library; OverlayView is built-in so no marker lib needed
+    if (g?.maps?.Map && g?.maps?.Geocoder && g?.maps?.OverlayView) {
+        _gmapsScriptState = "ready"
+        return
+    }
+    if (_gmapsScriptState === "loading") return
+    _gmapsScriptState = "loading"
+    ;(window as any).__curastemMapsReady = () => {
+        _gmapsScriptState = "ready"
+        _gmapsReadyCallbacks.forEach((cb) => cb())
+        _gmapsReadyCallbacks.length = 0
+        delete (window as any).__curastemMapsReady
+    }
+    const s = document.createElement("script")
+    s.id = "curastem-gmaps"
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=geometry,places&loading=async&callback=__curastemMapsReady`
+    s.async = true
+    document.head.appendChild(s)
+}
+
+const MapAgentPanel = React.memo(function MapAgentPanel({
+    jobsApiUrl,
+    googleMapsApiKey,
+    themeColors,
+    isMobile = false,
+    onClose,
+    preciseLocRef,
+}: {
+    jobsApiUrl: string
+    googleMapsApiKey: string
+    themeColors: typeof darkColors
+    isMobile?: boolean
+    onClose: () => void
+    /** Ref owned by the parent so precise coords survive panel close/reopen. */
+    preciseLocRef: React.MutableRefObject<{ lat: number; lng: number } | null>
+}) {
+    const isStatic = useIsStaticRenderer()
+    const mapContainerRef = React.useRef<HTMLDivElement>(null)
+    const mapInstanceRef = React.useRef<any>(null)
+    const markersRef = React.useRef<any[]>([])
+    const [mapsReady, setMapsReady] = React.useState(false)
+    const [userLoc, setUserLoc] = React.useState<{ lat: number; lng: number } | null>(null)
+    const [jobs, setJobs] = React.useState<MapCompanyEntry[]>([])
+    const [totalJobCount, setTotalJobCount] = React.useState(0)
+    // Accumulates chips across viewport moves — never discards already-loaded chips
+    const accJobsRef = React.useRef(new Map<string, MapCompanyEntry>())
+    // Center of the last /jobs/map fetch; skip re-fetch if still within ~50km
+    const lastFetchCenterRef = React.useRef<{ lat: number; lng: number } | null>(null)
+    // Stable ref to jobsApiUrl so the idle listener closure stays fresh
+    const jobsApiUrlRef = React.useRef(jobsApiUrl)
+    React.useEffect(() => { jobsApiUrlRef.current = jobsApiUrl }, [jobsApiUrl])
+    const [selectedJobs, setSelectedJobs] = React.useState<HomepageJob[] | null>(null)
+    const [travelTimes, setTravelTimes] = React.useState<
+        Record<string, { drivingMins: number | null; walkingMins: number | null }>
+    >({})
+    // Starts filled if we already have a cached precise location from a previous session
+    const [atPreciseLocation, setAtPreciseLocation] = React.useState(() => preciseLocRef.current !== null)
+    // Overlays need a laid-out map — first idle means projection/panes are valid
+    const [mapHasIdle, setMapHasIdle] = React.useState(false)
+    const isDark = themeColors.background !== lightColors.background
+
+    // Load Maps JS API once per page
+    React.useEffect(() => {
+        if (isStatic || !googleMapsApiKey) return
+        if (_gmapsScriptState === "ready") {
+            setMapsReady(true)
+            return
+        }
+        _gmapsReadyCallbacks.push(() => setMapsReady(true))
+        loadGoogleMapsScript(googleMapsApiKey)
+        // If already loading, callback registered above will fire
+    }, [googleMapsApiKey, isStatic])
+
+    // Fetch IP-based geo for initial map centering only — job chips are loaded
+    // on-demand per viewport from the idle listener attached in the map init effect.
+    React.useEffect(() => {
+        if (!jobsApiUrl || isStatic) return
+        let cancelled = false
+        fetch(`${jobsApiUrl}/geo`)
+            .then((r) => (r.ok ? r.json() : {}))
+            .then(({ lat, lng }: { lat?: number | null; lng?: number | null }) => {
+                if (cancelled) return
+                if (typeof lat === "number" && typeof lng === "number" && !isNaN(lat) && !isNaN(lng)) {
+                    setUserLoc({ lat, lng })
+                }
+            })
+            .catch(() => {})
+        return () => { cancelled = true }
+    }, [jobsApiUrl, isStatic])
+
+    // Init the map after Maps JS API loads and the container div is in the DOM
+    React.useEffect(() => {
+        if (!mapsReady || !mapContainerRef.current || isStatic) return
+        const google = (window as any).google
+        if (!google?.maps) return
+        setMapHasIdle(false)
+        const center = userLoc ?? { lat: 37.7749, lng: -122.4194 }
+        const map = new google.maps.Map(mapContainerRef.current, {
+            zoom: 11,
+            center,
+            disableDefaultUI: true,
+            gestureHandling: "greedy",
+            mapTypeId: "roadmap",
+            // No mapId → raster renderer → supports styles array for POI filtering.
+            // OverlayView handles custom HTML chips (AdvancedMarkerElement requires mapId).
+            colorScheme: "LIGHT",
+            styles: MAP_POI_STYLES,
+        })
+        mapInstanceRef.current = map
+        map.addListener("dragstart", () => setAtPreciseLocation(false))
+
+        // Fetch /jobs/map for the current viewport bbox, then merge into the
+        // accumulated cache so chips are never discarded as the user pans around.
+        // Re-fetch only when the center has moved more than ~50km (0.45°) so
+        // small pans within the same neighborhood don't trigger extra requests.
+        const MAX_CHIPS = 100
+
+        const fetchViewport = () => {
+            const apiUrl = jobsApiUrlRef.current
+            if (!apiUrl) return
+            const bounds = map.getBounds()
+            if (!bounds) return
+
+            const mapCenter = map.getCenter()
+            const cLat = mapCenter.lat()
+            const cLng = mapCenter.lng()
+            const last = lastFetchCenterRef.current
+            if (last && Math.abs(cLat - last.lat) < 0.45 && Math.abs(cLng - last.lng) < 0.45) return
+
+            lastFetchCenterRef.current = { lat: cLat, lng: cLng }
+
+            const ne = bounds.getNorthEast()
+            const sw = bounds.getSouthWest()
+            const latSpan = ne.lat() - sw.lat()
+            const lngSpan = ne.lng() - sw.lng()
+            const minLat = sw.lat() - latSpan * 0.6
+            const maxLat = ne.lat() + latSpan * 0.6
+            const minLng = sw.lng() - lngSpan * 0.6
+            const maxLng = ne.lng() + lngSpan * 0.6
+            const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
+
+            // Pass center so backend orders by distance (closest first) and limits to 100
+            const params = new URLSearchParams({
+                since: String(since7d),
+                min_lat: String(minLat), max_lat: String(maxLat),
+                min_lng: String(minLng), max_lng: String(maxLng),
+                center_lat: String(cLat), center_lng: String(cLng),
+                limit: String(MAX_CHIPS),
+            })
+
+            fetch(`${apiUrl}/jobs/map?${params}`)
+                .then((r) => (r.ok ? r.json() : { data: [] }))
+                .then(({ data }: { data: MapCompanyEntry[] }) => {
+                    const entries: MapCompanyEntry[] = Array.isArray(data) ? data : []
+                    entries
+                        .filter((e) => e.chip_lat != null && e.chip_lng != null)
+                        .forEach((e) => {
+                            const key = `${e.company_id}|${e.chip_lat.toFixed(3)}|${e.chip_lng.toFixed(3)}`
+                            accJobsRef.current.set(key, e)
+                        })
+                    // Re-rank the full accumulator by distance to current center,
+                    // then keep only the closest MAX_CHIPS to render
+                    const all = Array.from(accJobsRef.current.values())
+                    const nearest = all
+                        .map((e) => ({
+                            e,
+                            d: (e.chip_lat - cLat) ** 2 + (e.chip_lng - cLng) ** 2,
+                        }))
+                        .sort((a, b) => a.d - b.d)
+                        .slice(0, MAX_CHIPS)
+                        .map((x) => x.e)
+                    setTotalJobCount(all.reduce((sum, e) => sum + e.job_count, 0))
+                    setJobs(nearest)
+                })
+                .catch(() => {})
+        }
+
+        let cancelled = false
+        google.maps.event.addListenerOnce(map, "idle", () => {
+            if (cancelled) return
+            setMapHasIdle(true)
+            fetchViewport()
+        })
+        map.addListener("idle", () => {
+            if (!cancelled) fetchViewport()
+        })
+
+        return () => {
+            cancelled = true
+            mapInstanceRef.current = null
+            setMapHasIdle(false)
+        }
+    }, [mapsReady, isStatic]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Re-center when we receive a user location
+    React.useEffect(() => {
+        if (!mapInstanceRef.current || !userLoc) return
+        mapInstanceRef.current.panTo(userLoc)
+    }, [userLoc])
+
+    // Place / refresh company chips whenever jobs or map changes
+    React.useEffect(() => {
+        if (!mapInstanceRef.current || !mapsReady || !mapHasIdle || isStatic || jobs.length === 0)
+            return
+        const gm = (window as any).google?.maps
+        if (!gm?.Map) return
+
+        // OverlayView and classic Marker both expose setMap — this clears all chip overlays
+        markersRef.current.forEach((m) => { if (typeof m.setMap === "function") m.setMap(null) })
+        markersRef.current = []
+
+        const buildChip = (entry: MapCompanyEntry) => {
+            const chip = document.createElement("div")
+            chip.style.cssText = [
+                "display:inline-flex;align-items:center;gap:4px",
+                "padding:2px 8px 2px 2px",
+                "background:white;border-radius:28px",
+                "box-shadow:0 1px 4px rgba(0,0,0,0.36)",
+                "overflow:hidden",
+                "font-family:Inter,-apple-system,sans-serif",
+                "cursor:pointer;user-select:none;white-space:nowrap",
+            ].join(";")
+
+            if (entry.company_logo_url) {
+                const img = document.createElement("img")
+                img.src = entry.company_logo_url
+                img.style.cssText = "width:20px;height:20px;border-radius:10px;object-fit:cover;background:#F5F5F5;flex-shrink:0;"
+                img.onerror = () => { img.style.display = "none" }
+                chip.appendChild(img)
+            } else {
+                const dot = document.createElement("div")
+                dot.style.cssText = "width:20px;height:20px;border-radius:10px;background:#F5F5F5;flex-shrink:0;"
+                chip.appendChild(dot)
+            }
+
+            const span = document.createElement("span")
+            span.textContent = String(entry.job_count)
+            span.style.cssText = "font-size:14px;font-weight:600;color:#000;line-height:21px;"
+            chip.appendChild(span)
+            return chip
+        }
+
+        const placeChip = (entry: MapCompanyEntry, lat: number, lng: number) => {
+            const map = mapInstanceRef.current
+            if (!map || !gm.OverlayView) return
+            const chip = buildChip(entry)
+            chip.addEventListener("click", (e) => {
+                e.stopPropagation()
+                // Fetch company jobs then filter to those near this chip's location.
+                // Most jobs fall back to company HQ coords; for geocoded retail/franchise
+                // jobs the per-job coords are used, so the filter correctly shows only
+                // jobs at this specific city location.
+                const chipLat = entry.chip_lat
+                const chipLng = entry.chip_lng
+                const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
+                const params = new URLSearchParams({
+                    company: entry.company_slug,
+                    since: String(since7d),
+                    limit: "50",
+                    exclude_remote: "true",
+                })
+                setSelectedJobs([])
+                setTravelTimes({})
+                fetch(`${jobsApiUrl}/jobs?${params}`)
+                    .then((r) => (r.ok ? r.json() : { data: [] }))
+                    .then(({ data }: { data: HomepageJob[] }) => {
+                        const all: HomepageJob[] = Array.isArray(data) ? data : []
+                        // Use per-job coords when available, fall back to company HQ
+                        const nearby = all.filter((j) => {
+                            const jlat = j.location_lat ?? j.company?.headquarters?.lat ?? null
+                            const jlng = j.location_lng ?? j.company?.headquarters?.lng ?? null
+                            if (jlat == null || jlng == null) return true // no coords → always include
+                            return haversineKm(chipLat, chipLng, jlat, jlng) <= 80
+                        })
+                        setSelectedJobs(nearby)
+                    })
+                    .catch(() => setSelectedJobs(null))
+            })
+
+            // OverlayView: custom HTML on raster map without needing a mapId
+            const el = document.createElement("div")
+            el.style.cssText = "position:absolute;z-index:1000;"
+            el.appendChild(chip)
+
+            const overlay = new gm.OverlayView()
+            overlay.onAdd = function(this: any) {
+                this.getPanes().overlayMouseTarget.appendChild(el)
+            }
+            overlay.draw = function(this: any) {
+                const proj = this.getProjection()
+                if (!proj) return
+                const p = proj.fromLatLngToDivPixel(new gm.LatLng(lat, lng))
+                if (p) {
+                    el.style.left = `${p.x}px`
+                    el.style.top = `${p.y}px`
+                    // Anchor bottom-center of chip to the map point
+                    el.style.transform = "translate(-50%, -100%)"
+                }
+            }
+            overlay.onRemove = function() {
+                el.parentNode?.removeChild(el)
+            }
+            overlay.setMap(map)
+            markersRef.current.push(overlay)
+        }
+
+        // FNV-1a 32-bit — fast, deterministic scatter per company
+        const fnv = (s: string, seed = 0) => {
+            let h = (2166136261 + seed) >>> 0
+            for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0
+            return h
+        }
+
+        // At zoom 13, chips are ~60px wide and 1° ≈ 5800px, so two chips within
+        // ~0.010° (~1.1km) can visually overlap. We use 0.008° as the cluster
+        // threshold to catch same-block and same-neighborhood stacking in dense cities.
+        // SCATTER_BASE ≈ 150m keeps chips close to their real address.
+        const CLUSTER_THRESHOLD = 0.008
+        const SCATTER_BASE = 0.0013
+
+        const pts: Array<{ entry: MapCompanyEntry; lat: number; lng: number }> = []
+        for (const entry of jobs) {
+            pts.push({ entry, lat: entry.chip_lat, lng: entry.chip_lng })
+        }
+
+        // Greedy single-pass clustering — O(n²), n ≤ ~600, runs in < 1ms
+        const used = new Array(pts.length).fill(false)
+        for (let i = 0; i < pts.length; i++) {
+            if (used[i]) continue
+            const cluster: typeof pts = [pts[i]]
+            used[i] = true
+            for (let j = i + 1; j < pts.length; j++) {
+                if (used[j]) continue
+                if (
+                    Math.abs(pts[j].lat - pts[i].lat) < CLUSTER_THRESHOLD &&
+                    Math.abs(pts[j].lng - pts[i].lng) < CLUSTER_THRESHOLD
+                ) {
+                    cluster.push(pts[j])
+                    used[j] = true
+                }
+            }
+            if (cluster.length === 1) {
+                placeChip(cluster[0].entry, cluster[0].lat, cluster[0].lng)
+            } else {
+                // Each company gets a unique angle and radius wobble from its ID hash
+                // so the layout looks organic rather than a geometric pattern.
+                // Chips drift at most ~SCATTER_BASE * sqrt(n) * 1.3 from their original
+                // coords — enough to separate visually, small enough to stay on land.
+                const cosLat = Math.cos(pts[i].lat * Math.PI / 180)
+                for (let k = 0; k < cluster.length; k++) {
+                    const id = cluster[k].entry.company_id
+                    const angle = (fnv(id) % 100000) / 100000 * Math.PI * 2
+                    const r = SCATTER_BASE * Math.sqrt(k + 1) * (0.7 + (fnv(id, 1) % 1000) / 1000 * 0.6)
+                    placeChip(
+                        cluster[k].entry,
+                        cluster[k].lat + r * Math.cos(angle),
+                        cluster[k].lng + r * Math.sin(angle) / cosLat,
+                    )
+                }
+            }
+        }
+    }, [jobs, mapsReady, mapHasIdle, isStatic])
+
+    // Estimate travel times from straight-line distance — no API calls, no cost.
+    // Walking: 5 km/h. Driving: straight-line × 1.4 road factor ÷ 40 km/h urban.
+    // Accuracy is ±5–10 min — sufficient for "is this commutable?" decisions.
+    React.useEffect(() => {
+        if (!selectedJobs || !userLoc || isStatic) return
+
+        const updates: Record<string, { drivingMins: number | null; walkingMins: number | null }> = {}
+
+        for (const job of selectedJobs) {
+            // Use per-job coords when available (retail stores), fall back to HQ
+            const jobLat = job.location_lat ?? job.company?.headquarters?.lat ?? null
+            const jobLng = job.location_lng ?? job.company?.headquarters?.lng ?? null
+            if (jobLat == null || jobLng == null) continue
+
+            const km = haversineKm(userLoc.lat, userLoc.lng, jobLat, jobLng)
+            if (km > FIFTY_MILES_KM) continue
+
+            // Walking: only show if under 2.5 km straight-line (~30 min at 5 km/h)
+            const walkingMins = km <= 2.5 ? Math.round((km / 5) * 60) : null
+            // Driving: road distance ≈ straight-line × 1.4, urban speed ≈ 40 km/h
+            const drivingMins = Math.round((km * 1.4 / 40) * 60)
+
+            updates[job.id] = { drivingMins, walkingMins }
+        }
+
+        if (Object.keys(updates).length > 0) {
+            setTravelTimes((prev) => ({ ...prev, ...updates }))
+        }
+    }, [selectedJobs, userLoc, isStatic])
+
+    const handleCurrentLocation = React.useCallback(() => {
+        const panTo = (loc: { lat: number; lng: number }) => {
+            setAtPreciseLocation(true)
+            setUserLoc(loc) // triggers the re-center useEffect which calls panTo
+            mapInstanceRef.current?.setZoom(13)
+        }
+
+        // If we already have a precise location cached, go straight there — no network call needed
+        if (preciseLocRef.current) {
+            panTo(preciseLocRef.current)
+            return
+        }
+
+        // Hit /geo immediately so the map moves without waiting on GPS permission
+        fetch(`${jobsApiUrl}/geo`)
+            .then((r) => r.json())
+            .then((d) => { if (d?.lat && d?.lng) panTo({ lat: d.lat, lng: d.lng }) })
+            .catch(() => {})
+
+        // Then try GPS — cache and upgrade to precise coords if available
+        if (typeof navigator !== "undefined" && navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+                    preciseLocRef.current = loc
+                    panTo(loc)
+                },
+                () => {}, // /geo already handled the fallback
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+            )
+        }
+    }, [jobsApiUrl])
+
+    const tbBg = isDark ? "#333333" : "#ffffff"
+    const tbIcon = isDark ? "rgba(255,255,255,0.95)" : "rgba(0,0,0,0.85)"
+    const sheetBg = isDark ? "#212121" : "#f2f2f2"
+    const cardBg = isDark ? "#3D3D3D" : "#ffffff"
+    const textPrimary = themeColors.text.primary
+    const textSecondary = themeColors.text.secondary
+    const panelRadius = isMobile ? "28px 28px 0 0" : "28px 0 0 28px"
+    const tbStyle: React.CSSProperties = {
+        width: 40,
+        height: 40,
+        background: tbBg,
+        border: "none",
+        borderRadius: 31,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 0,
+        boxShadow: "0 1px 4px rgba(0,0,0,0.24)",
+    }
+
+    if (isStatic) {
+        return (
+            <div
+                style={{
+                    width: "100%",
+                    height: "100%",
+                    background: themeColors.backgroundDark,
+                    borderRadius: panelRadius,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
+            >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                    <path
+                        d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"
+                        fill={themeColors.text.tertiary}
+                    />
+                </svg>
+            </div>
+        )
+    }
+
+    return (
+        <div
+            data-layer="maps agent panel"
+            style={{
+                width: "100%",
+                height: "100%",
+                background: themeColors.backgroundDark,
+                borderRadius: panelRadius,
+                overflow: "hidden",
+                position: "relative",
+                display: "flex",
+                flexDirection: "column",
+            }}
+        >
+            {/* Map fills the panel */}
+            <div ref={mapContainerRef} style={{ flex: 1, width: "100%" }} aria-label="Jobs map" />
+
+            {/* Waiting for script — only shown when key is present */}
+            {!mapsReady && googleMapsApiKey && (
+                <div
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: themeColors.backgroundDark,
+                        borderRadius: panelRadius,
+                    }}
+                >
+                    <span
+                        style={{
+                            color: textSecondary,
+                            fontSize: 14,
+                            fontFamily: "Inter",
+                        }}
+                    >
+                        {"Loading map…"}
+                    </span>
+                </div>
+            )}
+
+            {/* Toolbar — top right, matches Figma spec */}
+            <div
+                data-layer="toolbar"
+                style={{
+                    position: "absolute",
+                    top: 12,
+                    right: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    zIndex: 10,
+                }}
+            >
+                {/* Close */}
+                <button aria-label="Close map" onClick={onClose} style={tbStyle}>
+                    <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                        <path
+                            d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25"
+                            stroke={tbIcon}
+                            strokeWidth="1.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
+                    </svg>
+                </button>
+
+                {/* Current location — filled arrow when map is centred on precise GPS location */}
+                <button
+                    aria-label="Go to current location"
+                    onClick={handleCurrentLocation}
+                    style={tbStyle}
+                >
+                    <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                        <path
+                            d="M13.3134 20.2602C13.2307 20.2397 13.1563 20.194 13.1006 20.1295C13.0448 20.0651 13.0104 19.9849 13.002 19.9001C12.9936 19.8152 13.0117 19.7299 13.0538 19.6557C13.0959 19.5816 13.1599 19.5223 13.2371 19.486L26.4105 13.0396C26.4874 13.0032 26.5737 12.9915 26.6575 13.0061C26.7413 13.0206 26.8186 13.0607 26.8788 13.1209C26.939 13.1811 26.9791 13.2584 26.9936 13.3422C27.0082 13.426 26.9965 13.5123 26.9601 13.5892L20.5137 26.7627C20.4775 26.8398 20.4183 26.9039 20.3442 26.946C20.2701 26.9882 20.1848 27.0063 20.0999 26.998C20.0151 26.9898 19.9349 26.9554 19.8704 26.8997C19.8059 26.8441 19.7602 26.7698 19.7395 26.6871L19.8555 20.4451C19.8373 20.3725 19.7996 20.3062 19.7466 20.2534C19.6936 20.2005 19.6272 20.163 19.5546 20.145L13.3134 20.2602Z"
+                            fill={atPreciseLocation ? tbIcon : "none"}
+                            stroke={tbIcon}
+                            strokeWidth="1.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
+                    </svg>
+                </button>
+
+                {/* Zoom +/− — hidden on mobile */}
+                {!isMobile && (
+                    <div
+                        style={{
+                            width: 40,
+                            background: tbBg,
+                            borderRadius: 31,
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            boxShadow: "0 1px 4px rgba(0,0,0,0.24)",
+                        }}
+                    >
+                        <button
+                            aria-label="Zoom in"
+                            onClick={() =>
+                                mapInstanceRef.current?.setZoom(
+                                    (mapInstanceRef.current.getZoom() ?? 11) + 1
+                                )
+                            }
+                            style={{
+                                width: 40,
+                                height: 40,
+                                background: "transparent",
+                                border: "none",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: 0,
+                            }}
+                        >
+                            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                                <path
+                                    d="M20 13V27M13 20H27"
+                                    stroke={tbIcon}
+                                    strokeWidth="1.2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            </svg>
+                        </button>
+                        <button
+                            aria-label="Zoom out"
+                            onClick={() =>
+                                mapInstanceRef.current?.setZoom(
+                                    (mapInstanceRef.current.getZoom() ?? 11) - 1
+                                )
+                            }
+                            style={{
+                                width: 40,
+                                height: 40,
+                                background: "transparent",
+                                border: "none",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: 0,
+                            }}
+                        >
+                            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                                <path
+                                    d="M13 19.5286H27"
+                                    stroke={tbIcon}
+                                    strokeWidth="1.2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            </svg>
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Job list sheet — animates in from bottom when a chip is tapped */}
+            <AnimatePresence>
+                {selectedJobs && (
+                    <motion.div
+                        data-layer="nearby jobs card overlay"
+                        initial={{ y: "100%" }}
+                        animate={{ y: 0 }}
+                        exit={{ y: "100%" }}
+                        transition={{ type: "spring", stiffness: 380, damping: 40 }}
+                        style={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            padding: 12,
+                            zIndex: 20,
+                        }}
+                    >
+                        <div
+                            style={{
+                                background: sheetBg,
+                                borderRadius: 36,
+                                overflow: "hidden",
+                                maxHeight: 288,
+                                display: "flex",
+                                flexDirection: "column",
+                                boxShadow: "0 -2px 24px rgba(0,0,0,0.2)",
+                                position: "relative",
+                            }}
+                        >
+                            {/* Header */}
+                            <div
+                                style={{
+                                    paddingTop: 20,
+                                    paddingLeft: 16,
+                                    paddingRight: 52,
+                                    paddingBottom: 0,
+                                    flexShrink: 0,
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        color: textPrimary,
+                                        fontSize: 15,
+                                        fontFamily: "Inter",
+                                        fontWeight: "400",
+                                        lineHeight: "22.5px",
+                                    }}
+                                >
+                                    {totalJobCount} jobs nearby
+                                </div>
+                            </div>
+
+                            {/* Sheet close button */}
+                            <button
+                                aria-label="Close job list"
+                                onClick={() => setSelectedJobs(null)}
+                                style={{
+                                    position: "absolute",
+                                    top: 10,
+                                    right: 10,
+                                    width: 36,
+                                    height: 36,
+                                    background: "transparent",
+                                    border: "none",
+                                    cursor: "pointer",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    padding: 0,
+                                }}
+                            >
+                                <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+                                    <path
+                                        d="M23.25 12.75L12.75 23.25M12.75 12.75L23.25 23.25"
+                                        stroke={textPrimary}
+                                        strokeOpacity="0.95"
+                                        strokeWidth="1.2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                            </button>
+
+                            {/* Scrollable job cards */}
+                            <div
+                                style={{
+                                    overflowY: "auto",
+                                    padding: "12px 16px 16px",
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 10,
+                                    flex: 1,
+                                    minHeight: 0,
+                                }}
+                            >
+                                {selectedJobs.map((job) => {
+                                    const tt = travelTimes[job.id] ?? null
+                                    const driveMins = tt?.drivingMins ?? null
+                                    const walkMins = tt?.walkingMins ?? null
+                                    // Show walking icon + time if walkable in ≤30 min
+                                    const isWalkable = walkMins !== null && walkMins <= 30
+                                    const timeDisplay = isWalkable ? walkMins : driveMins
+                                    const hasTime = timeDisplay !== null
+
+                                    const postedMs = job.posted_at
+                                        ? Date.now() - new Date(job.posted_at).getTime()
+                                        : null
+                                    const postedStr =
+                                        postedMs === null
+                                            ? null
+                                            : postedMs < 3600000
+                                              ? `${Math.floor(postedMs / 60000)} min ago`
+                                              : postedMs < 86400000
+                                                ? `${Math.floor(postedMs / 3600000)}h ago`
+                                                : `${Math.floor(postedMs / 86400000)}d ago`
+
+                                    const dotSpan = (
+                                        <span
+                                            style={{
+                                                color: textSecondary,
+                                                fontSize: 12,
+                                                fontFamily: "Inter",
+                                            }}
+                                        >
+                                            •
+                                        </span>
+                                    )
+                                    const infoText = (txt: string) => (
+                                        <span
+                                            style={{
+                                                color: textSecondary,
+                                                fontSize: 12,
+                                                fontFamily: "Inter",
+                                                lineHeight: "18px",
+                                            }}
+                                        >
+                                            {txt}
+                                        </span>
+                                    )
+
+                                    return (
+                                        <div
+                                            key={job.id}
+                                            role="button"
+                                            tabIndex={0}
+                                            aria-label={`${job.title} at ${job.company.name}, open job listing`}
+                                            onClick={() => {
+                                                if (typeof window !== "undefined")
+                                                    window.open(job.apply_url, "_blank", "noopener,noreferrer")
+                                            }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter" || e.key === " ") {
+                                                    if (typeof window !== "undefined")
+                                                        window.open(job.apply_url, "_blank", "noopener,noreferrer")
+                                                }
+                                            }}
+                                            style={{
+                                                background: cardBg,
+                                                borderRadius: 28,
+                                                padding: "16px 20px",
+                                                cursor: "pointer",
+                                                flexShrink: 0,
+                                                outline: "none",
+                                            }}
+                                        >
+                                            {/* Title */}
+                                            <div
+                                                style={{
+                                                    color: textPrimary,
+                                                    fontSize: 16,
+                                                    fontFamily: "Inter",
+                                                    fontWeight: "500",
+                                                    lineHeight: "24px",
+                                                    marginBottom: 8,
+                                                }}
+                                            >
+                                                {job.title}
+                                            </div>
+                                            {/* Meta row */}
+                                            <div
+                                                style={{
+                                                    display: "flex",
+                                                    flexWrap: "wrap",
+                                                    alignItems: "center",
+                                                    gap: 6,
+                                                }}
+                                            >
+                                                {/* Company logo */}
+                                                {job.company.logo_url ? (
+                                                    <img
+                                                        src={job.company.logo_url}
+                                                        alt=""
+                                                        style={{
+                                                            width: 16,
+                                                            height: 16,
+                                                            borderRadius: 8,
+                                                            objectFit: "cover",
+                                                        }}
+                                                        onError={(e) => {
+                                                            ;(e.target as HTMLImageElement).style.display = "none"
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div
+                                                        style={{
+                                                            width: 16,
+                                                            height: 16,
+                                                            borderRadius: 8,
+                                                            background: "rgba(255,255,255,0.12)",
+                                                        }}
+                                                    />
+                                                )}
+                                                {infoText(job.company.name)}
+                                                {postedStr && (
+                                                    <>
+                                                        {dotSpan}
+                                                        {infoText(postedStr)}
+                                                    </>
+                                                )}
+                                                {hasTime && (
+                                                    <>
+                                                        {dotSpan}
+                                                        {/* Walking or driving icon */}
+                                                        {isWalkable ? (
+                                                            <svg
+                                                                width="9"
+                                                                height="14"
+                                                                viewBox="0 0 9 14"
+                                                                fill="none"
+                                                                aria-label="Walking"
+                                                            >
+                                                                <path
+                                                                    d="M1.08504 13.7746L3.01605 11.4757C3.20609 11.2551 3.23061 11.1937 3.3103 10.9608L3.46356 10.4888L2.42756 9.18919L2.10265 10.6788L0.19616 12.9408C-0.42299 13.6642 0.576233 14.3753 1.08504 13.7746ZM5.79304 13.5845C6.18537 14.3937 7.3746 13.8972 6.94549 13.0267L5.63365 10.3662C5.53557 10.1639 5.38844 9.94931 5.27197 9.77769L4.43213 8.58839L4.49343 8.41677C4.72638 7.7547 4.79994 7.35012 4.84898 6.68805L4.97772 4.8306C5.04515 3.94785 4.52408 3.27353 3.61681 3.27353C2.93636 3.27353 2.47659 3.61682 1.85132 4.22984L0.870483 5.19841C0.545582 5.51718 0.441368 5.77465 0.410717 6.1915L0.294243 7.71182C0.263592 8.09185 0.47815 8.36774 0.833698 8.37998C1.18925 8.40453 1.40381 8.19606 1.44672 7.78533L1.58772 6.11794L2.05974 5.68883C2.23139 5.53557 2.45821 5.63979 2.44594 5.81143L2.3356 7.22753C2.28043 7.93862 2.45207 8.27578 2.94249 8.88882L4.24209 10.5256C4.37696 10.691 4.38922 10.7585 4.44439 10.8566L5.79304 13.5845ZM8.03059 5.79304H6.54091L5.57235 4.71413L5.47426 6.27733L5.87273 6.66966C6.08115 6.88422 6.26506 6.94555 6.64512 6.94555H8.03059C8.41677 6.94555 8.6742 6.72484 8.6742 6.36314C8.6742 6.01986 8.41061 5.79304 8.03059 5.79304ZM4.33405 2.69729C5.08193 2.69729 5.68269 2.09653 5.68269 1.34865C5.68269 0.60076 5.08193 0 4.33405 0C3.58616 0 2.9854 0.60076 2.9854 1.34865C2.9854 2.09653 3.58616 2.69729 4.33405 2.69729Z"
+                                                                    fill={textSecondary}
+                                                                />
+                                                            </svg>
+                                                        ) : (
+                                                            <svg
+                                                                width="16"
+                                                                height="12"
+                                                                viewBox="0 0 16 12"
+                                                                fill="none"
+                                                                aria-label="Driving"
+                                                            >
+                                                                <path
+                                                                    d="M2.6717 3.69381C2.82049 2.98869 3.13747 2.06361 3.35095 1.68841C3.52562 1.38437 3.71322 1.24852 4.06254 1.20324C4.55419 1.13855 5.65392 1.09326 7.65282 1.09326C9.65825 1.09326 10.7579 1.12561 11.2432 1.20324C11.5925 1.25499 11.7736 1.38437 11.9548 1.68841C12.1747 2.05715 12.4722 2.98869 12.6404 3.69381C12.6987 3.93316 12.5952 4.02373 12.3494 4.01079C11.2755 3.93963 9.99463 3.87494 7.65282 3.87494C5.31753 3.87494 4.03666 3.93963 2.96281 4.01079C2.71052 4.02373 2.61348 3.93316 2.6717 3.69381ZM2.98869 8.47443C2.40001 8.47443 1.94717 8.0216 1.94717 7.4329C1.94717 6.83777 2.40001 6.39139 2.98869 6.39139C3.57736 6.39139 4.03019 6.83777 4.03019 7.4329C4.03019 8.0216 3.57736 8.47443 2.98869 8.47443ZM5.94502 8.21562C5.49866 8.21562 5.19462 7.91163 5.19462 7.46522C5.19462 7.02537 5.49866 6.72132 5.94502 6.72132H9.36712C9.80703 6.72132 10.1111 7.02537 10.1111 7.46522C10.1111 7.91163 9.80703 8.21562 9.36712 8.21562H5.94502ZM12.317 8.47443C11.7283 8.47443 11.2819 8.0216 11.2819 7.4329C11.2819 6.83777 11.7283 6.39139 12.317 6.39139C12.9122 6.39139 13.3585 6.83777 13.3585 7.4329C13.3585 8.0216 12.9122 8.47443 12.317 8.47443ZM15.3057 8.55849V7.41998C15.3057 6.3267 15.0857 5.71861 14.4906 4.94233L13.9407 4.2372C13.7079 3.07278 13.2744 1.85014 13.0545 1.37143C12.7052 0.640433 12.0388 0.207008 11.1785 0.0905664C10.745 0.0323451 9.3283 0 7.65282 0C5.98384 0 4.56712 0.0388141 4.1337 0.0905664C3.27332 0.194071 2.60054 0.640433 2.25768 1.37143C2.03127 1.85014 1.60432 3.07278 1.36496 4.2372L0.821562 4.94233C0.219946 5.71861 0 6.3267 0 7.41998V8.55849C0 11.3171 15.3057 11.3182 15.3057 8.55849ZM0.86038 12H1.61726C2.10243 12 2.47763 11.6248 2.47763 11.1461V9.53531L0 8.35798V11.1461C0 11.6248 0.375203 12 0.86038 12ZM13.6885 12H14.4518C14.9369 12 15.3057 11.6248 15.3057 11.1461V8.35798L12.8345 9.53531V11.1461C12.8345 11.6248 13.2032 12 13.6885 12Z"
+                                                                    fill={textSecondary}
+                                                                />
+                                                            </svg>
+                                                        )}
+                                                        {infoText(`${timeDisplay} min`)}
+                                                    </>
+                                                )}
+                                                {job.employment_type && (
+                                                    <>
+                                                        {dotSpan}
+                                                        {infoText(
+                                                            job.employment_type
+                                                                .replace(/_/g, "-")
+                                                                .replace(/^\w/, (c) => c.toUpperCase())
+                                                        )}
+                                                    </>
+                                                )}
+                                                {job.visa_sponsorship === "yes" && (
+                                                    <>
+                                                        {dotSpan}
+                                                        {infoText("Sponsors visa")}
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    )
+})
+
 /**
  * Return up to `limit` jobs with at most one per company.
  * If unique companies don't fill `limit`, backfill with remaining duplicates.
@@ -13223,16 +14240,101 @@ function dedupeByCompany(jobs: HomepageJob[], limit: number): HomepageJob[] {
     return [...unique, ...dupes].slice(0, limit)
 }
 
+// ─── MAP PREVIEW CARD ─────────────────────────────────────────────────────────
+// Replaces the BigJobCard in "Jobs near you" — shows a Google Static Maps
+// thumbnail at the user's /geo location and opens the Maps panel on click.
+function MapPreviewCard({
+    googleMapsApiKey,
+    geoCoords,
+    themeColors,
+    borderRadius,
+    style,
+    onClick,
+    isMobile,
+}: {
+    googleMapsApiKey?: string
+    geoCoords: { lat: number; lng: number } | null
+    themeColors: typeof darkColors
+    borderRadius: number
+    style?: React.CSSProperties
+    onClick?: () => void
+    isMobile?: boolean
+}) {
+    const isDark = themeColors.background !== lightColors.background
+
+    const staticMapUrl = React.useMemo(() => {
+        if (!googleMapsApiKey || !geoCoords) return null
+        const { lat, lng } = geoCoords
+        const w = isMobile ? 640 : 544
+        const h = isMobile ? 328 : 544
+        const params = new URLSearchParams({
+            center: `${lat},${lng}`,
+            zoom: "12",
+            size: `${w}x${h}`,
+            scale: "2",
+            maptype: "roadmap",
+            key: googleMapsApiKey,
+        })
+        return `https://maps.googleapis.com/maps/api/staticmap?${params}`
+    }, [googleMapsApiKey, geoCoords, isMobile])
+
+    if (!googleMapsApiKey) return null
+
+    const bg = isDark ? themeColors.surfaceHighlight : themeColors.surface
+
+    return (
+        <div
+            role="button"
+            tabIndex={0}
+            aria-label="Open jobs map"
+            onClick={onClick}
+            onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") onClick?.()
+            }}
+            style={{
+                borderRadius,
+                overflow: "hidden",
+                position: "relative",
+                background: bg,
+                cursor: onClick ? "pointer" : "default",
+                outline: "none",
+                ...style,
+            }}
+        >
+            {staticMapUrl && (
+                <img
+                    src={staticMapUrl}
+                    alt="Map preview"
+                    draggable={false}
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        pointerEvents: "none",
+                        userSelect: "none",
+                    }}
+                />
+            )}
+        </div>
+    )
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 const HomepageJobs = React.memo(function HomepageJobs({
     jobsApiUrl,
+    googleMapsApiKey,
     userQuery,
     isMobileLayout,
     themeColors,
     onOpenSettings,
     onJobClick,
     onHomepageDeckJobs,
+    onOpenMap,
 }: {
     jobsApiUrl: string
+    googleMapsApiKey?: string
     userQuery: string
     isMobileLayout: boolean
     themeColors: typeof darkColors
@@ -13240,6 +14342,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
     onJobClick?: (job: HomepageJob) => void
     /** Flat order: next → near → top, for job panel cycling with chat results */
     onHomepageDeckJobs?: (jobs: HomepageJob[]) => void
+    onOpenMap?: () => void
 }) {
     const [nextJobs, setNextJobs] = React.useState<HomepageJob[]>([])
     const [nearJobs, setNearJobs] = React.useState<HomepageJob[]>([])
@@ -13248,6 +14351,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
     const [loadingNear, setLoadingNear] = React.useState(true)
     const [nearbyBasedOnLocation, setNearbyBasedOnLocation] =
         React.useState(true) // true until we know we fell back to keyword search
+    const [geoCoords, setGeoCoords] = React.useState<{ lat: number; lng: number } | null>(null)
     React.useEffect(() => {
         if (!jobsApiUrl) {
             setLoadingPicks(false)
@@ -13363,6 +14467,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     lat <= 90 &&
                     lng >= -180 &&
                     lng <= 180
+
+                if (hasCoords) setGeoCoords({ lat, lng })
 
                 if (!hasCoords) {
                     setNearbyBasedOnLocation(false)
@@ -13656,7 +14762,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     {nearbyBasedOnLocation ? "Jobs near you" : "Explore jobs"}
                 </div>
                 {m ? (
-                    // Mobile: 4 row cards on top, big card at bottom
+                    // Mobile: map preview card on top, 4 row cards below
                     <div
                         style={{
                             alignSelf: "stretch",
@@ -13665,7 +14771,16 @@ const HomepageJobs = React.memo(function HomepageJobs({
                             display: "flex",
                         }}
                     >
-                        {nearList.slice(1, 5).map((job, i) => (
+                        <MapPreviewCard
+                            googleMapsApiKey={googleMapsApiKey}
+                            geoCoords={geoCoords}
+                            borderRadius={36}
+                            style={{ height: 164 }}
+                            onClick={onOpenMap}
+                            themeColors={themeColors}
+                            isMobile
+                        />
+                        {nearList.slice(0, 4).map((job, i) => (
                             <RowJobCard
                                 key={job?.id ?? i}
                                 job={job}
@@ -13674,21 +14789,9 @@ const HomepageJobs = React.memo(function HomepageJobs({
                                 isMobile
                             />
                         ))}
-                        <BigJobCard
-                            job={nearList[0] ?? null}
-                            borderRadius={36}
-                            style={{ height: 164 }}
-                            onClick={
-                                nearList[0]
-                                    ? () => openJob(nearList[0])
-                                    : undefined
-                            }
-                            themeColors={themeColors}
-                            isMobile
-                        />
                     </div>
                 ) : (
-                    // Desktop: big card left (square by default, grows taller if content needs it), 4 row cards right
+                    // Desktop: map preview card left, 4 row cards right
                     <div
                         style={{
                             alignSelf: "stretch",
@@ -13698,8 +14801,9 @@ const HomepageJobs = React.memo(function HomepageJobs({
                             display: "flex",
                         }}
                     >
-                        <BigJobCard
-                            job={nearList[0] ?? null}
+                        <MapPreviewCard
+                            googleMapsApiKey={googleMapsApiKey}
+                            geoCoords={geoCoords}
                             borderRadius={48}
                             style={{
                                 width: 272,
@@ -13707,11 +14811,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
                                 maxWidth: 272,
                                 minHeight: 272,
                             }}
-                            onClick={
-                                nearList[0]
-                                    ? () => openJob(nearList[0])
-                                    : undefined
-                            }
+                            onClick={onOpenMap}
                             themeColors={themeColors}
                         />
                         <div
@@ -18360,6 +19460,7 @@ export default function OmegleMentorshipUI(props: Props) {
         geminiApiKey,
         skillsApiUrl,
         jobsApiUrl = "https://jobs-proxy.curastem.org",
+        googleMapsApiKey = "",
         systemPrompt,
         accentColor,
         model = "gemini-3.1-flash-lite-preview",
@@ -19052,6 +20153,12 @@ Extract this structure:
         selectedJobRef.current = isJobOpen ? selectedJob : null
     }, [selectedJob, isJobOpen])
 
+    // --- STATE: AGENT SIDEBAR — MAP ---
+    const [isMapOpen, setIsMapOpen] = React.useState(false)
+
+    // True when any agent sidebar panel is open (docs, whiteboard, apps, jobs, map)
+    const isAgentOpen = isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen || isMapOpen
+
     // Delayed flag so context-aware placeholder only shows after the overlay
     // slide-up animation is well underway (~halfway through 250ms).
     const [toolOverlayReady, setToolOverlayReady] = React.useState(false)
@@ -19059,7 +20166,7 @@ Extract this structure:
         const onMobile =
             typeof window !== "undefined" && window.innerWidth < 768
         if (!onMobile) return
-        const anyOverlayOpen = isJobOpen || isDocOpen || isAppOpen
+        const anyOverlayOpen = isJobOpen || isDocOpen || isAppOpen || isMapOpen
         let t: ReturnType<typeof setTimeout>
         if (anyOverlayOpen) {
             t = setTimeout(() => setToolOverlayReady(true), 150)
@@ -19067,10 +20174,7 @@ Extract this structure:
             setToolOverlayReady(false)
         }
         return () => clearTimeout(t)
-    }, [isJobOpen, isDocOpen, isAppOpen])
-
-    // True when any agent sidebar panel is open (docs, whiteboard, apps, jobs)
-    const isAgentOpen = isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen
+    }, [isJobOpen, isDocOpen, isAppOpen, isMapOpen])
 
     // --- STATE: RESUME KEYWORD ANIMATION ---
     // Drives the multi-phase animation: keywords orbit the right sidebar during
@@ -22626,7 +23730,8 @@ Do not include markdown formatting or explanations.`
             !isWhiteboardOpen &&
             !isDocOpen &&
             !isAppOpen &&
-            !isJobOpen
+            !isJobOpen &&
+            !isMapOpen
         ) {
             prevContainerSize.current = containerSize
             return
@@ -22672,7 +23777,8 @@ Do not include markdown formatting or explanations.`
             isWhiteboardOpen ||
             isDocOpen ||
             isAppOpen ||
-            isJobOpen
+            isJobOpen ||
+            isMapOpen
         )
             return
 
@@ -22735,6 +23841,7 @@ Do not include markdown formatting or explanations.`
         isDocOpen,
         isAppOpen,
         isJobOpen,
+        isMapOpen,
         isMobileLayout,
         containerSize,
         isScreenSharing,
@@ -22753,10 +23860,10 @@ Do not include markdown formatting or explanations.`
     const chatHeightBeforeSidebar = React.useRef<number | null>(null)
     const prevSidebarOpen = React.useRef(isSidebarOpen)
 
-    // --- EFFECT: MINIMIZE CHAT WHEN DOC, WHITEBOARD, APP, OR JOBS OPENS ---
+    // --- EFFECT: MINIMIZE CHAT WHEN DOC, WHITEBOARD, APP, JOBS, OR MAP OPENS ---
     // Save previous height and restore when closing
     React.useEffect(() => {
-        if (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) {
+        if (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen || isMapOpen) {
             // Calculate proper initial height based on constraints
             const containerHeight =
                 containerRef.current?.clientHeight || window.innerHeight
@@ -23196,6 +24303,23 @@ Do not include markdown formatting or explanations.`
         appCode,
         appMode,
     ])
+
+    // Persists precise GPS coords across map panel open/close cycles.
+    // Stored here (parent) so re-mounting MapAgentPanel doesn't lose the cached position.
+    const preciseLocRef = React.useRef<{ lat: number; lng: number } | null>(null)
+
+    const toggleMap = React.useCallback(() => {
+        if (isMapOpen) {
+            setIsMapOpen(false)
+        } else {
+            setIsMapOpen(true)
+            // Close other panels — map is mutually exclusive
+            if (isDocOpen) setIsDocOpen(false)
+            if (isWhiteboardOpen) setIsWhiteboardOpen(false)
+            if (isAppOpen) setIsAppOpen(false)
+            setIsJobOpen(false)
+        }
+    }, [isMapOpen, isDocOpen, isWhiteboardOpen, isAppOpen])
 
     // Pull-to-dismiss for the mobile tool overlay (drives ModalSheet's dragY).
     const overlayDragY = useMotionValue(0)
@@ -28954,7 +30078,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
         let activeWidth: number
         let activeHeight: number
 
-        if (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen) {
+        if (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen || isMapOpen) {
             return {
                 width: "100%",
                 height: "100%",
@@ -29601,6 +30725,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     isAppOpen={isAppOpen}
                     toggleApp={toggleApp}
                     isJobOpen={isJobOpen}
+                    isMapOpen={isMapOpen}
+                    toggleMap={toggleMap}
                     isConnected={status === "connected" && !isLiveMode}
                     status={status}
                     isMobileLayout={isMobileLayout}
@@ -29670,6 +30796,32 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 </div>
             )
         }
+
+        // Map panel — shown when map is open and no doc/whiteboard/app is layered on top.
+        // Checked after job panel so a job opened from the map overlays on top; closing
+        // the job returns here naturally since isMapOpen is still true.
+        if (isMapOpen && !isDocOpen && !isWhiteboardOpen && !isAppOpen) {
+            return (
+                <div
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        position: "relative",
+                        overflow: "hidden",
+                    }}
+                >
+                    <MapAgentPanel
+                        jobsApiUrl={jobsApiUrl}
+                        googleMapsApiKey={googleMapsApiKey}
+                        themeColors={themeColors}
+                        isMobile={isMobileLayout}
+                        onClose={() => setIsMapOpen(false)}
+                        preciseLocRef={preciseLocRef}
+                    />
+                </div>
+            )
+        }
+
         const toolPanelRadius = isMobileLayout
             ? "28px 28px 0 0"
             : "28px 0 0 28px"
@@ -30342,6 +31494,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     isAppOpen={isAppOpen}
                                     toggleApp={toggleApp}
                                     isJobOpen={isJobOpen}
+                                    isMapOpen={isMapOpen}
+                                    toggleMap={toggleMap}
                                     isConnected={
                                         status === "connected" && !isLiveMode
                                     }
@@ -30498,12 +31652,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         jobsApiUrl && (
                             <HomepageJobs
                                 jobsApiUrl={jobsApiUrl}
+                                googleMapsApiKey={googleMapsApiKey}
                                 userQuery={youWork}
                                 isMobileLayout={isMobileLayout}
                                 themeColors={themeColors}
                                 onOpenSettings={() => setShowYouSettings(true)}
                                 onJobClick={openJobDetail}
                                 onHomepageDeckJobs={handleHomepageDeckJobs}
+                                onOpenMap={toggleMap}
                             />
                         )}
                     {messages.map((msg, idx) => {
@@ -30654,7 +31810,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         justifyContent: "flex-end",
                         alignItems: "center",
                         zIndex:
-                            isMobileLayout && (isDocOpen || isJobOpen)
+                            isMobileLayout && (isDocOpen || isJobOpen || isMapOpen)
                                 ? 10001
                                 : 1000,
                         pointerEvents: "none",
@@ -30744,6 +31900,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         isAppOpen={isAppOpen}
                         toggleApp={toggleApp}
                         isJobOpen={isJobOpen}
+                        isMapOpen={isMapOpen}
+                        toggleMap={toggleMap}
                         isConnected={status === "connected" && !isLiveMode}
                         status={status}
                         isMobileLayout={isMobileLayout}
@@ -31040,7 +32198,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             isWhiteboardOpen ||
             isDocOpen ||
             isAppOpen ||
-            isJobOpen
+            isJobOpen ||
+            isMapOpen
         const targetRatio =
             isMultiParty || (isContentOpen && isMultiParty) ? 1.0 : 1.55
 
@@ -31477,7 +32636,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             !!remoteScreenStream ||
             isWhiteboardOpen ||
             isDocOpen ||
-            isAppOpen
+            isAppOpen ||
+            isJobOpen ||
+            isMapOpen
 
         // Hide tiles and drag bar when idle with no role — user will use the "Join video call" button instead
         const isIdleNoRole = status === "idle" && !role && !isLiveMode
@@ -34618,7 +35779,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             (isDocOpen ||
                                 isWhiteboardOpen ||
                                 isAppOpen ||
-                                isJobOpen)
+                                isJobOpen ||
+                                isMapOpen)
                                 ? chatWidth
                                 : "100%",
                         flexGrow:
@@ -34626,7 +35788,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             (isDocOpen ||
                                 isWhiteboardOpen ||
                                 isAppOpen ||
-                                isJobOpen)
+                                isJobOpen ||
+                                isMapOpen)
                                 ? 0
                                 : 1,
                     }}
@@ -34650,7 +35813,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             (isDocOpen ||
                                 isWhiteboardOpen ||
                                 isAppOpen ||
-                                isJobOpen)
+                                isJobOpen ||
+                                isMapOpen)
                     )}
 
                     {/* Video Call Icon — same position as new chat button, shown when idle with no messages */}
@@ -34811,7 +35975,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     (isDocOpen ||
                         isWhiteboardOpen ||
                         isAppOpen ||
-                        isJobOpen) && (
+                        isJobOpen ||
+                        isMapOpen) && (
                         <div
                             onPointerDown={(e) =>
                                 handlePointerDown(e, "horizontal-sidebar")
@@ -34833,7 +35998,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         (isDocOpen ||
                             isWhiteboardOpen ||
                             isAppOpen ||
-                            isJobOpen) && (
+                            isJobOpen ||
+                            isMapOpen) && (
                             <motion.div
                                 data-layer="desktop-tool-panel"
                                 className="DesktopToolPanel"
@@ -35422,6 +36588,14 @@ addPropertyControls(OmegleMentorshipUI, {
         description:
             "URL of the Curastem Jobs proxy Worker. No API key needed — the key is stored server-side.",
         defaultValue: "https://jobs-proxy.curastem.org",
+    },
+    googleMapsApiKey: {
+        type: ControlType.String,
+        title: "Google Maps API Key",
+        description:
+            "Browser-restricted Maps JavaScript API key. Enable: Maps JavaScript API, Marker library (AdvancedMarkerElement job chips), Geocoding API, Distance Matrix API. Restrict to your site's origin.",
+        defaultValue: "",
+        obscured: true,
     },
     model: {
         type: ControlType.String,

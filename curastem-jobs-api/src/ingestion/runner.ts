@@ -25,6 +25,8 @@ import {
   batchMarkJobsEmbedded,
   batchSetLanguage,
   batchUpsertJobs,
+  batchGetCompanyLocationCoords,
+  upsertCompanyLocationGeocode,
   getJobsNeedingEmbedding,
   getJobsNeedingLanguageDetection,
   getLocationsNeedingGeocode,
@@ -39,9 +41,11 @@ import {
 import { backfillConsiderDescriptions } from "../enrichment/consider-descriptions.ts";
 import { embedJob } from "../enrichment/ai.ts";
 import { runCompanyEnrichment, runExaEnrichment } from "../enrichment/company.ts";
+import { runCompanyPlacesGeocode } from "../enrichment/placesGeocodeCompanies.ts";
 import { runCompanyWebsiteProbeBatch } from "../enrichment/websiteProbe.ts";
 import { getFetcher, getSourcePriority } from "./registry.ts";
 import { geocode } from "../utils/geocode.ts";
+import { placesGeocode, hasGeocodeableCity, normalizeLocationForGeocode } from "../utils/placesGeocode.ts";
 import type { Env, IngestionResult, SourceRow } from "../types.ts";
 import {
   buildDedupKey,
@@ -224,34 +228,112 @@ async function processSource(
     existingMap = new Map(); // treat all as new inserts
   }
 
-  // ── Phase 4b: Inline geocode unique primary locations (locations[0] = normalizeLocation(raw))
-  // Coords are keyed off the normalized string, which is what ends up in locations[0] in the DB.
+  // ── Phase 4b: Inline geocode unique primary locations ──────────────────────
+  // Strategy (unified for all companies):
+  //   1. Check company_location_geocodes D1 table — free, instant, persistent cache.
+  //   2. Cache miss + GOOGLE_MAPS_API_KEY → Places API "{Company} {City, ST}"
+  //      → saves result to D1 cache so the same (company, city) is never billed twice.
+  //   3. No API key or Places API failure → fall back to Photon/Nominatim (free,
+  //      city-level accuracy — better than nothing).
+  // Cap at 50 Places API calls per source run to stay within Worker CPU budget.
   const INLINE_GEOCODE_CAP = 50;
-  const uniqueLocations = [...new Set(
-    nonDupMetas
-      .map((m) => primaryNormalizedLocation(m.normalized.location))
-      .filter((l): l is string => Boolean(l?.trim()))
-  )].slice(0, INLINE_GEOCODE_CAP);
+
+  // Build unique (companyId, normalizedLocation) pairs for this run
+  const pairsToCheck: Array<{ company_id: string; location_key: string; company_name: string }> = [];
+  const seenPairKeys = new Set<string>();
+  for (const m of nonDupMetas) {
+    const slug =
+      aliasCache.get(slugify(m.normalized.company_name)) ?? slugify(m.normalized.company_name);
+    const rawLoc = primaryNormalizedLocation(m.normalized.location, slug);
+    if (!rawLoc?.trim()) continue;
+    const locationKey = normalizeLocationForGeocode(rawLoc);
+    const pairKey = `${m.companyId}|${locationKey}`;
+    if (!seenPairKeys.has(pairKey)) {
+      seenPairKeys.add(pairKey);
+      pairsToCheck.push({ company_id: m.companyId, location_key: locationKey, company_name: m.normalized.company_name });
+    }
+  }
+
+  // Batch-lookup D1 cache first
+  const cachedCoords = await batchGetCompanyLocationCoords(db, pairsToCheck);
+
+  // locationToCoords: keyed by original raw location string (before normalization)
+  // so we can look up coords when building upsert inputs below
   const locationToCoords = new Map<string, { lat: number; lng: number }>();
-  for (const loc of uniqueLocations) {
+
+  // Populate from D1 cache hits
+  for (const { company_id, location_key, company_name: _ } of pairsToCheck) {
+    const cached = cachedCoords.get(`${company_id}|${location_key}`);
+    if (cached) locationToCoords.set(location_key, { lat: cached.lat, lng: cached.lng });
+  }
+
+  // Call Places API for cache misses (capped to avoid Worker timeout)
+  const misses = pairsToCheck.filter(
+    (p) => !cachedCoords.has(`${p.company_id}|${p.location_key}`) && hasGeocodeableCity(p.location_key)
+  ).slice(0, INLINE_GEOCODE_CAP);
+
+  let placesApiCalls = 0;
+  if (env.GOOGLE_MAPS_API_KEY) {
+    for (const { company_id, location_key, company_name } of misses) {
+      if (locationToCoords.has(location_key)) continue; // already resolved by earlier pair
+      try {
+        const result = await placesGeocode(
+          `${company_name} ${location_key}`,
+          env.GOOGLE_MAPS_API_KEY,
+          env.RATE_LIMIT_KV,
+        );
+        if (result) {
+          locationToCoords.set(location_key, { lat: result.lat, lng: result.lng });
+          // Persist to D1 so future jobs for this (company, city) skip the API call
+          await upsertCompanyLocationGeocode(db, {
+            company_id,
+            location_key,
+            lat: result.lat,
+            lng: result.lng,
+            address: result.formattedAddress,
+          });
+          placesApiCalls++;
+        }
+      } catch (err) {
+        logger.warn("places_geocode_inline_failed", { company_name, location_key, error: String(err) });
+      }
+    }
+  }
+
+  // Fallback: Photon/Nominatim for anything still unresolved (free, city-level)
+  const stillUnresolved = [...new Set(
+    pairsToCheck
+      .map((p) => p.location_key)
+      .filter((k) => !locationToCoords.has(k))
+  )];
+  for (const loc of stillUnresolved) {
     try {
       const result = await geocode(loc, env.RATE_LIMIT_KV);
       if (result) {
         locationToCoords.set(loc, { lat: result.lat, lng: result.lng });
-        if (result.usedNominatim) await new Promise((r) => setTimeout(r, 1100)); // Nominatim 1 req/sec
+        if (result.usedNominatim) await new Promise((r) => setTimeout(r, 1100));
       }
     } catch (err) {
-      logger.warn("geocode_inline_failed", { location: loc, error: String(err) });
+      logger.warn("geocode_inline_fallback_failed", { location: loc, error: String(err) });
     }
+  }
+
+  if (placesApiCalls > 0) {
+    logger.info("inline_geocode_places_calls", { source_id: source.id, calls: placesApiCalls });
   }
 
   // ── Phase 5: Batch INSERT new + UPDATE existing — 2 D1 subrequests total ──
   const upsertInputs = nonDupMetas.map(({ jobId, companyId, dedupKey, normalized }) => {
-    const normLoc = primaryNormalizedLocation(normalized.location);
-    const coords = normLoc ? locationToCoords.get(normLoc) : null;
+    const company_slug =
+      aliasCache.get(slugify(normalized.company_name)) ?? slugify(normalized.company_name);
+    const normLoc = primaryNormalizedLocation(normalized.location, company_slug);
+    // Look up by normalized (geocoder-friendly) location key, not the raw ATS string
+    const locationKey = normLoc ? normalizeLocationForGeocode(normLoc) : null;
+    const coords = locationKey ? locationToCoords.get(locationKey) : null;
     return {
       id:           jobId,
       company_id:   companyId,
+      company_slug,
       source_id:    source.id,
       external_id:  normalized.external_id,
       source_name:  source.source_type,
@@ -606,6 +688,16 @@ export async function runIngestion(env: Env): Promise<void> {
     await backfillGeocode(env);
   } catch (err) {
     logger.error("geocode_backfill_cron_failed", { error: String(err) });
+  }
+
+  // Places API geocoding — company HQ coords for newly enriched companies only.
+  // Per-job geocoding for retail chains runs inline during ingestion (above), not here.
+  if (env.GOOGLE_MAPS_API_KEY) {
+    try {
+      await runCompanyPlacesGeocode(env.JOBS_DB, env.GOOGLE_MAPS_API_KEY, env.RATE_LIMIT_KV);
+    } catch (err) {
+      logger.error("company_places_geocode_cron_failed", { error: String(err) });
+    }
   }
 
   // Consider description backfill — fetches full job descriptions from the native

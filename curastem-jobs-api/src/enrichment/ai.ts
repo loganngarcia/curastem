@@ -234,15 +234,15 @@ ${descriptionText.slice(0, 8000)}
   "minimum_qualifications": ["<concise bullet>"],
   "preferred_qualifications": ["<concise bullet>"],
   "workplace_type": "remote|hybrid|on_site|null",
-  "employment_type": "full_time|part_time|contract|internship|temporary|null",
-  "seniority_level": "new_grad|entry|mid|senior|staff|manager|director|executive|null",
+  "employment_type": "full_time|part_time|contract|temporary|volunteer|null",
+  "seniority_level": "new_grad|internship|entry|mid|senior|staff|manager|director|executive|null",
   "description_language": "<ISO 639-1>|null",
   "visa_sponsorship": "yes|no|null",
   "salary_min": <number|null>,
   "salary_max": <number|null>,
   "salary_period": "year|month|hour|null",
   "experience_years_min": <integer|null>,
-  "locations": ["City, ST" or "City, Country"],
+  "locations": ["<City, ST for US, or City + full country name for non-US — never ISO country codes in strings>"] | null,
   "job_address": "<street address from description body>|null",
   "job_city": "<full city name>|null",
   "job_state": "<2-letter US state>|null",
@@ -251,14 +251,14 @@ ${descriptionText.slice(0, 8000)}
 
 Rules:
 - workplace_type: "remote" = 100% remote, no office. "hybrid" = has specific city + some remote, or "X days in office". "on_site" = in-person only. If a physical location is given alongside remote, use "hybrid" not "remote". null = not mentioned.
-- employment_type: "full_time" includes "Regular"/"Permanent"/no qualifier. "contract" includes freelance/C2C/1099/fixed-term. null = genuinely ambiguous.
-- seniority_level: "new_grad" only if explicitly targeting new graduates. "Junior"/"Associate" = entry. IC roles with "Manager" in title = not manager seniority. null = not enough info.
+- employment_type: "full_time" includes "Regular"/"Permanent"/no qualifier. "contract" includes freelance/C2C/1099/fixed-term. "volunteer" = unpaid/community role. null = genuinely ambiguous.
+- seniority_level: "new_grad" only if explicitly targeting new graduates. "internship" = paid/unpaid internship roles. "Junior"/"Associate" = entry. IC roles with "Manager" in title = not manager seniority. null = not enough info.
 - salary: USD numbers only, exact as stated. Do NOT annualize. null if not mentioned.
 - experience_years_min: lowest number from ranges ("2-5 years" → 2, "5+ years" → 5). null if not mentioned.
-- locations: city-level only ("City, ST" for US, "City, Country" for intl). Never include street addresses or road suffixes. Prefer ATS location hints over job title text. "Remote" only if truly 100% remote.
+- locations: city-level only — US: "City, ST" (2-letter state); non-US: "City, <full English country name>" (e.g. "London, United Kingdom", "Toronto, Canada"). Do not use ISO country abbreviations inside location strings (no "UK", "IN" as country). Never include street addresses or road suffixes. null if no physical location can be determined.
 - job_address: only if a full street address appears in the description body — never from the job title.
 - job_city/job_state/job_country: prefer ATS location hints. job_state = 2-letter US abbrev only. job_country = ISO-2 (e.g. "US", "GB").
-- Empty arrays [] for missing sections. null for missing scalar fields. Do not invent facts.
+- Empty arrays [] for missing list sections (except locations: prefer null when unknown, not []). null for missing scalar fields. Do not invent facts.
 `.trim();
 
 export interface ExtractedJobFields {
@@ -428,8 +428,8 @@ export async function extractJobFields(
   };
 
   const WORKPLACE_TYPES = ["remote", "hybrid", "on_site"] as const;
-  const EMPLOYMENT_TYPES = ["full_time", "part_time", "contract", "internship", "temporary"] as const;
-  const SENIORITY_LEVELS = ["new_grad", "entry", "mid", "senior", "staff", "manager", "director", "executive"] as const;
+  const EMPLOYMENT_TYPES = ["full_time", "part_time", "contract", "temporary", "volunteer"] as const;
+  const SENIORITY_LEVELS = ["new_grad", "internship", "entry", "mid", "senior", "staff", "manager", "director", "executive"] as const;
   const isValidLangCode = (v: unknown): v is import("../types.ts").DescriptionLanguage =>
     typeof v === "string" && /^[a-z]{2}$/.test(v);
 

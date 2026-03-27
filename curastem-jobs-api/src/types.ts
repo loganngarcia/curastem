@@ -70,6 +70,14 @@ export interface Env {
    * Set via: wrangler secret put EXA_API_KEY
    */
   EXA_API_KEY?: string;
+  /**
+   * Google Maps Platform API key — used for Places API (New) geocoding.
+   * Required for company HQ auto-geocoding and per-job geocoding for
+   * retail/franchise companies (CVS, Dollar Tree, etc.).
+   * Needs: Places API (New), Maps JavaScript API.
+   * Set via: wrangler secret put GOOGLE_MAPS_API_KEY
+   */
+  GOOGLE_MAPS_API_KEY?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -276,8 +284,8 @@ export type EmploymentType =
   | "full_time"
   | "part_time"
   | "contract"
-  | "internship"
-  | "temporary";
+  | "temporary"
+  | "volunteer";
 
 export type WorkplaceType = "remote" | "hybrid" | "on_site";
 
@@ -334,6 +342,7 @@ export type DescriptionLanguage =
  */
 export type SeniorityLevel =
   | "new_grad"
+  | "internship"
   | "entry"
   | "mid"
   | "senior"
@@ -442,6 +451,15 @@ export interface PublicJob {
   job_state: string | null;
   /** Country from the posting (ISO-2 or full name for international). */
   job_country: string | null;
+  /**
+   * Geocoded latitude of the primary job location (locations[0]).
+   * Populated at ingestion via Photon/Nominatim for most companies,
+   * or via Places API for whitelisted retail chains (CVS, Domino's, etc.)
+   * for store-level precision. null = not yet geocoded or location unknown.
+   */
+  location_lat: number | null;
+  /** Geocoded longitude of the primary job location. */
+  location_lng: number | null;
 
   /**
    * Skill and technology keywords extracted from the job description.

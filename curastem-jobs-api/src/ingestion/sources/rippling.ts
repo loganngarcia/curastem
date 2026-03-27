@@ -171,7 +171,7 @@ function mapEmployment(label: string | undefined): EmploymentType | null {
   if (u.includes("SALARIED_PT") || u.includes("PART")) return "part_time";
   if (u.includes("HOURLY")) return u.includes("PT") ? "part_time" : "full_time";
   if (u.includes("CONTRACT")) return "contract";
-  if (u.includes("INTERN")) return "internship";
+  if (u.includes("INTERN")) return null; // internship is seniority_level, not employment_type
   if (u.includes("TEMP")) return "temporary";
   return null;
 }

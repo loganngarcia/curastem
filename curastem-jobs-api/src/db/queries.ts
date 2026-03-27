@@ -174,6 +174,8 @@ export async function updateCompanyEnrichment(
     hq_country?: string | null;
     hq_lat?: number | null;
     hq_lng?: number | null;
+    /** Set to epoch timestamp when Places geocode fails; null to clear (retry). */
+    hq_geocode_failed_at?: number | null;
     industry?: string | null;
     company_type?: string | null;
     total_funding_usd?: number | null;
@@ -190,6 +192,15 @@ export async function updateCompanyEnrichment(
     }
   }
   if (sets.length === 0) return;
+
+  // When location data improves, reset the failure flag so Places geocode retries.
+  if (
+    fields.hq_city !== undefined ||
+    fields.hq_country !== undefined ||
+    fields.hq_address !== undefined
+  ) {
+    sets.push("hq_geocode_failed_at = NULL");
+  }
 
   sets.push("updated_at = ?");
   bindings.push(now);
@@ -542,6 +553,8 @@ export interface UpsertJobInput {
   dedup_key: string;
   normalized: NormalizedJob;
   now: number;
+  /** Canonical company slug — improves location normalization (ATS quirks per employer). */
+  company_slug?: string | null;
   /** Geocoded coords — set at insert time when available. */
   location_lat?: number | null;
   location_lng?: number | null;
@@ -585,7 +598,7 @@ export async function upsertJob(
   } = normalized;
 
   const { normalizeLocationsList } = await import("../utils/normalize.ts");
-  const locs = normalizeLocationsList(locationRaw);
+  const locs = normalizeLocationsList(locationRaw, input.company_slug);
   const locationsJson = locs && locs.length > 0 ? JSON.stringify(locs) : null;
 
   const existing = await db
@@ -859,13 +872,13 @@ export async function batchUpsertJobs(
   const { detectLanguage } = await import("../enrichment/language.ts");
 
   for (let i = 0; i < inputs.length; i++) {
-    const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now, location_lat, location_lng } = inputs[i];
+    const { id, company_id, source_id, external_id, source_name, dedup_key, normalized, now, location_lat, location_lng, company_slug } = inputs[i];
     const {
       title, location: locationRaw, employment_type, workplace_type, apply_url, source_url,
       description_raw, salary_min, salary_max, salary_currency, salary_period, posted_at,
     } = normalized;
 
-    const locs = normalizeLocationsList(locationRaw);
+    const locs = normalizeLocationsList(locationRaw, company_slug);
     const locationsJson = locs && locs.length > 0 ? JSON.stringify(locs) : null;
     const existing = existingMap.get(external_id);
 
@@ -1213,6 +1226,8 @@ export interface ListJobsRow {
   job_city: string | null;
   job_state: string | null;
   job_country: string | null;
+  location_lat: number | null;
+  location_lng: number | null;
   // joined company fields
   company_name: string;
   company_logo_url: string | null;
@@ -1334,6 +1349,7 @@ export async function listJobs(
       j.apply_url, j.source_url, j.source_name,
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
       j.experience_years_min, j.job_address, j.job_city, j.job_state, j.job_country,
+      j.location_lat, j.location_lng,
       j.job_summary, j.ai_generated_at, j.embedding_generated_at,
       j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
       c.name                 AS company_name,
@@ -1393,6 +1409,165 @@ export async function listJobs(
     rows: dataResult.results ?? [],
     total: countResult?.n ?? 0,
   };
+}
+
+/**
+ * One row per (company × ~10km geographic bucket).
+ * Uses per-job coordinates when geocoded (retail/franchise stores), falls back to
+ * company HQ otherwise.  Grouping by ROUND(lat,1) / ROUND(lng,1) produces ~10km
+ * buckets — enough to split e.g. "Dominos NYC" from "Dominos LA" while merging
+ * stores on the same block into one chip.
+ *
+ * chip_lat / chip_lng are the AVG of actual coords in the bucket so the chip sits
+ * at the geographic centroid of those jobs, not the rounded grid point.
+ */
+export interface MapCompanyRow {
+  company_id: string;
+  company_name: string;
+  company_logo_url: string | null;
+  company_slug: string;
+  chip_lat: number;
+  chip_lng: number;
+  company_hq_lat: number;
+  company_hq_lng: number;
+  company_hq_city: string | null;
+  company_hq_country: string | null;
+  company_hq_address: string | null;
+  job_count: number;
+}
+
+export interface MapBbox {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+}
+
+export interface MapCenter {
+  lat: number;
+  lng: number;
+}
+
+export async function listJobsForMap(
+  db: D1Database,
+  since: number,
+  bbox?: MapBbox,
+  center?: MapCenter,
+  limit = 100
+): Promise<MapCompanyRow[]> {
+  // Filter on the job's effective location (per-job coords when geocoded, HQ otherwise)
+  // so chips that are visually outside the viewport are excluded — not just those
+  // whose company HQ happens to fall inside it.
+  const bboxClause = bbox
+    ? `AND COALESCE(j.location_lat, c.hq_lat) BETWEEN ${bbox.minLat} AND ${bbox.maxLat}
+         AND COALESCE(j.location_lng, c.hq_lng) BETWEEN ${bbox.minLng} AND ${bbox.maxLng}`
+    : "";
+
+  // Order by squared distance from map center using the chip centroid (AVG expression).
+  // No sqrt needed since we only care about relative order.
+  const orderClause = center
+    ? `ORDER BY (AVG(COALESCE(j.location_lat, c.hq_lat)) - ${center.lat}) *
+                (AVG(COALESCE(j.location_lat, c.hq_lat)) - ${center.lat}) +
+                (AVG(COALESCE(j.location_lng, c.hq_lng)) - ${center.lng}) *
+                (AVG(COALESCE(j.location_lng, c.hq_lng)) - ${center.lng}) ASC`
+    : `ORDER BY job_count DESC`;
+
+  const { results } = await db
+    .prepare(
+      `SELECT
+         c.id          AS company_id,
+         c.name        AS company_name,
+         c.logo_url    AS company_logo_url,
+         c.slug        AS company_slug,
+         AVG(COALESCE(j.location_lat, c.hq_lat)) AS chip_lat,
+         AVG(COALESCE(j.location_lng, c.hq_lng)) AS chip_lng,
+         c.hq_lat      AS company_hq_lat,
+         c.hq_lng      AS company_hq_lng,
+         c.hq_city     AS company_hq_city,
+         c.hq_country  AS company_hq_country,
+         c.hq_address  AS company_hq_address,
+         COUNT(j.id)   AS job_count
+       FROM companies c
+       JOIN jobs j ON j.company_id = c.id
+       WHERE COALESCE(j.posted_at, j.first_seen_at) >= ?
+         AND (j.workplace_type IS NULL OR j.workplace_type != 'remote')
+         AND c.hq_lat IS NOT NULL
+         ${bboxClause}
+       GROUP BY c.id,
+                ROUND(COALESCE(j.location_lat, c.hq_lat), 1),
+                ROUND(COALESCE(j.location_lng, c.hq_lng), 1)
+       ${orderClause}
+       LIMIT ${limit}`
+    )
+    .bind(since)
+    .all<MapCompanyRow>();
+  return results ?? [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// company_location_geocodes — persistent per-job geocode cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface CompanyLocationRow {
+  company_id: string;
+  location_key: string;
+  lat: number;
+  lng: number;
+  address: string | null;
+}
+
+/**
+ * Batch-fetch cached (company, location) coords from the D1 table.
+ * Returns a Map keyed by "companyId|locationKey" for O(1) lookups.
+ */
+export async function batchGetCompanyLocationCoords(
+  db: D1Database,
+  pairs: Array<{ company_id: string; location_key: string }>
+): Promise<Map<string, { lat: number; lng: number; address: string | null }>> {
+  const out = new Map<string, { lat: number; lng: number; address: string | null }>();
+  if (pairs.length === 0) return out;
+
+  // Build composite keys for the IN clause
+  const keys = pairs.map((p) => `${p.company_id}|${p.location_key}`);
+  const placeholders = keys.map(() => "?").join(",");
+  const { results } = await db
+    .prepare(
+      `SELECT company_id, location_key, lat, lng, address
+       FROM company_location_geocodes
+       WHERE company_id || '|' || location_key IN (${placeholders})`
+    )
+    .bind(...keys)
+    .all<CompanyLocationRow>();
+
+  for (const row of results ?? []) {
+    out.set(`${row.company_id}|${row.location_key}`, {
+      lat: row.lat,
+      lng: row.lng,
+      address: row.address,
+    });
+  }
+  return out;
+}
+
+/**
+ * Upsert geocoded coords for a (company, location) pair.
+ * ON CONFLICT DO NOTHING — first geocode wins; stale updates ignored to avoid
+ * unnecessary D1 writes if the cache is already warm.
+ */
+export async function upsertCompanyLocationGeocode(
+  db: D1Database,
+  row: CompanyLocationRow
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await db
+    .prepare(
+      `INSERT INTO company_location_geocodes
+         (company_id, location_key, lat, lng, address, geocoded_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (company_id, location_key) DO NOTHING`
+    )
+    .bind(row.company_id, row.location_key, row.lat, row.lng, row.address ?? null, now)
+    .run();
 }
 
 /**
@@ -1522,7 +1697,9 @@ export async function listJobsNear(
     c.employee_count_range AS company_employee_count_range,
     c.founded_year AS company_founded_year,
     c.hq_address AS company_hq_address, c.hq_city AS company_hq_city,
-    c.hq_country AS company_hq_country, c.industry AS company_industry,
+    c.hq_country AS company_hq_country,
+    c.hq_lat AS company_hq_lat, c.hq_lng AS company_hq_lng,
+    c.industry AS company_industry,
     c.company_type AS company_type, c.total_funding_usd AS company_total_funding_usd`;
 
   const sql = `
@@ -1930,6 +2107,65 @@ export async function getMarketStats(db: D1Database): Promise<MarketStats> {
     total_companies: (totalCompaniesResult.results[0] as { n: number })?.n ?? 0,
     total_sources: (totalSourcesResult.results[0] as { n: number })?.n ?? 0,
   };
+}
+
+/**
+ * Companies that need Places API geocoding:
+ *   - no coordinates yet (hq_lat IS NULL)
+ *   - never failed before (hq_geocode_failed_at IS NULL)
+ *   - have enough data to geocode (city or address)
+ *
+ * The hq_geocode_failed_at guard prevents retrying companies whose location
+ * data genuinely doesn't match anything in Places. It is cleared by
+ * updateCompanyEnrichment whenever hq_city or hq_country is updated.
+ */
+export async function listCompaniesNeedingPlacesGeocode(
+  db: D1Database,
+  limit: number
+): Promise<Array<{ id: string; name: string; hq_city: string | null; hq_country: string | null; hq_address: string | null }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, name, hq_city, hq_country, hq_address
+       FROM companies
+       WHERE hq_lat IS NULL
+         AND hq_geocode_failed_at IS NULL
+         AND (hq_city IS NOT NULL OR hq_address IS NOT NULL)
+       ORDER BY updated_at DESC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ id: string; name: string; hq_city: string | null; hq_country: string | null; hq_address: string | null }>();
+  return results ?? [];
+}
+
+/**
+ * Jobs from whitelisted per-job-geocode companies that still need location coords.
+ * Returns job id, location primary string, and company name for the Places query.
+ */
+export async function listJobsNeedingPlacesGeocode(
+  db: D1Database,
+  companySlugs: string[],
+  limit: number
+): Promise<Array<{ id: string; location_primary: string; company_name: string }>> {
+  if (companySlugs.length === 0) return [];
+  const placeholders = companySlugs.map(() => "?").join(", ");
+  // location_primary = locations[0], the primary normalized location string
+  const { results } = await db
+    .prepare(
+      `SELECT j.id, json_extract(j.locations, '$[0]') AS location_primary, c.name AS company_name
+       FROM jobs j
+       JOIN companies c ON c.id = j.company_id
+       WHERE c.slug IN (${placeholders})
+         AND j.location_lat IS NULL
+         AND j.locations IS NOT NULL
+         AND json_extract(j.locations, '$[0]') IS NOT NULL
+         AND json_extract(j.locations, '$[0]') NOT LIKE '%emote%'
+       ORDER BY j.first_seen_at DESC
+       LIMIT ?`
+    )
+    .bind(...companySlugs, limit)
+    .all<{ id: string; location_primary: string; company_name: string }>();
+  return results ?? [];
 }
 
 /**

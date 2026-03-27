@@ -7,6 +7,7 @@
  */
 
 import type { EmploymentType, SalaryPeriod, SeniorityLevel, WorkplaceType } from "../types.ts";
+import { applyLocationPrePipeline } from "./companyLocationNormalize.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Company slug
@@ -53,12 +54,12 @@ const EMPLOYMENT_TYPE_MAP: Record<string, EmploymentType> = {
   full_time: "full_time",
   part_time: "part_time",
   contract: "contract",
-  internship: "internship",
+  // "internship" → seniority_level now, not employment_type
   temporary: "temporary",
+  volunteer: "volunteer",
   // Lever
   "full-time": "full_time",
   "part-time": "part_time",
-  intern: "internship",
   // Workday / SmartRecruiters
   "full time": "full_time",
   "part time": "part_time",
@@ -195,6 +196,10 @@ const NON_GEOCODABLE = new Set([
   "united states & canada",
   "shape",
   "hybrid",
+  // Workplace labels with no placename (not remote / not hybrid — just non-geographic)
+  "in-office",
+  "distributed",
+  "national capital region",
   "va",
   "turkey",
   "riverside",
@@ -2668,9 +2673,16 @@ const CITY_ALIASES: Record<string, string> = {
  *   8. Apply city aliases (Bangalore → Bengaluru, etc.)
  *   9. Return cleaned string as-is if no rule matched
  */
-export function normalizeLocation(raw: string | null | undefined): string | null {
+export function normalizeLocation(
+  raw: string | null | undefined,
+  companySlug?: string | null,
+): string | null {
   if (!raw) return null;
-  const s = raw.trim().replace(/\s+/g, " ");
+  let s = raw.trim().replace(/\s+/g, " ");
+  if (!s) return null;
+
+  // 0. ATS / company-specific pre-normalization (Amazon US,ST, Boeing USA -, CVS, …)
+  s = applyLocationPrePipeline(s, companySlug);
   if (!s) return null;
 
   // 1. Multi-location split FIRST so "Austin, TX | Remote" → city, not "Remote"
@@ -2689,21 +2701,21 @@ export function normalizeLocation(raw: string | null | undefined): string | null
 
   // 4a. Full street address → extract city+state from tail
   const addrMatch = first.match(STREET_ADDRESS_RE) ?? first.match(STREET_ADDRESS_RE2);
-  if (addrMatch) return normalizeLocation(addrMatch[1]);
+  if (addrMatch) return normalizeLocation(addrMatch[1], companySlug);
 
   if (/^\d+\s+[A-Za-z]/.test(first)) {
     const parts = first.split(/,\s*/);
     if (parts.length >= 3 && /^[A-Z]{2}(\s+\d{5})?$/.test(parts[parts.length - 1].trim())) {
       const cityState = `${parts[parts.length - 2].trim()}, ${parts[parts.length - 1].trim()}`
         .replace(/\s*\d{5}(-\d{4})?$/, "").trim();
-      return normalizeLocation(cityState);
+      return normalizeLocation(cityState, companySlug);
     }
     return null;
   }
 
   // 4b. Industrial estate → extract city from end: "Hemaraj ... Estate, RAYONG" → "Rayong"
   const estateMatch = first.match(INDUSTRIAL_ESTATE_RE);
-  if (estateMatch) return normalizeLocation(estateMatch[1]);
+  if (estateMatch) return normalizeLocation(estateMatch[1], companySlug);
 
   // 4c. Strip leading non-alpha garbage and leading HQ/headquarters prefixes
   //     Also strip "City-HQ" dash-attached suffix
@@ -2735,7 +2747,7 @@ export function normalizeLocation(raw: string | null | undefined): string | null
     if (parts.length >= 3 && /^[A-Z]{2}(\s+\d{5})?$/.test(parts[parts.length - 1].trim())) {
       const cityState = `${parts[parts.length - 2].trim()}, ${parts[parts.length - 1].trim()}`
         .replace(/\s*\d{5}(-\d{4})?$/, "").trim();
-      return normalizeLocation(cityState);
+      return normalizeLocation(cityState, companySlug);
     }
   }
 
@@ -2934,14 +2946,17 @@ export function normalizeLocation(raw: string | null | undefined): string | null
  * normalize each segment. Dedupes case-insensitively while preserving order.
  * Used at ingest so `jobs.locations` JSON can list every city (e.g. Meta JSON-LD).
  */
-export function normalizeLocationsList(raw: string | null | undefined): string[] | null {
+export function normalizeLocationsList(
+  raw: string | null | undefined,
+  companySlug?: string | null,
+): string[] | null {
   if (!raw?.trim()) return null;
   const segments = raw.split(/\s*[•\/|;]\s*/).map((s) => s.trim()).filter(Boolean);
   if (segments.length === 0) return null;
   const out: string[] = [];
   const seen = new Set<string>();
   for (const seg of segments) {
-    const n = normalizeLocation(seg);
+    const n = normalizeLocation(seg, companySlug);
     if (n && !seen.has(n.toLowerCase())) {
       seen.add(n.toLowerCase());
       out.push(n);
@@ -2951,17 +2966,23 @@ export function normalizeLocationsList(raw: string | null | undefined): string[]
 }
 
 /** Primary city for geocoding — first normalized segment, or full-string fallback. */
-export function primaryNormalizedLocation(raw: string | null | undefined): string | null {
-  const list = normalizeLocationsList(raw);
+export function primaryNormalizedLocation(
+  raw: string | null | undefined,
+  companySlug?: string | null,
+): string | null {
+  const list = normalizeLocationsList(raw, companySlug);
   if (list != null && list.length > 0) return list[0];
-  return normalizeLocation(raw);
+  return normalizeLocation(raw, companySlug);
 }
 
 /** Text passed to embedding API: all cities when multi-location, else single normalized string. */
-export function locationsRawToEmbedString(raw: string | null | undefined): string | null {
-  const list = normalizeLocationsList(raw);
+export function locationsRawToEmbedString(
+  raw: string | null | undefined,
+  companySlug?: string | null,
+): string | null {
+  const list = normalizeLocationsList(raw, companySlug);
   if (list != null && list.length > 0) return list.join("; ");
-  return normalizeLocation(raw);
+  return normalizeLocation(raw, companySlug);
 }
 
 /** Join stored locations JSON for embedding text so vectors reflect every listed city. */

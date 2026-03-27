@@ -48,9 +48,10 @@ CREATE TABLE IF NOT EXISTS companies (
   hq_country              TEXT,    -- ISO 3166-1 alpha-2, e.g. "US"
   hq_lat                  REAL,    -- geocoded latitude of HQ
   hq_lng                  REAL,    -- geocoded longitude of HQ
+  hq_geocode_failed_at    INTEGER, -- epoch; set on Places geocode failure, cleared when hq_city/country/address changes
   industry                TEXT,    -- normalized taxonomy: see src/enrichment/exa.ts INDUSTRY_MAP
   company_type            TEXT,    -- "startup"|"enterprise"|"agency"|"nonprofit"|"government"|"university"|"other"
-  total_funding_usd       INTEGER,
+  total_funding_usd       INTEGER, -- total venture capital funding in company lifetime
   locations               TEXT,    -- JSON array of unique job locations aggregated from the jobs table
 
   -- AI-generated one-sentence company description (lazy, cached)
@@ -126,9 +127,16 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- Experience requirement extracted by AI
   experience_years_min INTEGER,       -- minimum years required, e.g. 2 for "2+ years" or "2-3 years"
 
+  -- Geocoded coordinates for the primary job location (locations[0]).
+  -- Populated inline at ingestion (Photon/Nominatim) and by the geocode backfill cron.
+  -- Whitelisted retail chains (CVS, Dollar Tree, etc.) use Places API for store-level accuracy.
+  location_lat    REAL,               -- latitude of locations[0]
+  location_lng    REAL,               -- longitude of locations[0]
+
   -- Per-job physical location (extracted by AI from posting text)
   job_address     TEXT,               -- street address mentioned in the posting
   job_city        TEXT,               -- city mentioned in the posting (normalized)
+  job_state       TEXT,               -- US state abbreviation, e.g. "CA", "IN"
   job_country     TEXT,               -- country from the posting (ISO-2 or full name)
 
   -- Language of the job description text (ISO 639-1).
@@ -166,7 +174,9 @@ CREATE INDEX IF NOT EXISTS idx_jobs_posted_at ON jobs (posted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_first_seen ON jobs (first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_dedup_key ON jobs (dedup_key);
 CREATE INDEX IF NOT EXISTS idx_jobs_title ON jobs (title);
--- No scalar location index needed; geocoding uses json_extract(locations, '$[0]')
+-- Geocode backfill: find jobs missing coords, ordered newest-first
+CREATE INDEX IF NOT EXISTS idx_jobs_location_coords ON jobs (location_lat, first_seen_at DESC);
+-- No scalar location index on the locations JSON; geocoding uses json_extract(locations, '$[0]')
 CREATE INDEX IF NOT EXISTS idx_jobs_employment_type ON jobs (employment_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_workplace_type ON jobs (workplace_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_seniority_level ON jobs (seniority_level);
@@ -178,6 +188,22 @@ CREATE INDEX IF NOT EXISTS idx_jobs_experience_years ON jobs (experience_years_m
 -- Without this the query requires a full table scan to find un-embedded jobs.
 CREATE INDEX IF NOT EXISTS idx_jobs_embedding_backfill
   ON jobs (embedding_generated_at, first_seen_at DESC);
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- company_location_geocodes
+-- Persistent cache: (company, city-string) → precise lat/lng + address.
+-- Populated by the per-job geocoding path during ingestion.
+-- A cache hit avoids a Places API call for every subsequent job at that location.
+-- ──────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS company_location_geocodes (
+  company_id   TEXT    NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  location_key TEXT    NOT NULL,  -- normalized location string, e.g. "Houston, TX"
+  lat          REAL    NOT NULL,
+  lng          REAL    NOT NULL,
+  address      TEXT,              -- formatted address returned by Places API
+  geocoded_at  INTEGER NOT NULL,  -- epoch seconds
+  PRIMARY KEY (company_id, location_key)
+);
 
 -- ──────────────────────────────────────────────────────────────────────────────
 -- company_aliases
