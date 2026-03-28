@@ -571,15 +571,21 @@ async function backfillLanguage(env: Env): Promise<void> {
 export async function processSourceById(
   env: Env,
   sourceId: string,
-  limit?: number
+  limit?: number,
+  /** When set (e.g. metacareers single-job ingest), overrides `sources.base_url` for this run only. */
+  baseUrlOverride?: string
 ): Promise<IngestionResult | { error: string }> {
   const source = await getSourceById(env.JOBS_DB, sourceId);
   if (!source) {
     return { error: `Source not found: ${sourceId}` };
   }
+  const effective =
+    baseUrlOverride !== undefined && baseUrlOverride !== ""
+      ? { ...source, base_url: baseUrlOverride }
+      : source;
   // Skip embeddings so this fits within the 30s Worker request budget.
   // The hourly backfill cron will generate embeddings for all new jobs.
-  return processSource(env, source, true, limit);
+  return processSource(env, effective, true, limit);
 }
 
 /**

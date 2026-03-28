@@ -10,6 +10,7 @@
  *   GET  /jobs/map        One chip entry per company (for map, no 50-job limit).
  *   GET  /jobs/:id        Single job with lazy AI enrichment.
  *   POST /admin/trigger   Manually trigger ingestion (requires valid API key).
+ *   ?source=mc-meta&meta_job_url=<url>  Ingest one Meta role (job_details or create_application URL).
  *
  * ──────────────────────────────────────────────────────────────────────────
  * SCHEDULED TRIGGER
@@ -192,7 +193,8 @@ async function handleRequest(
         await applyCompanyMetadataCorrections(env.JOBS_DB);
         const limitParam = url.searchParams.get("limit");
         const limit = limitParam ? parseInt(limitParam, 10) : undefined;
-        const result = await processSourceById(env, sourceId, limit);
+        const metaJobUrl = url.searchParams.get("meta_job_url") ?? undefined;
+        const result = await processSourceById(env, sourceId, limit, metaJobUrl);
         return jsonOk({ status: "completed", result });
       } catch (triggerErr) {
         logger.error("admin_trigger_source_failed", { source_id: sourceId, error: String(triggerErr) });

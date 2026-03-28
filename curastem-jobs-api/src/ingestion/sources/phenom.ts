@@ -114,6 +114,15 @@ function externalIdFromJobUrl(jobUrl: string): string | null {
   }
 }
 
+/** Collect job posting URLs from any sitemap XML `<loc>` list. */
+function addJobUrlsFromLocXml(xml: string, jobUrls: Set<string>): void {
+  for (const m of xml.matchAll(/<loc>([^<]+)<\/loc>/gi)) {
+    const loc = m[1].trim().split("?")[0];
+    if (/\/job\/[^/]+\/[^/?]+$/.test(loc)) jobUrls.add(loc);
+    if (/\/jobs\/[^/]+\/[^/]+\/[^/?]+$/.test(loc)) jobUrls.add(loc);
+  }
+}
+
 async function fetchSitemapJobUrls(baseUrl: string): Promise<string[]> {
   const indexUrl = new URL("sitemap_index.xml", baseUrl).href;
   const res = await fetch(indexUrl, {
@@ -127,18 +136,21 @@ async function fetchSitemapJobUrls(baseUrl: string): Promise<string[]> {
   const sitemapLocs = [...indexXml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map((m) => m[1].trim());
   const jobUrls = new Set<string>();
 
+  // Some tenants (e.g. Genentech) use one urlset with job URLs inline — not only nested sitemaps.
+  addJobUrlsFromLocXml(indexXml, jobUrls);
+
   for (const smUrl of sitemapLocs) {
+    const baseLoc = smUrl.split("?")[0];
+    if (/\/job\/[^/]+\/[^/?]+$/.test(baseLoc) || /\/jobs\/[^/]+\/[^/]+\/[^/?]+$/.test(baseLoc)) {
+      continue;
+    }
     const sm = await fetch(smUrl, {
       headers: { "User-Agent": USER_AGENT, Accept: "application/xml,text/xml,*/*" },
       redirect: "follow",
     });
     if (!sm.ok) continue;
     const xml = await sm.text();
-    for (const m of xml.matchAll(/<loc>([^<]+)<\/loc>/gi)) {
-      const loc = m[1].trim().split("?")[0];
-      if (/\/job\/[^/]+\/[^/?]+$/.test(loc)) jobUrls.add(loc);
-      if (/\/jobs\/[^/]+\/[^/]+\/[^/?]+$/.test(loc)) jobUrls.add(loc);
-    }
+    addJobUrlsFromLocXml(xml, jobUrls);
   }
 
   return [...jobUrls];

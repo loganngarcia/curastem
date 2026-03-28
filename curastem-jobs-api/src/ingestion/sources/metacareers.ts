@@ -375,7 +375,26 @@ export const metacareersFetcher: JobSource = {
   sourceType: "metacareers",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
-    let sitemapUrl = source.base_url.trim();
+    const trimmed = source.base_url.trim();
+    // Single job: job_details or create_application share the same numeric id as job_details HTML.
+    const singleMatch = trimmed.match(
+      /^https:\/\/www\.metacareers\.com\/profile\/(?:job_details|create_application)\/(\d+)\/?$/i
+    );
+    if (singleMatch) {
+      const jobUrl = `https://www.metacareers.com/profile/job_details/${singleMatch[1]}`;
+      const html = await fetchJobHtml(jobUrl, FETCH_ATTEMPTS);
+      if (!html) {
+        throw new Error(`metacareers: failed to fetch ${jobUrl}`);
+      }
+      const companyName = source.name.replace(/\s*\(Meta careers\)\s*/i, "").trim() || "Meta";
+      const row = parseMetacareersPage(html, jobUrl, companyName);
+      if (!row) {
+        throw new Error(`metacareers: no JobPosting JSON-LD for ${jobUrl}`);
+      }
+      return [row];
+    }
+
+    let sitemapUrl = trimmed;
     if (!sitemapUrl) sitemapUrl = DEFAULT_SITEMAP;
     const origin = new URL(sitemapUrl);
     if (origin.hostname !== "www.metacareers.com") {

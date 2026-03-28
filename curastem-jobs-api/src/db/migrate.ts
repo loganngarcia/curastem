@@ -548,6 +548,13 @@ const SEED_SOURCES: SeedSource[] = [
     company_handle: "intuitive",
     base_url: "https://careers.intuitive.com/en/jobs/744000112787247/JOB212842/product-manager-portfolio-operations-da-vinci-sp/",
   },
+  {
+    id: "ph-genentech",
+    name: "Genentech (Phenom)",
+    source_type: "phenom",
+    company_handle: "genentech",
+    base_url: "https://careers.gene.com/us/en/",
+  },
 
   // ─── Jobvite (static listing HTML + per-job description) ─────────────────
   // Board root: `jobs.jobvite.com/{slug}/jobs`. Single-job URLs are normalized.
@@ -1061,6 +1068,7 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "ab-workos", name: "WorkOS (Ashby)", source_type: "ashby", company_handle: "workos", base_url: "https://api.ashbyhq.com/posting-api/job-board/workos?includeCompensation=true" },
   { id: "ab-zed", name: "Zed (Ashby)", source_type: "ashby", company_handle: "zed", base_url: "https://api.ashbyhq.com/posting-api/job-board/zed?includeCompensation=true" },
   { id: "gh-zero", name: "Zero (Greenhouse)", source_type: "greenhouse", company_handle: "zero", base_url: "https://boards-api.greenhouse.io/v1/boards/zero/jobs" },
+  { id: "gh-zscaler", name: "Zscaler (Greenhouse)", source_type: "greenhouse", company_handle: "zscaler", base_url: "https://boards-api.greenhouse.io/v1/boards/zscaler/jobs" },
 
   // ─── Nonprofit / civic / health / climate cohort (batch 4 probe, 2026-03) ───
   // Skipped probe hits: generic GH boards (action, new, community), ambiguous Ashby
