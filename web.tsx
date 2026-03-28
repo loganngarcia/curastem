@@ -1488,7 +1488,7 @@ const MAX_P2P_FILE_SIZE_BYTES = 3 * 1024 * 1024 // 3MB limit for P2P transfer
 
 // User abuse guardrails
 // These are designed to prevent abuse and ensure the API is used responsibly
-const MAX_INPUT_LENGTH = 1000 // Limit input characters
+const MAX_INPUT_LENGTH = 2000 // Limit input characters (send)
 const MESSAGE_RATE_LIMIT_MS = 1000 // 1 second between messages
 const API_TIMEOUT_MS = 30000 // 30 seconds timeout
 const MAX_HISTORY_MESSAGES = 50 // Limit history context
@@ -13405,17 +13405,19 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const [filterDaysOpen, setFilterDaysOpen] = React.useState(false)
     const [filterTypeOpen, setFilterTypeOpen] = React.useState(false)
     const [filterSeniorityOpen, setFilterSeniorityOpen] = React.useState(false)
-    // Mobile panel height = feed area + overhead (drag handle floats over scroll — not in-flow)
-    // Overhead: padding (20+4=24) + search bar (56+8=64) = 88px
-    // Container min = 128px feed + 88px overhead = 216px
-    // Container chip = 324px feed + 88px overhead = 412px
+    // Mobile panel height = feed area + overhead (drag + search in-flow below drag bar)
+    // Overhead: drag row (16) + search row (36) ≈ 52px above scroll body (plus outer motion padding)
+    // Default open height 248px; drag floor MOBILE_FEED_MIN; chip-selected height MOBILE_FEED_CHIP
+    const MOBILE_FEED_DEFAULT = 248
     const MOBILE_FEED_MIN = 216
     const MOBILE_FEED_CHIP = 412
-    const [mobileFeedHeight, setMobileFeedHeight] = React.useState(MOBILE_FEED_MIN)
+    const [mobileFeedHeight, setMobileFeedHeight] = React.useState(MOBILE_FEED_DEFAULT)
     const mobileFeedDragStart = React.useRef<{ y: number; height: number } | null>(null)
     const handleMobileFeedDragStart = React.useCallback((e: React.TouchEvent | React.PointerEvent) => {
-        // Use touch events on mobile — touchmove with preventDefault kills scroll competition
-        // giving smooth, jitter-free resize. Fall back to pointer events for non-touch (desktop testing).
+        // Ignore taps on the text input so the keyboard focus path is unaffected
+        if ((e.target as HTMLElement).tagName === "INPUT") return
+        // Touch events: use preventDefault on touchmove to prevent browser scroll competition.
+        // Pointer events: used for cursor/mouse dragging (same handler, different listener path).
         const isTouchEvent = "touches" in e
         const startY = isTouchEvent
             ? (e as React.TouchEvent).touches[0].clientY
@@ -13477,6 +13479,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const [mapSearchQuery, setMapSearchQuery] = React.useState(defaultSearch)
     const mapSearchQueryRef = React.useRef(defaultSearch)
     React.useEffect(() => { mapSearchQueryRef.current = mapSearchQuery }, [mapSearchQuery])
+    // Debounced value — API calls only fire 400ms after the user stops typing
+    const [debouncedMapSearchQuery, setDebouncedMapSearchQuery] = React.useState(defaultSearch)
+    React.useEffect(() => {
+        const t = setTimeout(() => setDebouncedMapSearchQuery(mapSearchQuery), 400)
+        return () => clearTimeout(t)
+    }, [mapSearchQuery])
     const mapSearchInputRef = React.useRef<HTMLInputElement>(null)
     // Auto-focus the search bar on desktop when the panel first mounts
     React.useEffect(() => {
@@ -13662,9 +13670,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     React.useEffect(() => { filterTypeRef.current = filterType }, [filterType])
     React.useEffect(() => { filterSeniorityRef.current = filterSeniority }, [filterSeniority])
 
-    // When search query OR any filter changes, bust the chip cache and force a fresh viewport fetch
+    // When debounced search query OR any filter changes, bust the chip cache and force a fresh viewport fetch
     React.useEffect(() => {
-        mapSearchQueryRef.current = mapSearchQuery
         filterDaysRef.current = filterDays
         filterTypeRef.current = filterType
         filterSeniorityRef.current = filterSeniority
@@ -13672,7 +13679,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         accJobsRef.current.clear()
         lastFetchCenterRef.current = null
         google.maps.event.trigger(mapInstanceRef.current, "idle")
-    }, [mapSearchQuery, filterDays, filterType, filterSeniority]) // eslint-disable-line react-hooks/exhaustive-deps
+    }, [debouncedMapSearchQuery, filterDays, filterType, filterSeniority]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Auto-fetch nearby jobs on both mobile and desktop whenever user location or filters change (skip when company chip is open)
     React.useEffect(() => {
@@ -13692,7 +13699,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         })
         if (filterType) p.set("employment_type", filterType)
         if (filterSeniority) p.set("seniority_level", filterSeniority)
-        if (mapSearchQuery.trim()) p.set("q", mapSearchQuery.trim())
+        if (debouncedMapSearchQuery.trim()) p.set("q", debouncedMapSearchQuery.trim())
         setIsLoadingOverlay(true)
         fetch(`${jobsApiUrl}/jobs?${p}`)
             .then((r) => (r.ok ? r.json() : { data: [] }))
@@ -13704,7 +13711,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             })
             .catch(() => { setSelectedJobs([]); setIsLoadingOverlay(false) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userLoc, filterDays, filterType, filterSeniority, selectedChipEntry, mapSearchQuery])
+    }, [userLoc, filterDays, filterType, filterSeniority, selectedChipEntry, debouncedMapSearchQuery])
 
     // Place / refresh company chips whenever jobs or map changes
     React.useEffect(() => {
@@ -13982,6 +13989,31 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         boxShadow: "0 1px 4px rgba(0,0,0,0.24)",
     }
 
+    // X icon for company feed close button (12×12, primaryText)
+    const companyFeedCloseIcon = (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+            <path d="M11.1016 0.599976L0.601562 11.1M0.601562 0.599976L11.1016 11.1" stroke={textPrimary} strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    )
+    // X icon for search bar clear button (standard 14×14 in a 24×24 tap target)
+    const mapSearchClearIcon = (
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
+            <path d="M8.60156 0.599976L0.601562 8.59998M0.601562 0.599976L8.60156 8.59998" stroke={textPrimary} strokeOpacity="0.65" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    )
+    const mapSearchClearButtonStyle: React.CSSProperties = {
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+        padding: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        width: 24,
+        height: 24,
+    }
+
     if (isStatic) {
         return (
             <div
@@ -14190,7 +14222,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                             left: 0,
                             top: isMobile ? undefined : 0,
                             bottom: 0,
-                            padding: isMobile ? "4px 4px 4px" : 12,
+                            padding: isMobile ? (selectedChipEntry ? "10px 0 0" : "10px 4px 4px") : 12,
                             zIndex: 20,
                             width: isMobile ? "100%" : feedWidth,
                             maxWidth: isMobile ? "100%" : "min(640px, 40%)",
@@ -14294,36 +14326,30 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         })()}
 
 
-                        {/* Large transparent drag-capture zone (mobile only) — sits behind search bar  */}
-                        {/* so input taps still reach the input (zIndex:4) while drags in the whole  */}
-                        {/* search-bar + indicator area (zIndex:3) resize the sheet.                 */}
+                        {/* Mobile: wide drag zone in the 10px top-padding space — easier grab target above sheet */}
                         {isMobile && (
                             <div
+                                onPointerDown={handleMobileFeedDragStart}
                                 onTouchStart={handleMobileFeedDragStart}
                                 style={{
-                                    position: "absolute",
-                                    top: 20,
-                                    left: 0,
-                                    right: 0,
-                                    height: 94,
-                                    zIndex: 3,
+                                    height: 10,
+                                    flexShrink: 0,
                                     cursor: "ns-resize",
                                     touchAction: "none",
                                 }}
                             />
                         )}
 
-                        {/* Search bar — always visible, sits between map and the feed sheet */}
+                        {/* Search bar — desktop only */}
+                        {!isMobile && (
                         <div
-                                onTouchStart={isMobile ? handleMobileFeedDragStart : undefined}
                                 style={{
                                     height: 56,
                                     paddingLeft: 20,
-                                    paddingRight: 20,
+                                    paddingRight: mapSearchQuery ? 14 : 20,
                                     background: sheetBg,
                                     borderRadius: 50,
                                     position: "relative",
-                                    zIndex: isMobile ? 4 : undefined,
                                     display: "flex",
                                     alignItems: "center",
                                     gap: 8,
@@ -14358,29 +14384,27 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 />
                                 {mapSearchQuery && (
                                     <button
-                                        onClick={() => { setMapSearchQuery(""); requestAnimationFrame(() => mapSearchInputRef.current?.focus()) }}
-                                        style={{
-                                            background: "transparent",
-                                            border: "none",
-                                            cursor: "pointer",
-                                            padding: 0,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                            flexShrink: 0,
+                                        type="button"
+                                        aria-label="Clear search"
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            setMapSearchQuery("")
+                                            requestAnimationFrame(() => mapSearchInputRef.current?.focus())
                                         }}
+                                        onPointerDown={(e) => e.stopPropagation()}
+                                        onTouchStart={(e) => e.stopPropagation()}
+                                        style={mapSearchClearButtonStyle}
                                     >
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                            <path d="M12 4L4 12M4 4L12 12" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        </svg>
+                                        {mapSearchClearIcon}
                                     </button>
                                 )}
                             </div>
+                        )}
 
                         <div
                             style={{
                                 background: sheetBg,
-                                borderRadius: 36,
+                                borderRadius: isMobile && selectedChipEntry ? "36px 36px 0 0" : 36,
                                 overflow: "hidden",
                                 flex: 1,
                                 minHeight: 0,
@@ -14392,38 +14416,194 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 zIndex: isMobile ? 5 : undefined,
                             }}
                         >
-                            {/* Single scrollable body — filter pills + cards scroll together */}
+                            {/* Mobile: drag bar in-flow, then 36px search (14px inner L/R padding), then filters */}
+                            {isMobile && (
+                                <>
+                                    <div
+                                        onPointerDown={handleMobileFeedDragStart}
+                                        onTouchStart={handleMobileFeedDragStart}
+                                        style={{
+                                            height: 16,
+                                            flexShrink: 0,
+                                            display: "flex",
+                                            justifyContent: "center",
+                                            alignItems: "center",
+                                            position: "relative",
+                                            zIndex: 6,
+                                            cursor: "ns-resize",
+                                            touchAction: "none",
+                                        }}
+                                    >
+                                        <svg width="36" height="4" viewBox="0 0 36 4" fill="none" aria-hidden>
+                                            <rect width="36" height="4" rx="2" fill={isDark ? "rgba(255,255,255,0.35)" : "#858585"} />
+                                        </svg>
+                                    </div>
+                                    {!selectedChipEntry && <div
+                                        onPointerDown={handleMobileFeedDragStart}
+                                        onTouchStart={handleMobileFeedDragStart}
+                                        style={{
+                                            paddingLeft: 12,
+                                            paddingRight: 12,
+                                            flexShrink: 0,
+                                            position: "relative",
+                                            zIndex: 4,
+                                            cursor: "ns-resize",
+                                        }}
+                                    >
+                                        <div
+                                            style={{
+                                                height: 36,
+                                                paddingLeft: 14,
+                                                paddingRight: mapSearchQuery ? 10 : 14,
+                                                background: isDark ? themeColors.surface : sheetBg,
+                                                borderRadius: 50,
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: 6,
+                                                boxShadow: isDark ? "none" : "0px 4px 16px rgba(0,0,0,0.13)",
+                                            }}
+                                        >
+                                            <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                    <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.52237C12.6167 8.09309 11.9837 9.59948 10.8571 10.7101C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7101C1.2345 9.59948 0.601563 8.09309 0.601562 6.52237C0.601563 4.95166 1.2345 3.44527 2.36113 2.33461C3.48777 1.22394 5.01581 0.599976 6.60911 0.599976C8.20241 0.599976 9.73045 1.22394 10.8571 2.33461C11.9837 3.44527 12.6167 4.95166 12.6167 6.52237Z" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                                </svg>
+                                            </div>
+                                            <input
+                                                ref={mapSearchInputRef}
+                                                type="text"
+                                                value={mapSearchQuery}
+                                                onChange={(e) => setMapSearchQuery(e.target.value)}
+                                                placeholder={selectedChipEntry ? `Search jobs at ${selectedChipEntry.company_name}` : "Search jobs"}
+                                                style={{
+                                                    flex: 1,
+                                                    background: "transparent",
+                                                    border: "none",
+                                                    outline: "none",
+                                                    color: textPrimary,
+                                                    fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 14,
+                                                    fontFamily: "Inter",
+                                                    fontWeight: "400",
+                                                    lineHeight: "20px",
+                                                }}
+                                            />
+                                            {mapSearchQuery && (
+                                                <button
+                                                    type="button"
+                                                    aria-label="Clear search"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        setMapSearchQuery("")
+                                                        requestAnimationFrame(() => mapSearchInputRef.current?.focus())
+                                                    }}
+                                                    onPointerDown={(e) => e.stopPropagation()}
+                                                    onTouchStart={(e) => e.stopPropagation()}
+                                                    style={mapSearchClearButtonStyle}
+                                                >
+                                                    {mapSearchClearIcon}
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>}
+                                </>
+                            )}
+                            {/* Scroll + optional top scrim (mobile): chat input gradient reversed — solid sheet → transparent */}
                             <div
-                                ref={overlayScrollRef}
-                                onScroll={() => {
-                                    setFilterDaysOpen(false)
-                                    setFilterSeniorityOpen(false)
-                                    setFilterTypeOpen(false)
-                                    setFilterDropdownPos(null)
-                                }}
                                 style={{
-                                    overflowY: "auto",
-                                    overflowX: "hidden",
-                                    padding: isMobile ? "28px 16px 16px" : "16px 16px 16px",
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    gap: 10,
+                                    position: "relative",
                                     flex: 1,
                                     minHeight: 0,
-                                    borderRadius: 36,
-                                    position: "relative",
+                                    display: "flex",
+                                    flexDirection: "column",
                                 }}
                             >
-                                {/* Filter pills — scroll with content, own horizontal scroll track */}
-                                {(() => {
-                                    const pillBorder = isDark ? "0.33px solid rgba(255,255,255,0.22)" : "0.33px solid rgba(0,0,0,0.18)"
+                                {/* Close button — company view only, fixed at top-right, does not scroll */}
+                                {selectedChipEntry && (
+                                    <button
+                                        aria-label="Close company view"
+                                        onClick={() => {
+                                            setSelectedChipEntry(null)
+                                            setNearbyJobCount(null)
+                                            setSelectedJobs([])
+                                            if (isMobile) setMobileFeedHeight(MOBILE_FEED_MIN)
+                                            // Desktop only — on mobile this would pop the keyboard unexpectedly
+                                            if (!isMobile) requestAnimationFrame(() => mapSearchInputRef.current?.focus())
+                                        }}
+                                        style={{
+                                            position: "absolute",
+                                            top: isMobile ? 10 : 14,
+                                            right: isMobile ? 12 : 14,
+                                            flexShrink: 0,
+                                            width: 28,
+                                            height: 28,
+                                            background: "transparent",
+                                            border: "none",
+                                            cursor: "pointer",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            padding: 0,
+                                            zIndex: 12,
+                                        }}
+                                    >
+                                        {companyFeedCloseIcon}
+                                    </button>
+                                )}
+                                <div
+                                    ref={overlayScrollRef}
+                                    onScroll={() => {
+                                        setFilterDaysOpen(false)
+                                        setFilterSeniorityOpen(false)
+                                        setFilterTypeOpen(false)
+                                        setFilterDropdownPos(null)
+                                    }}
+                                    style={{
+                                        overflowY: (selectedChipEntry && nearbyJobCount === null) ? "hidden" : "auto",
+                                        overflowX: "hidden",
+                                        padding: isMobile ? "10px 12px 12px" : "16px 16px 16px",
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: 10,
+                                        flex: 1,
+                                        minHeight: 0,
+                                        // Mobile: no inner radius — parent sheet clips; avoids a second rounded box vs search chrome
+                                        borderRadius: isMobile ? 0 : 36,
+                                        position: "relative",
+                                    }}
+                                >
+                                {/* Company header (company feed) OR filter pills (normal feed) — both scroll with content */}
+                                {selectedChipEntry ? (
+                                    <div style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 6,
+                                        paddingLeft: 6,
+                                        paddingRight: 6,
+                                        flexShrink: 0,
+                                    }}>
+                                        {selectedChipEntry.company_logo_url ? (
+                                            <img
+                                                src={selectedChipEntry.company_logo_url}
+                                                alt=""
+                                                style={{ width: 16, height: 16, borderRadius: 8, objectFit: "cover", flexShrink: 0 }}
+                                                onError={(e) => { ;(e.target as HTMLImageElement).style.display = "none" }}
+                                            />
+                                        ) : (
+                                            <div style={{ width: 16, height: 16, borderRadius: 8, background: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)", flexShrink: 0 }} />
+                                        )}
+                                        <span style={{ fontSize: 15, fontFamily: "Inter", fontWeight: "400", color: textPrimary, lineHeight: "22.5px" }}>
+                                            {selectedChipEntry.company_name}
+                                        </span>
+                                    </div>
+                                ) : (() => {
+                                    const pillBorderLight = "0.33px solid rgba(0,0,0,0.18)"
                                     const pillStyle = (isActive: boolean, isOpen: boolean): React.CSSProperties => ({
                                         height: 32,
                                         paddingLeft: 10,
                                         paddingRight: 10,
                                         borderRadius: 50,
-                                        background: "transparent",
-                                        border: pillBorder,
+                                        // Dark maps: shared surface #303030 (themeColors.surface); light: outlined pills
+                                        background: isDark ? themeColors.surface : "transparent",
+                                        border: isDark ? "none" : pillBorderLight,
                                         cursor: "pointer",
                                         display: "flex",
                                         alignItems: "center",
@@ -14488,10 +14668,10 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                 flexShrink: 0,
                                                 overflowX: "auto",
                                                 overflowY: "visible",
-                                                marginLeft: -16,
-                                                marginRight: -16,
-                                                paddingLeft: 16,
-                                                paddingRight: 16,
+                                                marginLeft: isMobile ? -12 : -16,
+                                                marginRight: isMobile ? -12 : -16,
+                                                paddingLeft: isMobile ? 12 : 16,
+                                                paddingRight: isMobile ? 12 : 16,
                                             }}
                                         >
                                             <style>{`.MapFeedFilterStrip::-webkit-scrollbar { display: none; } .MapFeedFilterStrip { scrollbar-width: none; }`}</style>
@@ -14499,7 +14679,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             {isMobile ? (
                                                 <div ref={filterDaysPillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
                                                     <div style={{ ...pillStyle(false, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
                                                         {chevron}
                                                     </div>
                                                     <select
@@ -14514,7 +14694,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                 <div ref={filterDaysPillRef} data-filter-pill style={{ flexShrink: 0 }}>
                                                     <button style={pillStyle(false, filterDaysOpen)}
                                                         onClick={openPill(filterDaysPillRef, setFilterDaysOpen, [setFilterSeniorityOpen, setFilterTypeOpen], filterDaysOpen)}>
-                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
                                                         {chevron}
                                                     </button>
                                                 </div>
@@ -14523,7 +14703,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             {isMobile ? (
                                                 <div ref={filterSeniorityPillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
                                                     <div style={{ ...pillStyle(!!filterSeniority, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
                                                         {chevron}
                                                     </div>
                                                     <select
@@ -14543,7 +14723,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                 <div ref={filterSeniorityPillRef} data-filter-pill style={{ flexShrink: 0 }}>
                                                     <button style={pillStyle(!!filterSeniority, filterSeniorityOpen)}
                                                         onClick={openPill(filterSeniorityPillRef, setFilterSeniorityOpen, [setFilterDaysOpen, setFilterTypeOpen], filterSeniorityOpen)}>
-                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
                                                         {chevron}
                                                     </button>
                                                 </div>
@@ -14552,7 +14732,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             {isMobile ? (
                                                 <div ref={filterTypePillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
                                                     <div style={{ ...pillStyle(!!filterType, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
                                                         {chevron}
                                                     </div>
                                                     <select
@@ -14571,7 +14751,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                 <div ref={filterTypePillRef} data-filter-pill style={{ flexShrink: 0 }}>
                                                     <button style={pillStyle(!!filterType, filterTypeOpen)}
                                                         onClick={openPill(filterTypePillRef, setFilterTypeOpen, [setFilterDaysOpen, setFilterSeniorityOpen], filterTypeOpen)}>
-                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
                                                         {chevron}
                                                     </button>
                                                 </div>
@@ -14579,41 +14759,6 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         </div>
                                     )
                                 })()}
-
-                                {/* Close button — company view only, top-right of scroll area */}
-                                {selectedChipEntry && (
-                                    <button
-                                        aria-label="Close company view"
-                                        onClick={() => {
-                                            setSelectedChipEntry(null)
-                                            setNearbyJobCount(null)
-                                            setSelectedJobs([])
-                                            if (isMobile) setMobileFeedHeight(MOBILE_FEED_MIN)
-                                            requestAnimationFrame(() => mapSearchInputRef.current?.focus())
-                                        }}
-                                        style={{
-                                            position: "absolute",
-                                            top: 14,
-                                            right: 14,
-                                            flexShrink: 0,
-                                            width: 28,
-                                            height: 28,
-                                            background: "transparent",
-                                            border: "none",
-                                            cursor: "pointer",
-                                            display: "flex",
-                                            alignItems: "center",
-                                            justifyContent: "center",
-                                            padding: 0,
-                                            zIndex: 12,
-                                        }}
-                                    >
-                                        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-                                            <path d="M19 9L9 19M9 9L19 19" stroke={textPrimary} strokeOpacity="0.7" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                                        </svg>
-                                    </button>
-                                )}
-
 
                                 {/* Section label skeleton — fill matches job card bg (avoid homepageSkeleton opacity, which reads as wrong color) */}
                                 {selectedChipEntry && nearbyJobCount === null && (
@@ -14632,9 +14777,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     />
                                 )}
 
-                                {selectedJobs.length === 0 ? (
-                                    // Skeleton cards — count from chip's job_count, uses homepage animation
-                                    Array.from({ length: Math.max(3, Math.min(selectedChipEntry?.job_count ?? 3, 8)) }).map((_, i) => (
+                                {(selectedChipEntry && nearbyJobCount === null) ? (
+                                    // Company feed loading — skeleton cards, count from chip's job_count (max 10)
+                                    Array.from({ length: Math.min(selectedChipEntry.job_count ?? 5, 10) }).map((_, i) => (
                                         <div key={i} style={{ background: cardBg, borderRadius: 28, padding: "16px 20px", flexShrink: 0 }}>
                                             <div style={{ height: 18, width: "65%", background: themeColors.hover.default, borderRadius: 6, marginBottom: 10, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
                                             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -14643,11 +14788,21 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             </div>
                                         </div>
                                     ))
+                                ) : (selectedChipEntry && nearbyJobCount !== null && selectedJobs.length === 0) ? (
+                                    // Company feed loaded — no results
+                                    <div style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "400", color: textSecondary }}>
+                                        No search results found
+                                    </div>
+                                ) : (!selectedChipEntry && selectedJobs.length === 0 && mapSearchQuery.trim()) ? (
+                                    // Regular feed — search returned no results
+                                    <div style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "400", color: textSecondary }}>
+                                        No search results found
+                                    </div>
                                 ) : (
                                     <>
                                         {/* Section label once loaded — hidden if 0 nearby */}
                                         {selectedChipEntry && nearbyJobCount !== null && nearbyJobCount > 0 && (
-                                            <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "500", color: textPrimary, display: "block" }}>
+                                            <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "500", color: textSecondary, display: "block" }}>
                                                 {`${nearbyJobCount} job${nearbyJobCount === 1 ? "" : "s"} nearby`}
                                             </span>
                                         )}
@@ -14684,7 +14839,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             return (
                                                 <React.Fragment key={job.id}>
                                                 {anywhereLabelHere && (
-                                                    <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "500", color: textPrimary, display: "block" }}>
+                                                    <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "500", color: textSecondary, display: "block" }}>
                                                         {`${anywhereTotalCount} job${anywhereTotalCount === 1 ? "" : "s"} anywhere`}
                                                     </span>
                                                 )}
@@ -14735,7 +14890,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                     </div>
                                                     {/* Meta row */}
                                                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-                                                        {job.company.logo_url ? (
+                                                        {!selectedChipEntry && (job.company.logo_url ? (
                                                             <img
                                                                 src={job.company.logo_url}
                                                                 alt=""
@@ -14744,9 +14899,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                             />
                                                         ) : (
                                                             <div style={{ width: 16, height: 16, borderRadius: 8, background: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)" }} />
-                                                        )}
-                                                        {infoText(job.company.name)}
-                                                        {postedStr && <>{dotSpan}{infoText(postedStr)}</>}
+                                                        ))}
+                                                        {!selectedChipEntry && infoText(job.company.name)}
+                                                        {postedStr && <>{!selectedChipEntry && dotSpan}{infoText(postedStr)}</>}
                                                         {hasTime && (
                                                             <>
                                                                 {dotSpan}
@@ -14782,30 +14937,22 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     </>
                                 )}
                             </div>
-                            {/* Drag pill floats over the top of the scroll body (not a separate flex row) */}
-                            {isMobile && (
-                                <div
-                                    onTouchStart={handleMobileFeedDragStart}
-                                    style={{
-                                        position: "absolute",
-                                        top: 0,
-                                        left: 0,
-                                        right: 0,
-                                        height: 28,
-                                        display: "flex",
-                                        justifyContent: "center",
-                                        alignItems: "center",
-                                        zIndex: 6,
-                                        cursor: "ns-resize",
-                                        touchAction: "none",
-                                        pointerEvents: "auto",
-                                    }}
-                                >
-                                    <svg width="36" height="4" viewBox="0 0 36 4" fill="none" aria-hidden>
-                                        <rect width="36" height="4" rx="2" fill={isDark ? "rgba(255,255,255,0.35)" : "#858585"} />
-                                    </svg>
-                                </div>
-                            )}
+                                {isMobile && !selectedChipEntry && (
+                                    <div
+                                        aria-hidden
+                                        style={{
+                                            position: "absolute",
+                                            top: 0,
+                                            left: 0,
+                                            right: 0,
+                                            height: 28,
+                                            zIndex: 3,
+                                            pointerEvents: "none",
+                                            background: `linear-gradient(180deg, ${sheetBg} 0%, ${themeColors.overlay.gradient} 55%)`,
+                                        }}
+                                    />
+                                )}
+                            </div>
                         </div>
                         {/* Right-edge drag handle — desktop only, resizes the feed width */}
                         {!isMobile && onFeedDragStart && (
@@ -14961,6 +15108,47 @@ const HomepageJobs = React.memo(function HomepageJobs({
     const [nearbyBasedOnLocation, setNearbyBasedOnLocation] =
         React.useState(true) // true until we know we fell back to keyword search
     const [geoCoords, setGeoCoords] = React.useState<{ lat: number; lng: number } | null>(null)
+
+    // Geo is IP-based — fetch once per jobsApiUrl, cache in a ref so query changes don't re-hit /geo
+    const geoCacheRef = React.useRef<{ lat: number; lng: number } | null | "pending">(null)
+    const geoCacheUrlRef = React.useRef<string | null>(null)
+    const geoResolversRef = React.useRef<Array<(v: { lat: number; lng: number } | null) => void>>([])
+    const getGeo = React.useCallback((): Promise<{ lat: number; lng: number } | null> => {
+        if (!jobsApiUrl) return Promise.resolve(null)
+        if (geoCacheUrlRef.current !== jobsApiUrl) {
+            geoCacheRef.current = null
+            geoCacheUrlRef.current = jobsApiUrl
+        }
+        if (geoCacheRef.current !== null && geoCacheRef.current !== "pending") {
+            return Promise.resolve(geoCacheRef.current)
+        }
+        if (geoCacheRef.current === "pending") {
+            return new Promise((res) => geoResolversRef.current.push(res))
+        }
+        geoCacheRef.current = "pending"
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), 4000)
+        return fetch(`${jobsApiUrl}/geo`, { signal: ctrl.signal })
+            .finally(() => clearTimeout(timer))
+            .then((r) => (r.ok ? r.json() : {}))
+            .then(({ lat, lng }: { lat?: number | null; lng?: number | null }) => {
+                const valid =
+                    typeof lat === "number" && typeof lng === "number" &&
+                    !isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+                const result = valid ? { lat: lat as number, lng: lng as number } : null
+                geoCacheRef.current = result
+                geoResolversRef.current.forEach((res) => res(result))
+                geoResolversRef.current = []
+                return result
+            })
+            .catch(() => {
+                geoCacheRef.current = null
+                geoResolversRef.current.forEach((res) => res(null))
+                geoResolversRef.current = []
+                return null
+            })
+    }, [jobsApiUrl])
+
     React.useEffect(() => {
         if (!jobsApiUrl) {
             setLoadingPicks(false)
@@ -15035,27 +15223,11 @@ const HomepageJobs = React.memo(function HomepageJobs({
             }
         )
 
-        // Geo lookup via the jobs-proxy edge endpoint (no third-party needed).
-        const geoCtrl = new AbortController()
-        const geoTimer = setTimeout(() => geoCtrl.abort(), 4000)
-        const geoPromise = fetch(`${jobsApiUrl}/geo`, {
-            signal: geoCtrl.signal,
-        })
-            .finally(() => clearTimeout(geoTimer))
-            .then((r) => (r.ok ? r.json() : {}))
-            .then(
-                ({
-                    lat,
-                    lng,
-                }: {
-                    lat?: number | null
-                    lng?: number | null
-                }) => ({
-                    lat: typeof lat === "number" ? lat : NaN,
-                    lng: typeof lng === "number" ? lng : NaN,
-                })
-            )
-            .catch(() => ({ lat: NaN, lng: NaN }))
+        // Geo lookup — cached per jobsApiUrl so query changes don't re-hit /geo
+        const geoPromise = getGeo().then((coords) => ({
+            lat: coords?.lat ?? NaN,
+            lng: coords?.lng ?? NaN,
+        }))
 
         const nearPromise = Promise.all([picksPromise, geoPromise]).then(
             async ([picks, { lat, lng }]) => {
@@ -15146,9 +15318,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
         return () => {
             cancelled = true
             clearTimeout(safetyTimer)
-            clearTimeout(geoTimer)
         }
-    }, [jobsApiUrl, userQuery])
+    }, [jobsApiUrl, userQuery, getGeo])
 
     React.useEffect(() => {
         onHomepageDeckJobs?.([...nextJobs, ...nearJobs, ...topJobs])
@@ -20318,6 +20489,11 @@ export default function OmegleMentorshipUI(props: Props) {
         }
         return ""
     })
+    const [debouncedYouWork, setDebouncedYouWork] = React.useState(youWork)
+    React.useEffect(() => {
+        const t = setTimeout(() => setDebouncedYouWork(youWork), 400)
+        return () => clearTimeout(t)
+    }, [youWork])
     const [youInterests, setYouInterests] = React.useState(() => {
         if (typeof window !== "undefined") {
             return localStorage.getItem("you_interests") || ""
@@ -32529,7 +32705,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             <HomepageJobs
                                 jobsApiUrl={jobsApiUrl}
                                 googleMapsApiKey={googleMapsApiKey}
-                                userQuery={youWork}
+                                userQuery={debouncedYouWork}
                                 isMobileLayout={isMobileLayout}
                                 themeColors={themeColors}
                                 onOpenSettings={() => setShowYouSettings(true)}
