@@ -139,7 +139,11 @@ async function handleRequest(
     const limitRaw = parseInt(url.searchParams.get("limit") ?? "", 10);
     const limit = !isNaN(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
 
-    const rows = await listJobsForMap(env.JOBS_DB, since, bbox, center, limit);
+    const q = url.searchParams.get("q") ?? undefined;
+    const employment_type = url.searchParams.get("employment_type") ?? undefined;
+    const seniority_level = url.searchParams.get("seniority_level") ?? undefined;
+
+    const rows = await listJobsForMap(env.JOBS_DB, since, bbox, center, limit, q, employment_type, seniority_level);
     return jsonOk({
       data: rows.map((r) => ({
         company_id: r.company_id,

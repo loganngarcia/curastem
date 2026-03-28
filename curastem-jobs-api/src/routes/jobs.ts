@@ -246,6 +246,9 @@ export async function handleListJobs(
         exclude_ids,
         q,
         posted_since,
+        employment_type,
+        seniority_level,
+        company: company || undefined,
       });
       return jsonOk({
         data: rows.map(rowToPublicJob),

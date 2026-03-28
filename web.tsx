@@ -11420,6 +11420,11 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
         if (phase === "idle" || phase === "done") return
 
         const findPanel = () =>
+            // When the doc editor is overlaid on the map, prefer its specific panel
+            // over the main desktop-tool-panel (which would be the map container)
+            (document.querySelector(
+                "[data-doc-overlay-panel]"
+            ) as HTMLElement | null) ??
             (document.querySelector(
                 "[data-layer='desktop-tool-panel']"
             ) as HTMLElement | null) ??
@@ -11427,6 +11432,7 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
                 "[data-layer='mobile-tool-overlay']"
             ) as HTMLElement | null)
 
+        let rafId: number | null = null
         const update = () => {
             const el = findPanel()
             if (!el) {
@@ -11439,6 +11445,13 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
                 return
             }
             const rect = el.getBoundingClientRect()
+            // Panel may still be sliding in — retry next frame until fully on-screen.
+            // x:"100%" means translateX(panelWidth), so rect.right overshoots the viewport.
+            if (rect.right > window.innerWidth + 1 || rect.left < -1) {
+                rafId = requestAnimationFrame(update)
+                return
+            }
+            rafId = null
             orbitRef.current = {
                 x: rect.left + rect.width / 2,
                 y: rect.top + rect.height / 2,
@@ -11451,6 +11464,7 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
         if (el) obs.observe(el)
         window.addEventListener("resize", update)
         return () => {
+            if (rafId !== null) cancelAnimationFrame(rafId)
             obs.disconnect()
             window.removeEventListener("resize", update)
         }
@@ -13333,6 +13347,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     isMobile = false,
     onClose,
     preciseLocRef,
+    onJobSelect,
+    onFeedDragStart,
+    feedRef,
+    feedWidth = 428,
+    defaultSearch = "",
+    searchFocusRef,
 }: {
     jobsApiUrl: string
     googleMapsApiKey: string
@@ -13341,6 +13361,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     onClose: () => void
     /** Ref owned by the parent so precise coords survive panel close/reopen. */
     preciseLocRef: React.MutableRefObject<{ lat: number; lng: number } | null>
+    onJobSelect?: (job: HomepageJob) => void
+    /** Right-edge drag handler for the feed panel; desktop only. */
+    onFeedDragStart?: (e: React.PointerEvent) => void
+    /** Ref forwarded to the feed motion.div for live-width updates. */
+    feedRef?: React.RefObject<HTMLDivElement | null>
+    /** Persisted width of the feed panel; desktop only. */
+    feedWidth?: number
+    /** Default search query pre-filled from the user's profile job title. */
+    defaultSearch?: string
+    /** Forwarded ref so parent can focus the search input (e.g. after closing job detail). */
+    searchFocusRef?: React.RefObject<(() => void) | null>
 }) {
     const isStatic = useIsStaticRenderer()
     const mapContainerRef = React.useRef<HTMLDivElement>(null)
@@ -13357,10 +13388,126 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // Stable ref to jobsApiUrl so the idle listener closure stays fresh
     const jobsApiUrlRef = React.useRef(jobsApiUrl)
     React.useEffect(() => { jobsApiUrlRef.current = jobsApiUrl }, [jobsApiUrl])
-    const [selectedJobs, setSelectedJobs] = React.useState<HomepageJob[] | null>(null)
+    // Stable refs for filter values so chip click handler (imperative) reads current values
+    const filterDaysRef = React.useRef<"1d"|"3d"|"7d"|"30d">("3d")
+    const filterTypeRef = React.useRef("")
+    const filterSeniorityRef = React.useRef("")
+    // Feed always visible on both mobile and desktop — empty array until first fetch resolves
+    const [selectedJobs, setSelectedJobs] = React.useState<HomepageJob[] | null>([])
     const [travelTimes, setTravelTimes] = React.useState<
         Record<string, { drivingMins: number | null; walkingMins: number | null }>
     >({})
+    // Selected chip for the nearby jobs overlay
+    const [selectedChipEntry, setSelectedChipEntry] = React.useState<MapCompanyEntry | null>(null)
+    // Filters for the nearby jobs overlay
+    const [filterDays, setFilterDays] = React.useState<"1d"|"3d"|"7d"|"30d">("3d")
+    const [filterType, setFilterType] = React.useState("")
+    const [filterSeniority, setFilterSeniority] = React.useState("")
+    const [filterDaysOpen, setFilterDaysOpen] = React.useState(false)
+    const [filterTypeOpen, setFilterTypeOpen] = React.useState(false)
+    const [filterSeniorityOpen, setFilterSeniorityOpen] = React.useState(false)
+    // Mobile panel height = feed area + overhead (drag handle floats over scroll — not in-flow)
+    // Overhead: padding (20+4=24) + search bar (56+8=64) = 88px
+    // Container min = 128px feed + 88px overhead = 216px
+    // Container chip = 324px feed + 88px overhead = 412px
+    const MOBILE_FEED_MIN = 216
+    const MOBILE_FEED_CHIP = 412
+    const [mobileFeedHeight, setMobileFeedHeight] = React.useState(MOBILE_FEED_MIN)
+    const mobileFeedDragStart = React.useRef<{ y: number; height: number } | null>(null)
+    const handleMobileFeedDragStart = React.useCallback((e: React.TouchEvent | React.PointerEvent) => {
+        // Use touch events on mobile — touchmove with preventDefault kills scroll competition
+        // giving smooth, jitter-free resize. Fall back to pointer events for non-touch (desktop testing).
+        const isTouchEvent = "touches" in e
+        const startY = isTouchEvent
+            ? (e as React.TouchEvent).touches[0].clientY
+            : (e as React.PointerEvent).clientY
+        const touchId = isTouchEvent ? (e as React.TouchEvent).touches[0].identifier : undefined
+
+        const startH = (overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>).current?.offsetHeight ?? mobileFeedHeight
+        mobileFeedDragStart.current = { y: startY, height: startH }
+
+        const getClientY = (ev: TouchEvent | PointerEvent): number => {
+            if ("changedTouches" in ev) {
+                const t = touchId !== undefined
+                    ? Array.from(ev.changedTouches).find((t) => t.identifier === touchId)
+                    : ev.changedTouches[0]
+                return t?.clientY ?? startY
+            }
+            return (ev as PointerEvent).clientY
+        }
+
+        const onMove = (ev: TouchEvent | PointerEvent) => {
+            ev.preventDefault()
+            if (!mobileFeedDragStart.current) return
+            const delta = mobileFeedDragStart.current.y - getClientY(ev)
+            const maxH = window.innerHeight * 0.95
+            const newH = Math.max(MOBILE_FEED_MIN, Math.min(mobileFeedDragStart.current.height + delta, maxH))
+            const el = (overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>).current
+            if (el) { el.style.transition = "none"; el.style.height = `${newH}px` }
+        }
+
+        const onEnd = (ev: TouchEvent | PointerEvent) => {
+            if (!mobileFeedDragStart.current) return
+            const delta = mobileFeedDragStart.current.y - getClientY(ev)
+            const maxH = window.innerHeight * 0.95
+            const newH = Math.max(MOBILE_FEED_MIN, Math.min(mobileFeedDragStart.current.height + delta, maxH))
+            const el = (overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>).current
+            if (el) el.style.transition = ""
+            setMobileFeedHeight(newH)
+            mobileFeedDragStart.current = null
+            if (isTouchEvent) {
+                document.removeEventListener("touchmove", onMove as EventListener)
+                document.removeEventListener("touchend", onEnd as EventListener)
+            } else {
+                window.removeEventListener("pointermove", onMove as EventListener)
+                window.removeEventListener("pointerup", onEnd as EventListener)
+            }
+        }
+
+        if (isTouchEvent) {
+            // { passive: false } required so preventDefault() on touchmove actually works
+            document.addEventListener("touchmove", onMove as EventListener, { passive: false })
+            document.addEventListener("touchend", onEnd as EventListener)
+        } else {
+            window.addEventListener("pointermove", onMove as EventListener)
+            window.addEventListener("pointerup", onEnd as EventListener)
+        }
+    }, [mobileFeedHeight]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Search query for the feed — seeded from profile job title, editable by user
+    const [mapSearchQuery, setMapSearchQuery] = React.useState(defaultSearch)
+    const mapSearchQueryRef = React.useRef(defaultSearch)
+    React.useEffect(() => { mapSearchQueryRef.current = mapSearchQuery }, [mapSearchQuery])
+    const mapSearchInputRef = React.useRef<HTMLInputElement>(null)
+    // Auto-focus the search bar on desktop when the panel first mounts
+    React.useEffect(() => {
+        if (!isMobile) mapSearchInputRef.current?.focus()
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    // Expose a focus() handle to the parent so it can refocus after closing job/company panels
+    React.useEffect(() => {
+        if (searchFocusRef) {
+            (searchFocusRef as React.MutableRefObject<(() => void) | null>).current = () => {
+                if (!isMobile) mapSearchInputRef.current?.focus()
+            }
+        }
+    }, [isMobile, searchFocusRef])
+    // Stable ref to userLoc so imperative chip-click handlers can read the current position
+    const userLocRef = React.useRef<{ lat: number; lng: number } | null>(null)
+    React.useEffect(() => { userLocRef.current = userLoc }, [userLoc])
+    // Coords used for the last overlay fetch — used by load-more sentinel (chip or auto)
+    const overlayFetchCoordsRef = React.useRef<{ lat: number; lng: number } | null>(null)
+    // Infinite scroll state for the overlay
+    const [overlayNextCursor, setOverlayNextCursor] = React.useState<string | null>(null)
+    const [isLoadingOverlay, setIsLoadingOverlay] = React.useState(false)
+    // How many of the currently displayed company-view jobs are "nearby" (geocoded within radius)
+    const [nearbyJobCount, setNearbyJobCount] = React.useState<number | null>(null)
+    const overlayScrollRef = React.useRef<HTMLDivElement>(null)
+    // Refs for measuring pill positions so dropdown can be rendered outside overflow:hidden
+    const overlayMotionWrapRef = React.useRef<HTMLDivElement>(null)
+    const filterDaysPillRef = React.useRef<HTMLDivElement>(null)
+    const filterSeniorityPillRef = React.useRef<HTMLDivElement>(null)
+    const filterTypePillRef = React.useRef<HTMLDivElement>(null)
+    const [filterDropdownPos, setFilterDropdownPos] = React.useState<{ top: number; left: number } | null>(null)
     // Starts filled if we already have a cached precise location from a previous session
     const [atPreciseLocation, setAtPreciseLocation] = React.useState(() => preciseLocRef.current !== null)
     // Overlays need a laid-out map — first idle means projection/panes are valid
@@ -13445,16 +13592,21 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const maxLat = ne.lat() + latSpan * 0.6
             const minLng = sw.lng() - lngSpan * 0.6
             const maxLng = ne.lng() + lngSpan * 0.6
-            const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
+            const daysMap: Record<string, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }
+            const sinceTs = Math.floor(Date.now() / 1000) - (daysMap[filterDaysRef.current] ?? 7) * 24 * 60 * 60
 
             // Pass center so backend orders by distance (closest first) and limits to 100
             const params = new URLSearchParams({
-                since: String(since7d),
+                since: String(sinceTs),
                 min_lat: String(minLat), max_lat: String(maxLat),
                 min_lng: String(minLng), max_lng: String(maxLng),
                 center_lat: String(cLat), center_lng: String(cLng),
                 limit: String(MAX_CHIPS),
             })
+            const q = mapSearchQueryRef.current.trim()
+            if (q) params.set("q", q)
+            if (filterTypeRef.current) params.set("employment_type", filterTypeRef.current)
+            if (filterSeniorityRef.current) params.set("seniority_level", filterSeniorityRef.current)
 
             fetch(`${apiUrl}/jobs/map?${params}`)
                 .then((r) => (r.ok ? r.json() : { data: [] }))
@@ -13506,6 +13658,55 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         mapInstanceRef.current.panTo(userLoc)
     }, [userLoc])
 
+    // Keep filter refs in sync
+    React.useEffect(() => { filterDaysRef.current = filterDays }, [filterDays])
+    React.useEffect(() => { filterTypeRef.current = filterType }, [filterType])
+    React.useEffect(() => { filterSeniorityRef.current = filterSeniority }, [filterSeniority])
+
+    // When search query OR any filter changes, bust the chip cache and force a fresh viewport fetch
+    React.useEffect(() => {
+        mapSearchQueryRef.current = mapSearchQuery
+        filterDaysRef.current = filterDays
+        filterTypeRef.current = filterType
+        filterSeniorityRef.current = filterSeniority
+        if (!mapInstanceRef.current) return
+        accJobsRef.current.clear()
+        lastFetchCenterRef.current = null
+        google.maps.event.trigger(mapInstanceRef.current, "idle")
+    }, [mapSearchQuery, filterDays, filterType, filterSeniority]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Auto-fetch nearby jobs on both mobile and desktop whenever user location or filters change (skip when company chip is open)
+    React.useEffect(() => {
+        if (!userLoc || selectedChipEntry) return
+        const daysMap: Record<string, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }
+        const sinceTs = Math.floor(Date.now() / 1000) - (daysMap[filterDays] ?? 3) * 24 * 60 * 60
+        setSelectedJobs([])
+        setOverlayNextCursor(null)
+        overlayFetchCoordsRef.current = userLoc
+        const p = new URLSearchParams({
+            near_lat: String(userLoc.lat),
+            near_lng: String(userLoc.lng),
+            radius_km: "50",
+            since: String(sinceTs),
+            limit: "30",
+            exclude_remote: "true",
+        })
+        if (filterType) p.set("employment_type", filterType)
+        if (filterSeniority) p.set("seniority_level", filterSeniority)
+        if (mapSearchQuery.trim()) p.set("q", mapSearchQuery.trim())
+        setIsLoadingOverlay(true)
+        fetch(`${jobsApiUrl}/jobs?${p}`)
+            .then((r) => (r.ok ? r.json() : { data: [] }))
+            .then(({ data }: { data: HomepageJob[] }) => {
+                const jobs = Array.isArray(data) ? data : []
+                setSelectedJobs(jobs)
+                setOverlayNextCursor(jobs.length >= 30 ? "more" : null)
+                setIsLoadingOverlay(false)
+            })
+            .catch(() => { setSelectedJobs([]); setIsLoadingOverlay(false) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [userLoc, filterDays, filterType, filterSeniority, selectedChipEntry, mapSearchQuery])
+
     // Place / refresh company chips whenever jobs or map changes
     React.useEffect(() => {
         if (!mapInstanceRef.current || !mapsReady || !mapHasIdle || isStatic || jobs.length === 0)
@@ -13544,6 +13745,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const span = document.createElement("span")
             span.textContent = String(entry.job_count)
             span.style.cssText = "font-size:14px;font-weight:600;color:#000;line-height:21px;"
+            span.dataset.chipSlug = entry.company_slug
             chip.appendChild(span)
             return chip
         }
@@ -13554,35 +13756,62 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const chip = buildChip(entry)
             chip.addEventListener("click", (e) => {
                 e.stopPropagation()
-                // Fetch company jobs then filter to those near this chip's location.
-                // Most jobs fall back to company HQ coords; for geocoded retail/franchise
-                // jobs the per-job coords are used, so the filter correctly shows only
-                // jobs at this specific city location.
                 const chipLat = entry.chip_lat
                 const chipLng = entry.chip_lng
-                const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
-                const params = new URLSearchParams({
-                    company: entry.company_slug,
-                    since: String(since7d),
-                    limit: "50",
-                    exclude_remote: "true",
-                })
+                setSelectedChipEntry(entry)
                 setSelectedJobs([])
+                setNearbyJobCount(null)
                 setTravelTimes({})
-                fetch(`${jobsApiUrl}/jobs?${params}`)
-                    .then((r) => (r.ok ? r.json() : { data: [] }))
-                    .then(({ data }: { data: HomepageJob[] }) => {
-                        const all: HomepageJob[] = Array.isArray(data) ? data : []
-                        // Use per-job coords when available, fall back to company HQ
-                        const nearby = all.filter((j) => {
-                            const jlat = j.location_lat ?? j.company?.headquarters?.lat ?? null
-                            const jlng = j.location_lng ?? j.company?.headquarters?.lng ?? null
-                            if (jlat == null || jlng == null) return true // no coords → always include
-                            return haversineKm(chipLat, chipLng, jlat, jlng) <= 80
-                        })
-                        setSelectedJobs(nearby)
+                setOverlayNextCursor(null)
+                overlayFetchCoordsRef.current = { lat: chipLat, lng: chipLng }
+                if (isMobile) setMobileFeedHeight(MOBILE_FEED_CHIP)
+
+                // Mirror whatever filters are active on the map — chips already respect all filters,
+                // so if a chip is visible there are matching jobs within this window.
+                const daysMap: Record<string, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }
+                const sinceTs = Math.floor(Date.now() / 1000) - (daysMap[filterDaysRef.current] ?? 7) * 24 * 60 * 60
+
+                // Company view: fetch nearby (geocoded within 50km) + all jobs globally in parallel
+                const nearbyParams = new URLSearchParams({
+                    company: entry.company_slug,
+                    near_lat: String(chipLat),
+                    near_lng: String(chipLng),
+                    radius_km: "50",
+                    since: String(sinceTs),
+                    limit: "50",
+                })
+                const allParams = new URLSearchParams({
+                    company: entry.company_slug,
+                    since: String(sinceTs),
+                    limit: "50",
+                })
+                const q = mapSearchQueryRef.current.trim()
+                if (q) { nearbyParams.set("q", q); allParams.set("q", q) }
+                const et = filterTypeRef.current
+                if (et) { nearbyParams.set("employment_type", et); allParams.set("employment_type", et) }
+                const sl = filterSeniorityRef.current
+                if (sl) { nearbyParams.set("seniority_level", sl); allParams.set("seniority_level", sl) }
+
+                Promise.all([
+                    fetch(`${jobsApiUrl}/jobs?${nearbyParams}`).then((r) => (r.ok ? r.json() : { data: [] })),
+                    fetch(`${jobsApiUrl}/jobs?${allParams}`).then((r) => (r.ok ? r.json() : { data: [] })),
+                ])
+                    .then(([nearbyRes, allRes]: [{ data: HomepageJob[] }, { data: HomepageJob[] }]) => {
+                        const nearby: HomepageJob[] = Array.isArray(nearbyRes.data) ? nearbyRes.data : []
+                        const all: HomepageJob[] = Array.isArray(allRes.data) ? allRes.data : []
+                        const nearbyIds = new Set(nearby.map((j) => j.id))
+                        // Nearby first, then any remaining global jobs not already shown
+                        const combined = [...nearby, ...all.filter((j) => !nearbyIds.has(j.id))]
+                        setNearbyJobCount(nearby.length)
+                        setSelectedJobs(combined)
+                        setOverlayNextCursor(null)
+                        // Update the chip's displayed count to match the real loaded total
+                        const realCount = combined.length
+                        document.querySelectorAll<HTMLSpanElement>(
+                            `[data-chip-slug="${entry.company_slug}"]`
+                        ).forEach((span) => { span.textContent = String(realCount) })
                     })
-                    .catch(() => setSelectedJobs(null))
+                    .catch(() => { setSelectedJobs([]); setNearbyJobCount(null) })
             })
 
             // OverlayView: custom HTML on raster map without needing a mapId
@@ -13734,11 +13963,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
 
     const tbBg = isDark ? "#333333" : "#ffffff"
     const tbIcon = isDark ? "rgba(255,255,255,0.95)" : "rgba(0,0,0,0.85)"
-    const sheetBg = isDark ? "#212121" : "#f2f2f2"
-    const cardBg = isDark ? "#3D3D3D" : "#ffffff"
+    const sheetBg = isDark ? "#212121" : "#ffffff"
+    const cardBg = themeColors.surfaceHighlight
     const textPrimary = themeColors.text.primary
     const textSecondary = themeColors.text.secondary
-    const panelRadius = isMobile ? "28px 28px 0 0" : "28px 0 0 28px"
+    // Desktop map is edge-to-edge — no rounded corners on the panel shell
+    const panelRadius = isMobile ? "28px 28px 0 0" : "0"
     const tbStyle: React.CSSProperties = {
         width: 40,
         height: 40,
@@ -13790,6 +14020,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 flexDirection: "column",
             }}
         >
+            <style>{`
+                @keyframes mapFeedLabelSkeletonPulse {
+                    0%, 100% { filter: brightness(1); }
+                    50% { filter: brightness(1.1); }
+                }
+            `}</style>
             {/* Map fills the panel */}
             <div ref={mapContainerRef} style={{ flex: 1, width: "100%" }} aria-label="Jobs map" />
 
@@ -13937,282 +14173,656 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 )}
             </div>
 
-            {/* Job list sheet — animates in from bottom when a chip is tapped */}
+            {/* Job list sheet — always visible on desktop, chip-triggered slide-up on mobile */}
             <AnimatePresence>
-                {selectedJobs && (
+                {selectedJobs !== null && (
                     <motion.div
-                        data-layer="nearby jobs card overlay"
-                        initial={{ y: "100%" }}
-                        animate={{ y: 0 }}
-                        exit={{ y: "100%" }}
+                        ref={(el) => {
+                            ;(overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+                            if (feedRef) (feedRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+                        }}
+                        data-layer="map-job-feed" // also known as nearby jobs card overlay
+                        initial={false}
+                        animate={{}}
+                        exit={{}}
                         transition={{ type: "spring", stiffness: 380, damping: 40 }}
                         style={{
                             position: "absolute",
                             left: 0,
-                            right: 0,
+                            top: isMobile ? undefined : 0,
                             bottom: 0,
-                            padding: 12,
+                            padding: isMobile ? "4px 4px 4px" : 12,
                             zIndex: 20,
+                            width: isMobile ? "100%" : feedWidth,
+                            maxWidth: isMobile ? "100%" : "min(640px, 40%)",
+                            height: isMobile ? mobileFeedHeight : undefined,
+                            transition: isMobile ? "height 0.32s ease" : undefined,
+                            display: "flex",
+                            flexDirection: "column",
+                        }}
+                        onClick={(e) => {
+                            const target = e.target as HTMLElement
+                            if (!target.closest("[data-filter-pill]")) {
+                                setFilterDaysOpen(false)
+                                setFilterTypeOpen(false)
+                                setFilterSeniorityOpen(false)
+                                setFilterDropdownPos(null)
+                            }
                         }}
                     >
+                        {/* Dropdown menus — rendered outside overflow:hidden sheet, positioned relative to motion.div */}
+                        {(filterDaysOpen || filterSeniorityOpen || filterTypeOpen) && filterDropdownPos && (() => {
+                            const menuStyle: React.CSSProperties = {
+                                position: "absolute",
+                                top: filterDropdownPos.top,
+                                left: filterDropdownPos.left,
+                                zIndex: 50,
+                                width: 196,
+                                padding: 10,
+                                background: themeColors.surfaceMenu,
+                                boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                borderRadius: 28,
+                                outline: `0.1px ${themeColors.border.subtle} solid`,
+                                outlineOffset: -0.1,
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 4,
+                            }
+                            const itemStyle = (active: boolean): React.CSSProperties => ({
+                                alignSelf: "stretch",
+                                height: 36,
+                                paddingLeft: 12,
+                                paddingRight: 12,
+                                borderRadius: 28,
+                                justifyContent: "space-between",
+                                display: "flex",
+                                alignItems: "center",
+                                cursor: "pointer",
+                                background: "transparent",
+                                color: themeColors.text.primary,
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: "400",
+                                border: "none",
+                                width: "100%",
+                                textAlign: "left" as const,
+                                transition: "background 0.15s",
+                            })
+                            const hoverBg = themeColors.hover.default
+                            const checkmark = (
+                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+                                    <path d="M1 6L4.5 9.5L11 2" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                            )
+                            const renderMenu = (opts: { value: string; label: string }[], current: string, onSelect: (v: string) => void) => (
+                                <div data-filter-pill style={menuStyle}>
+                                    <style>{`.mfi:hover{background:${hoverBg} !important}`}</style>
+                                    {opts.map((o) => (
+                                        <button
+                                            key={o.value}
+                                            className="mfi"
+                                            style={itemStyle(current === o.value)}
+                                            onClick={(e) => { e.stopPropagation(); onSelect(o.value); setFilterDropdownPos(null) }}
+                                        >
+                                            <span>{o.label}</span>
+                                            {current === o.value && checkmark}
+                                        </button>
+                                    ))}
+                                </div>
+                            )
+                            if (filterDaysOpen) return renderMenu([
+                                { value: "1d", label: "Past 24 hours" },
+                                { value: "3d", label: "Past 3 days" },
+                                { value: "7d", label: "Past 7 days" },
+                                { value: "30d", label: "Past 30 days" },
+                            ], filterDays, (v) => { setFilterDays(v as typeof filterDays); setFilterDaysOpen(false) })
+                            if (filterSeniorityOpen) return renderMenu([
+                                { value: "", label: "All levels" },
+                                { value: "intern", label: "Intern" },
+                                { value: "entry,new_grad", label: "Entry level" },
+                                { value: "mid,senior", label: "Senior" },
+                                { value: "staff,manager", label: "Manager" },
+                                { value: "director,executive", label: "Director / Executive" },
+                            ], filterSeniority, (v) => { setFilterSeniority(v); setFilterSeniorityOpen(false) })
+                            if (filterTypeOpen) return renderMenu([
+                                { value: "", label: "All types" },
+                                { value: "full_time", label: "Full-time" },
+                                { value: "part_time", label: "Part-time" },
+                                { value: "contract", label: "Contract" },
+                                { value: "temporary", label: "Temporary" },
+                            ], filterType, (v) => { setFilterType(v); setFilterTypeOpen(false) })
+                            return null
+                        })()}
+
+
+                        {/* Large transparent drag-capture zone (mobile only) — sits behind search bar  */}
+                        {/* so input taps still reach the input (zIndex:4) while drags in the whole  */}
+                        {/* search-bar + indicator area (zIndex:3) resize the sheet.                 */}
+                        {isMobile && (
+                            <div
+                                onTouchStart={handleMobileFeedDragStart}
+                                style={{
+                                    position: "absolute",
+                                    top: 20,
+                                    left: 0,
+                                    right: 0,
+                                    height: 94,
+                                    zIndex: 3,
+                                    cursor: "ns-resize",
+                                    touchAction: "none",
+                                }}
+                            />
+                        )}
+
+                        {/* Search bar — always visible, sits between map and the feed sheet */}
+                        <div
+                                onTouchStart={isMobile ? handleMobileFeedDragStart : undefined}
+                                style={{
+                                    height: 56,
+                                    paddingLeft: 20,
+                                    paddingRight: 20,
+                                    background: sheetBg,
+                                    borderRadius: 50,
+                                    position: "relative",
+                                    zIndex: isMobile ? 4 : undefined,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    marginBottom: 8,
+                                    flexShrink: 0,
+                                    boxShadow: isDark ? "none" : "0px 4px 16px rgba(0,0,0,0.13)",
+                                }}
+                            >
+                                <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                        <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.52237C12.6167 8.09309 11.9837 9.59948 10.8571 10.7101C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7101C1.2345 9.59948 0.601563 8.09309 0.601562 6.52237C0.601563 4.95166 1.2345 3.44527 2.36113 2.33461C3.48777 1.22394 5.01581 0.599976 6.60911 0.599976C8.20241 0.599976 9.73045 1.22394 10.8571 2.33461C11.9837 3.44527 12.6167 4.95166 12.6167 6.52237Z" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                    </svg>
+                                </div>
+                                <input
+                                    ref={mapSearchInputRef}
+                                    type="text"
+                                    value={mapSearchQuery}
+                                    onChange={(e) => setMapSearchQuery(e.target.value)}
+                                    placeholder={selectedChipEntry ? `Search jobs at ${selectedChipEntry.company_name}` : "Search jobs"}
+                                    style={{
+                                        flex: 1,
+                                        background: "transparent",
+                                        border: "none",
+                                        outline: "none",
+                                        color: textPrimary,
+                                        // 16px on iOS Safari prevents auto-zoom; 14px on Android + desktop
+                                        fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 14,
+                                        fontFamily: "Inter",
+                                        fontWeight: "400",
+                                        lineHeight: "24px",
+                                    }}
+                                />
+                                {mapSearchQuery && (
+                                    <button
+                                        onClick={() => { setMapSearchQuery(""); requestAnimationFrame(() => mapSearchInputRef.current?.focus()) }}
+                                        style={{
+                                            background: "transparent",
+                                            border: "none",
+                                            cursor: "pointer",
+                                            padding: 0,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            flexShrink: 0,
+                                        }}
+                                    >
+                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                            <path d="M12 4L4 12M4 4L12 12" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                    </button>
+                                )}
+                            </div>
+
                         <div
                             style={{
                                 background: sheetBg,
                                 borderRadius: 36,
                                 overflow: "hidden",
-                                maxHeight: 288,
+                                flex: 1,
+                                minHeight: 0,
+                                height: isMobile ? undefined : "100%",
                                 display: "flex",
                                 flexDirection: "column",
-                                boxShadow: "0 -2px 24px rgba(0,0,0,0.2)",
+                                boxShadow: "none",
                                 position: "relative",
+                                zIndex: isMobile ? 5 : undefined,
                             }}
                         >
-                            {/* Header */}
+                            {/* Single scrollable body — filter pills + cards scroll together */}
                             <div
-                                style={{
-                                    paddingTop: 20,
-                                    paddingLeft: 16,
-                                    paddingRight: 52,
-                                    paddingBottom: 0,
-                                    flexShrink: 0,
+                                ref={overlayScrollRef}
+                                onScroll={() => {
+                                    setFilterDaysOpen(false)
+                                    setFilterSeniorityOpen(false)
+                                    setFilterTypeOpen(false)
+                                    setFilterDropdownPos(null)
                                 }}
-                            >
-                                <div
-                                    style={{
-                                        color: textPrimary,
-                                        fontSize: 15,
-                                        fontFamily: "Inter",
-                                        fontWeight: "400",
-                                        lineHeight: "22.5px",
-                                    }}
-                                >
-                                    {totalJobCount} jobs nearby
-                                </div>
-                            </div>
-
-                            {/* Sheet close button */}
-                            <button
-                                aria-label="Close job list"
-                                onClick={() => setSelectedJobs(null)}
-                                style={{
-                                    position: "absolute",
-                                    top: 10,
-                                    right: 10,
-                                    width: 36,
-                                    height: 36,
-                                    background: "transparent",
-                                    border: "none",
-                                    cursor: "pointer",
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    padding: 0,
-                                }}
-                            >
-                                <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-                                    <path
-                                        d="M23.25 12.75L12.75 23.25M12.75 12.75L23.25 23.25"
-                                        stroke={textPrimary}
-                                        strokeOpacity="0.95"
-                                        strokeWidth="1.2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                    />
-                                </svg>
-                            </button>
-
-                            {/* Scrollable job cards */}
-                            <div
                                 style={{
                                     overflowY: "auto",
-                                    padding: "12px 16px 16px",
+                                    overflowX: "hidden",
+                                    padding: isMobile ? "28px 16px 16px" : "16px 16px 16px",
                                     display: "flex",
                                     flexDirection: "column",
                                     gap: 10,
                                     flex: 1,
                                     minHeight: 0,
+                                    borderRadius: 36,
+                                    position: "relative",
                                 }}
                             >
-                                {selectedJobs.map((job) => {
-                                    const tt = travelTimes[job.id] ?? null
-                                    const driveMins = tt?.drivingMins ?? null
-                                    const walkMins = tt?.walkingMins ?? null
-                                    // Show walking icon + time if walkable in ≤30 min
-                                    const isWalkable = walkMins !== null && walkMins <= 30
-                                    const timeDisplay = isWalkable ? walkMins : driveMins
-                                    const hasTime = timeDisplay !== null
-
-                                    const postedMs = job.posted_at
-                                        ? Date.now() - new Date(job.posted_at).getTime()
-                                        : null
-                                    const postedStr =
-                                        postedMs === null
-                                            ? null
-                                            : postedMs < 3600000
-                                              ? `${Math.floor(postedMs / 60000)} min ago`
-                                              : postedMs < 86400000
-                                                ? `${Math.floor(postedMs / 3600000)}h ago`
-                                                : `${Math.floor(postedMs / 86400000)}d ago`
-
-                                    const dotSpan = (
-                                        <span
-                                            style={{
-                                                color: textSecondary,
-                                                fontSize: 12,
-                                                fontFamily: "Inter",
-                                            }}
-                                        >
-                                            •
-                                        </span>
+                                {/* Filter pills — scroll with content, own horizontal scroll track */}
+                                {(() => {
+                                    const pillBorder = isDark ? "0.33px solid rgba(255,255,255,0.22)" : "0.33px solid rgba(0,0,0,0.18)"
+                                    const pillStyle = (isActive: boolean, isOpen: boolean): React.CSSProperties => ({
+                                        height: 32,
+                                        paddingLeft: 10,
+                                        paddingRight: 10,
+                                        borderRadius: 50,
+                                        background: "transparent",
+                                        border: pillBorder,
+                                        cursor: "pointer",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 5,
+                                        outline: "none",
+                                        whiteSpace: "nowrap",
+                                        flexShrink: 0,
+                                    })
+                                    const daysOpts: { value: "1d"|"3d"|"7d"|"30d"; label: string }[] = [
+                                        { value: "1d", label: "Past 24 hours" },
+                                        { value: "3d", label: "Past 3 days" },
+                                        { value: "7d", label: "Past 7 days" },
+                                        { value: "30d", label: "Past 30 days" },
+                                    ]
+                                    const daysLabel = daysOpts.find((o) => o.value === filterDays)?.label ?? "Past 3 days"
+                                    const seniorityLabelMap: Record<string, string> = {
+                                        "intern": "Intern",
+                                        "entry,new_grad": "Entry level",
+                                        "mid,senior": "Senior",
+                                        "staff,manager": "Manager",
+                                        "director,executive": "Director / Executive",
+                                    }
+                                    const seniorityLabel = filterSeniority
+                                        ? (seniorityLabelMap[filterSeniority] ?? filterSeniority)
+                                        : "Experience"
+                                    const typeLabel = filterType
+                                        ? (filterType === "full_time" ? "Full-time" : filterType === "part_time" ? "Part-time" : filterType.charAt(0).toUpperCase() + filterType.slice(1))
+                                        : "Type"
+                                    const chevron = (
+                                        <svg width="9" height="6" viewBox="0 0 10 6" fill="none">
+                                            <path d="M0.601562 0.599976L4.60156 4.59998L8.60156 0.599976" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
                                     )
-                                    const infoText = (txt: string) => (
-                                        <span
-                                            style={{
-                                                color: textSecondary,
-                                                fontSize: 12,
-                                                fontFamily: "Inter",
-                                                lineHeight: "18px",
-                                            }}
-                                        >
-                                            {txt}
-                                        </span>
-                                    )
-
+                                    const openPill = (
+                                        pillRef: React.RefObject<HTMLDivElement>,
+                                        openFn: (v: boolean) => void,
+                                        closeFns: Array<(v: boolean) => void>,
+                                        currentOpen: boolean,
+                                    ) => (e: React.MouseEvent) => {
+                                        e.stopPropagation()
+                                        if (currentOpen) {
+                                            openFn(false)
+                                            setFilterDropdownPos(null)
+                                        } else {
+                                            closeFns.forEach((fn) => fn(false))
+                                            const el = pillRef.current
+                                            const wrap = overlayMotionWrapRef.current
+                                            if (el && wrap) {
+                                                const r = el.getBoundingClientRect()
+                                                const w = wrap.getBoundingClientRect()
+                                                setFilterDropdownPos({ top: r.bottom - w.top + 4, left: r.left - w.left })
+                                            }
+                                            openFn(true)
+                                        }
+                                    }
                                     return (
                                         <div
-                                            key={job.id}
-                                            role="button"
-                                            tabIndex={0}
-                                            aria-label={`${job.title} at ${job.company.name}, open job listing`}
-                                            onClick={() => {
-                                                if (typeof window !== "undefined")
-                                                    window.open(job.apply_url, "_blank", "noopener,noreferrer")
-                                            }}
-                                            onKeyDown={(e) => {
-                                                if (e.key === "Enter" || e.key === " ") {
-                                                    if (typeof window !== "undefined")
-                                                        window.open(job.apply_url, "_blank", "noopener,noreferrer")
-                                                }
-                                            }}
+                                            className="MapFeedFilterStrip"
                                             style={{
-                                                background: cardBg,
-                                                borderRadius: 28,
-                                                padding: "16px 20px",
-                                                cursor: "pointer",
+                                                display: "flex",
+                                                gap: 6,
                                                 flexShrink: 0,
-                                                outline: "none",
+                                                overflowX: "auto",
+                                                overflowY: "visible",
+                                                marginLeft: -16,
+                                                marginRight: -16,
+                                                paddingLeft: 16,
+                                                paddingRight: 16,
                                             }}
                                         >
-                                            {/* Title */}
-                                            <div
-                                                style={{
-                                                    color: textPrimary,
-                                                    fontSize: 16,
-                                                    fontFamily: "Inter",
-                                                    fontWeight: "500",
-                                                    lineHeight: "24px",
-                                                    marginBottom: 8,
-                                                }}
-                                            >
-                                                {job.title}
-                                            </div>
-                                            {/* Meta row */}
-                                            <div
-                                                style={{
-                                                    display: "flex",
-                                                    flexWrap: "wrap",
-                                                    alignItems: "center",
-                                                    gap: 6,
-                                                }}
-                                            >
-                                                {/* Company logo */}
-                                                {job.company.logo_url ? (
-                                                    <img
-                                                        src={job.company.logo_url}
-                                                        alt=""
-                                                        style={{
-                                                            width: 16,
-                                                            height: 16,
-                                                            borderRadius: 8,
-                                                            objectFit: "cover",
-                                                        }}
-                                                        onError={(e) => {
-                                                            ;(e.target as HTMLImageElement).style.display = "none"
-                                                        }}
-                                                    />
-                                                ) : (
-                                                    <div
-                                                        style={{
-                                                            width: 16,
-                                                            height: 16,
-                                                            borderRadius: 8,
-                                                            background: "rgba(255,255,255,0.12)",
-                                                        }}
-                                                    />
-                                                )}
-                                                {infoText(job.company.name)}
-                                                {postedStr && (
-                                                    <>
-                                                        {dotSpan}
-                                                        {infoText(postedStr)}
-                                                    </>
-                                                )}
-                                                {hasTime && (
-                                                    <>
-                                                        {dotSpan}
-                                                        {/* Walking or driving icon */}
-                                                        {isWalkable ? (
-                                                            <svg
-                                                                width="9"
-                                                                height="14"
-                                                                viewBox="0 0 9 14"
-                                                                fill="none"
-                                                                aria-label="Walking"
-                                                            >
-                                                                <path
-                                                                    d="M1.08504 13.7746L3.01605 11.4757C3.20609 11.2551 3.23061 11.1937 3.3103 10.9608L3.46356 10.4888L2.42756 9.18919L2.10265 10.6788L0.19616 12.9408C-0.42299 13.6642 0.576233 14.3753 1.08504 13.7746ZM5.79304 13.5845C6.18537 14.3937 7.3746 13.8972 6.94549 13.0267L5.63365 10.3662C5.53557 10.1639 5.38844 9.94931 5.27197 9.77769L4.43213 8.58839L4.49343 8.41677C4.72638 7.7547 4.79994 7.35012 4.84898 6.68805L4.97772 4.8306C5.04515 3.94785 4.52408 3.27353 3.61681 3.27353C2.93636 3.27353 2.47659 3.61682 1.85132 4.22984L0.870483 5.19841C0.545582 5.51718 0.441368 5.77465 0.410717 6.1915L0.294243 7.71182C0.263592 8.09185 0.47815 8.36774 0.833698 8.37998C1.18925 8.40453 1.40381 8.19606 1.44672 7.78533L1.58772 6.11794L2.05974 5.68883C2.23139 5.53557 2.45821 5.63979 2.44594 5.81143L2.3356 7.22753C2.28043 7.93862 2.45207 8.27578 2.94249 8.88882L4.24209 10.5256C4.37696 10.691 4.38922 10.7585 4.44439 10.8566L5.79304 13.5845ZM8.03059 5.79304H6.54091L5.57235 4.71413L5.47426 6.27733L5.87273 6.66966C6.08115 6.88422 6.26506 6.94555 6.64512 6.94555H8.03059C8.41677 6.94555 8.6742 6.72484 8.6742 6.36314C8.6742 6.01986 8.41061 5.79304 8.03059 5.79304ZM4.33405 2.69729C5.08193 2.69729 5.68269 2.09653 5.68269 1.34865C5.68269 0.60076 5.08193 0 4.33405 0C3.58616 0 2.9854 0.60076 2.9854 1.34865C2.9854 2.09653 3.58616 2.69729 4.33405 2.69729Z"
-                                                                    fill={textSecondary}
-                                                                />
-                                                            </svg>
-                                                        ) : (
-                                                            <svg
-                                                                width="16"
-                                                                height="12"
-                                                                viewBox="0 0 16 12"
-                                                                fill="none"
-                                                                aria-label="Driving"
-                                                            >
-                                                                <path
-                                                                    d="M2.6717 3.69381C2.82049 2.98869 3.13747 2.06361 3.35095 1.68841C3.52562 1.38437 3.71322 1.24852 4.06254 1.20324C4.55419 1.13855 5.65392 1.09326 7.65282 1.09326C9.65825 1.09326 10.7579 1.12561 11.2432 1.20324C11.5925 1.25499 11.7736 1.38437 11.9548 1.68841C12.1747 2.05715 12.4722 2.98869 12.6404 3.69381C12.6987 3.93316 12.5952 4.02373 12.3494 4.01079C11.2755 3.93963 9.99463 3.87494 7.65282 3.87494C5.31753 3.87494 4.03666 3.93963 2.96281 4.01079C2.71052 4.02373 2.61348 3.93316 2.6717 3.69381ZM2.98869 8.47443C2.40001 8.47443 1.94717 8.0216 1.94717 7.4329C1.94717 6.83777 2.40001 6.39139 2.98869 6.39139C3.57736 6.39139 4.03019 6.83777 4.03019 7.4329C4.03019 8.0216 3.57736 8.47443 2.98869 8.47443ZM5.94502 8.21562C5.49866 8.21562 5.19462 7.91163 5.19462 7.46522C5.19462 7.02537 5.49866 6.72132 5.94502 6.72132H9.36712C9.80703 6.72132 10.1111 7.02537 10.1111 7.46522C10.1111 7.91163 9.80703 8.21562 9.36712 8.21562H5.94502ZM12.317 8.47443C11.7283 8.47443 11.2819 8.0216 11.2819 7.4329C11.2819 6.83777 11.7283 6.39139 12.317 6.39139C12.9122 6.39139 13.3585 6.83777 13.3585 7.4329C13.3585 8.0216 12.9122 8.47443 12.317 8.47443ZM15.3057 8.55849V7.41998C15.3057 6.3267 15.0857 5.71861 14.4906 4.94233L13.9407 4.2372C13.7079 3.07278 13.2744 1.85014 13.0545 1.37143C12.7052 0.640433 12.0388 0.207008 11.1785 0.0905664C10.745 0.0323451 9.3283 0 7.65282 0C5.98384 0 4.56712 0.0388141 4.1337 0.0905664C3.27332 0.194071 2.60054 0.640433 2.25768 1.37143C2.03127 1.85014 1.60432 3.07278 1.36496 4.2372L0.821562 4.94233C0.219946 5.71861 0 6.3267 0 7.41998V8.55849C0 11.3171 15.3057 11.3182 15.3057 8.55849ZM0.86038 12H1.61726C2.10243 12 2.47763 11.6248 2.47763 11.1461V9.53531L0 8.35798V11.1461C0 11.6248 0.375203 12 0.86038 12ZM13.6885 12H14.4518C14.9369 12 15.3057 11.6248 15.3057 11.1461V8.35798L12.8345 9.53531V11.1461C12.8345 11.6248 13.2032 12 13.6885 12Z"
-                                                                    fill={textSecondary}
-                                                                />
-                                                            </svg>
-                                                        )}
-                                                        {infoText(`${timeDisplay} min`)}
-                                                    </>
-                                                )}
-                                                {job.employment_type && (
-                                                    <>
-                                                        {dotSpan}
-                                                        {infoText(
-                                                            job.employment_type
-                                                                .replace(/_/g, "-")
-                                                                .replace(/^\w/, (c) => c.toUpperCase())
-                                                        )}
-                                                    </>
-                                                )}
-                                                {job.visa_sponsorship === "yes" && (
-                                                    <>
-                                                        {dotSpan}
-                                                        {infoText("Sponsors visa")}
-                                                    </>
-                                                )}
-                                            </div>
+                                            <style>{`.MapFeedFilterStrip::-webkit-scrollbar { display: none; } .MapFeedFilterStrip { scrollbar-width: none; }`}</style>
+                                            {/* Days pill */}
+                                            {isMobile ? (
+                                                <div ref={filterDaysPillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
+                                                    <div style={{ ...pillStyle(false, false), pointerEvents: "none", userSelect: "none" }}>
+                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
+                                                        {chevron}
+                                                    </div>
+                                                    <select
+                                                        value={filterDays}
+                                                        onChange={(e) => setFilterDays(e.target.value as "1d"|"3d"|"7d"|"30d")}
+                                                        style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }}
+                                                    >
+                                                        {daysOpts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                                    </select>
+                                                </div>
+                                            ) : (
+                                                <div ref={filterDaysPillRef} data-filter-pill style={{ flexShrink: 0 }}>
+                                                    <button style={pillStyle(false, filterDaysOpen)}
+                                                        onClick={openPill(filterDaysPillRef, setFilterDaysOpen, [setFilterSeniorityOpen, setFilterTypeOpen], filterDaysOpen)}>
+                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
+                                                        {chevron}
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {/* Seniority pill */}
+                                            {isMobile ? (
+                                                <div ref={filterSeniorityPillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
+                                                    <div style={{ ...pillStyle(!!filterSeniority, false), pointerEvents: "none", userSelect: "none" }}>
+                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
+                                                        {chevron}
+                                                    </div>
+                                                    <select
+                                                        value={filterSeniority}
+                                                        onChange={(e) => setFilterSeniority(e.target.value)}
+                                                        style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }}
+                                                    >
+                                                        <option value="">All levels</option>
+                                                        <option value="intern">Intern</option>
+                                                        <option value="entry,new_grad">Entry level</option>
+                                                        <option value="mid,senior">Senior</option>
+                                                        <option value="staff,manager">Manager</option>
+                                                        <option value="director,executive">Director / Executive</option>
+                                                    </select>
+                                                </div>
+                                            ) : (
+                                                <div ref={filterSeniorityPillRef} data-filter-pill style={{ flexShrink: 0 }}>
+                                                    <button style={pillStyle(!!filterSeniority, filterSeniorityOpen)}
+                                                        onClick={openPill(filterSeniorityPillRef, setFilterSeniorityOpen, [setFilterDaysOpen, setFilterTypeOpen], filterSeniorityOpen)}>
+                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
+                                                        {chevron}
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {/* Type pill */}
+                                            {isMobile ? (
+                                                <div ref={filterTypePillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
+                                                    <div style={{ ...pillStyle(!!filterType, false), pointerEvents: "none", userSelect: "none" }}>
+                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
+                                                        {chevron}
+                                                    </div>
+                                                    <select
+                                                        value={filterType}
+                                                        onChange={(e) => setFilterType(e.target.value)}
+                                                        style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }}
+                                                    >
+                                                        <option value="">All types</option>
+                                                        <option value="full_time">Full-time</option>
+                                                        <option value="part_time">Part-time</option>
+                                                        <option value="contract">Contract</option>
+                                                        <option value="temporary">Temporary</option>
+                                                    </select>
+                                                </div>
+                                            ) : (
+                                                <div ref={filterTypePillRef} data-filter-pill style={{ flexShrink: 0 }}>
+                                                    <button style={pillStyle(!!filterType, filterTypeOpen)}
+                                                        onClick={openPill(filterTypePillRef, setFilterTypeOpen, [setFilterDaysOpen, setFilterSeniorityOpen], filterTypeOpen)}>
+                                                        <span style={{ color: textPrimary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
+                                                        {chevron}
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     )
-                                })}
+                                })()}
+
+                                {/* Close button — company view only, top-right of scroll area */}
+                                {selectedChipEntry && (
+                                    <button
+                                        aria-label="Close company view"
+                                        onClick={() => {
+                                            setSelectedChipEntry(null)
+                                            setNearbyJobCount(null)
+                                            setSelectedJobs([])
+                                            if (isMobile) setMobileFeedHeight(MOBILE_FEED_MIN)
+                                            requestAnimationFrame(() => mapSearchInputRef.current?.focus())
+                                        }}
+                                        style={{
+                                            position: "absolute",
+                                            top: 14,
+                                            right: 14,
+                                            flexShrink: 0,
+                                            width: 28,
+                                            height: 28,
+                                            background: "transparent",
+                                            border: "none",
+                                            cursor: "pointer",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            padding: 0,
+                                            zIndex: 12,
+                                        }}
+                                    >
+                                        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                                            <path d="M19 9L9 19M9 9L19 19" stroke={textPrimary} strokeOpacity="0.7" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                        </svg>
+                                    </button>
+                                )}
+
+
+                                {/* Section label skeleton — fill matches job card bg (avoid homepageSkeleton opacity, which reads as wrong color) */}
+                                {selectedChipEntry && nearbyJobCount === null && (
+                                    <div
+                                        style={{
+                                            alignSelf: "flex-start",
+                                            marginLeft: 4,
+                                            marginRight: 4,
+                                            marginTop: 12,
+                                            width: 118,
+                                            height: 21,
+                                            borderRadius: 9999,
+                                            backgroundColor: cardBg,
+                                            animation: "mapFeedLabelSkeletonPulse 1.4s ease-in-out infinite",
+                                        }}
+                                    />
+                                )}
+
+                                {selectedJobs.length === 0 ? (
+                                    // Skeleton cards — count from chip's job_count, uses homepage animation
+                                    Array.from({ length: Math.max(3, Math.min(selectedChipEntry?.job_count ?? 3, 8)) }).map((_, i) => (
+                                        <div key={i} style={{ background: cardBg, borderRadius: 28, padding: "16px 20px", flexShrink: 0 }}>
+                                            <div style={{ height: 18, width: "65%", background: themeColors.hover.default, borderRadius: 6, marginBottom: 10, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
+                                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                                <div style={{ width: 16, height: 16, borderRadius: 8, background: themeColors.hover.default, flexShrink: 0, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
+                                                <div style={{ height: 13, width: "40%", background: themeColors.hover.default, borderRadius: 6, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <>
+                                        {/* Section label once loaded — hidden if 0 nearby */}
+                                        {selectedChipEntry && nearbyJobCount !== null && nearbyJobCount > 0 && (
+                                            <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "500", color: textPrimary, display: "block" }}>
+                                                {`${nearbyJobCount} job${nearbyJobCount === 1 ? "" : "s"} nearby`}
+                                            </span>
+                                        )}
+                                        {selectedJobs.map((job, idx) => {
+                                            // Insert "X jobs anywhere" divider before the first non-nearby job
+                                            const anywhereLabelHere = selectedChipEntry && nearbyJobCount !== null && idx === nearbyJobCount && selectedJobs.length > nearbyJobCount
+                                            const anywhereTotalCount = selectedJobs.length - (nearbyJobCount ?? 0)
+                                            const tt = travelTimes[job.id] ?? null
+                                            const driveMins = tt?.drivingMins ?? null
+                                            const walkMins = tt?.walkingMins ?? null
+                                            const isWalkable = walkMins !== null && walkMins <= 30
+                                            const timeDisplay = isWalkable ? walkMins : driveMins
+                                            const hasTime = timeDisplay !== null
+
+                                            const postedMs = job.posted_at
+                                                ? Date.now() - new Date(job.posted_at).getTime()
+                                                : null
+                                            const postedStr =
+                                                postedMs === null
+                                                    ? null
+                                                    : postedMs < 3600000
+                                                      ? `${Math.floor(postedMs / 60000)} min ago`
+                                                      : postedMs < 86400000
+                                                        ? `${Math.floor(postedMs / 3600000)}h ago`
+                                                        : `${Math.floor(postedMs / 86400000)}d ago`
+
+                                            const dotSpan = (
+                                                <span style={{ color: textSecondary, fontSize: 12, fontFamily: "Inter" }}>•</span>
+                                            )
+                                            const infoText = (txt: string) => (
+                                                <span style={{ color: textSecondary, fontSize: 12, fontFamily: "Inter", lineHeight: "18px" }}>{txt}</span>
+                                            )
+
+                                            return (
+                                                <React.Fragment key={job.id}>
+                                                {anywhereLabelHere && (
+                                                    <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "500", color: textPrimary, display: "block" }}>
+                                                        {`${anywhereTotalCount} job${anywhereTotalCount === 1 ? "" : "s"} anywhere`}
+                                                    </span>
+                                                )}
+                                                <div
+                                                    role="button"
+                                                    tabIndex={0}
+                                                    aria-label={`${job.title} at ${job.company.name}, open job listing`}
+                                                    onClick={() => {
+                                                        if (onJobSelect) {
+                                                            onJobSelect(job)
+                                                        } else if (typeof window !== "undefined") {
+                                                            window.open(job.apply_url, "_blank", "noopener,noreferrer")
+                                                        }
+                                                    }}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === "Enter" || e.key === " ") {
+                                                            if (onJobSelect) {
+                                                                onJobSelect(job)
+                                                            } else if (typeof window !== "undefined") {
+                                                                window.open(job.apply_url, "_blank", "noopener,noreferrer")
+                                                            }
+                                                        }
+                                                    }}
+                                                    style={{
+                                                        background: cardBg,
+                                                        borderRadius: 28,
+                                                        padding: "16px 20px",
+                                                        cursor: "pointer",
+                                                        flexShrink: 0,
+                                                        outline: "none",
+                                                    }}
+                                                >
+                                                    {/* Title */}
+                                                    <div
+                                                        style={{
+                                                            color: textPrimary,
+                                                            fontSize: 16,
+                                                            fontFamily: "Inter",
+                                                            fontWeight: "500",
+                                                            lineHeight: "24px",
+                                                            marginBottom: 8,
+                                                            whiteSpace: "nowrap",
+                                                            overflow: "hidden",
+                                                            textOverflow: "ellipsis",
+                                                        }}
+                                                    >
+                                                        {job.title}
+                                                    </div>
+                                                    {/* Meta row */}
+                                                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+                                                        {job.company.logo_url ? (
+                                                            <img
+                                                                src={job.company.logo_url}
+                                                                alt=""
+                                                                style={{ width: 16, height: 16, borderRadius: 8, objectFit: "cover" }}
+                                                                onError={(e) => { ;(e.target as HTMLImageElement).style.display = "none" }}
+                                                            />
+                                                        ) : (
+                                                            <div style={{ width: 16, height: 16, borderRadius: 8, background: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)" }} />
+                                                        )}
+                                                        {infoText(job.company.name)}
+                                                        {postedStr && <>{dotSpan}{infoText(postedStr)}</>}
+                                                        {hasTime && (
+                                                            <>
+                                                                {dotSpan}
+                                                                {isWalkable ? (
+                                                                    <svg width="9" height="14" viewBox="0 0 9 14" fill="none" aria-label="Walking">
+                                                                        <path d="M1.08504 13.7746L3.01605 11.4757C3.20609 11.2551 3.23061 11.1937 3.3103 10.9608L3.46356 10.4888L2.42756 9.18919L2.10265 10.6788L0.19616 12.9408C-0.42299 13.6642 0.576233 14.3753 1.08504 13.7746ZM5.79304 13.5845C6.18537 14.3937 7.3746 13.8972 6.94549 13.0267L5.63365 10.3662C5.53557 10.1639 5.38844 9.94931 5.27197 9.77769L4.43213 8.58839L4.49343 8.41677C4.72638 7.7547 4.79994 7.35012 4.84898 6.68805L4.97772 4.8306C5.04515 3.94785 4.52408 3.27353 3.61681 3.27353C2.93636 3.27353 2.47659 3.61682 1.85132 4.22984L0.870483 5.19841C0.545582 5.51718 0.441368 5.77465 0.410717 6.1915L0.294243 7.71182C0.263592 8.09185 0.47815 8.36774 0.833698 8.37998C1.18925 8.40453 1.40381 8.19606 1.44672 7.78533L1.58772 6.11794L2.05974 5.68883C2.23139 5.53557 2.45821 5.63979 2.44594 5.81143L2.3356 7.22753C2.28043 7.93862 2.45207 8.27578 2.94249 8.88882L4.24209 10.5256C4.37696 10.691 4.38922 10.7585 4.44439 10.8566L5.79304 13.5845ZM8.03059 5.79304H6.54091L5.57235 4.71413L5.47426 6.27733L5.87273 6.66966C6.08115 6.88422 6.26506 6.94555 6.64512 6.94555H8.03059C8.41677 6.94555 8.6742 6.72484 8.6742 6.36314C8.6742 6.01986 8.41061 5.79304 8.03059 5.79304ZM4.33405 2.69729C5.08193 2.69729 5.68269 2.09653 5.68269 1.34865C5.68269 0.60076 5.08193 0 4.33405 0C3.58616 0 2.9854 0.60076 2.9854 1.34865C2.9854 2.09653 3.58616 2.69729 4.33405 2.69729Z" fill={textSecondary}/>
+                                                                    </svg>
+                                                                ) : (
+                                                                    <svg width="16" height="12" viewBox="0 0 16 12" fill="none" aria-label="Driving">
+                                                                        <path d="M2.6717 3.69381C2.82049 2.98869 3.13747 2.06361 3.35095 1.68841C3.52562 1.38437 3.71322 1.24852 4.06254 1.20324C4.55419 1.13855 5.65392 1.09326 7.65282 1.09326C9.65825 1.09326 10.7579 1.12561 11.2432 1.20324C11.5925 1.25499 11.7736 1.38437 11.9548 1.68841C12.1747 2.05715 12.4722 2.98869 12.6404 3.69381C12.6987 3.93316 12.5952 4.02373 12.3494 4.01079C11.2755 3.93963 9.99463 3.87494 7.65282 3.87494C5.31753 3.87494 4.03666 3.93963 2.96281 4.01079C2.71052 4.02373 2.61348 3.93316 2.6717 3.69381ZM2.98869 8.47443C2.40001 8.47443 1.94717 8.0216 1.94717 7.4329C1.94717 6.83777 2.40001 6.39139 2.98869 6.39139C3.57736 6.39139 4.03019 6.83777 4.03019 7.4329C4.03019 8.0216 3.57736 8.47443 2.98869 8.47443ZM5.94502 8.21562C5.49866 8.21562 5.19462 7.91163 5.19462 7.46522C5.19462 7.02537 5.49866 6.72132 5.94502 6.72132H9.36712C9.80703 6.72132 10.1111 7.02537 10.1111 7.46522C10.1111 7.91163 9.80703 8.21562 9.36712 8.21562H5.94502ZM12.317 8.47443C11.7283 8.47443 11.2819 8.0216 11.2819 7.4329C11.2819 6.83777 11.7283 6.39139 12.317 6.39139C12.9122 6.39139 13.3585 6.83777 13.3585 7.4329C13.3585 8.0216 12.9122 8.47443 12.317 8.47443ZM15.3057 8.55849V7.41998C15.3057 6.3267 15.0857 5.71861 14.4906 4.94233L13.9407 4.2372C13.7079 3.07278 13.2744 1.85014 13.0545 1.37143C12.7052 0.640433 12.0388 0.207008 11.1785 0.0905664C10.745 0.0323451 9.3283 0 7.65282 0C5.98384 0 4.56712 0.0388141 4.1337 0.0905664C3.27332 0.194071 2.60054 0.640433 2.25768 1.37143C2.03127 1.85014 1.60432 3.07278 1.36496 4.2372L0.821562 4.94233C0.219946 5.71861 0 6.3267 0 7.41998V8.55849C0 11.3171 15.3057 11.3182 15.3057 8.55849ZM0.86038 12H1.61726C2.10243 12 2.47763 11.6248 2.47763 11.1461V9.53531L0 8.35798V11.1461C0 11.6248 0.375203 12 0.86038 12ZM13.6885 12H14.4518C14.9369 12 15.3057 11.6248 15.3057 11.1461V8.35798L12.8345 9.53531V11.1461C12.8345 11.6248 13.2032 12 13.6885 12Z" fill={textSecondary}/>
+                                                                    </svg>
+                                                                )}
+                                                                {infoText(`${timeDisplay} min`)}
+                                                            </>
+                                                        )}
+                                                        {job.visa_sponsorship === "yes" && (
+                                                            <>{dotSpan}{infoText("Sponsors visa")}</>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                </React.Fragment>
+                                            )
+                                        })}
+                                        {isLoadingOverlay && (
+                                            <div style={{ background: cardBg, borderRadius: 28, padding: "16px 20px", flexShrink: 0 }}>
+                                                <div style={{ height: 18, width: "65%", background: themeColors.hover.default, borderRadius: 6, marginBottom: 10, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
+                                                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                                    <div style={{ width: 16, height: 16, borderRadius: 8, background: themeColors.hover.default, flexShrink: 0, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
+                                                    <div style={{ height: 13, width: "40%", background: themeColors.hover.default, borderRadius: 6, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
                             </div>
+                            {/* Drag pill floats over the top of the scroll body (not a separate flex row) */}
+                            {isMobile && (
+                                <div
+                                    onTouchStart={handleMobileFeedDragStart}
+                                    style={{
+                                        position: "absolute",
+                                        top: 0,
+                                        left: 0,
+                                        right: 0,
+                                        height: 28,
+                                        display: "flex",
+                                        justifyContent: "center",
+                                        alignItems: "center",
+                                        zIndex: 6,
+                                        cursor: "ns-resize",
+                                        touchAction: "none",
+                                        pointerEvents: "auto",
+                                    }}
+                                >
+                                    <svg width="36" height="4" viewBox="0 0 36 4" fill="none" aria-hidden>
+                                        <rect width="36" height="4" rx="2" fill={isDark ? "rgba(255,255,255,0.35)" : "#858585"} />
+                                    </svg>
+                                </div>
+                            )}
                         </div>
+                        {/* Right-edge drag handle — desktop only, resizes the feed width */}
+                        {!isMobile && onFeedDragStart && (
+                            <div
+                                onPointerDown={onFeedDragStart}
+                                style={{
+                                    position: "absolute",
+                                    top: 0,
+                                    right: 0,
+                                    width: 12,
+                                    bottom: 0,
+                                    cursor: "ew-resize",
+                                    zIndex: 30,
+                                }}
+                            />
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -19864,7 +20474,8 @@ Extract this structure:
   "school": "most recent school/university or empty string",
   "work": "current or most recent job title or empty string",
   "interests": ["array of skills, hobbies, interests found — max 10 concise phrases"],
-  "resumeText": "the full plain-text content of the resume"
+  "resumeText": "the full plain-text content of the resume",
+  "seniorityLevel": "one of: intern | new_grad | entry | mid | senior | staff | manager | director | executive — infer from years of total professional experience, job titles, and education. Use intern for students/no experience, new_grad for <1yr, entry for 1-2yr, mid for 3-5yr, senior for 6-9yr, staff for 10+yr individual contributors, manager/director/executive for leadership roles."
 }`
 
                 const extractRes = await fetch(
@@ -19920,6 +20531,7 @@ Extract this structure:
                     work?: string
                     interests?: string[]
                     resumeText?: string
+                    seniorityLevel?: string
                 } = {}
 
                 if (extractRes.ok) {
@@ -19953,6 +20565,12 @@ Extract this structure:
 
                 // Save plain resume text for AI tool calls
                 if (extracted.resumeText) saveResume(extracted.resumeText)
+
+                // Save inferred seniority level for backend personalization
+                const validSeniority = ["intern","new_grad","entry","mid","senior","staff","manager","director","executive"]
+                if (extracted.seniorityLevel && validSeniority.includes(extracted.seniorityLevel)) {
+                    localStorage.setItem("you_seniority", extracted.seniorityLevel)
+                }
 
                 // Auto-fill only empty profile fields
                 if (extracted.fullName && !youName.trim())
@@ -20068,6 +20686,120 @@ Extract this structure:
     const dragStartWidth = React.useRef(872)
     const liveChatWidthRef = React.useRef(872) // tracks clamped value during drag; committed to state on pointer-up
     const [isResizing, setIsResizing] = React.useState(false)
+
+    // Map job detail panel — independently resizable from its left edge, width persisted
+    const [mapJobPanelWidth, setMapJobPanelWidth] = React.useState(() => {
+        if (typeof window !== "undefined") {
+            const saved = localStorage.getItem("curastem_map_job_width")
+            if (saved) {
+                const parsed = parseInt(saved, 10)
+                if (!isNaN(parsed) && parsed >= 320) return parsed
+            }
+        }
+        return 428
+    })
+    React.useEffect(() => {
+        if (typeof window !== "undefined") {
+            localStorage.setItem("curastem_map_job_width", String(mapJobPanelWidth))
+        }
+    }, [mapJobPanelWidth])
+    const mapJobPanelRef = React.useRef<HTMLDivElement>(null)
+    const mapDocOverlayRef = React.useRef<HTMLDivElement>(null)
+    const mapJobDragStart = React.useRef<{ x: number; width: number } | null>(null)
+    const handleMapJobPanelDragStart = React.useCallback((e: React.PointerEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const startX = e.clientX
+        let didDrag = false
+        // Use whichever overlay panel is currently mounted
+        const activeEl = mapDocOverlayRef.current ?? mapJobPanelRef.current
+        mapJobDragStart.current = { x: startX, width: activeEl?.offsetWidth ?? mapJobPanelWidth }
+        const setWidth = (w: number) => {
+            if (mapJobPanelRef.current) mapJobPanelRef.current.style.width = `${w}px`
+            if (mapDocOverlayRef.current) mapDocOverlayRef.current.style.width = `${w}px`
+        }
+        const onMove = (ev: PointerEvent) => {
+            if (!mapJobDragStart.current) return
+            if (Math.abs(ev.clientX - startX) > 4) didDrag = true
+            const delta = mapJobDragStart.current.x - ev.clientX
+            const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
+            const maxW = Math.min(640, containerWidth * 0.4)
+            const newWidth = Math.max(320, Math.min(mapJobDragStart.current.width + delta, maxW))
+            setWidth(newWidth)
+        }
+        const onUp = (ev: PointerEvent) => {
+            if (!mapJobDragStart.current) return
+            if (!didDrag) {
+                setMapJobPanelWidth(428)
+                setWidth(428)
+            } else {
+                const delta = mapJobDragStart.current.x - ev.clientX
+                const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
+                const maxW = Math.min(640, containerWidth * 0.4)
+                const newWidth = Math.max(320, Math.min(mapJobDragStart.current.width + delta, maxW))
+                setMapJobPanelWidth(newWidth)
+            }
+            mapJobDragStart.current = null
+            window.removeEventListener("pointermove", onMove)
+            window.removeEventListener("pointerup", onUp)
+        }
+        window.addEventListener("pointermove", onMove)
+        window.addEventListener("pointerup", onUp)
+    }, [mapJobPanelWidth])
+
+    // Map job feed (left overlay) — resizable from right edge, width persisted
+    const [mapFeedWidth, setMapFeedWidth] = React.useState(() => {
+        if (typeof window !== "undefined") {
+            const saved = localStorage.getItem("curastem_map_feed_width")
+            if (saved) {
+                const parsed = parseInt(saved, 10)
+                if (!isNaN(parsed) && parsed >= 280) return parsed
+            }
+        }
+        return 428
+    })
+    React.useEffect(() => {
+        if (typeof window !== "undefined") {
+            localStorage.setItem("curastem_map_feed_width", String(mapFeedWidth))
+        }
+    }, [mapFeedWidth])
+    const mapFeedRef = React.useRef<HTMLDivElement>(null)
+    const mapSearchFocusRef = React.useRef<(() => void) | null>(null)
+    const mapFeedDragStart = React.useRef<{ x: number; width: number } | null>(null)
+    const handleMapFeedDragStart = React.useCallback((e: React.PointerEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const startX = e.clientX
+        let didDrag = false
+        mapFeedDragStart.current = { x: startX, width: mapFeedRef.current?.offsetWidth ?? mapFeedWidth }
+        const onMove = (ev: PointerEvent) => {
+            if (!mapFeedDragStart.current) return
+            if (Math.abs(ev.clientX - startX) > 4) didDrag = true
+            const delta = ev.clientX - mapFeedDragStart.current.x // dragging right = wider
+            const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
+            const maxW = Math.min(640, containerWidth * 0.4)
+            const newWidth = Math.max(280, Math.min(mapFeedDragStart.current.width + delta, maxW))
+            if (mapFeedRef.current) mapFeedRef.current.style.width = `${newWidth}px`
+        }
+        const onUp = (ev: PointerEvent) => {
+            if (!mapFeedDragStart.current) return
+            if (!didDrag) {
+                setMapFeedWidth(428)
+                if (mapFeedRef.current) mapFeedRef.current.style.width = "428px"
+            } else {
+                const delta = ev.clientX - mapFeedDragStart.current.x
+                const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
+                const maxW = Math.min(640, containerWidth * 0.4)
+                const newWidth = Math.max(280, Math.min(mapFeedDragStart.current.width + delta, maxW))
+                setMapFeedWidth(newWidth)
+            }
+            mapFeedDragStart.current = null
+            window.removeEventListener("pointermove", onMove)
+            window.removeEventListener("pointerup", onUp)
+        }
+        window.addEventListener("pointermove", onMove)
+        window.addEventListener("pointerup", onUp)
+    }, [mapFeedWidth])
 
     const [remoteAppMutation, setRemoteAppMutation] = React.useState<any>(null)
     const [remoteAppEvent, setRemoteAppEvent] = React.useState<any>(null)
@@ -20219,6 +20951,8 @@ Extract this structure:
         dataConnectionsRef.current.forEach((conn) => {
             if (conn.open) conn.send({ type: "job-close" })
         })
+        // Refocus map search bar on desktop when closing a job detail opened from the map
+        requestAnimationFrame(() => mapSearchFocusRef.current?.())
     }, [])
 
     // Close the DocEditor — clear resume keyword state and dismiss the job
@@ -30758,7 +31492,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             </div>
         )
 
-        if (showJobPanel) {
+        // When the map is open, skip here — the map branch renders the job as an overlay
+        // (desktop: absolute motion.div on top; mobile: dedicated ModalSheet at root level).
+        if (showJobPanel && !isMapOpen) {
             return (
                 <div
                     style={{
@@ -30784,8 +31520,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         }
                         mobileToolGestureAxis={mobileToolGestureAxis}
                         onJobDetailFetched={(jobId, entry) => {
-                            // Relay fetched detail to peers so they hydrate from cache
-                            // instead of making a duplicate API call
                             broadcastData({
                                 type: "job-detail-cache",
                                 payload: { jobId, entry },
@@ -30797,27 +31531,170 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             )
         }
 
-        // Map panel — shown when map is open and no doc/whiteboard/app is layered on top.
-        // Checked after job panel so a job opened from the map overlays on top; closing
-        // the job returns here naturally since isMapOpen is still true.
-        if (isMapOpen && !isDocOpen && !isWhiteboardOpen && !isAppOpen) {
+        // Map panel — shown when map is open and no whiteboard/app is layered on top.
+        // On desktop, job detail and doc panels overlay the map so closing them never remounts MapAgentPanel.
+        // On mobile, doc/whiteboard/app replace the map entirely (no overlay room).
+        if (isMapOpen && !isWhiteboardOpen && !isAppOpen && !(isMobileLayout && isDocOpen)) {
+            // Desktop: map is fullscreen — no rounded corners, no shadow
+            const mapPanelRadius = isMobileLayout ? "28px 28px 0 0" : "0"
             return (
-                <div
-                    style={{
-                        width: "100%",
-                        height: "100%",
-                        position: "relative",
-                        overflow: "hidden",
-                    }}
-                >
-                    <MapAgentPanel
-                        jobsApiUrl={jobsApiUrl}
-                        googleMapsApiKey={googleMapsApiKey}
-                        themeColors={themeColors}
-                        isMobile={isMobileLayout}
-                        onClose={() => setIsMapOpen(false)}
-                        preciseLocRef={preciseLocRef}
-                    />
+                // Outer shell: overflow:visible so box-shadow isn't clipped (same pattern as other tool panels)
+                <div style={{
+                    width: "100%",
+                    height: "100%",
+                    position: "relative",
+                    overflow: "visible",
+                    borderRadius: mapPanelRadius,
+                    boxShadow: "none",
+                }}>
+                    {/* Inner clip: keeps map tiles inside rounded corners */}
+                    <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", borderRadius: mapPanelRadius }}>
+                        <MapAgentPanel
+                            jobsApiUrl={jobsApiUrl}
+                            googleMapsApiKey={googleMapsApiKey}
+                            themeColors={themeColors}
+                            isMobile={isMobileLayout}
+                            onClose={() => setIsMapOpen(false)}
+                            preciseLocRef={preciseLocRef}
+                            onJobSelect={openJobDetail}
+                            onFeedDragStart={isMobileLayout ? undefined : handleMapFeedDragStart}
+                            feedRef={isMobileLayout ? undefined : mapFeedRef}
+                            feedWidth={isMobileLayout ? undefined : mapFeedWidth}
+                            defaultSearch={youWork}
+                            searchFocusRef={isMobileLayout ? undefined : mapSearchFocusRef}
+                        />
+                        {/* Desktop only — slides in from the right over the map, same animation as the tool panel */}
+                        <AnimatePresence>
+                        {!isMobileLayout && showJobPanel && selectedJob && (
+                            <motion.div
+                                ref={mapJobPanelRef}
+                                initial={{ x: "100%" }}
+                                animate={{ x: 0 }}
+                                exit={{ x: "100%" }}
+                                transition={{ duration: 0.25, ease: "easeInOut" }}
+                                style={{
+                                    position: "absolute",
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    width: mapJobPanelWidth,
+                                    maxWidth: "min(640px, 40%)",
+                                    zIndex: 30,
+                                    // Padding creates the floating-panel gap; overflow visible so radius shows
+                                    padding: "12px 12px 12px 0",
+                                    overflow: "visible",
+                                    boxSizing: "border-box",
+                                }}
+                            >
+                                {/* Left-edge drag handle */}
+                                <div
+                                    onPointerDown={handleMapJobPanelDragStart}
+                                    style={{
+                                        position: "absolute",
+                                        top: 0,
+                                        left: 0,
+                                        width: 12,
+                                        bottom: 0,
+                                        cursor: "ew-resize",
+                                        zIndex: 1,
+                                    }}
+                                />
+                                <div style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    borderRadius: 36,
+                                    overflow: "hidden",
+                                }}>
+                                    <JobDetailPanel
+                                        job={selectedJob}
+                                        jobsApiUrl={jobsApiUrl}
+                                        onClose={closeJobDetail}
+                                        themeColors={themeColors}
+                                        isMobile={false}
+                                        resumeAnimPhase={resumeAnimPhase}
+                                        onCreateResume={handleCreateResume}
+                                        jobSwipeDeck={jobCycleDeck}
+                                        mobileToolGestureAxis={mobileToolGestureAxis}
+                                        onJobDetailFetched={(jobId, entry) => {
+                                            broadcastData({ type: "job-detail-cache", payload: { jobId, entry } })
+                                        }}
+                                    />
+                                </div>
+                            </motion.div>
+                        )}
+                        </AnimatePresence>
+
+                        {/* Desktop only — DocEditor slides in from right over map, same pattern as job detail */}
+                        <AnimatePresence>
+                        {!isMobileLayout && isDocOpen && (
+                            <motion.div
+                                ref={mapDocOverlayRef}
+                                initial={{ x: "100%" }}
+                                animate={{ x: 0 }}
+                                exit={{ x: "100%" }}
+                                transition={{ duration: 0.25, ease: "easeInOut" }}
+                                style={{
+                                    position: "absolute",
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    width: mapJobPanelWidth,
+                                    maxWidth: "min(640px, 40%)",
+                                    zIndex: 31,
+                                    padding: "12px 12px 12px 0",
+                                    overflow: "visible",
+                                    boxSizing: "border-box",
+                                }}
+                            >
+                                {/* Left-edge drag handle */}
+                                <div
+                                    onPointerDown={handleMapJobPanelDragStart}
+                                    style={{
+                                        position: "absolute",
+                                        top: 0,
+                                        left: 0,
+                                        width: 12,
+                                        bottom: 0,
+                                        cursor: "ew-resize",
+                                        zIndex: 1,
+                                    }}
+                                />
+                                <div
+                                    data-doc-overlay-panel
+                                    style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        borderRadius: 36,
+                                        overflow: "hidden",
+                                    }}
+                                >
+                                    <DocEditor
+                                        content={docContent}
+                                        onChange={handleDocChange}
+                                        settings={docSettings}
+                                        onSettingsChange={setDocSettings}
+                                        themeColors={chatThemeColors}
+                                        isMobileLayout={false}
+                                        remoteCursors={remoteCursors}
+                                        onCursorMove={handleDocPointerMove}
+                                        onClose={handleDocClose}
+                                        docType={docType}
+                                        hideContent={
+                                            resumeAnimPhase === "landing" ||
+                                            resumeAnimPhase === "orbiting"
+                                        }
+                                        docCompany={
+                                            docType === "resume" || docType === "cover_letter"
+                                                ? selectedJob?.company?.name?.trim() || docCompany
+                                                : ""
+                                        }
+                                        userDisplayName={youName}
+                                    />
+                                </div>
+                            </motion.div>
+                        )}
+                        </AnimatePresence>
+                    </div>
                 </div>
             )
         }
@@ -32917,7 +33794,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     left: 8,
                     top: 8,
                     position: "absolute",
-                    zIndex: 100,
+                    // Stay below the nearby jobs card overlay (zIndex 20) when map is fullscreen on desktop
+                    zIndex: !isMobileLayout && isMapOpen ? 15 : 100,
                     cursor: "ew-resize",
                     background: isSidebarBtnHovered
                         ? themeColors.hover.medium
@@ -35775,12 +36653,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     initial={false}
                     animate={{
                         width:
-                            !isMobileLayout &&
-                            (isDocOpen ||
-                                isWhiteboardOpen ||
-                                isAppOpen ||
-                                isJobOpen ||
-                                isMapOpen)
+                            !isMobileLayout && isMapOpen
+                                ? 0
+                                : !isMobileLayout &&
+                                  (isDocOpen ||
+                                      isWhiteboardOpen ||
+                                      isAppOpen ||
+                                      isJobOpen)
                                 ? chatWidth
                                 : "100%",
                         flexGrow:
@@ -35970,13 +36849,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     )}
                 </motion.div>
 
-                {/* Resize Handle */}
+                {/* Resize Handle — hidden when map fills full width */}
                 {!isMobileLayout &&
+                    !isMapOpen &&
                     (isDocOpen ||
                         isWhiteboardOpen ||
                         isAppOpen ||
-                        isJobOpen ||
-                        isMapOpen) && (
+                        isJobOpen) && (
                         <div
                             onPointerDown={(e) =>
                                 handlePointerDown(e, "horizontal-sidebar")
@@ -36043,6 +36922,47 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 }}
             >
                 {renderActiveTool(true)}
+            </ModalSheet>
+
+            {/* Job detail over map (mobile) — fresh ModalSheet slides up on top of the map sheet */}
+            <ModalSheet
+                isOpen={isMobileLayout && isMapOpen && isJobOpen && !!selectedJob && resumeAnimPhase === "idle" && !isDocOpen}
+                onClose={closeJobDetail}
+                themeColors={themeColors}
+                zIndex={30001}
+                mobileOnly
+                sheetStyle={{
+                    position: "absolute",
+                    top: "max(16px, env(safe-area-inset-top, 0px))",
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    borderRadius: "28px 28px 0 0",
+                }}
+            >
+                {selectedJob && (
+                    <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
+                        <JobDetailPanel
+                            job={selectedJob}
+                            jobsApiUrl={jobsApiUrl}
+                            onClose={closeJobDetail}
+                            themeColors={themeColors}
+                            isMobile={isMobileLayout}
+                            resumeAnimPhase={resumeAnimPhase}
+                            onCreateResume={handleCreateResume}
+                            jobSwipeDeck={jobCycleDeck}
+                            onSwipeCycleJob={
+                                isMobileLayout && jobCycleDeck.length > 1
+                                    ? (d) => cycleJobDetail(d)
+                                    : undefined
+                            }
+                            mobileToolGestureAxis={mobileToolGestureAxis}
+                            onJobDetailFetched={(jobId, entry) => {
+                                broadcastData({ type: "job-detail-cache", payload: { jobId, entry } })
+                            }}
+                        />
+                    </div>
+                )}
             </ModalSheet>
 
             {/* REPORT MODAL */}

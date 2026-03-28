@@ -1301,8 +1301,14 @@ export async function listJobs(
     bindings.push(filter.workplace_type);
   }
   if (filter.seniority_level) {
-    conditions.push("j.seniority_level = ?");
-    bindings.push(filter.seniority_level);
+    const levels = filter.seniority_level.split(",").map((s) => s.trim()).filter(Boolean);
+    if (levels.length === 1) {
+      conditions.push("j.seniority_level = ?");
+      bindings.push(levels[0]);
+    } else if (levels.length > 1) {
+      conditions.push(`j.seniority_level IN (${levels.map(() => "?").join(", ")})`);
+      bindings.push(...levels);
+    }
   }
   if (filter.description_language) {
     conditions.push("j.description_language = ?");
@@ -1453,23 +1459,49 @@ export async function listJobsForMap(
   since: number,
   bbox?: MapBbox,
   center?: MapCenter,
-  limit = 100
+  limit = 100,
+  q?: string,
+  employment_type?: string,
+  seniority_level?: string
 ): Promise<MapCompanyRow[]> {
   // Filter on the job's effective location (per-job coords when geocoded, HQ otherwise)
   // so chips that are visually outside the viewport are excluded — not just those
   // whose company HQ happens to fall inside it.
   const bboxClause = bbox
-    ? `AND COALESCE(j.location_lat, c.hq_lat) BETWEEN ${bbox.minLat} AND ${bbox.maxLat}
-         AND COALESCE(j.location_lng, c.hq_lng) BETWEEN ${bbox.minLng} AND ${bbox.maxLng}`
+    ? `AND j.location_lat BETWEEN ${bbox.minLat} AND ${bbox.maxLat}
+         AND j.location_lng BETWEEN ${bbox.minLng} AND ${bbox.maxLng}`
     : "";
+
+  const bindings: unknown[] = [since];
+  let qClause = "";
+  if (q && q.trim()) {
+    // Title-only match for map chips — company-name matching causes false-positive chips
+    // (e.g. "Descript" appearing for the query "design" with zero matching job titles).
+    qClause = `AND j.title LIKE ?`;
+    bindings.push(`%${q.trim()}%`);
+  }
+  let typeClause = "";
+  if (employment_type) {
+    typeClause = `AND j.employment_type = ?`;
+    bindings.push(employment_type);
+  }
+  let seniorityClause = "";
+  if (seniority_level) {
+    const levels = seniority_level.split(",").map((s) => s.trim()).filter(Boolean);
+    if (levels.length === 1) {
+      seniorityClause = `AND j.seniority_level = ?`;
+      bindings.push(levels[0]);
+    } else if (levels.length > 1) {
+      seniorityClause = `AND j.seniority_level IN (${levels.map(() => "?").join(", ")})`;
+      bindings.push(...levels);
+    }
+  }
 
   // Order by squared distance from map center using the chip centroid (AVG expression).
   // No sqrt needed since we only care about relative order.
   const orderClause = center
-    ? `ORDER BY (AVG(COALESCE(j.location_lat, c.hq_lat)) - ${center.lat}) *
-                (AVG(COALESCE(j.location_lat, c.hq_lat)) - ${center.lat}) +
-                (AVG(COALESCE(j.location_lng, c.hq_lng)) - ${center.lng}) *
-                (AVG(COALESCE(j.location_lng, c.hq_lng)) - ${center.lng}) ASC`
+    ? `ORDER BY (AVG(j.location_lat) - ${center.lat}) * (AVG(j.location_lat) - ${center.lat}) +
+                (AVG(j.location_lng) - ${center.lng}) * (AVG(j.location_lng) - ${center.lng}) ASC`
     : `ORDER BY job_count DESC`;
 
   const { results } = await db
@@ -1479,8 +1511,8 @@ export async function listJobsForMap(
          c.name        AS company_name,
          c.logo_url    AS company_logo_url,
          c.slug        AS company_slug,
-         AVG(COALESCE(j.location_lat, c.hq_lat)) AS chip_lat,
-         AVG(COALESCE(j.location_lng, c.hq_lng)) AS chip_lng,
+         AVG(j.location_lat) AS chip_lat,
+         AVG(j.location_lng) AS chip_lng,
          c.hq_lat      AS company_hq_lat,
          c.hq_lng      AS company_hq_lng,
          c.hq_city     AS company_hq_city,
@@ -1492,14 +1524,19 @@ export async function listJobsForMap(
        WHERE COALESCE(j.posted_at, j.first_seen_at) >= ?
          AND (j.workplace_type IS NULL OR j.workplace_type != 'remote')
          AND c.hq_lat IS NOT NULL
+         AND j.location_lat IS NOT NULL
+         AND j.location_lng IS NOT NULL
          ${bboxClause}
+         ${qClause}
+         ${typeClause}
+         ${seniorityClause}
        GROUP BY c.id,
-                ROUND(COALESCE(j.location_lat, c.hq_lat), 1),
-                ROUND(COALESCE(j.location_lng, c.hq_lng), 1)
+                ROUND(j.location_lat, 1),
+                ROUND(j.location_lng, 1)
        ${orderClause}
        LIMIT ${limit}`
     )
-    .bind(since)
+    .bind(...bindings)
     .all<MapCompanyRow>();
   return results ?? [];
 }
@@ -1635,9 +1672,12 @@ export async function listJobsNear(
     exclude_ids?: string[];
     q?: string;
     posted_since?: number;
+    employment_type?: string;
+    seniority_level?: string;
+    company?: string;
   }
 ): Promise<{ rows: ListJobsRow[] }> {
-  const { lat, lng, radius_km, exclude_remote, limit, exclude_ids, q, posted_since } = filter;
+  const { lat, lng, radius_km, exclude_remote, limit, exclude_ids, q, posted_since, employment_type, seniority_level, company } = filter;
   const conditions: string[] = [
     "j.location_lat IS NOT NULL",
     "j.location_lng IS NOT NULL",
@@ -1665,6 +1705,24 @@ export async function listJobsNear(
       conditions.push(`j.id NOT IN (${valid.map(() => "?").join(", ")})`);
       bindings.push(...valid);
     }
+  }
+  if (employment_type) {
+    conditions.push("j.employment_type = ?");
+    bindings.push(employment_type);
+  }
+  if (seniority_level) {
+    const levels = seniority_level.split(",").map((s) => s.trim()).filter(Boolean);
+    if (levels.length === 1) {
+      conditions.push("j.seniority_level = ?");
+      bindings.push(levels[0]);
+    } else if (levels.length > 1) {
+      conditions.push(`j.seniority_level IN (${levels.map(() => "?").join(", ")})`);
+      bindings.push(...levels);
+    }
+  }
+  if (company) {
+    conditions.push("c.slug = ?");
+    bindings.push(company);
   }
 
   const where = conditions.join(" AND ");
