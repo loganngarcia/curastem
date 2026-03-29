@@ -587,6 +587,7 @@ export async function upsertJob(
     location: locationRaw,
     employment_type,
     workplace_type,
+    seniority_level,
     apply_url,
     source_url,
     description_raw,
@@ -597,9 +598,12 @@ export async function upsertJob(
     posted_at,
   } = normalized;
 
-  const { normalizeLocationsList } = await import("../utils/normalize.ts");
+  const { normalizeLocationsList, detectEmploymentTypeFromText, detectSeniorityFromText } = await import("../utils/normalize.ts");
   const locs = normalizeLocationsList(locationRaw, input.company_slug);
   const locationsJson = locs && locs.length > 0 ? JSON.stringify(locs) : null;
+
+  const detectedEt = employment_type ?? detectEmploymentTypeFromText(title, description_raw);
+  const detectedSl = seniority_level ?? detectSeniorityFromText(title, description_raw);
 
   const existing = await db
     .prepare("SELECT id, description_raw FROM jobs WHERE source_id = ? AND external_id = ?")
@@ -611,21 +615,21 @@ export async function upsertJob(
       .prepare(
         `INSERT INTO jobs (
           id, company_id, source_id, external_id, title, locations,
-          employment_type, workplace_type, apply_url, source_url, source_name,
+          employment_type, workplace_type, seniority_level, apply_url, source_url, source_name,
           description_raw, salary_min, salary_max, salary_currency, salary_period,
           posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?, ?, ?
         )`
       )
       .bind(
         id, company_id, source_id, external_id, title, locationsJson,
-        employment_type, workplace_type, apply_url, source_url, source_name,
-        description_raw, salary_min, salary_max, salary_currency, salary_period,
-        posted_at, now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
+        detectedEt ?? null, workplace_type ?? null, detectedSl ?? null, apply_url, source_url ?? null, source_name,
+        description_raw ?? null, salary_min ?? null, salary_max ?? null, salary_currency ?? null, salary_period ?? null,
+        posted_at ?? null, now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
       )
       .run();
     return { inserted: true, needsEmbedding: true };
@@ -635,6 +639,8 @@ export async function upsertJob(
     description_raw !== null &&
     existing.description_raw !== description_raw;
 
+  const updatedSl = descriptionChanged ? detectSeniorityFromText(title, description_raw) : null;
+
   await db
     .prepare(
       `UPDATE jobs SET
@@ -642,8 +648,9 @@ export async function upsertJob(
         title                  = ?,
         -- Only fill locations when AI hasn't set it yet; once AI populates it, ingest doesn't overwrite
         locations              = CASE WHEN locations IS NULL THEN ? ELSE locations END,
-        employment_type        = ?,
+        employment_type        = COALESCE(?, employment_type),
         workplace_type         = ?,
+        seniority_level        = COALESCE(seniority_level, ?),
         apply_url              = ?,
         source_url             = ?,
         salary_min             = ?,
@@ -664,20 +671,21 @@ export async function upsertJob(
       company_id,
       title,
       locationsJson,
-      employment_type,
-      workplace_type,
+      detectedEt ?? null,
+      workplace_type ?? null,
+      updatedSl ?? null,
       apply_url,
-      source_url,
-      salary_min,
-      salary_max,
-      salary_currency,
-      salary_period,
-      posted_at,
+      source_url ?? null,
+      salary_min ?? null,
+      salary_max ?? null,
+      salary_currency ?? null,
+      salary_period ?? null,
+      posted_at ?? null,
       dedup_key,
       location_lat ?? null,
       location_lng ?? null,
       now,
-      descriptionChanged ? 1 : 0, description_raw,
+      descriptionChanged ? 1 : 0, description_raw ?? null,
       descriptionChanged ? 1 : 0,
       descriptionChanged ? 1 : 0,
       source_id, external_id
@@ -846,21 +854,22 @@ export async function batchUpsertJobs(
 
   const INSERT_SQL = `INSERT INTO jobs (
     id, company_id, source_id, external_id, title, locations,
-    employment_type, workplace_type, apply_url, source_url, source_name,
+    employment_type, workplace_type, seniority_level, apply_url, source_url, source_name,
     description_raw, description_language,
     salary_min, salary_max, salary_currency, salary_period,
     posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const UPDATE_SQL = `UPDATE jobs SET
     company_id = ?, title = ?,
     locations = CASE WHEN locations IS NULL THEN ? ELSE locations END,
-    employment_type = ?,
+    employment_type = COALESCE(?, employment_type),
     workplace_type = ?, apply_url = ?, source_url = ?,
     salary_min = ?, salary_max = ?, salary_currency = ?, salary_period = ?,
     posted_at = ?, dedup_key = ?,
     location_lat           = COALESCE(?, location_lat),
     location_lng           = COALESCE(?, location_lng),
+    seniority_level        = COALESCE(seniority_level, ?),
     updated_at = ?,
     description_raw        = CASE WHEN ? = 1 THEN ? ELSE description_raw END,
     description_language   = CASE WHEN ? = 1 THEN ? ELSE description_language END,
@@ -868,7 +877,7 @@ export async function batchUpsertJobs(
     embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END
   WHERE source_id = ? AND external_id = ?`;
 
-  const { normalizeLocationsList } = await import("../utils/normalize.ts");
+  const { normalizeLocationsList, detectEmploymentTypeFromText, detectSeniorityFromText } = await import("../utils/normalize.ts");
   const { detectLanguage } = await import("../enrichment/language.ts");
 
   for (let i = 0; i < inputs.length; i++) {
@@ -876,6 +885,7 @@ export async function batchUpsertJobs(
     const {
       title, location: locationRaw, employment_type, workplace_type, apply_url, source_url,
       description_raw, salary_min, salary_max, salary_currency, salary_period, posted_at,
+      seniority_level,
     } = normalized;
 
     const locs = normalizeLocationsList(locationRaw, company_slug);
@@ -886,6 +896,12 @@ export async function batchUpsertJobs(
     // nullable field to null so any fetcher that omits optional fields is safe.
     const n = <T>(v: T | undefined): T | null => (v === undefined ? null : v);
 
+    // Fill employment_type and seniority_level from heuristic text detection when
+    // the ATS/fetcher did not provide them. Runs at ingest so every new job gets
+    // at least a best-effort classification without waiting for AI lazy-load.
+    const detectedEt = employment_type ?? detectEmploymentTypeFromText(title, description_raw);
+    const detectedSl = seniority_level ?? detectSeniorityFromText(title, description_raw);
+
     // Run heuristic language detection on the raw description at ingest time.
     // AI lazy-load will override this on first GET /jobs/:id if needed.
     const detectedLang = description_raw ? detectLanguage(description_raw) : null;
@@ -894,7 +910,7 @@ export async function batchUpsertJobs(
       inserts.push(
         db.prepare(INSERT_SQL).bind(
           id, company_id, source_id, external_id, title, locationsJson,
-          n(employment_type), n(workplace_type), apply_url, n(source_url), source_name,
+          n(detectedEt), n(workplace_type), n(detectedSl), apply_url, n(source_url), source_name,
           n(description_raw), detectedLang,
           n(salary_min), n(salary_max), n(salary_currency), n(salary_period),
           n(posted_at), now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
@@ -906,14 +922,18 @@ export async function batchUpsertJobs(
       descChangedFlags[i] = descChanged;
       // Re-detect language when description changes; keep existing value otherwise
       const updatedLang = descChanged ? detectLanguage(description_raw) : null;
+      // Re-detect seniority if description changed; bind null otherwise (COALESCE keeps existing)
+      const updatedSl = descChanged ? detectSeniorityFromText(title, description_raw) : null;
       updates.push(
         db.prepare(UPDATE_SQL).bind(
           company_id, title,
           locationsJson,
-          n(employment_type),
+          n(detectedEt),
           n(workplace_type), apply_url, n(source_url),
           n(salary_min), n(salary_max), n(salary_currency), n(salary_period),
-          n(posted_at), dedup_key, location_lat ?? null, location_lng ?? null, now,
+          n(posted_at), dedup_key, location_lat ?? null, location_lng ?? null,
+          n(updatedSl),
+          now,
           descChanged ? 1 : 0, n(description_raw),
           descChanged ? 1 : 0, updatedLang,
           descChanged ? 1 : 0,
@@ -1835,6 +1855,32 @@ export async function getJobById(
  * Returns the job id, apply_url (points to the real ATS), and any fields
  * we may want to backfill (salary, location) alongside the description.
  */
+/**
+ * Fetch Workday jobs that have no description yet.
+ * Returns source_url (the human-readable apply URL containing /job/...) and
+ * the source's base_url (the CXS endpoint) so the backfill can construct the
+ * CXS detail URL without a second DB lookup.
+ */
+export async function getWorkdayJobsNeedingDescription(
+  db: D1Database,
+  limit: number
+): Promise<Array<{ id: string; source_url: string; base_url: string }>> {
+  const { results } = await db
+    .prepare(`
+      SELECT j.id, j.source_url, s.base_url
+      FROM jobs j
+      JOIN sources s ON j.source_id = s.id
+      WHERE s.source_type = 'workday'
+        AND j.description_raw IS NULL
+        AND j.source_url IS NOT NULL
+      ORDER BY j.first_seen_at DESC
+      LIMIT ?
+    `)
+    .bind(limit)
+    .all<{ id: string; source_url: string; base_url: string }>();
+  return results;
+}
+
 export async function getConsiderJobsNeedingDescription(
   db: D1Database,
   limit: number
@@ -2065,6 +2111,57 @@ export async function batchSetLanguage(
     db
       .prepare("UPDATE jobs SET description_language = ? WHERE id = ? AND description_language IS NULL")
       .bind(description_language, id)
+  );
+  const CHUNK = 500;
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    await db.batch(stmts.slice(i, i + CHUNK));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heuristic field backfill (employment_type + seniority_level)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch jobs that have a description but are missing seniority_level (or
+ * missing employment_type) so the heuristic backfill can populate them.
+ * Returns both fields so we can skip a job if both are already set.
+ */
+export async function getJobsNeedingHeuristicEnrichment(
+  db: D1Database,
+  limit: number
+): Promise<Array<{ id: string; title: string; description_raw: string; employment_type: string | null; seniority_level: string | null }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, title, description_raw, employment_type, seniority_level FROM jobs
+       WHERE description_raw IS NOT NULL
+         AND (seniority_level IS NULL OR employment_type IS NULL)
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ id: string; title: string; description_raw: string; employment_type: string | null; seniority_level: string | null }>();
+  return results;
+}
+
+/**
+ * Write heuristic-detected seniority_level and/or employment_type for a batch.
+ * Uses COALESCE so AI-set (or scraper-set) values are never overwritten.
+ */
+export async function batchSetHeuristicFields(
+  db: D1Database,
+  rows: Array<{ id: string; employment_type: string | null; seniority_level: string | null }>
+): Promise<void> {
+  if (rows.length === 0) return;
+  const stmts = rows.map(({ id, employment_type, seniority_level }) =>
+    db
+      .prepare(
+        `UPDATE jobs SET
+           employment_type = COALESCE(employment_type, ?),
+           seniority_level = COALESCE(seniority_level, ?)
+         WHERE id = ?`
+      )
+      .bind(employment_type, seniority_level, id)
   );
   const CHUNK = 500;
   for (let i = 0; i < stmts.length; i += CHUNK) {

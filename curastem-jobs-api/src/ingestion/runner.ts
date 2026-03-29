@@ -24,10 +24,12 @@ import {
   batchGetExistingJobs,
   batchMarkJobsEmbedded,
   batchSetLanguage,
+  batchSetHeuristicFields,
   batchUpsertJobs,
   batchGetCompanyLocationCoords,
   upsertCompanyLocationGeocode,
   getJobsNeedingEmbedding,
+  getJobsNeedingHeuristicEnrichment,
   getJobsNeedingLanguageDetection,
   getLocationsNeedingGeocode,
   getSourceById,
@@ -39,6 +41,7 @@ import {
   upsertCompany,
 } from "../db/queries.ts";
 import { backfillConsiderDescriptions } from "../enrichment/consider-descriptions.ts";
+import { backfillWorkdayDescriptions } from "../enrichment/workday-descriptions.ts";
 import { embedJob } from "../enrichment/ai.ts";
 import { runCompanyEnrichment, runExaEnrichment } from "../enrichment/company.ts";
 import { runCompanyPlacesGeocode } from "../enrichment/placesGeocodeCompanies.ts";
@@ -562,6 +565,39 @@ async function backfillLanguage(env: Env): Promise<void> {
   });
 }
 
+// Pure CPU regex — no network. 5,000 jobs × ~0.2ms each ≈ 1s per run.
+const HEURISTIC_BACKFILL_BATCH = 5000;
+
+/**
+ * Backfill heuristic employment_type and seniority_level for existing jobs that
+ * have a description but were ingested before regex detection was added.
+ *
+ * Runs at the end of every cron, newest-first so recently posted jobs are
+ * classified first. A job is skipped once both fields are non-null.
+ */
+async function backfillHeuristicFields(env: Env): Promise<void> {
+  const { detectEmploymentTypeFromText, detectSeniorityFromText } = await import("../utils/normalize.ts");
+  const jobs = await getJobsNeedingHeuristicEnrichment(env.JOBS_DB, HEURISTIC_BACKFILL_BATCH);
+  if (jobs.length === 0) return;
+
+  const rows: Array<{ id: string; employment_type: string | null; seniority_level: string | null }> = [];
+  for (const job of jobs) {
+    const et = job.employment_type ?? detectEmploymentTypeFromText(job.title, job.description_raw);
+    const sl = job.seniority_level ?? detectSeniorityFromText(job.title, job.description_raw);
+    // Only write if we detected at least one new value
+    if (et !== job.employment_type || sl !== job.seniority_level) {
+      rows.push({ id: job.id, employment_type: et, seniority_level: sl });
+    }
+  }
+
+  await batchSetHeuristicFields(env.JOBS_DB, rows);
+  logger.info("heuristic_backfill_completed", {
+    processed: jobs.length,
+    updated: rows.length,
+    no_change: jobs.length - rows.length,
+  });
+}
+
 /**
  * Run ingestion for a single source by ID.
  * Used by the POST /admin/trigger?source=<id> endpoint for synchronous,
@@ -716,6 +752,14 @@ export async function runIngestion(env: Env): Promise<void> {
     logger.error("consider_description_backfill_cron_failed", { error: String(err) });
   }
 
+  // Workday list API only returns bulletFields (a brief teaser), not the full description.
+  // 100 jobs/run × 200ms delay = ~20s. At 24 runs/day, ~5k jobs clear in ~2 days.
+  try {
+    await backfillWorkdayDescriptions(env.JOBS_DB);
+  } catch (err) {
+    logger.error("workday_description_backfill_cron_failed", { error: String(err) });
+  }
+
   // Language detection backfill — runs the heuristic detector on jobs that have a
   // description but no language tag yet (e.g. jobs ingested before this feature shipped).
   // Pure CPU, no network calls, so 2,000/run is fast (~200ms) and clears the backlog quickly.
@@ -723,5 +767,15 @@ export async function runIngestion(env: Env): Promise<void> {
     await backfillLanguage(env);
   } catch (err) {
     logger.error("language_backfill_cron_failed", { error: String(err) });
+  }
+
+  // Heuristic field backfill — populates employment_type and seniority_level for
+  // existing jobs that were ingested before regex detection was introduced.
+  // Pure CPU regex, no network — 5,000/run ≈ 1s. At 24 runs/day, the backlog
+  // of ~170k jobs clears in ~1–2 days.
+  try {
+    await backfillHeuristicFields(env);
+  } catch (err) {
+    logger.error("heuristic_backfill_cron_failed", { error: String(err) });
   }
 }

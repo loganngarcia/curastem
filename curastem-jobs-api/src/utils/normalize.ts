@@ -75,6 +75,127 @@ export function normalizeEmploymentType(raw: string | null | undefined): Employm
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Heuristic employment-type detection from free-form text
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Scan job title + description for employment-type signals.
+ * Called during ingest only when the ATS did not supply an explicit type.
+ * Intentionally conservative — ambiguous text returns null to let AI handle it.
+ */
+export function detectEmploymentTypeFromText(
+  title: string,
+  description: string | null,
+): EmploymentType | null {
+  const hay = `${title} ${description ?? ""}`.toLowerCase();
+
+  // Contract signals (check before full-time to avoid "full-time contractor" → full_time)
+  if (/\b(contractor|contract\s+(?:role|position|assignment|work|job)|c2c|1099|corp[-\s]?to[-\s]?corp|freelance)\b/.test(hay))
+    return "contract";
+
+  // Temporary signals
+  if (/\b(temp(?:orary)?\s+(?:role|position|job|worker|staff|assignment)|short[-\s]term\s+(?:contract|role|position))\b/.test(hay))
+    return "temporary";
+
+  // Part-time — check before full-time
+  if (/\bpart[-\u2013\s]time\b/.test(hay)) return "part_time";
+
+  // Full-time — only trigger on clear employment-type phrases (not "full-time benefits")
+  if (/\bfull[-\u2013\s]time\s+(?:position|role|job|opportunity|employment|employee)\b/.test(hay)) return "full_time";
+  if (/\bthis\s+is\s+a\s+full[-\u2013\s]time\b/.test(hay)) return "full_time";
+  // Title-level "Full Time" or "FT" suffix is reliable
+  if (/\bfull[-\u2013\s]time\b/.test(title.toLowerCase())) return "full_time";
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heuristic seniority detection from title keywords + years-of-experience
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Detect seniority from the job title (fast, high-confidence) and
+ * years-of-experience patterns in the description (lower-confidence fallback).
+ *
+ * Title matching is tried first and returns immediately when a clear signal is
+ * found. Year-range parsing is attempted only when no title keyword matched.
+ *
+ * Returns null when uncertain so the AI lazy-load can fill the gap.
+ *
+ * Year → seniority mapping (conservative to avoid blocking AI corrections):
+ *   0–2  yrs minimum required → entry
+ *   3–5  yrs minimum required → mid
+ *   6+   yrs minimum required → senior
+ * manager / staff / director / executive are left to the AI because they cannot
+ * be reliably inferred from years alone.
+ */
+export function detectSeniorityFromText(
+  title: string,
+  description: string | null,
+): SeniorityLevel | null {
+  const t = title.toLowerCase();
+  const d = (description ?? "").toLowerCase();
+
+  // ── Title keywords (ordered from most-specific to least) ──────────────────
+
+  // Executive: VP, C-suite, SVP, EVP, President
+  if (/\b(vp\b|vice\s+president|svp\b|evp\b|c[a-z]{1,2}o\b|chief\s+\w+\s+officer|president)\b/.test(t))
+    return "executive";
+
+  // Director (watch for "product director" vs "director of engineering" — both director-level)
+  if (/\bdirector\b/.test(t)) return "director";
+
+  // Staff / Principal IC (above senior, no direct reports)
+  if (/\b(staff\s+(?:software|data|ml|platform|infra|infrastructure|devops|security|backend|frontend|fullstack|full.?stack|mobile|ios|android|site\s+reliability|sre)\s+engineer|staff\s+engineer|principal\s+(?:engineer|scientist|architect|designer|researcher)|distinguished\s+engineer)\b/.test(t))
+    return "staff";
+
+  // Intern / internship
+  if (/\b(intern(ship)?)\b/.test(t)) return "internship";
+
+  // New grad / campus hire
+  if (/\b(new\s*grad(uate)?|campus\s*(hire|recruit(er)?)|university\s*grad|early\s*career|0\s*[-–]\s*1\s*year)\b/.test(t))
+    return "new_grad";
+
+  // "Senior Manager" (and variants) is a management level, not a senior IC
+  if (/\bsenior\s+manager\b/.test(t)) return "manager";
+
+  // Senior IC
+  if (/\b(sr\.?\s|senior\s|sr\s)/.test(t)) return "senior";
+
+  // Junior / entry-level explicit
+  if (/\b(jr\.?\s|junior\s|entry[-\s]?level|associate\s+(?:software|data|product|design|engineer|developer|analyst|scientist))\b/.test(t))
+    return "entry";
+
+  // ── Description-level signals (lower confidence, title gave nothing) ──────
+
+  // Internship described in body even if not in title
+  if (/\b(internship|intern\s+program|summer\s+intern|co[-\s]?op)\b/.test(d)) return "internship";
+
+  // New grad described in body
+  if (/\b(new\s*grad(uate)?|campus\s+hire|university\s+grad|recent\s+grad(uate)?|graduating\s+(class|student))\b/.test(d))
+    return "new_grad";
+
+  // ── Years-of-experience parsing ────────────────────────────────────────────
+  // Patterns: "3 years", "3+ years", "3-8 years", "3–8 years", "3-8+ years", "3 yrs"
+  // No need to require "experience" after — job descriptions don't say "X years"
+  // unless they mean required experience.
+  const yrsRx = /(\d+)\s*(?:[-–]\s*\d+\s*)?\+?\s*(?:years?|yrs?)\b/gi;
+
+  let minYears = Infinity;
+  let m: RegExpExecArray | null;
+  while ((m = yrsRx.exec(d)) !== null) {
+    const v = parseInt(m[1], 10);
+    if (!isNaN(v) && v < minYears) minYears = v;
+  }
+
+  if (minYears === Infinity) return null;
+
+  if (minYears <= 2) return "entry";
+  if (minYears <= 5) return "mid";
+  return "senior";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Workplace type (remote / hybrid / on_site)
 // ─────────────────────────────────────────────────────────────────────────────
 

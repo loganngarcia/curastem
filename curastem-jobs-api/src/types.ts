@@ -496,6 +496,12 @@ export interface NormalizedJob {
   location: string | null;
   employment_type: EmploymentType | null;
   workplace_type: WorkplaceType | null;
+  /**
+   * Seniority level detected by the source fetcher (title/description heuristics).
+   * Optional — most fetchers leave this null; the ingestion layer fills it via
+   * detectSeniorityFromText before upsert. AI lazy-load adds it when still null.
+   */
+  seniority_level?: SeniorityLevel | null;
   apply_url: string;
   source_url: string | null;
   description_raw: string | null;

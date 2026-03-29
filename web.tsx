@@ -13715,14 +13715,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
 
     // Place / refresh company chips whenever jobs or map changes
     React.useEffect(() => {
-        if (!mapInstanceRef.current || !mapsReady || !mapHasIdle || isStatic || jobs.length === 0)
+        if (!mapInstanceRef.current || !mapsReady || !mapHasIdle || isStatic)
             return
         const gm = (window as any).google?.maps
         if (!gm?.Map) return
 
-        // OverlayView and classic Marker both expose setMap — this clears all chip overlays
+        // Always clear old chips first — if jobs is empty (e.g. filter returned no results in
+        // this viewport) we still need to remove stale chips from the previous unfiltered state.
         markersRef.current.forEach((m) => { if (typeof m.setMap === "function") m.setMap(null) })
         markersRef.current = []
+
+        if (jobs.length === 0) return
 
         const buildChip = (entry: MapCompanyEntry) => {
             const chip = document.createElement("div")
@@ -14309,7 +14312,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                             ], filterDays, (v) => { setFilterDays(v as typeof filterDays); setFilterDaysOpen(false) })
                             if (filterSeniorityOpen) return renderMenu([
                                 { value: "", label: "All levels" },
-                                { value: "intern", label: "Intern" },
+                                { value: "internship", label: "Intern" },
                                 { value: "entry,new_grad", label: "Entry level" },
                                 { value: "mid,senior", label: "Senior" },
                                 { value: "staff,manager", label: "Manager" },
@@ -14620,7 +14623,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     ]
                                     const daysLabel = daysOpts.find((o) => o.value === filterDays)?.label ?? "Past 3 days"
                                     const seniorityLabelMap: Record<string, string> = {
-                                        "intern": "Intern",
+                                        "internship": "Intern",
                                         "entry,new_grad": "Entry level",
                                         "mid,senior": "Senior",
                                         "staff,manager": "Manager",
@@ -14712,7 +14715,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                         style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }}
                                                     >
                                                         <option value="">All levels</option>
-                                                        <option value="intern">Intern</option>
+                                                        <option value="internship">Intern</option>
                                                         <option value="entry,new_grad">Entry level</option>
                                                         <option value="mid,senior">Senior</option>
                                                         <option value="staff,manager">Manager</option>
