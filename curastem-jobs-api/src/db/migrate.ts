@@ -111,6 +111,38 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "gh-uberfreight", name: "Uber Freight (Greenhouse)", source_type: "greenhouse", company_handle: "uberfreight", base_url: "https://boards-api.greenhouse.io/v1/boards/uberfreight/jobs" },
   // Corporate Uber — Fusion `loadSearchJobsResults` RPC (see uber_sites.ts); not Workday / not Freight GH.
   { id: "uber-main", name: "Uber", source_type: "uber_sites", company_handle: "uber", base_url: "https://www.uber.com/api/loadSearchJobsResults?localeCode=en" },
+  // iCIMS Jibe — public JSON at /api/jobs (see jibe.ts)
+  { id: "jibe-sprouts", name: "Sprouts Farmers Market (iCIMS Jibe)", source_type: "jibe", company_handle: "sprouts-farmers-market", base_url: "https://jobs.sprouts.com" },
+  { id: "jibe-ulta", name: "Ulta Beauty (iCIMS Jibe)", source_type: "jibe", company_handle: "ulta-beauty", base_url: "https://careers.ulta.com" },
+  // Oracle Activate — /Search/SearchResults + per-job HTML (apply via Taleo; see activate_careers.ts)
+  { id: "act-ross", name: "Ross Dress for Less (Activate)", source_type: "activate_careers", company_handle: "ross-stores", base_url: "https://jobs.rossstores.com" },
+  // Retail — Workday CXS POST (see workday.ts); verified 200 with cookie preflight
+  { id: "wd-dsg", name: "Dick's Sporting Goods (Workday)", source_type: "workday", company_handle: "dicks-sporting-goods", base_url: "https://dickssportinggoods.wd1.myworkdayjobs.com/wday/cxs/dickssportinggoods/DSG/jobs" },
+  { id: "wd-meijer", name: "Meijer (Workday)", source_type: "workday", company_handle: "meijer", base_url: "https://meijer.wd5.myworkdayjobs.com/wday/cxs/meijer/Meijer_Stores_Hourly/jobs" },
+  { id: "wd-nordstrom", name: "Nordstrom (Workday)", source_type: "workday", company_handle: "nordstrom", base_url: "https://nordstrom.wd501.myworkdayjobs.com/wday/cxs/nordstrom/nordstrom_careers/jobs" },
+  // Retail — Phenom (sitemap + phApp.ddo HTML descriptions; see phenom.ts)
+  { id: "ph-lowes", name: "Lowe's (Phenom)", source_type: "phenom", company_handle: "lowes", base_url: "https://talent.lowes.com/us/en/" },
+  { id: "ph-panera", name: "Panera Bread (Phenom)", source_type: "phenom", company_handle: "panera-bread", base_url: "https://careers.panerabread.com/global/en/" },
+  { id: "ph-oreilly", name: "O'Reilly Auto Parts (Phenom)", source_type: "phenom", company_handle: "oreilly-auto-parts", base_url: "https://careers.oreillyauto.com/us/en/" },
+  { id: "ph-michaels", name: "Michaels (Phenom)", source_type: "phenom", company_handle: "michaels", base_url: "https://careers.michaels.com/us/en/" },
+  { id: "ph-fivebelow", name: "Five Below (Phenom)", source_type: "phenom", company_handle: "five-below", base_url: "https://careers.fivebelow.com/us/en/" },
+  { id: "ph-familydollar", name: "Family Dollar (Phenom)", source_type: "phenom", company_handle: "family-dollar", base_url: "https://careers.familydollar.com/us/en/" },
+  { id: "ph-fiveguys", name: "Five Guys (Phenom)", source_type: "phenom", company_handle: "five-guys", base_url: "https://careers.fiveguys.com/us/en/" },
+  { id: "ph-gianteagle", name: "Giant Eagle (Phenom)", source_type: "phenom", company_handle: "giant-eagle", base_url: "https://jobs.gianteagle.com/us/en/" },
+  { id: "ph-wawa", name: "Wawa (Phenom)", source_type: "phenom", company_handle: "wawa", base_url: "https://careers.wawa.com/us/en/" },
+  { id: "ph-whataburger", name: "Whataburger (Phenom)", source_type: "phenom", company_handle: "whataburger", base_url: "https://careers.whataburger.com/us/en/" },
+  // Retail — Radancy TalentBrew (search-jobs + per-job HTML; see talentbrew.ts)
+  { id: "tb-7eleven", name: "7-Eleven (TalentBrew)", source_type: "talentbrew", company_handle: "7-eleven", base_url: "https://careers.7-eleven.com/search-jobs" },
+  { id: "tb-aldi", name: "ALDI USA (TalentBrew)", source_type: "talentbrew", company_handle: "aldi-us", base_url: "https://careers.aldi.us/search-jobs" },
+  { id: "tb-ikea", name: "IKEA USA (TalentBrew)", source_type: "talentbrew", company_handle: "ikea-us", base_url: "https://jobs.ikea.com/en/search-jobs" },
+  // Retail — Oracle Fusion CE REST + detail (see oracle_ce.ts)
+  { id: "oc-autozone", name: "AutoZone (Oracle CE)", source_type: "oracle_ce", company_handle: "autozone", base_url: "https://careers.autozone.com/hcmUI/CandidateExperience/en/sites/CX_1" },
+  { id: "oc-staples", name: "Staples (Oracle CE)", source_type: "oracle_ce", company_handle: "staples", base_url: "https://fa-exhh-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/StaplesInc" },
+  { id: "jibe-rei", name: "REI Co-op (iCIMS Jibe)", source_type: "jibe", company_handle: "rei", base_url: "https://www.rei.jobs" },
+  { id: "jibe-dollargeneral", name: "Dollar General (iCIMS Jibe)", source_type: "jibe", company_handle: "dollar-general", base_url: "https://careers.dollargeneral.com" },
+  { id: "jibe-jcpenney", name: "JCPenney (iCIMS Jibe)", source_type: "jibe", company_handle: "jcpenney", base_url: "https://jobs.jcp.com" },
+  { id: "jibe-sheetz", name: "Sheetz (iCIMS Jibe)", source_type: "jibe", company_handle: "sheetz", base_url: "https://jobs.sheetz.com" },
+  { id: "jibe-heb", name: "H-E-B (iCIMS Jibe)", source_type: "jibe", company_handle: "heb", base_url: "https://careers.heb.com" },
   { id: "gh-lyft",    name: "Lyft (Greenhouse)",    source_type: "greenhouse", company_handle: "lyft",         base_url: "https://boards-api.greenhouse.io/v1/boards/lyft/jobs" },
   { id: "gh-doordashusa", name: "DoorDash (Greenhouse)", source_type: "greenhouse", company_handle: "doordashusa", base_url: "https://boards-api.greenhouse.io/v1/boards/doordashusa/jobs" },
   { id: "gh-reddit",  name: "Reddit (Greenhouse)",  source_type: "greenhouse", company_handle: "reddit",       base_url: "https://boards-api.greenhouse.io/v1/boards/reddit/jobs" },
@@ -1219,6 +1251,12 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "br-grubmarket", name: "GrubMarket (Browser)", source_type: "browser", company_handle: "grubmarket", base_url: "https://www.grubmarket.com/jobs/openings" },
   // Supersedes br-jpmorgan — Oracle CE public REST (see oracle_ce.ts); site from Candidate Experience URL
   { id: "oc-jpmorgan",    name: "JPMorgan Chase (Oracle CE)", source_type: "oracle_ce", company_handle: "jpmorgan",   base_url: "https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
+  { id: "oc-macys",       name: "Macy's (Oracle CE)", source_type: "oracle_ce", company_handle: "macys", base_url: "https://ebwh.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
+  { id: "oc-albertsons", name: "Albertsons Companies (Oracle CE)", source_type: "oracle_ce", company_handle: "albertsons", base_url: "https://eofd.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
+  // Kroger banner + corporate (Fred Meyer, Ralphs, etc.) — REST on fa host; public UI at krogerfamilycareers.com
+  { id: "oc-kroger", name: "Kroger (Oracle CE)", source_type: "oracle_ce", company_handle: "kroger", base_url: "https://eluq.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001" },
+  { id: "wd-petco",      name: "Petco", source_type: "workday", company_handle: "petco", base_url: "https://petco.wd1.myworkdayjobs.com/wday/cxs/petco/External/jobs" },
+  { id: "sr-raisingcanes", name: "Raising Cane's", source_type: "smartrecruiters", company_handle: "RaisingCanes", base_url: "https://api.smartrecruiters.com/v1/companies/RaisingCanes/postings" },
   { id: "br-bofa",        name: "Bank of America (Browser)", source_type: "browser", company_handle: "bankofamerica",   base_url: "https://careers.bankofamerica.com/en-us/job-search" },
   { id: "br-morganstanley",name:"Morgan Stanley (Browser)",  source_type: "browser", company_handle: "morganstanley",   base_url: "https://jobs.morganstanley.com/search" },
   { id: "br-volvogroup",  name: "Volvo Group (Browser)",     source_type: "browser", company_handle: "volvogroup",      base_url: "https://jobs.volvogroup.com/" },
@@ -1230,7 +1268,6 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "br-bestbuy",     name: "Best Buy (Browser)",        source_type: "browser", company_handle: "bestbuy",         base_url: "https://jobs.bestbuy.com/bby/jobs" },
   { id: "br-kroger",      name: "Kroger (Browser)",          source_type: "browser", company_handle: "kroger",          base_url: "https://jobs.kroger.com/jobs" },
   { id: "br-costco",      name: "Costco (Browser)",          source_type: "browser", company_handle: "costco",          base_url: "https://www.costco.com/jobs.html" },
-  { id: "br-albertsons",  name: "Albertsons (Browser)",      source_type: "browser", company_handle: "albertsons",      base_url: "https://jobs.albertsons.com/search-jobs" },
   { id: "br-walgreens",   name: "Walgreens (Browser)",       source_type: "browser", company_handle: "walgreens",       base_url: "https://jobs.walgreens.com/en/search-jobs" },
   { id: "br-shopify",     name: "Shopify (Browser)",         source_type: "browser", company_handle: "shopify",         base_url: "https://www.shopify.com/careers" },
   { id: "br-chewy",       name: "Chewy (Browser)",           source_type: "browser", company_handle: "chewy",           base_url: "https://careers.chewy.com/us/en/search-results" },
@@ -1548,6 +1585,39 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   // TalentBrew — hundreds of per-job HTML fetches per employer
   { id: "tb-schwab", hours: 12 },
   { id: "tb-pge", hours: 12 },
+  { id: "oc-macys", hours: 48 },
+  { id: "oc-albertsons", hours: 48 },
+  { id: "oc-kroger", hours: 48 },
+  { id: "wd-petco", hours: 48 },
+  { id: "sr-raisingcanes", hours: 48 },
+  // Activate — thousands of per-job HTML fetches
+  { id: "act-ross", hours: 24 },
+  // Jibe — large boards; descriptions included in API (still sizable payloads)
+  { id: "jibe-sprouts", hours: 12 },
+  { id: "jibe-ulta", hours: 12 },
+  { id: "jibe-rei", hours: 12 },
+  { id: "jibe-dollargeneral", hours: 12 },
+  { id: "jibe-jcpenney", hours: 12 },
+  { id: "jibe-sheetz", hours: 12 },
+  { id: "jibe-heb", hours: 12 },
+  { id: "wd-dsg", hours: 48 },
+  { id: "wd-meijer", hours: 48 },
+  { id: "wd-nordstrom", hours: 48 },
+  { id: "ph-lowes", hours: 12 },
+  { id: "ph-panera", hours: 12 },
+  { id: "ph-oreilly", hours: 12 },
+  { id: "ph-michaels", hours: 12 },
+  { id: "ph-fivebelow", hours: 12 },
+  { id: "ph-familydollar", hours: 12 },
+  { id: "ph-fiveguys", hours: 12 },
+  { id: "ph-gianteagle", hours: 12 },
+  { id: "ph-wawa", hours: 12 },
+  { id: "ph-whataburger", hours: 12 },
+  { id: "tb-7eleven", hours: 12 },
+  { id: "tb-aldi", hours: 12 },
+  { id: "tb-ikea", hours: 12 },
+  { id: "oc-autozone", hours: 48 },
+  { id: "oc-staples", hours: 48 },
 ];
 
 /** Source IDs that consistently 404 or fail — disabled to avoid cron noise. */
@@ -1590,7 +1660,7 @@ const DISABLED_SOURCE_IDS = [
   "wd-adp", "wd-qualcomm", "wd-ibm", "wd-meta", "wd-bofa", "wd-fedex",
   // Browser sources with no viable public API
   "br-jpmorgan",      // Superseded by oc-jpmorgan (oracle_ce)
-  "br-kroger",        // Oracle Cloud HCM — no fetcher; krogerfamilycareers.com
+  "br-kroger",        // Superseded by oc-kroger (oracle_ce)
   "br-hilton",        // Taleo — no fetcher
   "br-marriott",      // Oracle Cloud HCM — no fetcher
   "br-costco",        // iCIMS — no fetcher
@@ -1599,7 +1669,6 @@ const DISABLED_SOURCE_IDS = [
   "br-lululemon",     // Workday 401 — private/internal board
   "br-vimeo",         // Workday tenant exists but returns 0 public jobs
   "br-shopify",       // Navigation timeout; no public ATS API found
-  "br-albertsons",    // Oracle Cloud HCM — no fetcher (eofd.fa.us6.oraclecloud.com)
 ];
 
 /**

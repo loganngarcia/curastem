@@ -42,6 +42,12 @@
  * seconds at ingest time using the current date as the reference point.
  * Jobs older than 30 days are stored as (now - 30 days) as a conservative
  * lower bound.
+ *
+ * ── Full job description ─────────────────────────────────────────────────
+ * The CXS list response does not include posting body text; `bulletFields` is
+ * often just a requisition id. Each public job detail page embeds schema.org
+ * `JobPosting` JSON-LD with a full `description` (HTML or plain). We GET the
+ * canonical job URL (same cookie session as the API) and parse that block.
  */
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
@@ -71,6 +77,9 @@ interface WorkdayJobsResponse {
 const PAGE_SIZE = 20;
 // Safety cap: prevents runaway pagination on very large employers (e.g. Walmart, Target).
 const MAX_OFFSET = 5000;
+
+/** Parallel GETs for job detail pages (JSON-LD extraction). */
+const DETAIL_FETCH_CONCURRENCY = 8;
 
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -127,6 +136,73 @@ function parseWorkdayPostedOn(raw: string | null | undefined, nowSec: number): n
   return null;
 }
 
+/** Recursively find schema.org JobPosting `description` (handles `@graph` arrays). */
+function findJobPostingDescriptionLd(obj: unknown): string | null {
+  if (!obj || typeof obj !== "object") return null;
+  const o = obj as Record<string, unknown>;
+  const t = o["@type"];
+  if (t === "JobPosting" && typeof o.description === "string") {
+    const d = o.description.trim();
+    return d || null;
+  }
+  if (Array.isArray(o["@graph"])) {
+    for (const node of o["@graph"]) {
+      const d = findJobPostingDescriptionLd(node);
+      if (d) return d;
+    }
+  }
+  return null;
+}
+
+/** Extract `description` from the first `application/ld+json` JobPosting block. */
+function extractSchemaJobPostingDescription(html: string): string | null {
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    try {
+      const data = JSON.parse(m[1].trim()) as unknown;
+      const candidates = Array.isArray(data) ? data : [data];
+      for (const item of candidates) {
+        const d = findJobPostingDescriptionLd(item);
+        if (d) return d;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function fetchWorkdayJobDescriptionFromDetailPage(
+  applyUrl: string,
+  cookieHeader: string,
+  origin: string,
+  tenant: string
+): Promise<string | null> {
+  const res = await fetch(applyUrl, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": BROWSER_UA,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US",
+      Cookie: cookieHeader,
+      Referer: `${origin}/en-US/${tenant}`,
+    },
+  });
+  if (!res.ok) return null;
+  const html = await res.text();
+  return extractSchemaJobPostingDescription(html);
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    out.push(...(await Promise.all(chunk.map((x) => fn(x)))));
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Fetcher
 // ─────────────────────────────────────────────────────────────────────────────
@@ -171,11 +247,28 @@ export const workdayFetcher: JobSource = {
       }
 
       const data = (await res.json()) as WorkdayJobsResponse;
-      // total is sometimes missing on paginated responses — treat as done
-      if (typeof data.total === "number") total = data.total;
-      else total = offset; // stop after this page
+      const batch = data.jobPostings ?? [];
+      if (batch.length === 0) break;
 
-      for (const posting of data.jobPostings ?? []) {
+      // `total` is sometimes wrong on pages after the first (0 or omitted) even when more jobs exist.
+      if (typeof data.total === "number") {
+        if (data.total > 0) total = data.total;
+        else if (offset === 0) total = 0;
+        // else: keep prior `total` (e.g. Petco page 2+ returns total: 0)
+      } else if (offset === 0) {
+        total = Infinity;
+      }
+
+      type Pending = {
+        posting: WorkdayJobListing;
+        titleText: string;
+        locationRaw: string | null;
+        applyUrl: string;
+        externalId: string;
+      };
+      const pending: Pending[] = [];
+
+      for (const posting of batch) {
         try {
           const titleText = typeof posting.title === "string" ? posting.title.trim() : "";
           if (!titleText) continue;
@@ -192,6 +285,27 @@ export const workdayFetcher: JobSource = {
           // id is null on most modern tenants; externalPath is the stable unique key
           const externalId = (posting.id ?? posting.externalPath ?? titleText) as string;
 
+          pending.push({ posting, titleText, locationRaw, applyUrl, externalId });
+        } catch {
+          continue;
+        }
+      }
+
+      const descriptions = await mapWithConcurrency(pending, DETAIL_FETCH_CONCURRENCY, (p) =>
+        fetchWorkdayJobDescriptionFromDetailPage(p.applyUrl, cookieHeader, origin, tenant)
+      );
+
+      for (let i = 0; i < pending.length; i++) {
+        const { posting, titleText, locationRaw, applyUrl, externalId } = pending[i];
+        try {
+          const descriptionFromLd = descriptions[i];
+          const fallbackBullets = posting.bulletFields?.join("\n").trim() || null;
+          // Prefer JSON-LD body. List `bulletFields` is often a bare requisition id (no spaces);
+          // only use bullets as a fallback when they look like real teaser copy.
+          const descriptionRaw =
+            descriptionFromLd ??
+            (fallbackBullets && /\s/.test(fallbackBullets) ? fallbackBullets : null);
+
           jobs.push({
             external_id: String(externalId),
             title: titleText,
@@ -200,9 +314,7 @@ export const workdayFetcher: JobSource = {
             workplace_type: normalizeWorkplaceType(null, locationRaw),
             apply_url: applyUrl,
             source_url: applyUrl,
-            // Bullet fields are a brief teaser — better than nothing until a
-            // detail-fetch backfill is added for Workday.
-            description_raw: posting.bulletFields?.join("\n") ?? null,
+            description_raw: descriptionRaw,
             salary_min: null,
             salary_max: null,
             salary_currency: null,

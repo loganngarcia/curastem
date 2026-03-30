@@ -301,7 +301,20 @@ export type SourceType =
    * (`/hcmRestApi/resources/latest/...`). `base_url` is the CE sites URL with locale, e.g.
    * `https://tenant.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001`. See oracle_ce.ts.
    */
-  | "oracle_ce";
+  | "oracle_ce"
+  /**
+   * iCIMS Jibe white-label boards (`*.jibeapply.com` and branded hosts).
+   * Public `GET {origin}/api/jobs?page=&limit=` returns full HTML descriptions.
+   * `base_url` is the branded site origin (e.g. `https://jobs.sprouts.com`). See jibe.ts.
+   */
+  | "jibe"
+  /**
+   * Oracle Activate career sites (listing often still applies via classic Taleo).
+   * `GET {origin}/Search/SearchResults?jtStartIndex=&jtPageSize=` for JSON rows;
+   * job descriptions from `/search/jobdetails/{slug}/{uuid}` HTML (`div.Description`).
+   * `base_url` is the careers site origin (e.g. `https://jobs.rossstores.com`). See activate_careers.ts.
+   */
+  | "activate_careers";
 
 export type EmploymentType =
   | "full_time"

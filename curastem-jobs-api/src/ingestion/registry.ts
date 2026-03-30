@@ -43,6 +43,8 @@ import { jobviteFetcher } from "./sources/jobvite.ts";
 import { eightfoldFetcher } from "./sources/eightfold.ts";
 import { uberSitesFetcher } from "./sources/uber_sites.ts";
 import { talentbrewFetcher } from "./sources/talentbrew.ts";
+import { jibeFetcher } from "./sources/jibe.ts";
+import { activateCareersFetcher } from "./sources/activate_careers.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -76,6 +78,8 @@ const REGISTRY: Record<SourceType, JobSource> = {
   eightfold: eightfoldFetcher,
   uber_sites: uberSitesFetcher,
   talentbrew: talentbrewFetcher,
+  jibe: jibeFetcher,
+  activate_careers: activateCareersFetcher,
 };
 
 /**
@@ -149,6 +153,10 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   // Eightfold PCS — employer-configured board; structured JSON from their public PCS API
   eightfold: 86,
   uber_sites: 90,
+  // iCIMS Jibe — employer-branded board; full descriptions in API
+  jibe: 88,
+  // Oracle Activate + Taleo apply — structured list + HTML detail
+  activate_careers: 82,
 };
 
 export function getSourcePriority(sourceType: string): number {
