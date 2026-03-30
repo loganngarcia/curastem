@@ -50,7 +50,12 @@ import { handleGetStats } from "./routes/stats.ts";
 import { runIngestion, processSourceById, backfillEmbeddings } from "./ingestion/runner.ts";
 import { runExaEnrichment } from "./enrichment/company.ts";
 import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns, ensureNewJobColumns, listJobsForMap, type MapBbox, type MapCenter } from "./db/queries.ts";
-import { applyCompanyMetadataCorrections, seedSources, seedCompanyWebsites } from "./db/migrate.ts";
+import {
+  applyCompanyMetadataCorrections,
+  migrateRenameCrunchbaseSource,
+  seedCompanyWebsites,
+  seedSources,
+} from "./db/migrate.ts";
 import type { Env } from "./types.ts";
 import { Errors, jsonOk } from "./utils/errors.ts";
 import { logger } from "./utils/logger.ts";
@@ -186,6 +191,7 @@ async function handleRequest(
       // Embeddings are skipped to fit within the 30s Worker request budget.
       try {
         await seedSources(env.JOBS_DB);
+        await migrateRenameCrunchbaseSource(env.JOBS_DB);
         await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
         await ensureCompanyExaColumns(env.JOBS_DB);
         await ensureNewJobColumns(env.JOBS_DB);
@@ -209,6 +215,7 @@ async function handleRequest(
     ctx.waitUntil(
       (async () => {
         await seedSources(env.JOBS_DB);
+        await migrateRenameCrunchbaseSource(env.JOBS_DB);
         await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
         await ensureCompanyExaColumns(env.JOBS_DB);
         await ensureNewJobColumns(env.JOBS_DB);
@@ -512,6 +519,7 @@ export default {
         }
         try {
           await seedSources(env.JOBS_DB);
+          await migrateRenameCrunchbaseSource(env.JOBS_DB);
           await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
           await ensureCompanyExaColumns(env.JOBS_DB);
           await ensureNewJobColumns(env.JOBS_DB);

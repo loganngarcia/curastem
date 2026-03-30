@@ -273,6 +273,141 @@ export function parseSalary(raw: string | null | undefined): ParsedSalary {
   return { min, max, currency, period };
 }
 
+/**
+ * Scan a full job description for a salary/pay range.
+ *
+ * Designed for California pay-transparency disclosures and common US patterns:
+ *   "$80,000 – $120,000 per year", "$25–$35/hr", "Salary: $150,000",
+ *   "$80k - $120k annually", "Pay Range: $25.00 - $30.00/hour"
+ *
+ * Strategy: find every `$amount [–range]` in the text, then check up to 80
+ * chars before/after for a period indicator. Magnitude-based inference is used
+ * only when a salary/pay/compensation keyword is present in the same window
+ * (avoids mis-classifying funding rounds like "$50M Series B").
+ *
+ * Returns all nulls when no credible pattern is found — salary is optional.
+ */
+export function extractSalaryFromText(text: string | null | undefined): ParsedSalary {
+  const empty: ParsedSalary = { min: null, max: null, currency: null, period: null };
+  if (!text) return empty;
+
+  let t = text.replace(/\r\n|\r/g, "\n").replace(/[ \t]+/g, " ");
+  // Decode HTML entities so salary figures inside HTML job descriptions are found
+  t = t
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/&mdash;|&#8212;/g, "—")
+    .replace(/&ndash;|&#8211;/g, "–")
+    .replace(/&#36;/g, "$")
+    .replace(/&nbsp;/g, " ");
+  // Strip HTML tags after decoding (descriptions stored as HTML often wrap salary in spans)
+  t = t.replace(/<[^>]+>/g, " ");
+  // Normalize "between $X and $Y" → "$X - $Y" so the main regex handles it uniformly
+  t = t.replace(/between\s+(\$[\d,]+(?:\.\d+)?k?)\s+and\s+(\$[\d,]+(?:\.\d+)?k?)/gi, "$1 - $2");
+  // Bridge salary ranges split across a line break: "$145,000–\n$270,000" → "$145,000–$270,000"
+  t = t.replace(/(\$[\d,]+(?:\.\d+)?k?)\s*[-–—]\s*\n\s*(\$[\d,]+(?:\.\d+)?k?)/gi, "$1 – $2");
+
+  // $ amount (optional k-suffix), optional range, then trailing context window.
+  // (?!\d) prevents backtracking to sub-strings of longer numbers (e.g. "$120M" → never "$12").
+  // (?![MBTmbt]) then excludes million/billion/trillion shorthand (funding, revenue, etc.).
+  // Range separator allows an optional ISO currency code between number and dash/to
+  // (e.g. "$146,200.00 USD to $233,700.00").
+  const SALARY_RX = /\$\s*([\d,]+(?:\.\d+)?)(?!\d)(k?)(?![MBTmbt])(?:\s*(?:[A-Z]{2,3}\s+)?(?:[-–—]|\bto\b)\s*\$?\s*([\d,]+(?:\.\d+)?)(?!\d)(k?))?([^$\n]{0,80})?/gi;
+
+  const PERIOD_MAP: Array<[RegExp, SalaryPeriod]> = [
+    [/\/\s*(?:yr|year|annum)|per\s+(?:yr|year|annum)|\ba(?:n)?\s+year\b|\bannually\b/i, "year"],
+    [/\/\s*(?:hr|hour)|per\s+(?:hr|hour)|\ba(?:n)?\s+hour\b|\bhourly\b/i, "hour"],
+    [/\/\s*(?:mo|month)|per\s+(?:mo|month)|\ba\s+month\b|\bmonthly\b/i, "month"],
+  ];
+
+  // Salary-context keywords that make magnitude-based period inference safe.
+  // "rate" alone is too broad (hits "revenue run rate", "conversion rate", etc.);
+  // only "rate of pay" is specific enough.
+  const CONTEXT_RX = /\b(?:salary|pay(?:\s+range)?|compensation|wage|rate\s+of\s+pay|earn(?:ings?)?|total\s+(?:comp|compensation)|base(?:\s+(?:pay|salary))?|OTE|on[\s-]target\s+earn)\b/i;
+
+  interface Candidate { min: number; max: number | null; period: SalaryPeriod; score: number; }
+  const candidates: Candidate[] = [];
+
+  let m: RegExpExecArray | null;
+  SALARY_RX.lastIndex = 0;
+  while ((m = SALARY_RX.exec(t)) !== null) {
+    let min = parseFloat(m[1].replace(/,/g, "")) * (m[2].toLowerCase() === "k" ? 1000 : 1);
+    let max = m[3]
+      ? parseFloat(m[3].replace(/,/g, "")) * ((m[4]?.toLowerCase() ?? "") === "k" ? 1000 : 1)
+      : null;
+
+    // "$110-120K" — max has explicit k but min doesn't; if max is ≥100× min the min is
+    // implicitly also in thousands (e.g. "$110-120K" = $110k–$120k, not $110–$120k).
+    if (max !== null && (m[4]?.toLowerCase() ?? "") === "k" && (m[2] ?? "") === "" && min < 1000 && max >= min * 100) {
+      min = min * 1000;
+    }
+
+    // Skip implausible values (funding rounds, revenue figures, etc.)
+    if (min < 8 || min > 2_000_000) continue;
+    if (max !== null && (max < min || max > 2_000_000)) continue;
+
+    const trailing   = m[5] ?? "";
+    // Narrow (60-char) window for period indicators — keeps them adjacent to the amount
+    // so stray "/mo" in a URL 100 chars away doesn't corrupt the period classification.
+    const nearLeading = t.slice(Math.max(0, m.index - 60), m.index);
+    // Wide (150-char) window for salary-keyword context — catches "Salary Range:" section
+    // headers that appear above the dollar figures with no keyword on the same line.
+    const wideLeading = t.slice(Math.max(0, m.index - 150), m.index);
+    const window      = wideLeading + m[0] + trailing;
+
+    let period: SalaryPeriod | null = null;
+    let hasPeriod = false;
+    for (const [rx, p] of PERIOD_MAP) {
+      if (rx.test(trailing) || rx.test(nearLeading)) {
+        period    = p;
+        hasPeriod = true;
+        break;
+      }
+    }
+    // Reject if the period word is part of a revenue/MRR/ARR phrase, not a pay period
+    // e.g. "$650K in monthly recurring revenue", "$50k+/month in revenue"
+    if (hasPeriod && /\b(?:recurring\s+revenue|in\s+(?:\w+\s+)?revenue|MRR\b|ARR\b|revenue\s+run)\b/i.test(trailing + nearLeading)) {
+      period    = null;
+      hasPeriod = false;
+    }
+
+    // Fall back to magnitude inference when a salary keyword anchors the context
+    if (!period && CONTEXT_RX.test(window)) {
+      if (min >= 10_000) period = "year";
+      else if (min <= 500) period = "hour";
+    }
+
+    // Final fallback: bare range with a currency/region marker near the match.
+    // Companies like Pinterest/Toast/Oura use "$X — $Y USD" or "Region 1 $X-$Y" without
+    // a "per year" phrase. Check both trailing and the near-leading window (Oura puts
+    // "Region 1" before the numbers; Pinterest/Toast put "USD" after). Only fire when
+    // both min and max are present (deliberate range = pay disclosure).
+    if (!period && max !== null && /\b(?:USD|CAD|GBP|EUR|Region|Zone|Tier)\b/i.test(trailing + nearLeading)) {
+      if (min >= 10_000) period = "year";
+    }
+
+    if (!period) continue;
+
+    // Weed out non-salary dollar amounts that happen to carry a period indicator:
+    // benefit stipends ($100–$150/mo), dev budgets ($1,500/yr), etc. are never salaries.
+    if (period === "year"  && min < 20_000) continue;
+    if (period === "month" && min < 1_500)  continue;
+    if (period === "hour"  && min < 8)      continue;
+
+    const hasContext = CONTEXT_RX.test(window);
+    const score = (hasPeriod ? 4 : 0) + (hasContext ? 2 : 0) + (max !== null ? 1 : 0);
+    candidates.push({ min, max, period, score });
+  }
+
+  if (candidates.length === 0) return empty;
+
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  return { min: best.min, max: best.max, currency: "USD", period: best.period };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Location normalization
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2733,6 +2868,40 @@ const ISO2_TO_COUNTRY: Record<string, string> = {
   lv: "Latvia",
   ee: "Estonia",
   gr: "Greece",   // resolved below via city set; default to Greece if unknown
+  // Never US state abbreviations — safe to expand in "City, XX" (Gemini often emits ISO here)
+  gb: "United Kingdom",
+  uk: "United Kingdom",
+  es: "Spain",
+  ie: "Ireland",
+  sg: "Singapore",
+  br: "Brazil",
+  mx: "Mexico",
+  au: "Australia",
+  nz: "New Zealand",
+  ru: "Russia",
+  ua: "Ukraine",
+  za: "South Africa",
+  ae: "United Arab Emirates",
+  sa: "Saudi Arabia",
+  tr: "Turkey",
+  eg: "Egypt",
+  ng: "Nigeria",
+  pk: "Pakistan",
+  bd: "Bangladesh",
+  ph: "Philippines",
+  th: "Thailand",
+  id: "Indonesia",
+  my: "Malaysia",
+  cl: "Chile",
+  pe: "Peru",
+  is: "Iceland",
+  lu: "Luxembourg",
+  cy: "Cyprus",
+  li: "Liechtenstein",
+  mc: "Monaco",
+  sm: "San Marino",
+  ad: "Andorra",
+  // Omit ISO codes that match US state abbreviations (AR, CO, IL, MT, NE, VA, …) — those stay US.
   // Note: IN = Indiana (US) or India, DE = Delaware (US) or Germany — handled by city sets below
 };
 
@@ -3034,13 +3203,16 @@ export function normalizeLocation(
     ]);
     if (MY_STATES.has(qualLower)) return `${canonicalCity}, Malaysia`;
 
-    // French regions → France
+    // French regions / départements → France (ATS often uses département name as qualifier)
     const FR_REGIONS = new Set([
       "nouvelle-aquitaine","auvergne-rhône-alpes","auvergne rhone alpes",
       "île-de-france","ile-de-france","bretagne","brittany","normandie","normandy",
       "occitanie","hauts-de-france","pays de la loire","bourgogne-franche-comté",
       "bourgogne franche-comté","centre-val de loire","grand est","provence-alpes-côte d'azur",
       "provence-alpes-cote d'azur","paca","corsica","corse",
+      // Île-de-France départements (Workday / EU postings)
+      "yvelines","hauts-de-seine","seine-saint-denis","seine-et-marne","val-de-marne",
+      "essonne","val-d'oise","val-d’oise",
     ]);
     if (FR_REGIONS.has(qualLower)) return `${canonicalCity}, France`;
 

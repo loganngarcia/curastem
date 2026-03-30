@@ -25,12 +25,14 @@ import {
   batchMarkJobsEmbedded,
   batchSetLanguage,
   batchSetHeuristicFields,
+  batchSetHeuristicSalary,
   batchUpsertJobs,
   batchGetCompanyLocationCoords,
   upsertCompanyLocationGeocode,
   getJobsNeedingEmbedding,
   getJobsNeedingHeuristicEnrichment,
   getJobsNeedingLanguageDetection,
+  getJobsNeedingSalaryEnrichment,
   getLocationsNeedingGeocode,
   getSourceById,
   listEnabledSources,
@@ -431,17 +433,19 @@ async function processSource(
 /**
  * How many jobs to embed per cron run during the backfill pass.
  *
- * At 500/run × 24 runs/day = 12,000 embeddings/day. The initial 42K-job
- * backfill completes in ~3.5 days. On a paid Gemini API account the rate
- * limit is 150 RPM (9,000/hour), so 500 per 1-hour cron window is very
- * conservative and will never hit rate limits.
+ * Workers Paid hard cap: 1,000 subrequests per invocation (cron included).
+ * Budget breakdown per run:
+ *   ~50  source fetches (one per ATS)
+ *   200  embedding Gemini fetches      ← this constant
+ *   200  geocode Photon/Nominatim fetches
+ *   ~50  Exa / Brandfetch / Workday / Consider backfill fetches
+ *   ─────────────────────────────────────────────────────────
+ *   ~500 total — well under the 1,000 ceiling
  *
- * Increase this number if you want the backfill to complete faster.
- * Each embedding takes ~200–400ms, so 500 ≈ 100–200 seconds of wall clock time.
+ * Speed: requests run 5 concurrent → 200 / 5 = 40 batches × ~250ms = ~10s wall clock.
  */
-// 1000 × 24/day = 24,000 embeddings/day. Backlog of ~15k a16z jobs clears in <1 day.
-// Each embed ~250ms sequential → 1000 ≈ 250s. Total cron CPU with 50 sources ≈ 450s (50%).
-const EMBEDDING_BACKFILL_BATCH = 1000;
+const EMBEDDING_BACKFILL_BATCH = 200;
+const EMBEDDING_CONCURRENCY    = 5;
 
 /**
  * Backfill Vectorize embeddings for jobs that were ingested but never embedded.
@@ -476,26 +480,34 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
   logger.info("embedding_backfill_started", { count: jobs.length });
   const now = Math.floor(Date.now() / 1000);
 
-  // Phase 1: call Gemini for each job sequentially (can't batch these —
-  // each job needs its own embedding vector from the external API).
+  // Phase 1: call Gemini for each job — EMBEDDING_CONCURRENCY concurrent at a time.
+  // Parallel requests stay well within the 150 RPM Gemini limit while cutting
+  // wall-clock time from ~50s sequential to ~10s for 200 jobs.
   // Collect successes; failures stay NULL and are retried next run.
   const vectors: Array<{ id: string; values: number[] }> = [];
   let failed = 0;
 
-  for (const job of jobs) {
-    try {
-      const locText = locationsJsonToEmbedString(job.locations) ?? job.location_primary;
-      const values = await embedJob(
-        env.GEMINI_API_KEY,
-        job.title,
-        job.company_name,
-        locText,
-        job.description_raw
-      );
-      vectors.push({ id: job.id, values });
-    } catch (err) {
-      failed++;
-      logger.warn("embedding_backfill_job_failed", { job_id: job.id, error: String(err) });
+  for (let i = 0; i < jobs.length; i += EMBEDDING_CONCURRENCY) {
+    const batch = jobs.slice(i, i + EMBEDDING_CONCURRENCY);
+    const settled = await Promise.allSettled(
+      batch.map((job) => {
+        const locText = locationsJsonToEmbedString(job.locations) ?? job.location_primary;
+        return embedJob(
+          env.GEMINI_API_KEY!,
+          job.title,
+          job.company_name,
+          locText,
+          job.description_raw
+        ).then((values) => ({ id: job.id, values }));
+      })
+    );
+    for (const r of settled) {
+      if (r.status === "fulfilled") {
+        vectors.push(r.value);
+      } else {
+        failed++;
+        logger.warn("embedding_backfill_job_failed", { error: String(r.reason) });
+      }
     }
   }
 
@@ -515,11 +527,10 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
   return { succeeded: vectors.length, failed, total: jobs.length };
 }
 
-// Photon (primary) has no rate limit and resolves in ~100ms — 500 locations ≈ 50s.
-// Only Nominatim fallbacks (rare, <5% of locations) add the 1.1s delay.
-// Worst case (all Nominatim): 500 × 1.1s = 550s — acceptable since it never happens in practice.
-// At 500/run × 24/day = 12,000/day, the 13k geocode backlog clears in ~1 day.
-const GEOCODE_BACKFILL_BATCH = 500;
+// Photon ~100ms each → 200 × 100ms = 20s. Nominatim (rare) adds 1.1s/call.
+// Kept at 200 to preserve subrequest budget for embeddings and source fetches.
+// At 200/run × 24/day = 4,800 geocodes/day.
+const GEOCODE_BACKFILL_BATCH = 200;
 
 async function backfillGeocode(env: Env): Promise<void> {
   const locations = await getLocationsNeedingGeocode(env.JOBS_DB, GEOCODE_BACKFILL_BATCH);
@@ -595,6 +606,41 @@ async function backfillHeuristicFields(env: Env): Promise<void> {
     processed: jobs.length,
     updated: rows.length,
     no_change: jobs.length - rows.length,
+  });
+}
+
+// Pure CPU regex — no network. 5,000 jobs × ~0.2ms each ≈ 1s per run.
+const SALARY_BACKFILL_BATCH = 5000;
+
+/**
+ * Backfill regex-detected salary fields for jobs that have a description but
+ * no salary data yet. Runs after the heuristic fields pass — same "pure CPU,
+ * no network" budget. Newest-first so recently posted jobs get salary first.
+ */
+async function backfillHeuristicSalary(env: Env): Promise<void> {
+  const { extractSalaryFromText } = await import("../utils/normalize.ts");
+  const jobs = await getJobsNeedingSalaryEnrichment(env.JOBS_DB, SALARY_BACKFILL_BATCH);
+  if (jobs.length === 0) return;
+
+  const rows: Array<{ id: string; salary_min: number; salary_max: number | null; salary_currency: string; salary_period: string }> = [];
+  for (const job of jobs) {
+    const detected = extractSalaryFromText(job.description_raw);
+    if (detected.min !== null && detected.period !== null && detected.currency !== null) {
+      rows.push({
+        id:              job.id,
+        salary_min:      detected.min,
+        salary_max:      detected.max,
+        salary_currency: detected.currency,
+        salary_period:   detected.period,
+      });
+    }
+  }
+
+  await batchSetHeuristicSalary(env.JOBS_DB, rows);
+  logger.info("salary_backfill_completed", {
+    processed: jobs.length,
+    detected:  rows.length,
+    no_match:  jobs.length - rows.length,
   });
 }
 
@@ -777,5 +823,14 @@ export async function runIngestion(env: Env): Promise<void> {
     await backfillHeuristicFields(env);
   } catch (err) {
     logger.error("heuristic_backfill_cron_failed", { error: String(err) });
+  }
+
+  // Salary backfill — regex-scans descriptions for pay transparency disclosures
+  // (California requires salary ranges on every posting). Pure CPU, no network.
+  // 5,000/run × 24/day clears a 120k-job backlog in ~1 day.
+  try {
+    await backfillHeuristicSalary(env);
+  } catch (err) {
+    logger.error("salary_heuristic_backfill_cron_failed", { error: String(err) });
   }
 }

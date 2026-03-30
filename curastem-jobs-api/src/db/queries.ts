@@ -27,6 +27,7 @@ import type {
   NormalizedJob,
   SourceRow,
 } from "../types.ts";
+import { CRUNCHBASE_SOURCE_ID, CRUNCHBASE_SOURCE_LEGACY_ID } from "./sourceIds.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // companies
@@ -516,9 +517,10 @@ export async function getSourceById(
   db: D1Database,
   id: string
 ): Promise<SourceRow | null> {
+  const resolvedId = id === CRUNCHBASE_SOURCE_LEGACY_ID ? CRUNCHBASE_SOURCE_ID : id;
   const result = await db
     .prepare("SELECT * FROM sources WHERE id = ?")
-    .bind(id)
+    .bind(resolvedId)
     .first<SourceRow>();
   return result ?? null;
 }
@@ -865,7 +867,10 @@ export async function batchUpsertJobs(
     locations = CASE WHEN locations IS NULL THEN ? ELSE locations END,
     employment_type = COALESCE(?, employment_type),
     workplace_type = ?, apply_url = ?, source_url = ?,
-    salary_min = ?, salary_max = ?, salary_currency = ?, salary_period = ?,
+    salary_min      = COALESCE(?, salary_min),
+    salary_max      = COALESCE(?, salary_max),
+    salary_currency = COALESCE(?, salary_currency),
+    salary_period   = COALESCE(?, salary_period),
     posted_at = ?, dedup_key = ?,
     location_lat           = COALESCE(?, location_lat),
     location_lng           = COALESCE(?, location_lng),
@@ -877,7 +882,7 @@ export async function batchUpsertJobs(
     embedding_generated_at = CASE WHEN ? = 1 THEN NULL ELSE embedding_generated_at END
   WHERE source_id = ? AND external_id = ?`;
 
-  const { normalizeLocationsList, detectEmploymentTypeFromText, detectSeniorityFromText } = await import("../utils/normalize.ts");
+  const { normalizeLocationsList, detectEmploymentTypeFromText, detectSeniorityFromText, extractSalaryFromText } = await import("../utils/normalize.ts");
   const { detectLanguage } = await import("../enrichment/language.ts");
 
   for (let i = 0; i < inputs.length; i++) {
@@ -906,13 +911,23 @@ export async function batchUpsertJobs(
     // AI lazy-load will override this on first GET /jobs/:id if needed.
     const detectedLang = description_raw ? detectLanguage(description_raw) : null;
 
+    // Detect salary from description when the source doesn't provide it structured.
+    // COALESCE in the UPDATE path ensures this never overwrites source-provided salary.
+    const detectedSalary = (salary_min == null && description_raw)
+      ? extractSalaryFromText(description_raw)
+      : null;
+    const effectiveSalaryMin      = salary_min      ?? detectedSalary?.min      ?? null;
+    const effectiveSalaryMax      = salary_max      ?? detectedSalary?.max      ?? null;
+    const effectiveSalaryCurrency = salary_currency ?? detectedSalary?.currency ?? null;
+    const effectiveSalaryPeriod   = salary_period   ?? detectedSalary?.period   ?? null;
+
     if (!existing) {
       inserts.push(
         db.prepare(INSERT_SQL).bind(
           id, company_id, source_id, external_id, title, locationsJson,
           n(detectedEt), n(workplace_type), n(detectedSl), apply_url, n(source_url), source_name,
           n(description_raw), detectedLang,
-          n(salary_min), n(salary_max), n(salary_currency), n(salary_period),
+          n(effectiveSalaryMin), n(effectiveSalaryMax), n(effectiveSalaryCurrency), n(effectiveSalaryPeriod),
           n(posted_at), now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
         )
       );
@@ -924,13 +939,19 @@ export async function batchUpsertJobs(
       const updatedLang = descChanged ? detectLanguage(description_raw) : null;
       // Re-detect seniority if description changed; bind null otherwise (COALESCE keeps existing)
       const updatedSl = descChanged ? detectSeniorityFromText(title, description_raw) : null;
+      // Re-detect salary if description changed; COALESCE in SQL keeps existing when null
+      const updatedSalary = descChanged ? extractSalaryFromText(description_raw) : null;
+      const updatedSalaryMin      = salary_min      ?? updatedSalary?.min      ?? null;
+      const updatedSalaryMax      = salary_max      ?? updatedSalary?.max      ?? null;
+      const updatedSalaryCurrency = salary_currency ?? updatedSalary?.currency ?? null;
+      const updatedSalaryPeriod   = salary_period   ?? updatedSalary?.period   ?? null;
       updates.push(
         db.prepare(UPDATE_SQL).bind(
           company_id, title,
           locationsJson,
           n(detectedEt),
           n(workplace_type), apply_url, n(source_url),
-          n(salary_min), n(salary_max), n(salary_currency), n(salary_period),
+          n(updatedSalaryMin), n(updatedSalaryMax), n(updatedSalaryCurrency), n(updatedSalaryPeriod),
           n(posted_at), dedup_key, location_lat ?? null, location_lng ?? null,
           n(updatedSl),
           now,
@@ -1057,6 +1078,26 @@ export async function batchMarkJobsEmbedded(
  */
 const D1_IN_CHUNK = 90;
 
+/** Comma-separated employment types (e.g. contract,temporary) → SQL fragment + bindings. */
+function employmentTypeCondition(employment_type: string | undefined): {
+  sql: string;
+  bindings: unknown[];
+} | null {
+  if (!employment_type) return null;
+  const types = employment_type
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (types.length === 0) return null;
+  if (types.length === 1) {
+    return { sql: "j.employment_type = ?", bindings: [types[0]!] };
+  }
+  return {
+    sql: `j.employment_type IN (${types.map(() => "?").join(", ")})`,
+    bindings: types,
+  };
+}
+
 /**
  * Fetch a set of jobs by their IDs, applying optional secondary filters.
  * Used by the vector search path: Vectorize returns ranked IDs, then we
@@ -1125,9 +1166,10 @@ async function listJobsByIdsChunk(
       bindings.push(...valid);
     }
   }
-  if (filter.employment_type) {
-    conditions.push("j.employment_type = ?");
-    bindings.push(filter.employment_type);
+  const etChunk = employmentTypeCondition(filter.employment_type);
+  if (etChunk) {
+    conditions.push(etChunk.sql);
+    bindings.push(...etChunk.bindings);
   }
   if (filter.workplace_type) {
     conditions.push("j.workplace_type = ?");
@@ -1312,9 +1354,10 @@ export async function listJobs(
       bindings.push(...valid);
     }
   }
-  if (filter.employment_type) {
-    conditions.push("j.employment_type = ?");
-    bindings.push(filter.employment_type);
+  const etList = employmentTypeCondition(filter.employment_type);
+  if (etList) {
+    conditions.push(etList.sql);
+    bindings.push(...etList.bindings);
   }
   if (filter.workplace_type) {
     conditions.push("j.workplace_type = ?");
@@ -1501,9 +1544,10 @@ export async function listJobsForMap(
     bindings.push(`%${q.trim()}%`);
   }
   let typeClause = "";
-  if (employment_type) {
-    typeClause = `AND j.employment_type = ?`;
-    bindings.push(employment_type);
+  const etMap = employmentTypeCondition(employment_type);
+  if (etMap) {
+    typeClause = `AND ${etMap.sql}`;
+    bindings.push(...etMap.bindings);
   }
   let seniorityClause = "";
   if (seniority_level) {
@@ -1726,9 +1770,10 @@ export async function listJobsNear(
       bindings.push(...valid);
     }
   }
-  if (employment_type) {
-    conditions.push("j.employment_type = ?");
-    bindings.push(employment_type);
+  const etNear = employmentTypeCondition(employment_type);
+  if (etNear) {
+    conditions.push(etNear.sql);
+    bindings.push(...etNear.bindings);
   }
   if (seniority_level) {
     const levels = seniority_level.split(",").map((s) => s.trim()).filter(Boolean);
@@ -1860,6 +1905,9 @@ export async function getJobById(
  * Returns source_url (the human-readable apply URL containing /job/...) and
  * the source's base_url (the CXS endpoint) so the backfill can construct the
  * CXS detail URL without a second DB lookup.
+ *
+ * Also includes rows where `description_raw` is a numeric-only placeholder (e.g. requisition
+ * id from `bulletFields` when JSON-LD fetch failed during ingest). Those must be re-fetched.
  */
 export async function getWorkdayJobsNeedingDescription(
   db: D1Database,
@@ -1871,8 +1919,15 @@ export async function getWorkdayJobsNeedingDescription(
       FROM jobs j
       JOIN sources s ON j.source_id = s.id
       WHERE s.source_type = 'workday'
-        AND j.description_raw IS NULL
         AND j.source_url IS NOT NULL
+        AND (
+          j.description_raw IS NULL
+          OR (
+            LENGTH(TRIM(j.description_raw)) <= 32
+            AND TRIM(j.description_raw) != ''
+            AND NOT (TRIM(j.description_raw) GLOB '*[!0-9]*')
+          )
+        )
       ORDER BY j.first_seen_at DESC
       LIMIT ?
     `)
@@ -1929,7 +1984,8 @@ export async function getConsiderJobsNeedingDescription(
 
 /**
  * Backfill description + optional salary/location fields for a single job.
- * Only writes fields that are currently null to avoid overwriting good data.
+ * Only writes when `description_raw` is null, or when it is a short numeric-only placeholder
+ * (Workday requisition id accidentally stored as the description) so real copy can replace it.
  */
 export async function backfillJobDescription(
   db: D1Database,
@@ -1963,7 +2019,14 @@ export async function backfillJobDescription(
         workplace_type  = CASE WHEN workplace_type IS NULL AND ? IS NOT NULL THEN ? ELSE workplace_type END,
         employment_type = CASE WHEN employment_type IS NULL AND ? IS NOT NULL THEN ? ELSE employment_type END,
         updated_at      = ?
-      WHERE id = ? AND description_raw IS NULL
+      WHERE id = ? AND (
+        description_raw IS NULL
+        OR (
+          LENGTH(TRIM(description_raw)) <= 32
+          AND TRIM(description_raw) != ''
+          AND NOT (TRIM(description_raw) GLOB '*[!0-9]*')
+        )
+      )
     `)
     .bind(
       fields.description_raw,
@@ -2162,6 +2225,59 @@ export async function batchSetHeuristicFields(
          WHERE id = ?`
       )
       .bind(employment_type, seniority_level, id)
+  );
+  const CHUNK = 500;
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    await db.batch(stmts.slice(i, i + CHUNK));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heuristic salary backfill
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch jobs that have a description but no salary_min set yet.
+ * Ordered newest-first so recently posted jobs are classified before old ones.
+ */
+export async function getJobsNeedingSalaryEnrichment(
+  db: D1Database,
+  limit: number
+): Promise<Array<{ id: string; description_raw: string }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, description_raw FROM jobs
+       WHERE description_raw IS NOT NULL
+         AND salary_min IS NULL
+         AND salary_max IS NULL
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ id: string; description_raw: string }>();
+  return results;
+}
+
+/**
+ * Write regex-detected salary fields for a batch.
+ * Uses COALESCE so source-set or AI-set values are never overwritten.
+ */
+export async function batchSetHeuristicSalary(
+  db: D1Database,
+  rows: Array<{ id: string; salary_min: number; salary_max: number | null; salary_currency: string; salary_period: string }>
+): Promise<void> {
+  if (rows.length === 0) return;
+  const stmts = rows.map(({ id, salary_min, salary_max, salary_currency, salary_period }) =>
+    db
+      .prepare(
+        `UPDATE jobs SET
+           salary_min      = COALESCE(salary_min, ?),
+           salary_max      = COALESCE(salary_max, ?),
+           salary_currency = COALESCE(salary_currency, ?),
+           salary_period   = COALESCE(salary_period, ?)
+         WHERE id = ?`
+      )
+      .bind(salary_min, salary_max, salary_currency, salary_period, id)
   );
   const CHUNK = 500;
   for (let i = 0; i < stmts.length; i += CHUNK) {

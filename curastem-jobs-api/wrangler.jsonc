@@ -46,6 +46,9 @@
   // Cloudflare Browser Rendering binding — used by the "browser" source type
   // to scrape company career pages that use client-side-only job widgets.
   // Free tier: 10 hrs/month on Workers Paid (plenty for ~30 companies/day).
+  // Omit `remote` or set `false` so `wrangler dev` uses local Chromium (often passes
+  // bot walls that block Cloudflare's remote browser egress). Set `remote: true` if you
+  // need to match production Browser Rendering behavior exactly.
   "browser": {
     "binding": "BROWSER"
   },

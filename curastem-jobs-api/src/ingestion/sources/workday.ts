@@ -155,7 +155,7 @@ function findJobPostingDescriptionLd(obj: unknown): string | null {
 }
 
 /** Extract `description` from the first `application/ld+json` JobPosting block. */
-function extractSchemaJobPostingDescription(html: string): string | null {
+export function extractSchemaJobPostingDescription(html: string): string | null {
   const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {

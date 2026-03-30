@@ -69,10 +69,18 @@ function extractJobElements(parsed: XmlObject): XmlObject[] {
   return candidates;
 }
 
-function parseJobElement(el: XmlObject, companyName: string): NormalizedJob | null {
+function personioFeedOrigin(feedXmlUrl: string): string {
+  return new URL(feedXmlUrl.trim()).origin;
+}
+
+function parseJobElement(el: XmlObject, companyName: string, feedXmlUrl: string): NormalizedJob | null {
   const externalId = getTextAlt(el, "id");
   const title = getTextAlt(el, "name", "title");
-  const applyUrl = getTextAlt(el, "apply_url", "applicationUrl", "url");
+  let applyUrl = getTextAlt(el, "apply_url", "applicationUrl", "url");
+  // Many Personio XML exports omit apply links; public job pages are always /job/{id} on the feed host.
+  if (!applyUrl && externalId) {
+    applyUrl = `${personioFeedOrigin(feedXmlUrl)}/job/${encodeURIComponent(externalId)}`;
+  }
 
   if (!externalId || !title || !applyUrl) return null;
 
@@ -80,7 +88,7 @@ function parseJobElement(el: XmlObject, companyName: string): NormalizedJob | nu
   const department = getTextAlt(el, "department");
   const employmentTypeRaw = getTextAlt(el, "schedule", "employment_type", "employmentType");
   const remoteHint = getTextAlt(el, "remote", "workplace");
-  const createdAt = getTextAlt(el, "created_at", "createdAt");
+  const createdAt = getTextAlt(el, "created_at", "createdAt", "createdat");
 
   const descriptionParts: string[] = [];
   const descEl = el["jobDescriptions"];
@@ -154,7 +162,7 @@ export const personioFetcher: JobSource = {
 
     for (const el of jobElements) {
       try {
-        const job = parseJobElement(el, companyName);
+        const job = parseJobElement(el, companyName, source.base_url);
         if (job) jobs.push(job);
       } catch {
         continue;

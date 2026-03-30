@@ -13296,6 +13296,53 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
+function jobPostedTsMs(j: HomepageJob): number {
+    const t = j.posted_at ? new Date(j.posted_at).getTime() : 0
+    return Number.isFinite(t) ? t : 0
+}
+
+function jobDistKmFromRef(j: HomepageJob, refLat: number, refLng: number): number {
+    const jLat = j.location_lat ?? j.company?.headquarters?.lat ?? null
+    const jLng = j.location_lng ?? j.company?.headquarters?.lng ?? null
+    if (jLat == null || jLng == null) return Number.POSITIVE_INFINITY
+    return haversineKm(refLat, refLng, jLat, jLng)
+}
+
+function sortNearbyJobsByDistanceThenPosted(
+    jobs: HomepageJob[],
+    refLat: number,
+    refLng: number
+): HomepageJob[] {
+    return [...jobs].sort((a, b) => {
+        const da = jobDistKmFromRef(a, refLat, refLng)
+        const db = jobDistKmFromRef(b, refLat, refLng)
+        if (da !== db) return da - db
+        return jobPostedTsMs(b) - jobPostedTsMs(a)
+    })
+}
+
+/** Nearby: distance then recency. Anywhere: remote (recency), then non-remote (distance then recency). */
+function sortChipCompanyFeed(
+    nearby: HomepageJob[],
+    anywhere: HomepageJob[],
+    refLat: number,
+    refLng: number
+): HomepageJob[] {
+    const sortedNearby = sortNearbyJobsByDistanceThenPosted(nearby, refLat, refLng)
+    const remote = anywhere
+        .filter((j) => j.workplace_type === "remote")
+        .sort((a, b) => jobPostedTsMs(b) - jobPostedTsMs(a))
+    const nonRemote = anywhere
+        .filter((j) => j.workplace_type !== "remote")
+        .sort((a, b) => {
+            const da = jobDistKmFromRef(a, refLat, refLng)
+            const db = jobDistKmFromRef(b, refLat, refLng)
+            if (da !== db) return da - db
+            return jobPostedTsMs(b) - jobPostedTsMs(a)
+        })
+    return [...sortedNearby, ...remote, ...nonRemote]
+}
+
 const FIFTY_MILES_KM = 80.47
 
 // Minimal dark roadmap style — avoids needing a cloud-based map ID.
@@ -13388,7 +13435,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const jobsApiUrlRef = React.useRef(jobsApiUrl)
     React.useEffect(() => { jobsApiUrlRef.current = jobsApiUrl }, [jobsApiUrl])
     // Stable refs for filter values so chip click handler (imperative) reads current values
-    const filterDaysRef = React.useRef<"1d"|"3d"|"7d"|"30d">("3d")
+    const filterDaysRef = React.useRef<"1d"|"3d"|"7d"|"30d">("7d")
     const filterTypeRef = React.useRef("")
     const filterSeniorityRef = React.useRef("")
     // Feed always visible on both mobile and desktop — empty array until first fetch resolves
@@ -13399,7 +13446,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // Selected chip for the nearby jobs overlay
     const [selectedChipEntry, setSelectedChipEntry] = React.useState<MapCompanyEntry | null>(null)
     // Filters for the nearby jobs overlay
-    const [filterDays, setFilterDays] = React.useState<"1d"|"3d"|"7d"|"30d">("3d")
+    const [filterDays, setFilterDays] = React.useState<"1d"|"3d"|"7d"|"30d">("7d")
     const [filterType, setFilterType] = React.useState("")
     const [filterSeniority, setFilterSeniority] = React.useState("")
     const [filterDaysOpen, setFilterDaysOpen] = React.useState(false)
@@ -13544,6 +13591,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 if (cancelled) return
                 if (typeof lat === "number" && typeof lng === "number" && !isNaN(lat) && !isNaN(lng)) {
                     setUserLoc({ lat, lng })
+                    setAtPreciseLocation(true)
                 }
             })
             .catch(() => {})
@@ -13685,7 +13733,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     React.useEffect(() => {
         if (!userLoc || selectedChipEntry) return
         const daysMap: Record<string, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }
-        const sinceTs = Math.floor(Date.now() / 1000) - (daysMap[filterDays] ?? 3) * 24 * 60 * 60
+        const sinceTs = Math.floor(Date.now() / 1000) - (daysMap[filterDays] ?? 7) * 24 * 60 * 60
         setSelectedJobs([])
         setOverlayNextCursor(null)
         overlayFetchCoordsRef.current = userLoc
@@ -13705,8 +13753,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             .then((r) => (r.ok ? r.json() : { data: [] }))
             .then(({ data }: { data: HomepageJob[] }) => {
                 const jobs = Array.isArray(data) ? data : []
-                setSelectedJobs(jobs)
-                setOverlayNextCursor(jobs.length >= 30 ? "more" : null)
+                const sorted = sortNearbyJobsByDistanceThenPosted(jobs, userLoc.lat, userLoc.lng)
+                setSelectedJobs(sorted)
+                setOverlayNextCursor(sorted.length >= 30 ? "more" : null)
                 setIsLoadingOverlay(false)
             })
             .catch(() => { setSelectedJobs([]); setIsLoadingOverlay(false) })
@@ -13754,7 +13803,6 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const span = document.createElement("span")
             span.textContent = String(entry.job_count)
             span.style.cssText = "font-size:14px;font-weight:600;color:#000;line-height:21px;"
-            span.dataset.chipSlug = entry.company_slug
             chip.appendChild(span)
             return chip
         }
@@ -13809,16 +13857,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         const nearby: HomepageJob[] = Array.isArray(nearbyRes.data) ? nearbyRes.data : []
                         const all: HomepageJob[] = Array.isArray(allRes.data) ? allRes.data : []
                         const nearbyIds = new Set(nearby.map((j) => j.id))
-                        // Nearby first, then any remaining global jobs not already shown
-                        const combined = [...nearby, ...all.filter((j) => !nearbyIds.has(j.id))]
+                        const anywhere = all.filter((j) => !nearbyIds.has(j.id))
+                        const combined = sortChipCompanyFeed(nearby, anywhere, chipLat, chipLng)
                         setNearbyJobCount(nearby.length)
                         setSelectedJobs(combined)
                         setOverlayNextCursor(null)
-                        // Update the chip's displayed count to match the real loaded total
-                        const realCount = combined.length
-                        document.querySelectorAll<HTMLSpanElement>(
-                            `[data-chip-slug="${entry.company_slug}"]`
-                        ).forEach((span) => { span.textContent = String(realCount) })
                     })
                     .catch(() => { setSelectedJobs([]); setNearbyJobCount(null) })
             })
@@ -14322,8 +14365,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 { value: "", label: "All types" },
                                 { value: "full_time", label: "Full-time" },
                                 { value: "part_time", label: "Part-time" },
-                                { value: "contract", label: "Contract" },
-                                { value: "temporary", label: "Temporary" },
+                                { value: "contract,temporary", label: "Contract" },
                             ], filterType, (v) => { setFilterType(v); setFilterTypeOpen(false) })
                             return null
                         })()}
@@ -14560,7 +14602,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         setFilterDropdownPos(null)
                                     }}
                                     style={{
-                                        overflowY: (selectedChipEntry && nearbyJobCount === null) ? "hidden" : "auto",
+                                        overflowY: "auto",
                                         overflowX: "hidden",
                                         padding: isMobile ? "10px 12px 12px" : "16px 16px 16px",
                                         display: "flex",
@@ -14621,7 +14663,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         { value: "7d", label: "Past 7 days" },
                                         { value: "30d", label: "Past 30 days" },
                                     ]
-                                    const daysLabel = daysOpts.find((o) => o.value === filterDays)?.label ?? "Past 3 days"
+                                    const daysLabel = daysOpts.find((o) => o.value === filterDays)?.label ?? "Past 7 days"
                                     const seniorityLabelMap: Record<string, string> = {
                                         "internship": "Intern",
                                         "entry,new_grad": "Entry level",
@@ -14633,7 +14675,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         ? (seniorityLabelMap[filterSeniority] ?? filterSeniority)
                                         : "Experience"
                                     const typeLabel = filterType
-                                        ? (filterType === "full_time" ? "Full-time" : filterType === "part_time" ? "Part-time" : filterType.charAt(0).toUpperCase() + filterType.slice(1))
+                                        ? (filterType === "full_time"
+                                            ? "Full-time"
+                                            : filterType === "part_time"
+                                              ? "Part-time"
+                                              : filterType === "contract,temporary"
+                                                ? "Contract"
+                                                : filterType.charAt(0).toUpperCase() + filterType.slice(1))
                                         : "Type"
                                     const chevron = (
                                         <svg width="9" height="6" viewBox="0 0 10 6" fill="none">
@@ -14746,8 +14794,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                         <option value="">All types</option>
                                                         <option value="full_time">Full-time</option>
                                                         <option value="part_time">Part-time</option>
-                                                        <option value="contract">Contract</option>
-                                                        <option value="temporary">Temporary</option>
+                                                        <option value="contract,temporary">Contract</option>
                                                     </select>
                                                 </div>
                                             ) : (

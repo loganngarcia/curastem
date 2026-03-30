@@ -44,7 +44,10 @@ import { eightfoldFetcher } from "./sources/eightfold.ts";
 import { uberSitesFetcher } from "./sources/uber_sites.ts";
 import { talentbrewFetcher } from "./sources/talentbrew.ts";
 import { jibeFetcher } from "./sources/jibe.ts";
+import { shopifyCareersFetcher } from "./sources/shopify_careers.ts";
 import { activateCareersFetcher } from "./sources/activate_careers.ts";
+import { avatureFetcher } from "./sources/avature.ts";
+import { servicenowSeoFetcher } from "./sources/servicenow_seo.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -79,7 +82,10 @@ const REGISTRY: Record<SourceType, JobSource> = {
   uber_sites: uberSitesFetcher,
   talentbrew: talentbrewFetcher,
   jibe: jibeFetcher,
+  shopify_careers: shopifyCareersFetcher,
   activate_careers: activateCareersFetcher,
+  avature: avatureFetcher,
+  servicenow_seo: servicenowSeoFetcher,
 };
 
 /**
@@ -155,8 +161,14 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   uber_sites: 90,
   // iCIMS Jibe — employer-branded board; full descriptions in API
   jibe: 88,
+  // Shopify careers — SSR HTML + per-job Ashby payload (same trust as employer-direct)
+  shopify_careers: 82,
   // Oracle Activate + Taleo apply — structured list + HTML detail
   activate_careers: 82,
+  // Avature RSS — structured feed; detail pages often blocked by WAF for server-side clients
+  avature: 76,
+  // ServiceNow SEO sitemap + SSR meta on job pages (employer’s own portal)
+  servicenow_seo: 78,
 };
 
 export function getSourcePriority(sourceType: string): number {

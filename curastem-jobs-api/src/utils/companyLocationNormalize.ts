@@ -128,6 +128,16 @@ function parseUsRtxSiteCode(t: string): string | null {
 }
 
 /**
+ * New Zealand Workday site codes: NZ-CAN-CHRISTCHURCH-115-1 ~ … (CAN = Canterbury region code).
+ */
+function parseNzWorkdaySite(t: string): string | null {
+  const head = t.split("~")[0].trim();
+  const m = head.match(/^NZ-[A-Z]{2,4}-([A-Za-z]+)-\d+/i);
+  if (!m) return null;
+  return `${titleCaseCity(m[1])}, New Zealand`;
+}
+
+/**
  * Philippines site codes: PH-BTG-TANAUAN CITY-BQ4 ~ … — city tokens are in the hyphen chain.
  */
 function parsePhRtxSite(t: string): string | null {
@@ -214,9 +224,36 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
   const usaSp = t.match(/^USA-([A-Z]{2})\s+([A-Za-z]+)\b/i);
   if (usaSp) return `${titleCaseCity(usaSp[2])}, ${usaSp[1].toUpperCase()}`;
 
+  // Workday / Danaher / Leica: "USA - Washington DC - Multiple-OpCo", "USA - Deer Park - Leica Biosystems"
+  const usaPlaceOrg = t.match(/^USA\s*-\s*(.+?)\s*-\s*(.+)$/i);
+  if (usaPlaceOrg) {
+    const place = usaPlaceOrg[1].trim();
+    const org = usaPlaceOrg[2].trim();
+    if (/^washington\s+dc$/i.test(place)) return "Washington, DC";
+    // Leica Biosystems HQ / lab — Long Island (not TX Deer Park)
+    if (/^deer\s+park$/i.test(place) && /biosystems/i.test(org)) return "Deer Park, NY";
+    return `${titleCaseCity(place)}, USA`;
+  }
+
+  // Leica / Singapore ISO: "SGP - Singapore - Leica Microsystems"
+  const sgpPlaceOrg = t.match(/^SGP\s*-\s*(.+?)\s*-\s*(.+)$/i);
+  if (sgpPlaceOrg) {
+    const city = titleCaseCity(sgpPlaceOrg[1].trim());
+    return `${city}, Singapore`;
+  }
+
+  // Sysco / Freshpoint (ATS — regional DC labels; Victoria = Sysco Canada on Vancouver Island)
+  if (/^Freshpoint\s+Dallas$/i.test(t)) return "Dallas, TX";
+  if (/^Sysco\s+Knoxville\s*-\s*Kingsport$/i.test(t)) return "Knoxville, TN";
+  if (/^Sysco\s+Montana$/i.test(t)) return "Montana, USA";
+  if (/^Sysco\s+Long\s+Island\s*-\s*Brooklyn\s+Yard$/i.test(t)) return "Brooklyn, NY";
+  if (/^Sysco\s+Poland$/i.test(t)) return "Poland";
+  if (/^Sysco\s+Hawaii\s*-\s*Oahu$/i.test(t)) return "Honolulu, HI";
+  if (/^Sysco\s+Victoria$/i.test(t)) return "Victoria, BC";
+
   // UK - London (Expedia, etc.)
   const ukDash = t.match(/^UK\s*-\s*(.+)$/i);
-  if (ukDash) return `${titleCaseCity(ukDash[1].trim())}, UK`;
+  if (ukDash) return `${titleCaseCity(ukDash[1].trim())}, United Kingdom`;
 
   // LinkedIn regional marketing names (D1: SF Bay Area, Greater Seattle, …)
   const regionKey = t.trim().toLowerCase();
@@ -240,7 +277,7 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
 
   // GB, London / GB, Swindon → City, UK (city already in string)
   const gbComma = t.match(/^GB,\s*(.+)$/i);
-  if (gbComma) return `${titleCaseCity(gbComma[1].trim())}, UK`;
+  if (gbComma) return `${titleCaseCity(gbComma[1].trim())}, United Kingdom`;
 
   // CA, ON / CA, BC (Amazon Canada — country CA conflicts with California; here "CA, XY" is Canada+province)
   const canCa = t.match(/^CA,\s*([A-Z]{2})\s*$/i);
@@ -270,7 +307,7 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
   // Pulse / UK: London, Greater London → London, UK
   if (/^(.+),\s*Greater London$/i.test(t)) {
     const city = t.replace(/,\s*Greater London$/i, "").trim();
-    return `${titleCaseCity(city)}, UK`;
+    return `${titleCaseCity(city)}, United Kingdom`;
   }
 
   // Leading store / internal numeric prefix (e.g. DaVita) — keep text after code, not a new city
@@ -316,6 +353,10 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
   // PH-BTG-TANAUAN CITY-BQ4 ~ …
   const phR = parsePhRtxSite(t);
   if (phR) return phR;
+
+  // NZ-CAN-CHRISTCHURCH-115-1 ~ … (before US- patterns)
+  const nzW = parseNzWorkdaySite(t);
+  if (nzW) return nzW;
 
   // US-CT-EAST HARTFORD-ETC ~ … (multi-word cities)
   const rtxMulti = parseUsRtxSiteCode(t);
@@ -415,6 +456,9 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
 
   // Indian state only (no city in source)
   if (/^Karnataka$/i.test(t.trim())) return "Karnataka, India";
+
+  // CVS / Longs internal store code already stripped above — entity string is state-level
+  if (/^Longs\s+Drug\s+Stores\s+California\b/i.test(t.trim())) return "California, USA";
 
   // Region strings where a real placename appears in the label
   if (/^dubai emirate$/i.test(t.trim())) return "Dubai, United Arab Emirates";

@@ -17,6 +17,9 @@
  *
  * Response includes: title, location, employment type, workplace type,
  * description HTML, application URL, and posting date.
+ *
+ * Older tenants use `{ postings: [...] }`; newer Pinpoint APIs return `{ data: [...] }` with
+ * `url` / `path` instead of `apply_path`.
  */
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
@@ -40,16 +43,57 @@ interface PinpointPosting {
   apply_path: string | null;        // relative path, e.g. "/postings/123"
 }
 
+/** Newer `postings.json` shape (`data` array). */
+interface PinpointPostingV2 {
+  id: string | number;
+  title: string;
+  /** New API may return a structured object instead of a plain string. */
+  location: string | PinpointLocationStruct | null;
+  employment_type: string | null;
+  employment_type_text?: string | null;
+  path?: string | null;
+  url?: string | null;
+  description: string | null;
+  published_at?: string | null;
+  remote?: boolean | null;
+  remote_type?: string | null;
+  workplace_type?: string | null;
+  workplace_type_text?: string | null;
+}
+
+interface PinpointLocationStruct {
+  city?: string | null;
+  name?: string | null;
+  province?: string | null;
+  postal_code?: string | null;
+}
+
+function locationToString(
+  loc: string | PinpointLocationStruct | null | undefined
+): string | null {
+  if (loc == null) return null;
+  if (typeof loc === "string") return loc;
+  const parts = [loc.city, loc.province, loc.name].filter((x): x is string => Boolean(x && String(x).trim()));
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
 interface PinpointResponse {
-  postings: PinpointPosting[];
+  postings?: PinpointPosting[];
+  data?: PinpointPostingV2[];
 }
 
 /**
  * Construct the full application URL from the company handle and the relative apply path.
  */
-function buildApplyUrl(handle: string, posting: PinpointPosting): string {
+function buildApplyUrl(handle: string, posting: PinpointPosting | PinpointPostingV2): string {
   const base = `https://${handle}.pinpointhq.com`;
-  if (posting.apply_path) return `${base}${posting.apply_path}`;
+  if ("url" in posting && posting.url && /^https?:\/\//i.test(posting.url)) {
+    return posting.url;
+  }
+  const path = ("path" in posting && posting.path) ? posting.path
+    : ("apply_path" in posting && posting.apply_path) ? posting.apply_path
+    : null;
+  if (path) return `${base}${path.startsWith("/") ? path : `/${path}`}`;
   return `${base}/postings/${posting.id}`;
 }
 
@@ -69,19 +113,37 @@ export const pinpointFetcher: JobSource = {
     }
 
     const data = (await res.json()) as PinpointResponse;
+    const rows: Array<PinpointPosting | PinpointPostingV2> =
+      data.postings ?? data.data ?? [];
     const jobs: NormalizedJob[] = [];
 
-    for (const posting of data.postings ?? []) {
+    for (const posting of rows) {
       try {
-        const workplaceHint = posting.remote_type ?? (posting.remote ? "remote" : null) ?? posting.location;
+        const remoteType = "remote_type" in posting ? posting.remote_type : null;
+        const workplaceType = "workplace_type" in posting ? posting.workplace_type : null;
+        const workplaceTypeText = "workplace_type_text" in posting ? posting.workplace_type_text : null;
+        const remote = "remote" in posting ? posting.remote : null;
+        const isRemote = remote ?? false;
+        const workplaceHint =
+          remoteType
+          ?? workplaceType
+          ?? workplaceTypeText
+          ?? (isRemote ? "remote" : null)
+          ?? locationToString(posting.location);
+
+        const employmentRaw =
+          posting.employment_type
+          ?? ("employment_type_text" in posting ? posting.employment_type_text : null);
+
         const applyUrl = buildApplyUrl(source.company_handle, posting);
+        const locStr = locationToString(posting.location);
 
         jobs.push({
           external_id: String(posting.id),
           title: posting.title,
-          location: normalizeLocation(posting.location),
-          employment_type: normalizeEmploymentType(posting.employment_type),
-          workplace_type: normalizeWorkplaceType(workplaceHint, posting.location),
+          location: normalizeLocation(locStr),
+          employment_type: normalizeEmploymentType(employmentRaw),
+          workplace_type: normalizeWorkplaceType(workplaceHint, locStr),
           apply_url: applyUrl,
           source_url: applyUrl,
           description_raw: posting.description ?? null,

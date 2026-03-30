@@ -16,8 +16,12 @@
  */
 
 import type { SourceType } from "../types.ts";
+import { buildJobId } from "../utils/normalize.ts";
+import { CRUNCHBASE_SOURCE_ID, CRUNCHBASE_SOURCE_LEGACY_ID } from "./sourceIds.ts";
 
-interface SeedSource {
+export { CRUNCHBASE_SOURCE_ID, CRUNCHBASE_SOURCE_LEGACY_ID } from "./sourceIds.ts";
+
+export interface SeedSource {
   id: string;
   name: string;
   source_type: SourceType;
@@ -35,7 +39,8 @@ interface SeedSource {
  * SmartRecruiters, Workable widget, Recruitee, Pinpoint, Personio XML, etc.).
  * Do not assume a vendor from the careers URL alone.
  */
-const SEED_SOURCES: SeedSource[] = [
+/** Exported for scripts (e.g. verify-seed-sources-job-count) — keep in sync with seedSources(). */
+export const SEED_SOURCES: SeedSource[] = [
   // ─── Greenhouse ───────────────────────────────────────────────────────
   // Public board API: https://boards-api.greenhouse.io/v1/boards/{handle}/jobs
   { id: "gh-stripe",    name: "Stripe (Greenhouse)",    source_type: "greenhouse", company_handle: "stripe",    base_url: "https://boards-api.greenhouse.io/v1/boards/stripe/jobs" },
@@ -142,7 +147,16 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "jibe-dollargeneral", name: "Dollar General (iCIMS Jibe)", source_type: "jibe", company_handle: "dollar-general", base_url: "https://careers.dollargeneral.com" },
   { id: "jibe-jcpenney", name: "JCPenney (iCIMS Jibe)", source_type: "jibe", company_handle: "jcpenney", base_url: "https://jobs.jcp.com" },
   { id: "jibe-sheetz", name: "Sheetz (iCIMS Jibe)", source_type: "jibe", company_handle: "sheetz", base_url: "https://jobs.sheetz.com" },
+  // H-E-B: `/api/jobs` can return `totalCount: 0` while the SPA shows a maintenance banner; listings may also flow through iCIMS (`careers-heb.icims.com`). Revisit if the public API stays empty.
   { id: "jibe-heb", name: "H-E-B (iCIMS Jibe)", source_type: "jibe", company_handle: "heb", base_url: "https://careers.heb.com" },
+  // PepsiCo — iCIMS Jibe (not Workday; wd-pepsico CXS 422). Public JSON at /api/jobs; job pages under /main/jobs/{req_id}.
+  { id: "jibe-pepsico", name: "PepsiCo (iCIMS Jibe)", source_type: "jibe", company_handle: "pepsico", base_url: "https://www.pepsicojobs.com" },
+  // United — Phenom (not Workday). Sitemap lists /job/{id}/… URLs; phApp.ddo on posting pages.
+  { id: "ph-united", name: "United Airlines (Phenom)", source_type: "phenom", company_handle: "unitedairlines", base_url: "https://careers.united.com/us/en/" },
+  // Delta — Avature `SearchJobs/feed/` (recent postings; sufficient for ongoing ingest without backfill)
+  { id: "av-delta", name: "Delta Air Lines (Avature RSS)", source_type: "avature", company_handle: "delta", base_url: "https://delta.avature.net/careers/SearchJobs/feed/" },
+  // Best Buy — ServiceNow SEO sitemap API (see jobs.bestbuy.com robots.txt); per-job SSR meta
+  { id: "sn-bestbuy", name: "Best Buy (ServiceNow SEO)", source_type: "servicenow_seo", company_handle: "bestbuy", base_url: "https://bestbuy.service-now.com/api/93622/seo/sitemap" },
   { id: "gh-lyft",    name: "Lyft (Greenhouse)",    source_type: "greenhouse", company_handle: "lyft",         base_url: "https://boards-api.greenhouse.io/v1/boards/lyft/jobs" },
   { id: "gh-doordashusa", name: "DoorDash (Greenhouse)", source_type: "greenhouse", company_handle: "doordashusa", base_url: "https://boards-api.greenhouse.io/v1/boards/doordashusa/jobs" },
   { id: "gh-reddit",  name: "Reddit (Greenhouse)",  source_type: "greenhouse", company_handle: "reddit",       base_url: "https://boards-api.greenhouse.io/v1/boards/reddit/jobs" },
@@ -555,7 +569,8 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "ab-atticus",    name: "Atticus (Ashby)",    source_type: "ashby", company_handle: "atticus",    base_url: "https://api.ashbyhq.com/posting-api/job-board/atticus?includeCompensation=true" },
   { id: "ab-avida",       name: "AVIDA (Ashby)",      source_type: "ashby", company_handle: "avida",      base_url: "https://api.ashbyhq.com/posting-api/job-board/avida?includeCompensation=true" },
   // Public Ashby board — may be empty between hiring waves (still the canonical listing endpoint).
-  { id: "ab-crunchbase",  name: "Crunchbase (Ashby)", source_type: "ashby", company_handle: "crunchbase", base_url: "https://api.ashbyhq.com/posting-api/job-board/crunchbase?includeCompensation=true" },
+  // Crunchbase moved from Ashby to Teamtailor (NA); public RSS includes full HTML descriptions.
+  { id: CRUNCHBASE_SOURCE_ID, name: "Crunchbase (RSS)", source_type: "rss", company_handle: "crunchbase", base_url: "https://crunchbase.na.teamtailor.com/jobs.rss" },
 
   // ─── Lever ────────────────────────────────────────────────────────────
   // Public posting API: https://api.lever.co/v0/postings/{handle} — EU-hosted boards use api.eu.lever.co
@@ -585,12 +600,12 @@ const SEED_SOURCES: SeedSource[] = [
   // ─── Workable ─────────────────────────────────────────────────────────
   // Public widget API: https://apply.workable.com/api/v1/widget/accounts/{handle}
   { id: "wb-pitch",        name: "Pitch (Workable)",          source_type: "workable",  company_handle: "pitch-software", base_url: "https://apply.workable.com/api/v1/widget/accounts/pitch-software" },
-  { id: "wb-shopify",     name: "Shopify",                  source_type: "workable", company_handle: "shopify",     base_url: "https://apply.workable.com/api/v1/widget/accounts/shopify" },
-  { id: "wb-vimeo",       name: "Vimeo",                    source_type: "workable", company_handle: "vimeo",       base_url: "https://apply.workable.com/api/v1/widget/accounts/vimeo" },
+  { id: "wb-shopify",     name: "Shopify",                  source_type: "shopify_careers", company_handle: "shopify",     base_url: "https://www.shopify.com/careers" },
   { id: "wb-untuckit",    name: "UNTUCKit",         source_type: "workable", company_handle: "untuckit",      base_url: "https://apply.workable.com/api/v1/widget/accounts/untuckit" },
-  { id: "wb-chipotle",    name: "Chipotle",                  source_type: "workable", company_handle: "chipotle",       base_url: "https://apply.workable.com/api/v1/widget/accounts/chipotle" },
-  { id: "wb-kindercare",  name: "KinderCare",                source_type: "workable", company_handle: "kindercare",      base_url: "https://apply.workable.com/api/v1/widget/accounts/kindercare" },
-  { id: "wb-insperity",   name: "Insperity",                 source_type: "workable", company_handle: "insperity",       base_url: "https://apply.workable.com/api/v1/widget/accounts/insperity" },
+  { id: "wb-chipotle",    name: "Chipotle",                 source_type: "talentbrew", company_handle: "chipotle",       base_url: "https://jobs.chipotle.com/search-jobs" },
+  // KinderCare: Workable widget is empty; public board is Phenom (kcecareers.com).
+  { id: "wb-kindercare",  name: "KinderCare (Phenom)",      source_type: "phenom", company_handle: "kindercare",      base_url: "https://www.kcecareers.com/us/en/" },
+  { id: "wb-insperity",   name: "Insperity",                 source_type: "workday", company_handle: "insperity",       base_url: "https://insperity.wd12.myworkdayjobs.com/wday/cxs/insperity/NSP/jobs" },
   { id: "wb-huggingface", name: "Hugging Face (Workable)",   source_type: "workable", company_handle: "huggingface",     base_url: "https://apply.workable.com/api/v1/widget/accounts/huggingface" },
   { id: "wb-curology",    name: "Curology (Workable)",       source_type: "workable", company_handle: "curology",        base_url: "https://apply.workable.com/api/v1/widget/accounts/curology" },
   { id: "wb-bask-health", name: "Bask Health (Workable)",   source_type: "workable", company_handle: "bask-health-1",   base_url: "https://apply.workable.com/api/v1/widget/accounts/bask-health-1" },
@@ -794,25 +809,9 @@ const SEED_SOURCES: SeedSource[] = [
   { id: "wd-umg",         name: "Universal Music Group",      source_type: "workday", company_handle: "umusic",          base_url: "https://umusic.wd5.myworkdayjobs.com/wday/cxs/umusic/UMGUS/jobs" },
   // wd-hp confirmed working (200 from CXS API, no WAF protection)
   { id: "wd-hp",          name: "HP Inc",                     source_type: "workday", company_handle: "hp",              base_url: "https://hp.wd5.myworkdayjobs.com/wday/cxs/hp/ExternalCareerSite/jobs" },
-  // TODO: find correct public Workday site names for these — their myworkdayjobs.com
-  // tenants exist but return 500 at /en-US/{site} (internal-only or wrong site name).
-  // Disabled in DISABLED_SOURCE_IDS below until correct site names are confirmed.
-  // { id: "wd-microsoft",   name: "Microsoft",    source_type: "workday", company_handle: "microsoft",     base_url: "https://microsoft.wd1.myworkdayjobs.com/wday/cxs/microsoft/Microsoft_Careers/jobs" },
-  // { id: "wd-goldmansachs",name: "Goldman Sachs",source_type: "workday", company_handle: "gs",            base_url: "https://gs.wd1.myworkdayjobs.com/wday/cxs/gs/GoldmanSachs/jobs" },
-  // { id: "wd-morganstanley",name:"Morgan Stanley",source_type: "workday", company_handle: "morganstanley",base_url: "https://morganstanley.wd1.myworkdayjobs.com/wday/cxs/morganstanley/Careers/jobs" },
-  // { id: "wd-delta",       name: "Delta Air Lines",source_type: "workday", company_handle: "delta",       base_url: "https://delta.wd1.myworkdayjobs.com/wday/cxs/delta/DeltaCareerSite/jobs" },
-  // { id: "wd-united",      name: "United Airlines",source_type: "workday", company_handle: "united",      base_url: "https://united.wd5.myworkdayjobs.com/wday/cxs/united/United_Airlines/jobs" },
-  // { id: "wd-bestbuy",     name: "Best Buy",       source_type: "workday", company_handle: "bestbuy",     base_url: "https://bestbuy.wd5.myworkdayjobs.com/wday/cxs/bestbuy/BestBuyCareers/jobs" },
-  // { id: "wd-pepsico",     name: "PepsiCo",        source_type: "workday", company_handle: "pepsico",     base_url: "https://pepsico.wd5.myworkdayjobs.com/wday/cxs/pepsico/PepsiCoJobs/jobs" },
-  // { id: "wd-amex",        name: "American Express",source_type: "workday", company_handle: "aexp",       base_url: "https://aexp.wd1.myworkdayjobs.com/wday/cxs/aexp/AEXP/jobs" },
-  // { id: "wd-volvogroup",  name: "Volvo Group",    source_type: "workday", company_handle: "volvogroup",  base_url: "https://volvogroup.wd3.myworkdayjobs.com/wday/cxs/volvogroup/Volvo_Group_Global/jobs" },
-  // { id: "wd-progressive", name: "Progressive",    source_type: "workday", company_handle: "progressive", base_url: "https://progressive.wd5.myworkdayjobs.com/wday/cxs/progressive/ProgCareers/jobs" },
-  // { id: "wd-adp",         name: "ADP",            source_type: "workday", company_handle: "adp",         base_url: "https://adp.wd5.myworkdayjobs.com/wday/cxs/adp/ADPCareers/jobs" },
-  // { id: "wd-qualcomm",    name: "Qualcomm",       source_type: "workday", company_handle: "qualcomm",    base_url: "https://qualcomm.wd5.myworkdayjobs.com/wday/cxs/qualcomm/External/jobs" },
-  // { id: "wd-ibm",         name: "IBM",            source_type: "workday", company_handle: "ibm",         base_url: "https://ibm.wd3.myworkdayjobs.com/wday/cxs/ibm/External/jobs" },
-  // { id: "wd-meta",        name: "Meta",           source_type: "workday", company_handle: "meta",        base_url: "https://meta.wd5.myworkdayjobs.com/wday/cxs/meta/Meta_Careers/jobs" },
-  // { id: "wd-bofa",        name: "Bank of America",source_type: "workday", company_handle: "bankofamerica",base_url: "https://bankofamerica.wd1.myworkdayjobs.com/wday/cxs/bankofamerica/BankOfAmerica/jobs" },
-  // { id: "wd-fedex",       name: "FedEx",          source_type: "workday", company_handle: "fedexcareers", base_url: "https://fedexcareers.wd1.myworkdayjobs.com/wday/cxs/fedexcareers/FedExCareers/jobs" },
+  // Stale Workday URL templates were removed. Replacements include ef-microsoft, av-delta, ph-united,
+  // sn-bestbuy, jibe-pepsico, mc-meta, seedSources() CXS fixes for wd-bofa / wd-fedex / wd-morganstanley,
+  // and br-* rows where Workday is not the chosen path. wd-qualcomm stays disabled (CXS returns no postings).
 
   // ─── Proprietary scrapers (Amazon & Apple) ────────────────────────────
   // Custom first-party fetchers — see ingestion/sources/amazon.ts
@@ -1204,14 +1203,6 @@ const SEED_SOURCES: SeedSource[] = [
   // for the same board — equal source priority would insert duplicate job rows.
   { id: "cn-a16z-portfolio", name: "a16z portfolio (Consider)", source_type: "consider", company_handle: "a16z-portfolio", base_url: "https://jobs.a16z.com/companies" }, // fetch_interval_hours=12 — see FETCH_INTERVALS below
 
-  // ─── Sector job boards (RSS) ─────────────────────────────────────────────
-  // Higher education — HigherEdJobs has public RSS feeds per category
-  // Format: https://www.higheredjobs.com/rss/categoryFeed.cfm?catID={id}
-  // Note: HigherEdJobs may use Incapsula; if fetches fail, try from Workers.
-  { id: "rss-he-main",     name: "HigherEdJobs (Higher Education)", source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=68" },
-  { id: "rss-he-faculty",  name: "HigherEdJobs (Faculty)",          source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=26" },
-  { id: "rss-he-admin",    name: "HigherEdJobs (Administrative)",   source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=24" },
-  { id: "rss-he-it",       name: "HigherEdJobs (IT)",               source_type: "rss", company_handle: "higheredjobs", base_url: "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=160" },
   // SAP SuccessFactors career site — `sitemap.xml` is a Google Jobs RSS with `g:location`, `g:id`, `g:employer`.
   { id: "rss-foundever",   name: "Foundever (RSS)",                 source_type: "rss", company_handle: "foundever",    base_url: "https://jobs.foundever.com/sitemap.xml" },
 
@@ -1285,16 +1276,9 @@ const SEED_SOURCES: SeedSource[] = [
   // scraping is possible using Cloudflare crawl but currently too expensive to run at scale.
   // Adding them is on the product roadmap once rendering capacity increases.
   // { id: "br-gitguardian", name: "GitGuardian (Browser)",    source_type: "browser", company_handle: "gitguardian", base_url: "https://careers.gitguardian.com/jobs" },
-  // { id: "br-ada",         name: "Ada (Browser)",            source_type: "browser", company_handle: "ada",         base_url: "https://www.ada.cx/careers" },
-  // { id: "br-hippocratic", name: "Hippocratic AI (Browser)", source_type: "browser", company_handle: "hippocratic", base_url: "https://www.hippocraticai.com/careers" },
   // { id: "br-ford",        name: "Ford (Browser)",            source_type: "browser", company_handle: "ford",            base_url: "https://www.careers.ford.com/en/search-results" },
   // { id: "br-aa",          name: "American Airlines (Browser)",source_type: "browser", company_handle: "americanairlines",base_url: "https://jobs.aa.com" },
   // { id: "br-hyatt",       name: "Hyatt (Browser)",           source_type: "browser", company_handle: "hyatt",           base_url: "https://careers.hyatt.com/jobs" },
-  // { id: "br-nordstrom",   name: "Nordstrom (Browser)",       source_type: "browser", company_handle: "nordstrom",       base_url: "https://careers.nordstrom.com/jobs" },
-  // { id: "br-lowes",       name: "Lowe's (Browser)",          source_type: "browser", company_handle: "lowes",           base_url: "https://talent.lowes.com/us/en" },
-  // { id: "br-macys",       name: "Macy's (Browser)",          source_type: "browser", company_handle: "macys",           base_url: "https://jobs.macys.com/search-jobs" },
-  // { id: "br-rossstores",  name: "Ross Stores (Browser)",     source_type: "browser", company_handle: "rossstores",      base_url: "https://jobs.rossstores.com/search-jobs" },
-  // { id: "br-dollargeneral",name:"Dollar General (Browser)",  source_type: "browser", company_handle: "dollargeneral",   base_url: "https://careers.dollargeneral.com/jobs" },
   // { id: "br-gxo",         name: "GXO Logistics (Browser)",    source_type: "browser", company_handle: "gxo",             base_url: "https://www.gxo.com/careers/job-search" },
   // { id: "br-merck",       name: "Merck (Browser)",            source_type: "browser", company_handle: "merck",           base_url: "https://jobs.merck.com/us/en/search-results" },
   // { id: "br-bd",          name: "Becton Dickinson (Browser)", source_type: "browser", company_handle: "bd",              base_url: "https://jobs.bd.com/search-jobs" },
@@ -1344,7 +1328,6 @@ const SEED_SOURCES: SeedSource[] = [
   // { id: "br-abercrombie", name: "Abercrombie & Fitch (Browser)",source_type: "browser", company_handle: "abercrombie",   base_url: "https://corporate.abercrombie.com/careers/job-search" },
   // { id: "br-aeo",         name: "American Eagle (Browser)",   source_type: "browser", company_handle: "aeo",             base_url: "https://ae.com/us/en/careers/job-search" },
   // { id: "br-victoriassecret",name:"Victoria's Secret (Browser)",source_type: "browser", company_handle: "victoriassecret",base_url: "https://careers.victoriassecret.com/search-jobs" },
-  // { id: "br-dicks",       name: "Dick's Sporting Goods (Browser)",source_type: "browser", company_handle: "dickssporting",base_url: "https://www.dickssportinggoods.jobs/search-jobs" },
   // { id: "br-williamsonoma",name:"Williams-Sonoma (Browser)",  source_type: "browser", company_handle: "williamsonoma",   base_url: "https://careers.williams-sonomainc.com/search-jobs" },
   // { id: "br-darden",      name: "Darden (Browser)",           source_type: "browser", company_handle: "darden",          base_url: "https://jobs.darden.com/search-jobs" },
   // { id: "br-aramark",     name: "Aramark (Browser)",          source_type: "browser", company_handle: "aramark",         base_url: "https://careers.aramark.com/search-jobs" },
@@ -1353,7 +1336,6 @@ const SEED_SOURCES: SeedSource[] = [
   // { id: "br-yumbrands",   name: "Yum Brands (Browser)",       source_type: "browser", company_handle: "yumbrands",       base_url: "https://careers.yum.com/jobs/search" },
   // { id: "br-caesars",     name: "Caesars Entertainment (Browser)",source_type: "browser", company_handle: "caesars",     base_url: "https://careers.caesars.com/search-jobs" },
   // { id: "br-tractorsupply",name:"Tractor Supply (Browser)",   source_type: "browser", company_handle: "tractorsupply",   base_url: "https://tractorsupply.com/careers/search-jobs" },
-  // { id: "br-autozone",    name: "AutoZone (Browser)",         source_type: "browser", company_handle: "autozone",        base_url: "https://careers.autozone.com/search-jobs" },
   // { id: "br-pfg",         name: "Performance Food Group (Browser)",source_type: "browser", company_handle: "pfg",        base_url: "https://pfgc.com/Careers/Job-Search" },
   // { id: "br-conduent",    name: "Conduent (Browser)",         source_type: "browser", company_handle: "conduent",        base_url: "https://careers.conduent.com/search-jobs" },
   // { id: "br-epam",        name: "EPAM Systems (Browser)",     source_type: "browser", company_handle: "epam",            base_url: "https://epam.com/careers/job-listings" },
@@ -1582,6 +1564,7 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "br-starbucks", hours: 48 },
   // ~2.6k roles + detail fetches — ease first-run cron load
   { id: "ef-microsoft", hours: 48 },
+  { id: "mc-meta", hours: 48 },
   // TalentBrew — hundreds of per-job HTML fetches per employer
   { id: "tb-schwab", hours: 12 },
   { id: "tb-pge", hours: 12 },
@@ -1600,6 +1583,10 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "jibe-jcpenney", hours: 12 },
   { id: "jibe-sheetz", hours: 12 },
   { id: "jibe-heb", hours: 12 },
+  { id: "jibe-pepsico", hours: 12 },
+  { id: "ph-united", hours: 12 },
+  { id: "av-delta", hours: 12 },
+  { id: "sn-bestbuy", hours: 24 },
   { id: "wd-dsg", hours: 48 },
   { id: "wd-meijer", hours: 48 },
   { id: "wd-nordstrom", hours: 48 },
@@ -1620,55 +1607,102 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "oc-staples", hours: 48 },
 ];
 
-/** Source IDs that consistently 404 or fail — disabled to avoid cron noise. */
+/**
+ * Legacy / broken source rows — keep disabled so cron does not hit dead endpoints.
+ *
+ * This list is **per source id**, not per company. A company often has two rows: a deprecated id
+ * (here, `enabled = 0`) and a working id in `SEED_SOURCES` that stays enabled — see
+ * `ENABLED_REPLACEMENT_SOURCE_IDS` below. Example: `wd-pepsico` is off; `jibe-pepsico` is on.
+ *
+ * wd-* rows here are wrong ATS or stale Workday CXS site names where a replacement exists.
+ */
 const DISABLED_SOURCE_IDS = [
-  "wb-taxfix",        // Workable 404; no public ATS API found
-  "gh-notion",        // Greenhouse 404; Notion uses Ashby (ab-notion)
-  "gh-linear",        // Greenhouse 404; Linear uses Ashby (ab-linear)
-  "gh-shopify",       // Greenhouse 404; careers embed Ashby (no public board slug); use br-shopify
-  "wb-papayaglobal",  // Workable 404; no public ATS API found
-  "wb-shopify",       // Workable returns empty; no working API
-  "br-augment",       // Retired; use gh-augmentcomputing (Greenhouse)
-  "br-figma",         // Browser 429; use gh-figma (Greenhouse) instead
-  "br-linear",        // Browser 429; use ab-linear (Ashby) instead
-  "br-ada",           // Browser 429; use gh-ada (Greenhouse) instead
-  "br-hippocratic",   // Browser 429; use ab-hippocratic-ai (Ashby) instead
-  "ps-n26",           // Personio 429 rate limit (temporary)
-  "br-hrc",           // Renamed to sh-hrc (SaaSHR REST); old id may still exist in D1
-  "cn-11x-ai",        // Superseded by cn-a16z-portfolio (full board; avoid duplicate consider rows)
-  // Browser sources replaced by wd-hp (confirmed working) or disabled pending site name fix
-  "br-hp",            // Replaced by wd-hp (hp.wd5 ExternalCareerSite confirmed 200)
-  "br-microsoft",     // Disabled — use ef-microsoft (Eightfold PCS on apply.careers.microsoft.com)
-  "br-goldmansachs",  // Disabled — wd-goldmansachs pending correct site name
-  "br-morganstanley", // Disabled — wd-morganstanley pending correct site name
-  "br-delta",         // Disabled — wd-delta pending correct site name
-  "br-united",        // Disabled — wd-united pending correct site name
-  "br-bestbuy",       // Disabled — wd-bestbuy pending correct site name
-  "br-pepsico",       // Disabled — wd-pepsico pending correct site name
-  "br-amex",          // Disabled — wd-amex pending correct site name
-  "br-volvogroup",    // Disabled — wd-volvogroup pending correct site name
-  "br-progressive",   // Disabled — wd-progressive pending correct site name
-  "br-adp",           // Disabled — wd-adp pending correct site name
-  "br-qualcomm",      // Disabled — wd-qualcomm pending correct site name
-  "br-ibm",           // Disabled — wd-ibm pending correct site name
-  "br-bofa",          // Disabled — wd-bofa pending correct site name
-  "br-fedex",         // Disabled — wd-fedex pending correct site name
-  "br-clay",          // clay.earth careers DOM listed nav as jobs; use ab-claylabs (Ashby) only
-  // wd-* entries that need correct site names before they can work
-  "wd-microsoft", "wd-goldmansachs", "wd-morganstanley", "wd-delta", "wd-united",
-  "wd-bestbuy", "wd-pepsico", "wd-amex", "wd-volvogroup", "wd-progressive",
-  "wd-adp", "wd-qualcomm", "wd-ibm", "wd-meta", "wd-bofa", "wd-fedex",
-  // Browser sources with no viable public API
-  "br-jpmorgan",      // Superseded by oc-jpmorgan (oracle_ce)
-  "br-kroger",        // Superseded by oc-kroger (oracle_ce)
-  "br-hilton",        // Taleo — no fetcher
-  "br-marriott",      // Oracle Cloud HCM — no fetcher
-  "br-costco",        // iCIMS — no fetcher
-  "br-google",        // Proprietary careers.google.com — no fetcher
-  "br-oracle",        // Proprietary careers.oracle.com — no fetcher
-  "br-lululemon",     // Workday 401 — private/internal board
-  "br-vimeo",         // Workday tenant exists but returns 0 public jobs
-  "br-shopify",       // Navigation timeout; no public ATS API found
+  "wb-taxfix",
+  "wb-papayaglobal",
+  "ps-n26",
+  "cn-11x-ai",
+  "br-hrc",
+  // Wrong board slug or empty API — use Ashby / Greenhouse replacement
+  "gh-notion",
+  "gh-linear",
+  "gh-shopify",
+  // Greenhouse board `method` is empty (Method Financial no longer on this public board).
+  "gh-method",
+  // Vimeo: removed from seed — no roles to ingest via public feeds we support reliably.
+  "wb-vimeo",
+  "br-augment",
+  "br-figma",
+  "br-linear",
+  "br-ada",
+  "br-hippocratic",
+  // Browser placeholders — replaced by structured ATS rows (see ENABLED_REPLACEMENT_SOURCE_IDS)
+  "br-hp",
+  "br-microsoft",
+  "br-goldmansachs",
+  "br-morganstanley",
+  "br-delta",
+  "br-united",
+  "br-bestbuy",
+  "br-pepsico",
+  "br-amex",
+  "br-volvogroup",
+  "br-progressive",
+  "br-adp",
+  "br-qualcomm",
+  "br-ibm",
+  "br-bofa",
+  "br-fedex",
+  "br-clay",
+  "br-jpmorgan",
+  "br-kroger",
+  "br-hilton",
+  "br-marriott",
+  "br-costco",
+  "br-google",
+  "br-oracle",
+  "br-lululemon",
+  "br-shopify",
+  // Stale Workday seeds (wrong employer ATS or CXS 422); Microsoft/Meta use ef-microsoft / mc-meta
+  "wd-microsoft",
+  "wd-goldmansachs",
+  "wd-delta",
+  "wd-united",
+  "wd-bestbuy",
+  "wd-pepsico",
+  "wd-amex",
+  "wd-volvogroup",
+  "wd-progressive",
+  "wd-adp",
+  "wd-ibm",
+  "wd-meta",
+  "wd-qualcomm",
+];
+
+/**
+ * Rows that must stay enabled — direct ATS replacements for ids in DISABLED_SOURCE_IDS.
+ * Applied after DISABLED_SOURCE_IDS so old D1 rows that were turned off are re-enabled on migrate.
+ */
+const ENABLED_REPLACEMENT_SOURCE_IDS = [
+  "ef-microsoft",
+  "mc-meta",
+  "jibe-pepsico",
+  "ph-united",
+  "av-delta",
+  "sn-bestbuy",
+  "wd-hp",
+  "wd-bofa",
+  "wd-fedex",
+  "wd-morganstanley",
+  "ab-notion",
+  "ab-linear",
+  "ab-hippocratic-ai",
+  "ab-claylabs",
+  "gh-figma",
+  "gh-ada",
+  "gh-augmentcomputing",
+  "oc-jpmorgan",
+  "oc-kroger",
+  "sh-hrc",
 ];
 
 /**
@@ -1701,6 +1735,29 @@ export async function seedSources(db: D1Database): Promise<void> {
     await db.prepare("UPDATE sources SET enabled = 0 WHERE id = ?").bind(id).run();
   }
 
+  // Workday CXS URLs verified 2026-03 (cookie preflight + POST …/jobs returns jobPostings; JSON-LD on job pages).
+  // company_handle left unchanged — used for logging and existing company linkage.
+  await db
+    .prepare(
+      `UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-bofa'`
+    )
+    .bind("https://ghr.wd1.myworkdayjobs.com/wday/cxs/ghr/lateral-us/jobs")
+    .run();
+  await db
+    .prepare(
+      `UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-fedex'`
+    )
+    .bind(
+      "https://fedex.wd1.myworkdayjobs.com/wday/cxs/fedex/FXE-LAC_External_Career_Site/jobs",
+    )
+    .run();
+  await db
+    .prepare(
+      `UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-morganstanley'`
+    )
+    .bind("https://ms.wd5.myworkdayjobs.com/wday/cxs/ms/External/jobs")
+    .run();
+
   // Starbucks: replace legacy browser placeholder with Eightfold PCS API (see eightfold.ts)
   await db
     .prepare(
@@ -1721,6 +1778,32 @@ export async function seedSources(db: D1Database): Promise<void> {
     .bind("Apple", "https://jobs.apple.com/en-us/search?location=united-states-USA")
     .run();
 
+  // KinderCare: Phenom at kcecareers.com (legacy rows may still say Workable).
+  await db
+    .prepare(
+      `UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wb-kindercare'`
+    )
+    .bind("KinderCare (Phenom)", "phenom", "https://www.kcecareers.com/us/en/")
+    .run();
+
+  // Drop removed sector-board source rows (delete jobs first — FK to sources).
+  const removedSectorBoardIds = [
+    "rss-he-bundle",
+    "rss-he-main",
+    "rss-he-faculty",
+    "rss-he-admin",
+    "rss-he-it",
+  ];
+  for (const id of removedSectorBoardIds) {
+    await db.prepare("DELETE FROM jobs WHERE source_id = ?").bind(id).run();
+    await db.prepare("DELETE FROM sources WHERE id = ?").bind(id).run();
+  }
+
+  // Re-enable canonical ATS rows (replacements for ids in DISABLED_SOURCE_IDS).
+  for (const id of ENABLED_REPLACEMENT_SOURCE_IDS) {
+    await db.prepare("UPDATE sources SET enabled = 1, last_error = NULL WHERE id = ?").bind(id).run();
+  }
+
   // Meta: browser source superseded by metacareers (sitemap + JSON-LD)
   await db.prepare("UPDATE sources SET enabled = 0 WHERE id = 'br-meta'").run();
 
@@ -1731,4 +1814,61 @@ export async function seedSources(db: D1Database): Promise<void> {
   await db.batch(
     COMPANY_ALIASES.map(({ alias, canonical }) => aliasStmt.bind(alias, canonical))
   );
+}
+
+/**
+ * Renames the Crunchbase source row from legacy `ab-crunchbase` to `tt-crunchbase`
+ * and rekeys `jobs.id` (deterministic from source_id + external_id). Clears
+ * `embedding_generated_at` so Vectorize backfill re-upserts under the new ids.
+ * Idempotent: no-op if the legacy source row is absent.
+ */
+export async function migrateRenameCrunchbaseSource(db: D1Database): Promise<void> {
+  const oldId = CRUNCHBASE_SOURCE_LEGACY_ID;
+  const newId = CRUNCHBASE_SOURCE_ID;
+
+  const oldSource = await db
+    .prepare("SELECT id FROM sources WHERE id = ?")
+    .bind(oldId)
+    .first<{ id: string }>();
+  if (!oldSource) return;
+
+  const newExists = await db
+    .prepare("SELECT id FROM sources WHERE id = ?")
+    .bind(newId)
+    .first<{ id: string }>();
+
+  if (!newExists) {
+    await db
+      .prepare(
+        `INSERT INTO sources (id, name, source_type, company_handle, base_url, enabled, last_fetched_at, last_job_count, last_error, fetch_interval_hours, created_at)
+         SELECT ?, name, source_type, company_handle, base_url, enabled, last_fetched_at, last_job_count, last_error, fetch_interval_hours, created_at
+         FROM sources WHERE id = ?`
+      )
+      .bind(newId, oldId)
+      .run();
+  }
+
+  const jobs = await db
+    .prepare("SELECT id, external_id FROM jobs WHERE source_id = ?")
+    .bind(oldId)
+    .all<{ id: string; external_id: string }>();
+
+  for (const row of jobs.results ?? []) {
+    const newJobId = buildJobId(newId, row.external_id);
+    if (newJobId === row.id) {
+      await db
+        .prepare("UPDATE jobs SET source_id = ?, embedding_generated_at = NULL WHERE id = ?")
+        .bind(newId, row.id)
+        .run();
+    } else {
+      await db
+        .prepare(
+          "UPDATE jobs SET id = ?, source_id = ?, embedding_generated_at = NULL WHERE id = ?"
+        )
+        .bind(newJobId, newId, row.id)
+        .run();
+    }
+  }
+
+  await db.prepare("DELETE FROM sources WHERE id = ?").bind(oldId).run();
 }

@@ -213,7 +213,7 @@ export type SourceType =
   | "ycombinator"
   /** Career pages that load jobs client-side only — scraped via Cloudflare Browser Rendering */
   | "browser"
-  /** Job boards with public RSS/Atom feeds (e.g. HigherEdJobs, Chronicle Jobs) */
+  /** Job boards with public RSS/Atom feeds reachable via plain HTTP (no bot wall). */
   | "rss"
   /** USAJOBS federal government job board — requires USAJOBS_API_KEY secret */
   | "usajobs"
@@ -309,12 +309,28 @@ export type SourceType =
    */
   | "jibe"
   /**
+   * Shopify marketing careers — Ashby-backed listings on shopify.com (public Ashby posting API off).
+   * `base_url` is `https://www.shopify.com/careers`. See shopify_careers.ts.
+   */
+  | "shopify_careers"
+  /**
    * Oracle Activate career sites (listing often still applies via classic Taleo).
    * `GET {origin}/Search/SearchResults?jtStartIndex=&jtPageSize=` for JSON rows;
    * job descriptions from `/search/jobdetails/{slug}/{uuid}` HTML (`div.Description`).
    * `base_url` is the careers site origin (e.g. `https://jobs.rossstores.com`). See activate_careers.ts.
    */
-  | "activate_careers";
+  | "activate_careers"
+  /**
+   * Avature career sites — public `SearchJobs/feed/` RSS (`<item>` title/link/pubDate).
+   * `base_url` is the feed URL (see avature.ts).
+   */
+  | "avature"
+  /**
+   * ServiceNow portals that expose job posting URLs via the SEO sitemap API (see `robots.txt`
+   * `Sitemap:`). Job pages include SSR `<title>` and `og:description`. `base_url` is the
+   * sitemap XML URL (see servicenow_seo.ts).
+   */
+  | "servicenow_seo";
 
 export type EmploymentType =
   | "full_time"

@@ -19,7 +19,7 @@
  */
 
 import type { JobDescriptionExtracted, PublicSalary, SalaryPeriod } from "../types.ts";
-import { htmlToText } from "../utils/normalize.ts";
+import { htmlToText, normalizeLocation } from "../utils/normalize.ts";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -211,11 +211,6 @@ async function callGemini(apiKey: string, prompt: string, maxOutputTokens = 900)
 // part with no text part, causing the extraction to silently fail.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Delimiter tokens used to wrap the JSON payload in the model response.
-// They allow robust extraction even when the model adds prose before/after.
-const JSON_START = "<<<JOB_DATA>>>";
-const JSON_END   = "<<<END_JOB_DATA>>>";
-
 const JOB_EXTRACTION_PROMPT = (companyName: string, jobTitle: string, descriptionText: string, sourceLocations: string[]) => `
 Extract structured data from this job posting. Return only the JSON object below — no prose, no markdown.
 
@@ -242,7 +237,7 @@ ${descriptionText.slice(0, 8000)}
   "salary_max": <number|null>,
   "salary_period": "year|month|hour|null",
   "experience_years_min": <integer|null>,
-  "locations": ["<City, ST for US, or City + full country name for non-US — never ISO country codes in strings>"] | null,
+  "locations": ["<City, ST for US, or City + full English country name for non-US — never ISO-2 country codes in these strings>"] | null,
   "job_address": "<street address from description body>|null",
   "job_city": "<full city name>|null",
   "job_state": "<2-letter US state>|null",
@@ -255,9 +250,9 @@ Rules:
 - seniority_level: "new_grad" only if explicitly targeting new graduates. "internship" = paid/unpaid internship roles. "Junior"/"Associate" = entry. IC roles with "Manager" in title = not manager seniority. null = not enough info.
 - salary: USD numbers only, exact as stated. Do NOT annualize. null if not mentioned.
 - experience_years_min: lowest number from ranges ("2-5 years" → 2, "5+ years" → 5). null if not mentioned.
-- locations: city-level only — US: "City, ST" (2-letter state); non-US: "City, <full English country name>" (e.g. "London, United Kingdom", "Toronto, Canada"). Do not use ISO country abbreviations inside location strings (no "UK", "IN" as country). Never include street addresses or road suffixes. null if no physical location can be determined.
+- locations: city-level only — US: "City, ST" (2-letter state); non-US: "City, <full English country name>" (e.g. "London, United Kingdom", "Toronto, Canada", "Singapore, Singapore"). Do not use ISO-2 country codes in location strings (no "GB", "SG", "DE" as country). Never include street addresses or road suffixes. null if no physical location can be determined.
 - job_address: only if a full street address appears in the description body — never from the job title.
-- job_city/job_state/job_country: prefer ATS location hints. job_state = 2-letter US abbrev only. job_country = ISO-2 (e.g. "US", "GB").
+- job_city/job_state/job_country: prefer ATS location hints. job_state = 2-letter US abbrev only. job_country = ISO-3166-1 alpha-2 only (e.g. US, GB, DE, CA, SG) — never spell out the country name here.
 - Empty arrays [] for missing list sections (except locations: prefer null when unknown, not []). null for missing scalar fields. Do not invent facts.
 `.trim();
 
@@ -284,7 +279,7 @@ export interface ExtractedJobFields {
   job_city: string | null;
   /** US state abbreviation (e.g. "CA", "IN") — null for non-US jobs. */
   job_state: string | null;
-  /** Country from posting text (ISO-2 or full name). */
+  /** ISO-3166-1 alpha-2 country code (e.g. US, GB) — matches public API filtering; use `locations` for human-readable place strings. */
   job_country: string | null;
 }
 
@@ -464,7 +459,12 @@ export async function extractJobFields(
     ? Math.floor(parsed.experience_years_min)
     : null;
 
-  const locations = ensureStringArray(parsed.locations);
+  const locationsRaw = ensureStringArray(parsed.locations);
+  // Run through the same geo normalizer as ingest so ISO-2 suffixes in model output become full names
+  // (e.g. "London, GB" → "London, United Kingdom") when unambiguous.
+  const locations = locationsRaw
+    .map((loc) => normalizeLocation(loc) ?? loc.trim())
+    .filter((loc): loc is string => Boolean(loc));
 
   // Reconcile workplace_type: demote "remote" → "hybrid" when a physical location is present
   const workplaceType = reconcileWorkplaceType(workplaceTypeRaw, locations);
@@ -478,9 +478,12 @@ export async function extractJobFields(
   const jobState = typeof parsed.job_state === "string" && parsed.job_state.trim()
     ? parsed.job_state.trim().toUpperCase().slice(0, 2)  // enforce 2-letter abbreviation
     : null;
-  const jobCountry = typeof parsed.job_country === "string" && parsed.job_country.trim()
+  const jobCountryRaw = typeof parsed.job_country === "string" && parsed.job_country.trim()
     ? parsed.job_country.trim()
     : null;
+  // Normalize two-letter codes to uppercase; leave longer strings as-is (legacy / model drift).
+  const jobCountry =
+    jobCountryRaw && /^[A-Za-z]{2}$/.test(jobCountryRaw) ? jobCountryRaw.toUpperCase() : jobCountryRaw;
 
   return {
     job_summary: typeof parsed.job_summary === "string" ? parsed.job_summary : "",

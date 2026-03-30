@@ -18,6 +18,7 @@
  */
 
 import { backfillJobDescription, getWorkdayJobsNeedingDescription } from "../db/queries.ts";
+import { extractSchemaJobPostingDescription } from "../ingestion/sources/workday.ts";
 import { logger } from "../utils/logger.ts";
 
 const BATCH_SIZE = 100;
@@ -65,27 +66,6 @@ function tenantFromBaseUrl(baseUrl: string): string {
 // HTML / JSON-LD parser
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EMPLOYMENT_TYPE_MAP: Record<string, string> = {
-  FULL_TIME: "full_time",
-  PART_TIME: "part_time",
-  CONTRACTOR: "contract",
-  TEMPORARY: "temporary",
-  INTERN: "internship",
-};
-
-interface WorkdayLdJson {
-  "@type"?: string;
-  description?: string;
-  employmentType?: string;
-  jobLocation?: {
-    address?: {
-      addressLocality?: string;
-      addressRegion?: string;
-      addressCountry?: string;
-    };
-  };
-}
-
 interface ParsedDetail {
   description: string;
   employment_type?: string | null;
@@ -94,6 +74,7 @@ interface ParsedDetail {
 /**
  * Fetch the Workday HTML job page and extract the schema.org JobPosting
  * JSON-LD block embedded in every public Workday job listing.
+ * Uses the same parser as ingest-time fetches (`@graph`, multiple scripts).
  */
 async function fetchWorkdayHtmlDetail(
   pageUrl: string,
@@ -111,25 +92,12 @@ async function fetchWorkdayHtmlDetail(
 
   const html = await res.text();
 
-  // Workday embeds a single schema.org JobPosting in application/ld+json
-  const match = html.match(/<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/i);
-  if (!match) return null;
-
-  let data: WorkdayLdJson;
-  try {
-    data = JSON.parse(match[1]) as WorkdayLdJson;
-  } catch {
-    return null;
-  }
-
-  const desc = data.description?.trim();
+  const desc = extractSchemaJobPostingDescription(html)?.trim();
   if (!desc) return null;
 
   return {
     description: desc,
-    employment_type: data.employmentType
-      ? (EMPLOYMENT_TYPE_MAP[data.employmentType] ?? null)
-      : null,
+    employment_type: null,
   };
 }
 
