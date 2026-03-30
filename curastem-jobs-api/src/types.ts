@@ -71,6 +71,13 @@ export interface Env {
    */
   EXA_API_KEY?: string;
   /**
+   * Logo.dev API key for 64px logos. Use a secret key (`sk_`) — resolved via Search API
+   * to img URLs — or a publishable key (`pk_`) for direct img.logo.dev use. When unset
+   * or when Logo.dev has no match, enrichment uses Google favicon URLs.
+   * Set via: wrangler secret put LOGO_DEV_TOKEN
+   */
+  LOGO_DEV_TOKEN?: string;
+  /**
    * Google Maps Platform API key — used for Places API (New) geocoding.
    * Required for company HQ auto-geocoding and per-job geocoding for
    * retail/franchise companies (CVS, Dollar Tree, etc.).

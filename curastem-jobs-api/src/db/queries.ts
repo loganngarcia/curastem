@@ -369,7 +369,8 @@ export async function ensureNewJobColumns(db: D1Database): Promise<void> {
 export async function listUnenrichedCompanies(
   db: D1Database,
   staleBefore: number,
-  retryMissingBefore: number
+  retryMissingBefore: number,
+  limit = 50
 ): Promise<CompanyRow[]> {
   const result = await db
     .prepare(
@@ -381,13 +382,17 @@ export async function listUnenrichedCompanies(
        WHERE c.description_enriched_at IS NULL
           OR c.description_enriched_at < ?
           OR (
-               (c.logo_url IS NULL OR c.linkedin_url IS NULL)
+               (  c.logo_url IS NULL
+               OR c.logo_url LIKE 'https://www.google.com/s2/favicons%'
+               OR c.logo_url LIKE 'https://img.logo.dev/%'
+               OR c.linkedin_url IS NULL
+               )
                AND c.description_enriched_at < ?
              )
        ORDER BY j.newest_job DESC NULLS LAST
-       LIMIT 50`
+       LIMIT ?`
     )
-    .bind(staleBefore, retryMissingBefore)
+    .bind(staleBefore, retryMissingBefore, limit)
     .all<CompanyRow>();
   return result.results ?? [];
 }

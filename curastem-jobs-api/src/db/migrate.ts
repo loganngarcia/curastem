@@ -16,6 +16,7 @@
  */
 
 import type { SourceType } from "../types.ts";
+import { resolveLogoUrl } from "../utils/logoUrl.ts";
 import { buildJobId } from "../utils/normalize.ts";
 import { CRUNCHBASE_SOURCE_ID, CRUNCHBASE_SOURCE_LEGACY_ID } from "./sourceIds.ts";
 
@@ -1411,7 +1412,7 @@ const COMPANY_HINTS: CompanyHint[] = [
 interface CompanyMetadataCorrection {
   slug: string;
   website_url: string;
-  /** Hostname passed to the same s2/favicons URL builder as company enrichment */
+  /** Hostname for Logo.dev / Google favicon URL (same resolver as company enrichment) */
   favicon_domain: string;
   /** When set, overwrites x_url (Brandfetch often lacks small orgs) */
   x_url?: string;
@@ -1433,18 +1434,41 @@ const COMPANY_METADATA_CORRECTIONS: CompanyMetadataCorrection[] = [
   { slug: "lovable", website_url: "https://lovable.dev", favicon_domain: "lovable.dev" },
   // GTM Clay (ab-claylabs) — not clay.earth / Mesh product site
   { slug: "clay", website_url: "https://www.clay.com", favicon_domain: "clay.com" },
-  // Mesh (me.sh) — use Google favicon CDN for me.sh until Brandfetch fills on enrich
+  // Mesh (me.sh) — placeholder logo until Brandfetch fills on enrich
   { slug: "mesh", website_url: "https://me.sh", favicon_domain: "me.sh" },
+
+  // --- Slug-derived URL corrections (enrichment guessed slug.com instead of real domain) ---
+  // Block (Jack Dorsey fintech) — slug "block" guessed block.com; real site is block.xyz
+  { slug: "block", website_url: "https://block.xyz", favicon_domain: "block.xyz", force_logo: true },
+  // CVS Health — slug generated cvs-health.com; canonical is cvshealth.com
+  { slug: "cvs-health", website_url: "https://www.cvshealth.com", favicon_domain: "cvshealth.com" },
+  // Hinge Health — slug generated hinge-health.com; canonical is hingehealth.com
+  { slug: "hinge-health", website_url: "https://www.hingehealth.com", favicon_domain: "hingehealth.com" },
+  // Lila Sciences — slug generated lila-sciences.com; canonical is lila.ai
+  { slug: "lila-sciences", website_url: "https://www.lila.ai", favicon_domain: "lila.ai" },
+  // Domino's Pizza — slug generated dominos-pizza.com; canonical is dominos.com
+  { slug: "dominos-pizza", website_url: "https://www.dominos.com", favicon_domain: "dominos.com" },
+  // Northrop Grumman — slug generated northrop-grumman.com; canonical is northropgrumman.com
+  { slug: "northrop-grumman", website_url: "https://www.northropgrumman.com", favicon_domain: "northropgrumman.com" },
+  // Otter AI — slug otterai guessed otterai.com; canonical is otter.ai
+  { slug: "otterai", website_url: "https://otter.ai", favicon_domain: "otter.ai", force_logo: true },
+  // Sweet Security — slug generated sweet-security.com; canonical is sweet.security
+  { slug: "sweet-security", website_url: "https://www.sweet.security", favicon_domain: "sweet.security" },
+  // Thinking Machines Lab — Exa found thinkingmachines.com (wrong); canonical is thinkingmachines.ai
+  { slug: "thinking-machines", website_url: "https://thinkingmachines.ai", favicon_domain: "thinkingmachines.ai", force_logo: true },
 ];
 
 /**
  * Force-correct company rows where enrichment or a bad domain guess stored the wrong
  * website or logo. Safe to run every request — idempotent UPDATEs by slug.
  */
-export async function applyCompanyMetadataCorrections(db: D1Database): Promise<void> {
+export async function applyCompanyMetadataCorrections(
+  db: D1Database,
+  logoDevToken?: string
+): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   for (const c of COMPANY_METADATA_CORRECTIONS) {
-    const faviconUrl = `https://www.google.com/s2/favicons?domain=${c.favicon_domain}&sz=64`;
+    const faviconUrl = await resolveLogoUrl(c.favicon_domain, logoDevToken);
     // force_logo: swap in favicon only while website_url still mismatches canonical (wrong Brandfetch domain).
     // Once website matches, leave logo alone so a later enrich pass can upgrade to SVG for the right domain.
     const logoSql = c.force_logo
@@ -1453,15 +1477,18 @@ export async function applyCompanyMetadataCorrections(db: D1Database): Promise<v
                ELSE logo_url
              END`
       : `logo_url = CASE
-               WHEN logo_url IS NOT NULL AND logo_url NOT LIKE 'https://www.google.com/s2/favicons%' THEN logo_url
+               WHEN logo_url IS NOT NULL AND logo_url NOT LIKE 'https://www.google.com/s2/favicons%' AND logo_url NOT LIKE 'https://img.logo.dev/%' THEN logo_url
                ELSE ?
              END`;
+    // When the website_url is changing, reset exa enrichment so Exa re-runs against the correct domain.
+    const exaResetSql = `exa_company_enriched_at = CASE WHEN website_url IS DISTINCT FROM ? THEN NULL ELSE exa_company_enriched_at END`;
     if (c.x_url) {
       await db
         .prepare(
           `UPDATE companies SET
              website_url = ?,
              ${logoSql},
+             ${exaResetSql},
              x_url = ?,
              website_infer_suppressed = 0,
              website_checked_at = NULL,
@@ -1471,6 +1498,7 @@ export async function applyCompanyMetadataCorrections(db: D1Database): Promise<v
         .bind(
           c.website_url,
           ...(c.force_logo ? [c.website_url, faviconUrl] : [faviconUrl]),
+          c.website_url,
           c.x_url,
           now,
           c.slug
@@ -1482,12 +1510,13 @@ export async function applyCompanyMetadataCorrections(db: D1Database): Promise<v
           `UPDATE companies SET
              website_url = ?,
              ${logoSql},
+             ${exaResetSql},
              website_infer_suppressed = 0,
              website_checked_at = NULL,
              updated_at = ?
            WHERE slug = ?`
         )
-        .bind(c.website_url, ...(c.force_logo ? [c.website_url, faviconUrl] : [faviconUrl]), now, c.slug)
+        .bind(c.website_url, ...(c.force_logo ? [c.website_url, faviconUrl] : [faviconUrl]), c.website_url, now, c.slug)
         .run();
     }
   }

@@ -13394,6 +13394,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     onClose,
     preciseLocRef,
     onJobSelect,
+    onFeedJobsChange,
     onFeedDragStart,
     feedRef,
     feedWidth = 428,
@@ -13408,6 +13409,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     /** Ref owned by the parent so precise coords survive panel close/reopen. */
     preciseLocRef: React.MutableRefObject<{ lat: number; lng: number } | null>
     onJobSelect?: (job: HomepageJob) => void
+    /** Called whenever the visible feed job list changes — used to keep the parent swipe deck in sync. */
+    onFeedJobsChange?: (jobs: HomepageJob[]) => void
     /** Right-edge drag handler for the feed panel; desktop only. */
     onFeedDragStart?: (e: React.PointerEvent) => void
     /** Ref forwarded to the feed motion.div for live-width updates. */
@@ -13440,6 +13443,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const filterSeniorityRef = React.useRef("")
     // Feed always visible on both mobile and desktop — empty array until first fetch resolves
     const [selectedJobs, setSelectedJobs] = React.useState<HomepageJob[] | null>([])
+    // Keep parent swipe deck in sync with the feed list so swipe-between-jobs works on mobile
+    const onFeedJobsChangeRef = React.useRef(onFeedJobsChange)
+    React.useEffect(() => { onFeedJobsChangeRef.current = onFeedJobsChange }, [onFeedJobsChange])
+    React.useEffect(() => {
+        if (selectedJobs && selectedJobs.length > 0) onFeedJobsChangeRef.current?.(selectedJobs)
+    }, [selectedJobs])
     const [travelTimes, setTravelTimes] = React.useState<
         Record<string, { drivingMins: number | null; walkingMins: number | null }>
     >({})
@@ -13452,57 +13461,82 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const [filterDaysOpen, setFilterDaysOpen] = React.useState(false)
     const [filterTypeOpen, setFilterTypeOpen] = React.useState(false)
     const [filterSeniorityOpen, setFilterSeniorityOpen] = React.useState(false)
-    // Mobile panel height = feed area + overhead (drag + search in-flow below drag bar)
-    // Overhead: drag row (16) + search row (36) ≈ 52px above scroll body (plus outer motion padding)
-    // Default open height 248px; drag floor MOBILE_FEED_MIN; chip-selected height MOBILE_FEED_CHIP
-    const MOBILE_FEED_DEFAULT = 248
-    const MOBILE_FEED_MIN = 216
-    const MOBILE_FEED_CHIP = 412
-    const [mobileFeedHeight, setMobileFeedHeight] = React.useState(MOBILE_FEED_DEFAULT)
-    const mobileFeedDragStart = React.useRef<{ y: number; height: number } | null>(null)
+    // Two-state mobile feed sheet driven by height (anchored at bottom: 0).
+    // mobileFeedDragY: 0 = expanded (93vh), maxSlide = collapsed (248px).
+    // Height approach (not y-transform) keeps the card's actual bottom edge on-screen so
+    // bottom padding and border-radius are always visible in the collapsed state.
+    const MOBILE_FEED_COLLAPSED_H = 248
+    const mobileFeedExpandedH = React.useRef(
+        typeof window !== "undefined" ? Math.round(window.innerHeight * 0.90) : 700
+    )
+    const mobileFeedMaxSlide = React.useRef(mobileFeedExpandedH.current - MOBILE_FEED_COLLAPSED_H)
+    // mobileFeedDragY drives everything: 0 = expanded, maxSlide = collapsed
+    const mobileFeedDragY = useMotionValue(mobileFeedMaxSlide.current)
+    // height = expandedH - dragY  (grows from collapsed 248px up to 90vh as dragY → 0)
+    const mobileFeedHeightPx = useTransform(mobileFeedDragY, (y) => mobileFeedExpandedH.current - y)
+    const mobileFeedScrimOpacity = useTransform(mobileFeedDragY, [0, mobileFeedMaxSlide.current], [0.6, 0])
+    const mobileFeedOuterPad = useTransform(mobileFeedDragY, [0, mobileFeedMaxSlide.current], [0, 4])
+    const mobileFeedBottomRadius = useTransform(mobileFeedDragY, [0, mobileFeedMaxSlide.current], [0, 36])
+    // Location button fades out quickly as sheet begins to expand (fades within first 35% of drag)
+    // Committed state — used for aria-labels and chip/close reset; visual state is the motion value.
+    const [mobileFeedExpanded, setMobileFeedExpanded] = React.useState(false)
+    const mobileFeedExpandedRef = React.useRef(false)
+    React.useEffect(() => { mobileFeedExpandedRef.current = mobileFeedExpanded }, [mobileFeedExpanded])
+
+    // Recalculate expanded height on viewport resize (e.g. rotation, browser chrome show/hide).
+    // rAF-throttled so it runs at most once per paint — no jank.
+    React.useEffect(() => {
+        if (!isMobile) return
+        let rafId = 0
+        const onResize = () => {
+            cancelAnimationFrame(rafId)
+            rafId = requestAnimationFrame(() => {
+                const newExpandedH = Math.round(window.innerHeight * 0.93)
+                const newMaxSlide = newExpandedH - MOBILE_FEED_COLLAPSED_H
+                mobileFeedExpandedH.current = newExpandedH
+                mobileFeedMaxSlide.current = newMaxSlide
+                // Snap motion value immediately to new position without animation
+                if (mobileFeedExpandedRef.current) {
+                    mobileFeedDragY.set(0)
+                } else {
+                    mobileFeedDragY.set(newMaxSlide)
+                }
+            })
+        }
+        window.addEventListener("resize", onResize)
+        return () => { window.removeEventListener("resize", onResize); cancelAnimationFrame(rafId) }
+    }, [isMobile, mobileFeedDragY]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const snapMobileFeed = React.useCallback((expand: boolean) => {
+        const target = expand ? 0 : mobileFeedMaxSlide.current
+        animate(mobileFeedDragY, target, { type: "spring", stiffness: 380, damping: 42 })
+        setMobileFeedExpanded(expand)
+    }, [mobileFeedDragY])
+
     const handleMobileFeedDragStart = React.useCallback((e: React.TouchEvent | React.PointerEvent) => {
-        // Ignore taps on the text input so the keyboard focus path is unaffected
-        if ((e.target as HTMLElement).tagName === "INPUT") return
-        // Touch events: use preventDefault on touchmove to prevent browser scroll competition.
-        // Pointer events: used for cursor/mouse dragging (same handler, different listener path).
         const isTouchEvent = "touches" in e
         const startY = isTouchEvent
             ? (e as React.TouchEvent).touches[0].clientY
             : (e as React.PointerEvent).clientY
+        const startX = isTouchEvent
+            ? (e as React.TouchEvent).touches[0].clientX
+            : (e as React.PointerEvent).clientX
         const touchId = isTouchEvent ? (e as React.TouchEvent).touches[0].identifier : undefined
+        const startDragY = mobileFeedDragY.get()
+        // Drag is only engaged after the threshold — taps on the input still focus normally.
+        let dragging = false
 
-        const startH = (overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>).current?.offsetHeight ?? mobileFeedHeight
-        mobileFeedDragStart.current = { y: startY, height: startH }
-
-        const getClientY = (ev: TouchEvent | PointerEvent): number => {
+        const getCoords = (ev: TouchEvent | PointerEvent): { x: number; y: number } => {
             if ("changedTouches" in ev) {
                 const t = touchId !== undefined
                     ? Array.from(ev.changedTouches).find((t) => t.identifier === touchId)
                     : ev.changedTouches[0]
-                return t?.clientY ?? startY
+                return { x: t?.clientX ?? startX, y: t?.clientY ?? startY }
             }
-            return (ev as PointerEvent).clientY
+            return { x: (ev as PointerEvent).clientX, y: (ev as PointerEvent).clientY }
         }
 
-        const onMove = (ev: TouchEvent | PointerEvent) => {
-            ev.preventDefault()
-            if (!mobileFeedDragStart.current) return
-            const delta = mobileFeedDragStart.current.y - getClientY(ev)
-            const maxH = window.innerHeight * 0.95
-            const newH = Math.max(MOBILE_FEED_MIN, Math.min(mobileFeedDragStart.current.height + delta, maxH))
-            const el = (overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>).current
-            if (el) { el.style.transition = "none"; el.style.height = `${newH}px` }
-        }
-
-        const onEnd = (ev: TouchEvent | PointerEvent) => {
-            if (!mobileFeedDragStart.current) return
-            const delta = mobileFeedDragStart.current.y - getClientY(ev)
-            const maxH = window.innerHeight * 0.95
-            const newH = Math.max(MOBILE_FEED_MIN, Math.min(mobileFeedDragStart.current.height + delta, maxH))
-            const el = (overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>).current
-            if (el) el.style.transition = ""
-            setMobileFeedHeight(newH)
-            mobileFeedDragStart.current = null
+        const cleanup = () => {
             if (isTouchEvent) {
                 document.removeEventListener("touchmove", onMove as EventListener)
                 document.removeEventListener("touchend", onEnd as EventListener)
@@ -13510,6 +13544,32 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 window.removeEventListener("pointermove", onMove as EventListener)
                 window.removeEventListener("pointerup", onEnd as EventListener)
             }
+        }
+
+        const onMove = (ev: TouchEvent | PointerEvent) => {
+            const { x, y } = getCoords(ev)
+            const deltaY = startY - y  // positive = dragged up
+            const deltaX = Math.abs(x - startX)
+            if (!dragging) {
+                // Abort if mostly horizontal — let horizontal scroll/swipe pass through
+                if (deltaX > Math.abs(deltaY)) { cleanup(); return }
+                // Wait for 8px vertical movement before engaging
+                if (Math.abs(deltaY) < 8) return
+                dragging = true
+            }
+            // Only prevent scroll/focus-keyboard once drag is confirmed
+            ev.preventDefault()
+            const max = mobileFeedMaxSlide.current
+            mobileFeedDragY.set(Math.max(0, Math.min(max, startDragY - deltaY)))
+        }
+
+        const onEnd = (ev: TouchEvent | PointerEvent) => {
+            if (dragging) {
+                const currentY = mobileFeedDragY.get()
+                const max = mobileFeedMaxSlide.current
+                snapMobileFeed(currentY < max * 0.6)
+            }
+            cleanup()
         }
 
         if (isTouchEvent) {
@@ -13520,7 +13580,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             window.addEventListener("pointermove", onMove as EventListener)
             window.addEventListener("pointerup", onEnd as EventListener)
         }
-    }, [mobileFeedHeight]) // eslint-disable-line react-hooks/exhaustive-deps
+    }, [mobileFeedDragY, snapMobileFeed])
 
     // Search query for the feed — seeded from profile job title, editable by user
     const [mapSearchQuery, setMapSearchQuery] = React.useState(defaultSearch)
@@ -13556,6 +13616,72 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // How many of the currently displayed company-view jobs are "nearby" (geocoded within radius)
     const [nearbyJobCount, setNearbyJobCount] = React.useState<number | null>(null)
     const overlayScrollRef = React.useRef<HTMLDivElement>(null)
+    // Overscroll-to-collapse: when expanded and scroll is at top, a downward drag collapses the sheet.
+    // Must be an imperative listener (non-passive) so we can call preventDefault on the touchmove.
+    React.useEffect(() => {
+        if (!isMobile) return
+        // Wait one frame so the scroll element is guaranteed to be in the DOM
+        const frame = requestAnimationFrame(() => {
+            const el = overlayScrollRef.current
+            if (!el) return
+
+            let tracking = false
+            let decided = false
+            let isCollapse = false
+            let startY = 0
+            let startDragY = 0
+
+            const onTouchStart = (e: TouchEvent) => {
+                tracking = false
+                if (!mobileFeedExpandedRef.current || el.scrollTop > 0) return
+                tracking = true
+                decided = false
+                isCollapse = false
+                startY = e.touches[0].clientY
+                startDragY = mobileFeedDragY.get()
+            }
+
+            const onTouchMove = (e: TouchEvent) => {
+                if (!tracking) return
+                const deltaY = startY - e.touches[0].clientY // positive = finger moved up
+                if (!decided) {
+                    if (Math.abs(deltaY) < 6) return
+                    decided = true
+                    isCollapse = deltaY < 0 // finger moving down = collapse
+                    if (!isCollapse) { tracking = false; return }
+                }
+                if (isCollapse) {
+                    e.preventDefault()
+                    const max = mobileFeedMaxSlide.current
+                    mobileFeedDragY.set(Math.max(0, Math.min(max, startDragY - deltaY)))
+                }
+            }
+
+            const onTouchEnd = () => {
+                if (!tracking || !isCollapse) { tracking = false; isCollapse = false; return }
+                tracking = false
+                isCollapse = false
+                const currentY = mobileFeedDragY.get()
+                const max = mobileFeedMaxSlide.current
+                snapMobileFeed(currentY < max * 0.6)
+            }
+
+            el.addEventListener("touchstart", onTouchStart, { passive: true })
+            el.addEventListener("touchmove", onTouchMove, { passive: false })
+            el.addEventListener("touchend", onTouchEnd)
+            // Store cleanup on the element so we can call it if the effect re-runs
+            ;(el as any).__overscrollCleanup = () => {
+                el.removeEventListener("touchstart", onTouchStart)
+                el.removeEventListener("touchmove", onTouchMove)
+                el.removeEventListener("touchend", onTouchEnd)
+            }
+        })
+        return () => {
+            cancelAnimationFrame(frame)
+            const el = overlayScrollRef.current
+            ;(el as any)?.__overscrollCleanup?.()
+        }
+    }, [isMobile, mobileFeedDragY, snapMobileFeed]) // eslint-disable-line react-hooks/exhaustive-deps
     // Refs for measuring pill positions so dropdown can be rendered outside overflow:hidden
     const overlayMotionWrapRef = React.useRef<HTMLDivElement>(null)
     const filterDaysPillRef = React.useRef<HTMLDivElement>(null)
@@ -13821,7 +13947,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 setTravelTimes({})
                 setOverlayNextCursor(null)
                 overlayFetchCoordsRef.current = { lat: chipLat, lng: chipLng }
-                if (isMobile) setMobileFeedHeight(MOBILE_FEED_CHIP)
+                if (isMobile) snapMobileFeed(false)
 
                 // Mirror whatever filters are active on the map — chips already respect all filters,
                 // so if a chip is visible there are matching jobs within this window.
@@ -14032,7 +14158,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         alignItems: "center",
         justifyContent: "center",
         padding: 0,
-        boxShadow: "0 1px 4px rgba(0,0,0,0.24)",
+        boxShadow: isDark ? "none" : "0 1px 4px rgba(0,0,0,0.24)",
     }
 
     // X icon for company feed close button (12×12, primaryText)
@@ -14157,23 +14283,25 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                     </svg>
                 </button>
 
-                {/* Current location — filled arrow when map is centred on precise GPS location */}
-                <button
-                    aria-label="Go to current location"
-                    onClick={handleCurrentLocation}
-                    style={tbStyle}
-                >
-                    <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-                        <path
-                            d="M13.3134 20.2602C13.2307 20.2397 13.1563 20.194 13.1006 20.1295C13.0448 20.0651 13.0104 19.9849 13.002 19.9001C12.9936 19.8152 13.0117 19.7299 13.0538 19.6557C13.0959 19.5816 13.1599 19.5223 13.2371 19.486L26.4105 13.0396C26.4874 13.0032 26.5737 12.9915 26.6575 13.0061C26.7413 13.0206 26.8186 13.0607 26.8788 13.1209C26.939 13.1811 26.9791 13.2584 26.9936 13.3422C27.0082 13.426 26.9965 13.5123 26.9601 13.5892L20.5137 26.7627C20.4775 26.8398 20.4183 26.9039 20.3442 26.946C20.2701 26.9882 20.1848 27.0063 20.0999 26.998C20.0151 26.9898 19.9349 26.9554 19.8704 26.8997C19.8059 26.8441 19.7602 26.7698 19.7395 26.6871L19.8555 20.4451C19.8373 20.3725 19.7996 20.3062 19.7466 20.2534C19.6936 20.2005 19.6272 20.163 19.5546 20.145L13.3134 20.2602Z"
-                            fill={atPreciseLocation ? tbIcon : "none"}
-                            stroke={tbIcon}
-                            strokeWidth="1.2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                        />
-                    </svg>
-                </button>
+                {/* Current location — desktop only; mobile version floats above the feed sheet */}
+                {!isMobile && (
+                    <button
+                        aria-label="Go to current location"
+                        onClick={handleCurrentLocation}
+                        style={tbStyle}
+                    >
+                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                            <path
+                                d="M13.3134 20.2602C13.2307 20.2397 13.1563 20.194 13.1006 20.1295C13.0448 20.0651 13.0104 19.9849 13.002 19.9001C12.9936 19.8152 13.0117 19.7299 13.0538 19.6557C13.0959 19.5816 13.1599 19.5223 13.2371 19.486L26.4105 13.0396C26.4874 13.0032 26.5737 12.9915 26.6575 13.0061C26.7413 13.0206 26.8186 13.0607 26.8788 13.1209C26.939 13.1811 26.9791 13.2584 26.9936 13.3422C27.0082 13.426 26.9965 13.5123 26.9601 13.5892L20.5137 26.7627C20.4775 26.8398 20.4183 26.9039 20.3442 26.946C20.2701 26.9882 20.1848 27.0063 20.0999 26.998C20.0151 26.9898 19.9349 26.9554 19.8704 26.8997C19.8059 26.8441 19.7602 26.7698 19.7395 26.6871L19.8555 20.4451C19.8373 20.3725 19.7996 20.3062 19.7466 20.2534C19.6936 20.2005 19.6272 20.163 19.5546 20.145L13.3134 20.2602Z"
+                                fill={atPreciseLocation ? tbIcon : "none"}
+                                stroke={tbIcon}
+                                strokeWidth="1.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        </svg>
+                    </button>
+                )}
 
                 {/* Zoom +/− — hidden on mobile */}
                 {!isMobile && (
@@ -14250,6 +14378,51 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 )}
             </div>
 
+            {/* Mobile current-location button — floats above collapsed sheet, fades as sheet expands */}
+            {isMobile && (
+                <div
+                    style={{
+                        position: "absolute",
+                        right: 12,
+                        bottom: 248,
+                        zIndex: 18,
+                        pointerEvents: "auto",
+                    }}
+                >
+                    <button
+                        aria-label="Go to current location"
+                        onClick={handleCurrentLocation}
+                        style={tbStyle}
+                    >
+                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                            <path
+                                d="M13.3134 20.2602C13.2307 20.2397 13.1563 20.194 13.1006 20.1295C13.0448 20.0651 13.0104 19.9849 13.002 19.9001C12.9936 19.8152 13.0117 19.7299 13.0538 19.6557C13.0959 19.5816 13.1599 19.5223 13.2371 19.486L26.4105 13.0396C26.4874 13.0032 26.5737 12.9915 26.6575 13.0061C26.7413 13.0206 26.8186 13.0607 26.8788 13.1209C26.939 13.1811 26.9791 13.2584 26.9936 13.3422C27.0082 13.426 26.9965 13.5123 26.9601 13.5892L20.5137 26.7627C20.4775 26.8398 20.4183 26.9039 20.3442 26.946C20.2701 26.9882 20.1848 27.0063 20.0999 26.998C20.0151 26.9898 19.9349 26.9554 19.8704 26.8997C19.8059 26.8441 19.7602 26.7698 19.7395 26.6871L19.8555 20.4451C19.8373 20.3725 19.7996 20.3062 19.7466 20.2534C19.6936 20.2005 19.6272 20.163 19.5546 20.145L13.3134 20.2602Z"
+                                fill={atPreciseLocation ? tbIcon : "none"}
+                                stroke={tbIcon}
+                                strokeWidth="1.2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        </svg>
+                    </button>
+                </div>
+            )}
+
+            {/* Black scrim behind the feed — fades in as sheet expands on mobile; tap to collapse */}
+            {isMobile && selectedJobs !== null && (
+                <motion.div
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        background: "black",
+                        opacity: mobileFeedScrimOpacity,
+                        zIndex: 19,
+                        pointerEvents: mobileFeedExpanded ? "auto" : "none",
+                    }}
+                    onClick={() => snapMobileFeed(false)}
+                />
+            )}
+
             {/* Job list sheet — always visible on desktop, chip-triggered slide-up on mobile */}
             <AnimatePresence>
                 {selectedJobs !== null && (
@@ -14268,12 +14441,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                             left: 0,
                             top: isMobile ? undefined : 0,
                             bottom: 0,
-                            padding: isMobile ? (selectedChipEntry ? "10px 0 0" : "10px 4px 4px") : 12,
+                            padding: isMobile ? mobileFeedOuterPad : 12,
                             zIndex: 20,
                             width: isMobile ? "100%" : feedWidth,
                             maxWidth: isMobile ? "100%" : "min(640px, 40%)",
-                            height: isMobile ? mobileFeedHeight : undefined,
-                            transition: isMobile ? "height 0.32s ease" : undefined,
+                            height: isMobile ? mobileFeedHeightPx : undefined,
                             display: "flex",
                             flexDirection: "column",
                         }}
@@ -14371,16 +14543,26 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         })()}
 
 
-                        {/* Mobile: wide drag zone in the 10px top-padding space — easier grab target above sheet */}
+                        {/* Mobile: wide drag zone in the top-padding space — easier grab target above the pill */}
                         {isMobile && (
                             <div
+                                role="button"
+                                tabIndex={0}
+                                aria-label={mobileFeedExpanded ? "Collapse feed" : "Expand feed"}
                                 onPointerDown={handleMobileFeedDragStart}
                                 onTouchStart={handleMobileFeedDragStart}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault()
+                                        snapMobileFeed(!mobileFeedExpanded)
+                                    }
+                                }}
                                 style={{
                                     height: 10,
                                     flexShrink: 0,
                                     cursor: "ns-resize",
                                     touchAction: "none",
+                                    outline: "none",
                                 }}
                             />
                         )}
@@ -14446,10 +14628,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                             </div>
                         )}
 
-                        <div
+                        <motion.div
                             style={{
                                 background: sheetBg,
-                                borderRadius: isMobile && selectedChipEntry ? "36px 36px 0 0" : 36,
+                                borderTopLeftRadius: 36,
+                                borderTopRightRadius: 36,
+                                borderBottomLeftRadius: isMobile ? mobileFeedBottomRadius : 36,
+                                borderBottomRightRadius: isMobile ? mobileFeedBottomRadius : 36,
                                 overflow: "hidden",
                                 flex: 1,
                                 minHeight: 0,
@@ -14465,8 +14650,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                             {isMobile && (
                                 <>
                                     <div
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={mobileFeedExpanded ? "Collapse feed" : "Expand feed"}
                                         onPointerDown={handleMobileFeedDragStart}
                                         onTouchStart={handleMobileFeedDragStart}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault()
+                                                snapMobileFeed(!mobileFeedExpanded)
+                                            }
+                                        }}
                                         style={{
                                             height: 16,
                                             flexShrink: 0,
@@ -14477,78 +14671,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             zIndex: 6,
                                             cursor: "ns-resize",
                                             touchAction: "none",
+                                            outline: "none",
                                         }}
                                     >
                                         <svg width="36" height="4" viewBox="0 0 36 4" fill="none" aria-hidden>
                                             <rect width="36" height="4" rx="2" fill={isDark ? "rgba(255,255,255,0.35)" : "#858585"} />
                                         </svg>
                                     </div>
-                                    {!selectedChipEntry && <div
-                                        onPointerDown={handleMobileFeedDragStart}
-                                        onTouchStart={handleMobileFeedDragStart}
-                                        style={{
-                                            paddingLeft: 12,
-                                            paddingRight: 12,
-                                            flexShrink: 0,
-                                            position: "relative",
-                                            zIndex: 4,
-                                            cursor: "ns-resize",
-                                        }}
-                                    >
-                                        <div
-                                            style={{
-                                                height: 36,
-                                                paddingLeft: 14,
-                                                paddingRight: mapSearchQuery ? 10 : 14,
-                                                background: isDark ? themeColors.surface : sheetBg,
-                                                borderRadius: 50,
-                                                display: "flex",
-                                                alignItems: "center",
-                                                gap: 6,
-                                                boxShadow: isDark ? "none" : "0px 4px 16px rgba(0,0,0,0.13)",
-                                            }}
-                                        >
-                                            <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                                    <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.52237C12.6167 8.09309 11.9837 9.59948 10.8571 10.7101C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7101C1.2345 9.59948 0.601563 8.09309 0.601562 6.52237C0.601563 4.95166 1.2345 3.44527 2.36113 2.33461C3.48777 1.22394 5.01581 0.599976 6.60911 0.599976C8.20241 0.599976 9.73045 1.22394 10.8571 2.33461C11.9837 3.44527 12.6167 4.95166 12.6167 6.52237Z" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                                </svg>
-                                            </div>
-                                            <input
-                                                ref={mapSearchInputRef}
-                                                type="text"
-                                                value={mapSearchQuery}
-                                                onChange={(e) => setMapSearchQuery(e.target.value)}
-                                                placeholder={selectedChipEntry ? `Search jobs at ${selectedChipEntry.company_name}` : "Search jobs"}
-                                                style={{
-                                                    flex: 1,
-                                                    background: "transparent",
-                                                    border: "none",
-                                                    outline: "none",
-                                                    color: textPrimary,
-                                                    fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 14,
-                                                    fontFamily: "Inter",
-                                                    fontWeight: "400",
-                                                    lineHeight: "20px",
-                                                }}
-                                            />
-                                            {mapSearchQuery && (
-                                                <button
-                                                    type="button"
-                                                    aria-label="Clear search"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation()
-                                                        setMapSearchQuery("")
-                                                        requestAnimationFrame(() => mapSearchInputRef.current?.focus())
-                                                    }}
-                                                    onPointerDown={(e) => e.stopPropagation()}
-                                                    onTouchStart={(e) => e.stopPropagation()}
-                                                    style={mapSearchClearButtonStyle}
-                                                >
-                                                    {mapSearchClearIcon}
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>}
                                 </>
                             )}
                             {/* Scroll + optional top scrim (mobile): chat input gradient reversed — solid sheet → transparent */}
@@ -14569,13 +14698,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             setSelectedChipEntry(null)
                                             setNearbyJobCount(null)
                                             setSelectedJobs([])
-                                            if (isMobile) setMobileFeedHeight(MOBILE_FEED_MIN)
+                                            if (isMobile) snapMobileFeed(false)
                                             // Desktop only — on mobile this would pop the keyboard unexpectedly
                                             if (!isMobile) requestAnimationFrame(() => mapSearchInputRef.current?.focus())
                                         }}
                                         style={{
                                             position: "absolute",
-                                            top: isMobile ? 10 : 14,
+                                            top: isMobile ? 4 : 14,
                                             right: isMobile ? 12 : 14,
                                             flexShrink: 0,
                                             width: 28,
@@ -14604,7 +14733,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     style={{
                                         overflowY: "auto",
                                         overflowX: "hidden",
-                                        padding: isMobile ? "10px 12px 12px" : "16px 16px 16px",
+                                        padding: isMobile ? "0 12px 12px" : (selectedChipEntry ? "0 16px 16px" : "16px 16px 16px"),
                                         display: "flex",
                                         flexDirection: "column",
                                         gap: 10,
@@ -14615,34 +14744,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         position: "relative",
                                     }}
                                 >
-                                {/* Company header (company feed) OR filter pills (normal feed) — both scroll with content */}
-                                {selectedChipEntry ? (
-                                    <div style={{
-                                        display: "flex",
-                                        alignItems: "center",
-                                        gap: 6,
-                                        paddingLeft: 6,
-                                        paddingRight: 6,
-                                        flexShrink: 0,
-                                    }}>
-                                        {selectedChipEntry.company_logo_url ? (
-                                            <img
-                                                src={selectedChipEntry.company_logo_url}
-                                                alt=""
-                                                style={{ width: 16, height: 16, borderRadius: 8, objectFit: "cover", flexShrink: 0 }}
-                                                onError={(e) => { ;(e.target as HTMLImageElement).style.display = "none" }}
-                                            />
-                                        ) : (
-                                            <div style={{ width: 16, height: 16, borderRadius: 8, background: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)", flexShrink: 0 }} />
-                                        )}
-                                        <span style={{ fontSize: 15, fontFamily: "Inter", fontWeight: "400", color: textPrimary, lineHeight: "22.5px" }}>
-                                            {selectedChipEntry.company_name}
-                                        </span>
-                                    </div>
-                                ) : (() => {
+                                {/* Mobile: sticky chrome + gradient so jobs scroll underneath; desktop: in-flow */}
+                                {(() => {
+                                    const filterStrip = (() => {
                                     const pillBorderLight = "0.33px solid rgba(0,0,0,0.18)"
                                     const pillStyle = (isActive: boolean, isOpen: boolean): React.CSSProperties => ({
-                                        height: 32,
+                                        height: 36,
                                         paddingLeft: 10,
                                         paddingRight: 10,
                                         borderRadius: 50,
@@ -14730,7 +14837,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             {isMobile ? (
                                                 <div ref={filterDaysPillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
                                                     <div style={{ ...pillStyle(false, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
                                                         {chevron}
                                                     </div>
                                                     <select
@@ -14754,7 +14861,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             {isMobile ? (
                                                 <div ref={filterSeniorityPillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
                                                     <div style={{ ...pillStyle(!!filterSeniority, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
                                                         {chevron}
                                                     </div>
                                                     <select
@@ -14783,7 +14890,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             {isMobile ? (
                                                 <div ref={filterTypePillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
                                                     <div style={{ ...pillStyle(!!filterType, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
+                                                        <span style={{ color: textSecondary, fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
                                                         {chevron}
                                                     </div>
                                                     <select
@@ -14808,6 +14915,165 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             )}
                                         </div>
                                     )
+                                })();
+                                    const companyWebsiteUrl = selectedJobs?.[0]?.company.website_url ?? null
+                                    const companyHeaderRow = selectedChipEntry ? (
+                                        <div
+                                            role={companyWebsiteUrl ? "link" : undefined}
+                                            tabIndex={companyWebsiteUrl ? 0 : undefined}
+                                            onClick={companyWebsiteUrl ? (e) => { e.stopPropagation(); window.open(companyWebsiteUrl, "_blank", "noopener,noreferrer") } : undefined}
+                                            onKeyDown={companyWebsiteUrl ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); window.open(companyWebsiteUrl, "_blank", "noopener,noreferrer") } } : undefined}
+                                            style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: 6,
+                                                paddingLeft: 6,
+                                                paddingRight: 6,
+                                                flexShrink: 0,
+                                                cursor: companyWebsiteUrl ? "pointer" : "default",
+                                                outline: "none",
+                                            }}>
+                                            {selectedChipEntry.company_logo_url ? (
+                                                <img
+                                                    src={selectedChipEntry.company_logo_url}
+                                                    alt=""
+                                                    style={{ width: 16, height: 16, borderRadius: 8, objectFit: "cover", flexShrink: 0 }}
+                                                    onError={(e) => { ;(e.target as HTMLImageElement).style.display = "none" }}
+                                                />
+                                            ) : (
+                                                <div style={{ width: 16, height: 16, borderRadius: 8, background: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)", flexShrink: 0 }} />
+                                            )}
+                                            <span style={{ fontSize: 15, fontFamily: "Inter", fontWeight: "400", color: textPrimary, lineHeight: "22.5px" }}>
+                                                {selectedChipEntry.company_name}
+                                            </span>
+                                            {companyWebsiteUrl && (
+                                                <svg width="9" height="6" viewBox="0 0 10 6" fill="none" style={{ transform: "rotate(-90deg)", flexShrink: 0, marginLeft: -2 }}>
+                                                    <path d="M0.601562 0.599976L4.60156 4.59998L8.60156 0.599976" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                                </svg>
+                                            )}
+                                        </div>
+                                    ) : null;
+                                    if (isMobile) {
+                                        return (
+                                            <>
+                                            <div
+                                                style={{
+                                                    position: "sticky",
+                                                    top: 0,
+                                                    zIndex: 10,
+                                                    paddingBottom: 0,
+                                                    marginLeft: -12,
+                                                    marginRight: -12,
+                                                    paddingLeft: 12,
+                                                    paddingRight: 12,
+                                                    background: isDark
+                                                        ? `linear-gradient(180deg, #212121 0px, #212121 1px, rgba(33,33,33,0.98) 8%, rgba(33,33,33,0.93) 18%, rgba(33,33,33,0.82) 30%, rgba(33,33,33,0.65) 45%, rgba(33,33,33,0.44) 60%, rgba(33,33,33,0.22) 73%, rgba(33,33,33,0.07) 84%, rgba(33,33,33,0) 92%)`
+                                                        : `linear-gradient(180deg, #fff 0px, #fff 1px, rgba(255,255,255,0.98) 8%, rgba(255,255,255,0.93) 18%, rgba(255,255,255,0.82) 30%, rgba(255,255,255,0.65) 45%, rgba(255,255,255,0.44) 60%, rgba(255,255,255,0.22) 73%, rgba(255,255,255,0.07) 84%, rgba(255,255,255,0) 92%)`,
+                                                }}
+                                            >
+                                                {!selectedChipEntry && (
+                                                    <div
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        aria-label={mobileFeedExpanded ? "Collapse feed" : "Expand feed"}
+                                                        onPointerDown={handleMobileFeedDragStart}
+                                                        onTouchStart={handleMobileFeedDragStart}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === "Enter" || e.key === " ") {
+                                                                e.preventDefault()
+                                                                snapMobileFeed(!mobileFeedExpanded)
+                                                            }
+                                                        }}
+                                                        style={{
+                                                            flexShrink: 0,
+                                                            position: "relative",
+                                                            zIndex: 4,
+                                                            cursor: "ns-resize",
+                                                            outline: "none",
+                                                        }}
+                                                    >
+                                                        <div
+                                                            style={{
+                                                                height: 44,
+                                                                paddingLeft: 14,
+                                                                paddingRight: mapSearchQuery ? 10 : 14,
+                                                                background: isDark ? themeColors.surface : sheetBg,
+                                                                borderRadius: 50,
+                                                                display: "flex",
+                                                                alignItems: "center",
+                                                                gap: 6,
+                                                                border: isDark ? "none" : "0.33px solid rgba(0,0,0,0.18)",
+                                                            }}
+                                                        >
+                                                            <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                                                    <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.52237C12.6167 8.09309 11.9837 9.59948 10.8571 10.7101C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7101C1.2345 9.59948 0.601563 8.09309 0.601562 6.52237C0.601563 4.95166 1.2345 3.44527 2.36113 2.33461C3.48777 1.22394 5.01581 0.599976 6.60911 0.599976C8.20241 0.599976 9.73045 1.22394 10.8571 2.33461C11.9837 3.44527 12.6167 4.95166 12.6167 6.52237Z" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                </svg>
+                                                            </div>
+                                                            <input
+                                                                ref={mapSearchInputRef}
+                                                                type="text"
+                                                                value={mapSearchQuery}
+                                                                onChange={(e) => setMapSearchQuery(e.target.value)}
+                                                                placeholder={selectedChipEntry ? `Search jobs at ${selectedChipEntry.company_name}` : "Search jobs"}
+                                                                style={{
+                                                                    flex: 1,
+                                                                    background: "transparent",
+                                                                    border: "none",
+                                                                    outline: "none",
+                                                                    color: textPrimary,
+                                                                    fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 14,
+                                                                    fontFamily: "Inter",
+                                                                    fontWeight: "400",
+                                                                    lineHeight: "20px",
+                                                                }}
+                                                            />
+                                                            {mapSearchQuery && (
+                                                                <button
+                                                                    type="button"
+                                                                    aria-label="Clear search"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation()
+                                                                        setMapSearchQuery("")
+                                                                        requestAnimationFrame(() => mapSearchInputRef.current?.focus())
+                                                                    }}
+                                                                    onPointerDown={(e) => e.stopPropagation()}
+                                                                    onTouchStart={(e) => e.stopPropagation()}
+                                                                    style={mapSearchClearButtonStyle}
+                                                                >
+                                                                    {mapSearchClearIcon}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {companyHeaderRow}
+                                            </div>
+                                            {!selectedChipEntry && filterStrip}
+                                            </>
+                                        );
+                                    }
+                                    // Desktop: company header is sticky; filter strip is in-flow
+                                    if (selectedChipEntry) {
+                                        return (
+                                            <div style={{
+                                                position: "sticky",
+                                                top: 0,
+                                                zIndex: 10,
+                                                marginLeft: -16,
+                                                marginRight: -16,
+                                                paddingLeft: 16,
+                                                paddingRight: 16,
+                                                paddingTop: 16,
+                                                background: isDark
+                                                    ? `linear-gradient(180deg, #212121 0%, #212121 40%, rgba(33,33,33,0.93) 52%, rgba(33,33,33,0.82) 60%, rgba(33,33,33,0.65) 68%, rgba(33,33,33,0.44) 76%, rgba(33,33,33,0.22) 84%, rgba(33,33,33,0.07) 91%, rgba(33,33,33,0) 97%)`
+                                                    : `linear-gradient(180deg, #fff 0%, #fff 40%, rgba(255,255,255,0.93) 52%, rgba(255,255,255,0.82) 60%, rgba(255,255,255,0.65) 68%, rgba(255,255,255,0.44) 76%, rgba(255,255,255,0.22) 84%, rgba(255,255,255,0.07) 91%, rgba(255,255,255,0) 97%)`,
+                                            }}>
+                                                {companyHeaderRow}
+                                            </div>
+                                        )
+                                    }
+                                    return filterStrip;
                                 })()}
 
                                 {/* Section label skeleton — fill matches job card bg (avoid homepageSkeleton opacity, which reads as wrong color) */}
@@ -14852,7 +15118,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     <>
                                         {/* Section label once loaded — hidden if 0 nearby */}
                                         {selectedChipEntry && nearbyJobCount !== null && nearbyJobCount > 0 && (
-                                            <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "500", color: textSecondary, display: "block" }}>
+                                            <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "400", color: textSecondary, display: "block" }}>
                                                 {`${nearbyJobCount} job${nearbyJobCount === 1 ? "" : "s"} nearby`}
                                             </span>
                                         )}
@@ -14889,7 +15155,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             return (
                                                 <React.Fragment key={job.id}>
                                                 {anywhereLabelHere && (
-                                                    <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "500", color: textSecondary, display: "block" }}>
+                                                    <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "400", color: textSecondary, display: "block" }}>
                                                         {`${anywhereTotalCount} job${anywhereTotalCount === 1 ? "" : "s"} anywhere`}
                                                     </span>
                                                 )}
@@ -14987,23 +15253,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     </>
                                 )}
                             </div>
-                                {isMobile && !selectedChipEntry && (
-                                    <div
-                                        aria-hidden
-                                        style={{
-                                            position: "absolute",
-                                            top: 0,
-                                            left: 0,
-                                            right: 0,
-                                            height: 28,
-                                            zIndex: 3,
-                                            pointerEvents: "none",
-                                            background: `linear-gradient(180deg, ${sheetBg} 0%, ${themeColors.overlay.gradient} 55%)`,
-                                        }}
-                                    />
-                                )}
                             </div>
-                        </div>
+                        </motion.div>
                         {/* Right-edge drag handle — desktop only, resizes the feed width */}
                         {!isMobile && onFeedDragStart && (
                             <div
@@ -25295,6 +25546,17 @@ Do not include markdown formatting or explanations.`
         prevMobileToolOverlayOpen.current = open
     }, [isMobileLayout, isAgentOpen, overlayDragY])
 
+    // Pull-to-dismiss for the map job detail sheet (mobile).
+    const mapJobDragY = useMotionValue(0)
+    const mapJobDragYRef = React.useRef(mapJobDragY)
+    mapJobDragYRef.current = mapJobDragY
+    const prevMapJobOpen = React.useRef(false)
+    React.useEffect(() => {
+        const open = isMobileLayout && isMapOpen && isJobOpen
+        if (open && !prevMapJobOpen.current) mapJobDragY.set(0)
+        prevMapJobOpen.current = open
+    }, [isMobileLayout, isMapOpen, isJobOpen, mapJobDragY])
+
     const settingsOverlayDragY = useMotionValue(0)
     const settingsOverlayDragYRef = React.useRef(settingsOverlayDragY)
     settingsOverlayDragYRef.current = settingsOverlayDragY
@@ -25321,6 +25583,75 @@ Do not include markdown formatting or explanations.`
         },
         []
     )
+
+    // Pull-to-dismiss gesture for the map job overlay — same mechanics as .MobileToolOverlay.
+    const closeJobDetailRef = React.useRef(closeJobDetail)
+    closeJobDetailRef.current = closeJobDetail
+    React.useEffect(() => {
+        if (!isMobileLayout || !isMapOpen || !isJobOpen) return
+        const sheet = document.querySelector(".MapJobOverlay") as HTMLElement | null
+        if (!sheet) return
+        const pullY = mapJobDragYRef.current
+        let lastY = 0, startY = 0, startX = 0, pressed = false
+        let activePointerId = -1, pullCaptureActive = false
+        const scrollEl = () => sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
+        const GESTURE_MIN = 10
+        const releaseCap = () => {
+            if (!pullCaptureActive || activePointerId < 0) return
+            try { if (sheet.hasPointerCapture(activePointerId)) sheet.releasePointerCapture(activePointerId) } catch { /**/ }
+            pullCaptureActive = false; activePointerId = -1
+        }
+        const settle = () => {
+            releaseCap(); pressed = false; lockMobileToolGesture(null)
+            if (pullY.get() < 88) {
+                animate(pullY, 0, { type: "spring", stiffness: 420, damping: 38 })
+            } else {
+                closeJobDetailRef.current()
+            }
+        }
+        const onDown = (e: PointerEvent) => {
+            if (e.pointerType === "mouse" && e.button !== 0) return
+            pressed = true; pullCaptureActive = false; activePointerId = e.pointerId
+            lockMobileToolGesture(null)
+            startX = e.clientX; startY = e.clientY; lastY = e.clientY
+        }
+        const onMove = (e: PointerEvent) => {
+            if (!pressed) return
+            let axis = mobileToolGestureAxisRef.current
+            if (axis === "x") return
+            const adx = Math.abs(e.clientX - startX), ady = Math.abs(e.clientY - startY)
+            if (axis === null) {
+                if (adx < GESTURE_MIN && ady < GESTURE_MIN) return
+                lockMobileToolGesture(adx > ady * 1.35 ? "x" : "y")
+                axis = mobileToolGestureAxisRef.current
+                if (axis === "x") return
+            }
+            const dy = e.clientY - lastY; lastY = e.clientY
+            const py = pullY.get()
+            const sc = scrollEl()
+            const atTop = sc == null || sc.scrollTop <= 1
+            if (!(py > 0 || (atTop && dy > 0))) return
+            if (!pullCaptureActive) {
+                try { sheet.setPointerCapture(e.pointerId); pullCaptureActive = true; activePointerId = e.pointerId } catch { /**/ }
+            }
+            pullY.set(Math.max(0, py + dy))
+            if (e.pointerType === "touch" && e.cancelable) e.preventDefault()
+        }
+        const onTouchMove = (e: TouchEvent) => { if (pullY.get() > 2 && e.cancelable) e.preventDefault() }
+        sheet.addEventListener("pointerdown", onDown)
+        sheet.addEventListener("pointermove", onMove)
+        sheet.addEventListener("pointerup", settle)
+        sheet.addEventListener("pointercancel", settle)
+        sheet.addEventListener("touchmove", onTouchMove, { passive: false })
+        return () => {
+            releaseCap()
+            sheet.removeEventListener("pointerdown", onDown)
+            sheet.removeEventListener("pointermove", onMove)
+            sheet.removeEventListener("pointerup", settle)
+            sheet.removeEventListener("pointercancel", settle)
+            sheet.removeEventListener("touchmove", onTouchMove)
+        }
+    }, [isMobileLayout, isMapOpen, isJobOpen, lockMobileToolGesture]) // eslint-disable-line react-hooks/exhaustive-deps
 
     /** Mobile full-screen tool sheet — same dismiss as toolbar (mutually exclusive tools). */
     const dismissMobileToolOverlayRef = React.useRef<() => void>(() => {})
@@ -31782,6 +32113,15 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             onClose={() => setIsMapOpen(false)}
                             preciseLocRef={preciseLocRef}
                             onJobSelect={openJobDetail}
+                            onFeedJobsChange={isMobileLayout ? (jobs) => {
+                                setJobDeckExtras((prev) => {
+                                    const merged = [...prev]
+                                    for (const j of jobs) {
+                                        if (!merged.some((x) => x.id === j.id)) merged.push(j)
+                                    }
+                                    return merged
+                                })
+                            } : undefined}
                             onFeedDragStart={isMobileLayout ? undefined : handleMapFeedDragStart}
                             feedRef={isMobileLayout ? undefined : mapFeedRef}
                             feedWidth={isMobileLayout ? undefined : mapFeedWidth}
@@ -37156,6 +37496,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 themeColors={themeColors}
                 zIndex={30001}
                 mobileOnly
+                className="MapJobOverlay"
+                dragY={mapJobDragY}
                 sheetStyle={{
                     position: "absolute",
                     top: "max(16px, env(safe-area-inset-top, 0px))",

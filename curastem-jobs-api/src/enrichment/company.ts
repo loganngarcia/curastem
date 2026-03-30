@@ -9,7 +9,8 @@
  *      backfills the highest-priority null field from pass 1 (industry, company_type,
  *      hq_city, hq_country, etc.). Run-once, tracked by exa_social_enriched_at.
  *   3. Brandfetch — fallback for logo / any social links still null after Exa.
- *   4. Google Favicon CDN — zero-cost favicon fallback for any domain.
+ *   4. Logo.dev (img.logo.dev) — raster logo by domain when configured; Google
+ *      Favicon CDN as fallback.
  *   5. Gemini AI — generates a one-sentence company description from job text.
  *
  * Runs after every ingestion cron pass. Non-blocking — failures are logged and
@@ -34,6 +35,7 @@ import {
 } from "../db/queries.ts";
 import { geocode } from "../utils/geocode.ts";
 import { logger } from "../utils/logger.ts";
+import { LOGO_MAX_PX, isLowTrustLogoUrl, resolveLogoUrl } from "../utils/logoUrl.ts";
 import type { CompanyRow } from "../types.ts";
 
 const ENRICHMENT_STALE_SECONDS = 7 * 24 * 60 * 60; // full Brandfetch/AI re-enrich every 7 days
@@ -73,8 +75,6 @@ interface BrandfetchResult {
   glassdoor_url: string | null;
 }
 
-const LOGO_MAX_PX = 64;
-
 function pickLogoUrl(logos: BrandfetchLogo[] | undefined): string | null {
   if (!logos || logos.length === 0) return null;
   const sorted = [...logos].sort((a) => (a.type === "logo" ? -1 : 1));
@@ -110,12 +110,6 @@ async function fetchBrandfetchData(domain: string, clientId: string): Promise<Br
   } catch {
     return null;
   }
-}
-
-// ─── Google Favicon fallback ──────────────────────────────────────────────────
-
-function getGoogleFaviconUrl(domain: string): string {
-  return `https://www.google.com/s2/favicons?domain=${domain}&sz=${LOGO_MAX_PX}`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -166,7 +160,8 @@ const PASS1_BACKFILL_PRIORITY: Array<{
  */
 export async function runExaEnrichment(
   db: D1Database,
-  exaApiKey: string
+  exaApiKey: string,
+  logoDevToken?: string
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
 
@@ -191,14 +186,12 @@ export async function runExaEnrichment(
             fields.website_url = profile.website_url;
 
           // Logo: derive favicon from the resolved domain
-          const logoIsPlaceholder =
-            !company.logo_url ||
-            company.logo_url.startsWith("https://www.google.com/s2/favicons");
+          const logoIsPlaceholder = isLowTrustLogoUrl(company.logo_url);
           if (logoIsPlaceholder) {
             const domain = profile.website_url
               ? extractDomain(profile.website_url)
               : (company.website_url ? extractDomain(company.website_url) : null);
-            if (domain) fields.logo_url = getGoogleFaviconUrl(domain);
+            if (domain) fields.logo_url = await resolveLogoUrl(domain, logoDevToken);
           }
 
           if (!company.linkedin_url && profile.linkedin_url)                   fields.linkedin_url         = profile.linkedin_url;
@@ -328,7 +321,8 @@ async function enrichCompany(
   db: D1Database,
   company: CompanyRow,
   geminiApiKey: string,
-  brandfetchClientId: string | undefined
+  brandfetchClientId: string | undefined,
+  logoDevToken?: string
 ): Promise<void> {
   try {
     const now = Math.floor(Date.now() / 1000);
@@ -342,19 +336,21 @@ async function enrichCompany(
       ? extractDomain(company.website_url)
       : slugFallbackDomain;
 
-    // Brandfetch: fallback for logo and social links still missing after Exa pass
+    const logoIsPlaceholder = isLowTrustLogoUrl(company.logo_url);
+
+    // Brandfetch: fallback for logo/social links still missing or only low-res after Exa pass
     const needsBrandfetch =
-      !company.logo_url || !company.linkedin_url || !company.x_url || !company.glassdoor_url;
+      logoIsPlaceholder || !company.linkedin_url || !company.x_url || !company.glassdoor_url;
     let brandfetch: BrandfetchResult | null = null;
     if (brandfetchClientId && domain && needsBrandfetch) {
       brandfetch = await fetchBrandfetchData(domain, brandfetchClientId);
     }
 
-    // Logo: prefer Brandfetch SVG over Google Favicon CDN placeholder
-    if (!company.logo_url) {
+    // Logo: upgrade any placeholder (Google favicon / img.logo.dev) to Brandfetch SVG → Logo.dev → Google favicon
+    if (logoIsPlaceholder) {
       fields.logo_url =
         brandfetch?.logo_url ??
-        (domain ? getGoogleFaviconUrl(domain) : null);
+        (domain ? await resolveLogoUrl(domain, logoDevToken) : null);
     }
 
     if (!company.linkedin_url && brandfetch?.linkedin_url) fields.linkedin_url  = brandfetch.linkedin_url;
@@ -394,23 +390,26 @@ async function enrichCompany(
 export async function runCompanyEnrichment(
   db: D1Database,
   geminiApiKey: string,
-  brandfetchClientId?: string
-): Promise<void> {
+  brandfetchClientId?: string,
+  logoDevToken?: string,
+  limit = 50
+): Promise<number> {
   const now         = Math.floor(Date.now() / 1000);
   const staleBefore = now - ENRICHMENT_STALE_SECONDS;
   const retryBefore = now - ENRICHMENT_RETRY_SECONDS;
 
-  const companies = await listUnenrichedCompanies(db, staleBefore, retryBefore);
+  const companies = await listUnenrichedCompanies(db, staleBefore, retryBefore, limit);
   if (companies.length === 0) {
     logger.info("company_enrichment_skipped", { reason: "no_stale_companies" });
-    return;
+    return 0;
   }
 
   logger.info("company_enrichment_started", { count: companies.length });
 
   for (const company of companies) {
-    await enrichCompany(db, company, geminiApiKey, brandfetchClientId);
+    await enrichCompany(db, company, geminiApiKey, brandfetchClientId, logoDevToken);
   }
 
   logger.info("company_enrichment_completed", { count: companies.length });
+  return companies.length;
 }

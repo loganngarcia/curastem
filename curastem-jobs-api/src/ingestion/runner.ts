@@ -735,7 +735,7 @@ export async function runIngestion(env: Env): Promise<void> {
   // Runs before Brandfetch so Brandfetch only fills what Exa left null.
   if (env.EXA_API_KEY) {
     try {
-      await runExaEnrichment(env.JOBS_DB, env.EXA_API_KEY);
+      await runExaEnrichment(env.JOBS_DB, env.EXA_API_KEY, env.LOGO_DEV_TOKEN);
     } catch (err) {
       logger.error("exa_enrichment_cron_failed", { error: String(err) });
     }
@@ -746,7 +746,7 @@ export async function runIngestion(env: Env): Promise<void> {
   // Brandfetch + AI description — fallback for fields Exa left null.
   if (env.GEMINI_API_KEY) {
     try {
-      await runCompanyEnrichment(env.JOBS_DB, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID);
+      await runCompanyEnrichment(env.JOBS_DB, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN, 50);
     } catch (err) {
       logger.error("company_enrichment_cron_failed", { error: String(err) });
     }

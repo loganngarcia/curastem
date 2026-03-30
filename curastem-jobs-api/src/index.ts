@@ -48,7 +48,7 @@ import { authenticate, recordKeyUsage } from "./middleware/auth.ts";
 import { checkRateLimit } from "./middleware/rateLimit.ts";
 import { handleGetStats } from "./routes/stats.ts";
 import { runIngestion, processSourceById, backfillEmbeddings } from "./ingestion/runner.ts";
-import { runExaEnrichment } from "./enrichment/company.ts";
+import { runExaEnrichment, runCompanyEnrichment } from "./enrichment/company.ts";
 import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns, ensureNewJobColumns, listJobsForMap, type MapBbox, type MapCenter } from "./db/queries.ts";
 import {
   applyCompanyMetadataCorrections,
@@ -196,7 +196,7 @@ async function handleRequest(
         await ensureCompanyExaColumns(env.JOBS_DB);
         await ensureNewJobColumns(env.JOBS_DB);
         await seedCompanyWebsites(env.JOBS_DB);
-        await applyCompanyMetadataCorrections(env.JOBS_DB);
+        await applyCompanyMetadataCorrections(env.JOBS_DB, env.LOGO_DEV_TOKEN);
         const limitParam = url.searchParams.get("limit");
         const limit = limitParam ? parseInt(limitParam, 10) : undefined;
         const metaJobUrl = url.searchParams.get("meta_job_url") ?? undefined;
@@ -220,7 +220,7 @@ async function handleRequest(
         await ensureCompanyExaColumns(env.JOBS_DB);
         await ensureNewJobColumns(env.JOBS_DB);
         await seedCompanyWebsites(env.JOBS_DB);
-        await applyCompanyMetadataCorrections(env.JOBS_DB);
+        await applyCompanyMetadataCorrections(env.JOBS_DB, env.LOGO_DEV_TOKEN);
         await runIngestion(env);
       })()
     );
@@ -298,13 +298,41 @@ async function handleRequest(
     }
     try {
       await ensureCompanyExaColumns(env.JOBS_DB);
-      await runExaEnrichment(env.JOBS_DB, env.EXA_API_KEY);
+      await runExaEnrichment(env.JOBS_DB, env.EXA_API_KEY, env.LOGO_DEV_TOKEN);
       return jsonOk({ status: "completed" });
     } catch (enrichErr) {
       logger.error("admin_enrich_failed", { error: String(enrichErr) });
       return new Response(JSON.stringify({ error: String(enrichErr) }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /admin/enrich-logos — run the Brandfetch+Logo.dev+AI pass for stale companies.
+  // Upgrades Google favicon placeholders to Logo.dev logos, batch by batch.
+  // ?limit=N  override the per-call batch size (default 50, max 50).
+  // Safe to call repeatedly — idempotent UPDATEs, stops when no stale companies remain.
+  if (path === "/admin/enrich-logos" && method === "POST") {
+    if (!env.GEMINI_API_KEY) {
+      return new Response(JSON.stringify({ error: "GEMINI_API_KEY not set" }), {
+        status: 503, headers: { "Content-Type": "application/json" },
+      });
+    }
+    const batchLimit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 50);
+    try {
+      const processed = await runCompanyEnrichment(env.JOBS_DB, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN, batchLimit);
+
+      // remaining = how many google-favicon companies still exist (may never reach 0 for niche companies not in Logo.dev)
+      // processed = how many were actually enriched this call — loop should stop when this is 0
+      const remaining = await env.JOBS_DB
+        .prepare(`SELECT COUNT(*) as c FROM companies WHERE logo_url LIKE 'https://www.google.com/s2/favicons%'`)
+        .first<{ c: number }>();
+      return jsonOk({ status: "completed", processed, remaining_google_favicons: remaining?.c ?? 0 });
+    } catch (err) {
+      logger.error("admin_enrich_logos_failed", { error: String(err) });
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500, headers: { "Content-Type": "application/json" },
       });
     }
   }
@@ -524,7 +552,7 @@ export default {
           await ensureCompanyExaColumns(env.JOBS_DB);
           await ensureNewJobColumns(env.JOBS_DB);
           await seedCompanyWebsites(env.JOBS_DB);
-          await applyCompanyMetadataCorrections(env.JOBS_DB);
+          await applyCompanyMetadataCorrections(env.JOBS_DB, env.LOGO_DEV_TOKEN);
           await runIngestion(env);
           await recordCronSuccess(env.RATE_LIMIT_KV);
         } catch (err) {
