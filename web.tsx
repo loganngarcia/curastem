@@ -1866,7 +1866,8 @@ function KoahAdSlot({
         const tryProcess = (attempts = 0) => {
             const koah = (window as any).koah
             if (!koah?.process) {
-                if (attempts < 40) setTimeout(() => tryProcess(attempts + 1), 200)
+                if (attempts < 40)
+                    setTimeout(() => tryProcess(attempts + 1), 200)
                 return
             }
             koah.process(userMessage, aiResponse, "suffix", {
@@ -2095,7 +2096,12 @@ interface Message {
     /** Jobs list from a search_jobs tool call, rendered as cards in chat. */
     jobs?: JobSnippet[]
     /** Job context chip — shown above user message bubble when sent with job details open. */
-    jobContext?: { id: string; title: string; companyName: string; logoUrl: string | null }
+    jobContext?: {
+        id: string
+        title: string
+        companyName: string
+        logoUrl: string | null
+    }
 }
 
 interface FileAttachmentProps {
@@ -3472,9 +3478,10 @@ const HeaderActions = React.memo(
                         xmlns="http://www.w3.org/2000/svg"
                     >
                         <path
-                            d={shareMode
-                                ? "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
-                                : "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M19.9987 13.5V22.7258M19.9987 22.7258L22.9342 19.7903M19.9987 22.7258L17.0633 19.7903"
+                            d={
+                                shareMode
+                                    ? "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
+                                    : "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M19.9987 13.5V22.7258M19.9987 22.7258L22.9342 19.7903M19.9987 22.7258L17.0633 19.7903"
                             }
                             stroke={themeColors.text.primary}
                             strokeOpacity="0.95"
@@ -3621,11 +3628,7 @@ function chatMatchesSidebarSearch(
     if (chat.title.toLowerCase().includes(q)) return true
     if (
         (chat.docType === "resume" || chat.docType === "cover_letter") &&
-        buildResumeCoverSidebarTitle(
-            chat.docType,
-            chat.docCompany,
-            profileName
-        )
+        buildResumeCoverSidebarTitle(chat.docType, chat.docCompany, profileName)
             .toLowerCase()
             .includes(q)
     ) {
@@ -7447,7 +7450,11 @@ const ChatInput = React.memo(function ChatInput({
     // is the overlay-embedded bar (`overlayToolComposer`), which exists precisely to type over the tool.
     const mobileToolSuppressEditor =
         isMobileLayout &&
-        (isWhiteboardOpen || isDocOpen || isAppOpen || isJobOpen || isMapOpen) &&
+        (isWhiteboardOpen ||
+            isDocOpen ||
+            isAppOpen ||
+            isJobOpen ||
+            isMapOpen) &&
         !overlayToolComposer
 
     // On mobile overlay bars, block typing while AI is streaming
@@ -7968,7 +7975,11 @@ const ChatInput = React.memo(function ChatInput({
                 >
                     <path
                         d="M5.66679 3.75386V14.8414M10.3336 1.14046V12.228M1 5.3499C1 4.1622 1 3.56874 1.30567 3.22262C1.41379 3.09895 1.54524 3.00095 1.69224 2.93328C2.7936 2.42538 4.23719 3.76241 5.40234 3.72119C5.55556 3.71575 5.70879 3.69397 5.8589 3.65741C7.55761 3.24129 8.62164 1.26179 10.3686 1.02068C11.3696 0.880672 12.4686 1.4858 13.4051 1.80936C14.1751 2.07537 14.5601 2.20837 14.7802 2.52494C15.0004 2.8415 15.0004 3.26307 15.0004 4.10309V10.6537C15.0004 11.8406 15.0004 12.4349 14.6947 12.781C14.5875 12.9032 14.4558 13.0015 14.3081 13.0695C13.2068 13.5774 11.7632 12.2412 10.598 12.2824C10.4441 12.2878 10.2911 12.3089 10.1415 12.3454C8.44275 12.7615 7.37872 14.741 5.63179 14.9829C4.63543 15.1214 1.8618 14.3996 1.22012 13.4779C1 13.1613 1 12.7413 1 11.8997V5.3499Z"
-                        stroke={isMapOpen ? themeColors.semantic.accent : themeColors.text.primary}
+                        stroke={
+                            isMapOpen
+                                ? themeColors.semantic.accent
+                                : themeColors.text.primary
+                        }
                         strokeOpacity="0.95"
                         strokeWidth="1.2"
                         strokeLinecap="round"
@@ -10426,7 +10437,13 @@ interface HomepageJob {
         facebook_url?: string | null
         employee_count_range?: string | null
         founded_year?: number | null
-        headquarters?: { address: string | null; city: string | null; country: string | null; lat?: number | null; lng?: number | null } | null
+        headquarters?: {
+            address: string | null
+            city: string | null
+            country: string | null
+            lat?: number | null
+            lng?: number | null
+        } | null
         industry?: string | null
         company_type?: string | null
         total_funding_usd?: number | null
@@ -11836,10 +11853,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     // Company fields fetched from the detail API override the prop when the job
     // was opened from a chat snippet (which only has name + logo).
     // Seed from cache so social links are visible immediately on second open.
-    const [companyOverride, setCompanyOverride] =
-        React.useState<HomepageJob["company"] | null>(
-            () => readJobDetailCache(job.id, jobsApiUrl)?.company ?? null
-        )
+    const [companyOverride, setCompanyOverride] = React.useState<
+        HomepageJob["company"] | null
+    >(() => readJobDetailCache(job.id, jobsApiUrl)?.company ?? null)
 
     // Keep detail in sync when the job changes without unmounting.
     const lastJobIdRef = React.useRef(job.id)
@@ -11915,7 +11931,11 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             facebook_url?: string | null
                             employee_count_range?: string | null
                             founded_year?: number | null
-                            headquarters?: { address: string | null; city: string | null; country: string | null } | null
+                            headquarters?: {
+                                address: string | null
+                                city: string | null
+                                country: string | null
+                            } | null
                             industry?: string | null
                             company_type?: string | null
                             total_funding_usd?: number | null
@@ -11961,14 +11981,18 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             detailJobCity: jobCity,
                             detailJobState: jobState,
                             detailJobCountry: jobCountry,
-                            company: (d.company as HomepageJob["company"]) ?? null,
+                            company:
+                                (d.company as HomepageJob["company"]) ?? null,
                         }
                         writeJobDetailCache(job.id, jobsApiUrl, entry)
                         onDetailFetched?.(job.id, entry)
                         // Populate company social links locally — no callback needed.
                         // When opened from a chat snippet the prop has nulls for everything;
                         // the detail response has the full company object.
-                        if (d.company) setCompanyOverride(d.company as HomepageJob["company"])
+                        if (d.company)
+                            setCompanyOverride(
+                                d.company as HomepageJob["company"]
+                            )
                     }
                 }
             )
@@ -12005,7 +12029,8 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     // companyOverride is set from the first full API fetch, filling the gaps.
     const effectiveCompany = companyOverride ?? job.company
     const effectiveSummary = job.job_summary || detailSummary
-    const effectiveCompanyDesc = effectiveCompany.description || detailCompanyDesc
+    const effectiveCompanyDesc =
+        effectiveCompany.description || detailCompanyDesc
 
     const hasCachedDetail = readJobDetailCache(job.id, jobsApiUrl) !== null
     const showLazyDetailBody = !loadingDesc && (fetchEnabled || hasCachedDetail)
@@ -12069,10 +12094,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     const locationDisplay = isRemote
         ? null
         : detailJobCity && detailJobState
-            ? `${detailJobCity}, ${detailJobState}`
-            : detailJobCity && detailJobCountry
-                ? `${detailJobCity}, ${detailJobCountry}`
-                : detailJobCity || job.locations?.[0] || null
+          ? `${detailJobCity}, ${detailJobState}`
+          : detailJobCity && detailJobCountry
+            ? `${detailJobCity}, ${detailJobCountry}`
+            : detailJobCity || job.locations?.[0] || null
     const metaItems = [
         jobTimeAgo(job.posted_at),
         locationDisplay,
@@ -12080,7 +12105,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         job.workplace_type !== "on_site" ? fmtPlace(job.workplace_type) : null,
         // Full-time is the default expectation — omit it to reduce noise
         job.employment_type !== "full_time" && job.employment_type
-            ? job.employment_type.replace(/_/g, "-").replace(/\b\w/g, (c) => c.toUpperCase())
+            ? job.employment_type
+                  .replace(/_/g, "-")
+                  .replace(/\b\w/g, (c) => c.toUpperCase())
             : null,
         fmtSeniority(job.seniority_level),
         job.salary?.display,
@@ -12211,11 +12238,14 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                 <div
                     onClick={() => openUrl(effectiveCompany.website_url)}
                     style={{
-                        display: "flex",
+                        display: "inline-flex",
                         alignItems: "center",
                         gap: 12,
                         flexWrap: "wrap",
-                        cursor: effectiveCompany.website_url ? "pointer" : "default",
+                        width: "fit-content",
+                        cursor: effectiveCompany.website_url
+                            ? "pointer"
+                            : "default",
                     }}
                 >
                     <CompanyLogo size={32} />
@@ -12526,12 +12556,15 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             About the company
                         </div>
                         <div
-                            onClick={() => openUrl(effectiveCompany.website_url)}
+                            onClick={() =>
+                                openUrl(effectiveCompany.website_url)
+                            }
                             style={{
-                                display: "flex",
+                                display: "inline-flex",
                                 alignItems: "center",
                                 gap: 12,
                                 flexWrap: "wrap",
+                                width: "fit-content",
                                 cursor: effectiveCompany.website_url
                                     ? "pointer"
                                     : "default",
@@ -12600,127 +12633,499 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             >
                                 {effectiveCompany.website_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.website_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(
+                                                effectiveCompany.website_url
+                                            )
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Website</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            Website
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.linkedin_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.linkedin_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(
+                                                effectiveCompany.linkedin_url
+                                            )
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287 -0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603 -0.00831011 14.8147 0.000101367" fill={themeColors.text.primary} />
+                                        <svg
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 16 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M13.6328 13.633H11.2621V9.92032C11.2621 9.03499 11.2463 7.8953 10.029 7.8953C8.79431 7.8953 8.60539 8.8599 8.60539 9.85586V13.6328H6.23469V5.99796H8.51057V7.04134H8.54242C9.00649 6.24786 9.86935 5.77396 10.7879 5.80805C13.1907 5.80805 13.6337 7.38855 13.6337 9.44469L13.6328 13.633ZM3.55975 4.95434C2.79995 4.95447 2.1839 4.33863 2.18376 3.57881C2.18362 2.81898 2.79946 2.20292 3.55926 2.20278C4.31906 2.20265 4.93512 2.81849 4.93525 3.57831C4.93532 3.94319 4.79044 4.29315 4.53248 4.5512C4.27453 4.80926 3.92462 4.95427 3.55975 4.95434ZM4.7451 13.633H2.37193V5.99796H4.7451V13.633ZM14.8147 0.00119305H1.18066C0.536287 -0.00607883 0.00786419 0.510087 0 1.15446V14.8453C0.00759494 15.49 0.535975 16.0067 1.18066 15.9999H14.8147C15.4606 16.0079 15.9911 15.4913 16 14.8453V1.15348C15.9908 0.507826 15.4603 -0.00831011 14.8147 0.000101367"
+                                                fill={themeColors.text.primary}
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>LinkedIn</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            LinkedIn
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.huggingface_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.huggingface_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(
+                                                effectiveCompany.huggingface_url
+                                            )
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="18" height="16" viewBox="0 0 18 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M17.1757 11.7618C17.1307 11.5922 17.0579 11.4313 16.9602 11.2855C16.9812 11.2088 16.9971 11.1308 17.0078 11.052C17.0771 10.5519 16.9038 10.0941 16.5771 9.73985C16.4001 9.54638 16.2104 9.4186 16.0095 9.34019C16.1413 8.77593 16.208 8.19844 16.2084 7.61903C16.2084 7.35435 16.1934 7.0951 16.1683 6.83971C16.1552 6.71217 16.1394 6.58498 16.1208 6.45812C16.0633 6.08381 15.978 5.71427 15.8655 5.35269C15.7918 5.11509 15.7065 4.88122 15.61 4.65194C15.4653 4.31237 15.2963 3.98366 15.1044 3.66834C14.9786 3.45856 14.8415 3.25569 14.6938 3.06065C14.6214 2.96216 14.546 2.86599 14.4675 2.77228C14.2351 2.48977 13.9824 2.22448 13.7116 1.97848C13.6217 1.89578 13.5292 1.81591 13.4342 1.73898C13.3408 1.66102 13.2452 1.58557 13.1477 1.51271C12.9515 1.36665 12.7487 1.22963 12.54 1.10208C11.3868 0.401671 10.0344 0 8.589 0C4.38049 0 0.969631 3.41102 0.969631 7.61928C0.969463 8.20606 1.03741 8.79082 1.17214 9.36186C0.991388 9.44036 0.818167 9.5627 0.657499 9.73969C0.33089 10.0937 0.157418 10.5499 0.22679 11.05C0.237334 11.1294 0.25315 11.208 0.274238 11.2854C0.176673 11.4312 0.103921 11.5922 0.0589253 11.7618C-0.0414925 12.1435 -0.00843836 12.4877 0.119176 12.7893C-0.019568 13.1834 0.0150762 13.6032 0.195745 13.9681C0.327124 14.2346 0.515157 14.4408 0.746954 14.6251C1.02252 14.8442 1.36745 15.0303 1.78352 15.2089C2.27992 15.4206 2.88585 15.6195 3.16142 15.6925C3.87321 15.8767 4.55572 15.9935 5.24743 15.9992C6.23294 16.0083 7.08164 15.7766 7.68925 15.1836C7.98774 15.2202 8.28824 15.2385 8.589 15.2383C8.90673 15.2376 9.22414 15.2176 9.53945 15.1785C10.1456 15.7753 10.9976 16.0091 11.9867 15.9997C12.6783 15.9942 13.3608 15.8774 14.0708 15.6929C14.3482 15.6199 14.9539 15.421 15.4505 15.2093C15.8666 15.0304 16.2115 14.8443 16.4889 14.6256C16.719 14.4412 16.9069 14.2351 17.0383 13.9686C17.2208 13.6036 17.2536 13.1838 17.1168 12.7897C17.2432 12.4881 17.2761 12.1432 17.1757 11.7618Z" fill="#c8c8c8"/>
-                                            <path fillRule="evenodd" clipRule="evenodd" d="M14.8736 7.61911C14.8736 4.11671 12.0353 1.27749 8.53268 1.27749C5.03011 1.27749 2.19063 4.11688 2.19063 7.61911V7.70112C2.19063 7.71476 2.19046 7.72849 2.19029 7.74204L2.19254 7.78095L2.19338 7.81351L2.19472 7.85175L2.19514 7.8643L2.19681 7.90581C2.19748 7.92171 2.19832 7.93744 2.19915 7.95325C2.20065 7.98363 2.20247 8.01401 2.2051 8.0443C2.20568 8.06271 2.2065 8.07359 2.20735 8.08438L2.21028 8.12388L2.21212 8.14706C2.21716 8.20748 2.22302 8.26773 2.22971 8.32798L2.2302 8.33166L2.23522 8.37593L2.24091 8.42237C2.24284 8.43785 2.24501 8.45334 2.24702 8.46882C2.25152 8.50287 2.25635 8.53693 2.2615 8.57091C2.26325 8.58237 2.26493 8.59392 2.26677 8.60538C2.29102 8.76045 2.32043 8.91149 2.35547 9.06128L2.35589 9.06321L2.36618 9.10672L2.37087 9.10111C2.55497 8.88103 2.81907 8.75969 3.11455 8.75969C3.35128 8.75969 3.5943 8.83802 3.83781 8.99241C3.99932 9.095 4.17789 9.27668 4.36166 9.50521C4.5317 9.26906 4.77002 9.11216 5.04266 9.06923C5.09463 9.06103 5.14718 9.05685 5.19981 9.05685C5.82215 9.05685 6.19687 9.59684 6.33847 10.0826C6.40842 10.2467 6.74558 10.9942 7.25403 11.4998C8.02691 12.2719 8.2203 13.0686 7.83779 13.9218H7.83913C8.18004 13.9247 8.48 13.9274 8.77 13.9298C9.13184 14.7247 9.90413 15.5005 10.4105 14.9936C10.7476 14.2461 10.8179 14.0819 10.9596 13.59C11.3342 13.05 11.9566 13.05 12.0092 13.05C12.0619 13.054 12.1138 13.062 12.3862 13.105C12.6245 13.262 12.7948 13.498 12.9787 13.27C13.1572 13.088 13.3188 12.985 13.5622 12.831C13.8054 12.753 14.0419 12.753 14.3027 12.753C14.539 12.848 14.7175 13.021 14.727 12.979L14.7362 12.937C14.7536 12.865 14.7789 12.721L14.7929 12.621L14.7998 12.583L14.8056 12.545L14.8177 12.459L14.8239 12.412L14.8281 12.378L14.8357 12.311L14.8438 12.233L14.862 12.008C14.868 11.941 14.8736 11.875 14.8736 7.61911Z" fill="#e8e8e8"/>
-                                            <path fillRule="evenodd" clipRule="evenodd" d="M10.5922 5.89302C10.6911 5.928 10.7646 6.03444 10.8346 6.13578C10.9291 6.27268 11.0172 6.40013 11.1522 6.32833C11.3116 6.24356 11.4422 6.11352 11.5276 5.95452C11.613 5.79553 11.6494 5.61483 11.6322 5.4352C11.6193 5.30087 11.5768 5.17108 11.5076 5.05518C11.4385 4.93927 11.3445 4.84014 11.2326 4.76492C11.1205 4.68971 10.9932 4.64029 10.8598 4.62021C10.7263 4.60014 10.5901 4.60992 10.4609 4.64884C10.3317 4.68774 10.2128 4.75481 10.1126 4.8452C10.0124 4.93559 9.93351 5.04706 9.88162 5.1716C9.82974 5.29613 9.80606 5.43063 9.81234 5.5654C9.81869 5.70021 9.85476 5.83185 9.91811 5.95101C9.9807 6.06875 10.1196 6.01318 10.2662 5.95452C10.3811 5.90858 10.5009 5.86072 10.5922 5.89302ZM6.29303 5.89302C6.19412 5.928 6.12056 6.03452 6.0506 6.13578C5.95604 6.27276 5.86793 6.40013 5.73295 6.32833C5.53257 6.22222 5.37891 6.04523 5.30189 5.83201C5.22487 5.61875 5.23004 5.38445 5.31636 5.17479C5.40269 4.96512 5.564 4.79512 5.76885 4.69792C5.9737 4.60072 6.2074 4.58328 6.42441 4.64901C6.59721 4.70104 6.75068 4.80312 6.86549 4.94235C6.9803 5.08159 7.05118 5.25172 7.06934 5.43126C7.08742 5.6108 7.05185 5.79168 6.96717 5.95101C6.90449 6.06875 6.76558 6.01318 6.61897 5.95461C6.50399 5.90858 6.38441 5.86072 6.29303 5.89302ZM9.92706 9.80521C10.6085 9.26839 10.8588 8.39191 10.8588 7.852C10.8588 7.42522 10.5717 7.55953 10.112 7.78715L10.0861 7.79995C9.66413 8.0089 9.10247 8.28714 8.4859 8.28714C7.86925 8.28714 7.30758 8.0089 6.88574 7.79987C6.41119 7.56481 6.11353 7.41736 6.11353 7.85208C6.11353 8.40907 6.37981 9.32362 7.11068 9.85492C7.20716 9.65919 7.34298 9.48546 7.50967 9.34454C7.67628 9.20362 7.87026 9.0986 8.07929 9.03601C8.15226 9.01425 8.22741 9.13986 8.30431 9.26848C8.37854 9.39249 8.45444 9.51935 8.53159 9.51935C8.61385 9.51935 8.6946 9.39433 8.77351 9.27233C8.85594 9.14471 8.93636 9.02044 9.0141 9.0453C9.40531 9.1709 9.73259 9.44329 9.92706 9.80521Z" fill="#888888"/>
-                                            <path d="M9.9269 9.80513C9.572 10.0848 9.10029 10.2723 8.48598 10.2723C7.90883 10.2723 7.45746 10.1068 7.11068 9.85483C7.20716 9.6591 7.34298 9.48529 7.50967 9.34446C7.67628 9.20354 7.87026 9.09852 8.07929 9.03593C8.22255 8.99316 8.37444 9.51935 8.53159 9.51935C8.69979 9.51935 8.86188 8.99659 9.0141 9.04521C9.40522 9.1709 9.73242 9.44329 9.9269 9.80513Z" fill="#aaaaaa"/>
-                                            <path fillRule="evenodd" clipRule="evenodd" d="M4.66358 6.65226C4.58251 6.70648 4.4893 6.73987 4.39222 6.74941C4.29514 6.75904 4.1972 6.74448 4.1071 6.70707C4.03508 6.67736 3.96963 6.63368 3.91453 6.57854C3.85943 6.52347 3.81575 6.45803 3.78601 6.38598C3.74869 6.29586 3.73417 6.19795 3.74377 6.10088C3.75336 6.00381 3.78676 5.91059 3.84099 5.8295C3.90616 5.73193 3.9988 5.65589 4.1072 5.61099C4.2156 5.56608 4.33488 5.55433 4.44995 5.57725C4.56503 5.60015 4.67072 5.65668 4.75366 5.73963C4.83659 5.82264 4.89305 5.92841 4.91588 6.04348C4.93875 6.15854 4.92699 6.27778 4.8821 6.38615C4.8372 6.49452 4.7611 6.58707 4.66358 6.65226ZM13.15 6.65226C13.0689 6.70648 12.9757 6.73987 12.8786 6.74941C12.7814 6.75904 12.6835 6.74448 12.5934 6.70707C12.5214 6.67728 12.4559 6.63368 12.4009 6.57854C12.3458 6.52347 12.3021 6.45803 12.2723 6.38598C12.2351 6.29586 12.2206 6.19795 12.2301 6.10088C12.2398 6.00381 12.2732 5.91059 12.3273 5.8295C12.376 5.75653 12.4404 5.69536 12.5156 5.65024C12.5908 5.60514 12.6751 5.5773 12.7624 5.56873C12.8497 5.56014 12.9378 5.57104 13.0203 5.60062C13.1029 5.63021 13.1779 5.67774 13.2399 5.7398C13.3229 5.82272 13.3794 5.92841 13.4023 6.04348C13.4252 6.15854 13.4134 6.27778 13.3685 6.38615C13.3235 6.49452 13.2475 6.58707 13.15 6.65226Z" fill="#bbbbbb"/>
+                                        <svg
+                                            width="18"
+                                            height="16"
+                                            viewBox="0 0 18 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M17.1757 11.7618C17.1307 11.5922 17.0579 11.4313 16.9602 11.2855C16.9812 11.2088 16.9971 11.1308 17.0078 11.052C17.0771 10.5519 16.9038 10.0941 16.5771 9.73985C16.4001 9.54638 16.2104 9.4186 16.0095 9.34019C16.1413 8.77593 16.208 8.19844 16.2084 7.61903C16.2084 7.35435 16.1934 7.0951 16.1683 6.83971C16.1552 6.71217 16.1394 6.58498 16.1208 6.45812C16.0633 6.08381 15.978 5.71427 15.8655 5.35269C15.7918 5.11509 15.7065 4.88122 15.61 4.65194C15.4653 4.31237 15.2963 3.98366 15.1044 3.66834C14.9786 3.45856 14.8415 3.25569 14.6938 3.06065C14.6214 2.96216 14.546 2.86599 14.4675 2.77228C14.2351 2.48977 13.9824 2.22448 13.7116 1.97848C13.6217 1.89578 13.5292 1.81591 13.4342 1.73898C13.3408 1.66102 13.2452 1.58557 13.1477 1.51271C12.9515 1.36665 12.7487 1.22963 12.54 1.10208C11.3868 0.401671 10.0344 0 8.589 0C4.38049 0 0.969631 3.41102 0.969631 7.61928C0.969463 8.20606 1.03741 8.79082 1.17214 9.36186C0.991388 9.44036 0.818167 9.5627 0.657499 9.73969C0.33089 10.0937 0.157418 10.5499 0.22679 11.05C0.237334 11.1294 0.25315 11.208 0.274238 11.2854C0.176673 11.4312 0.103921 11.5922 0.0589253 11.7618C-0.0414925 12.1435 -0.00843836 12.4877 0.119176 12.7893C-0.019568 13.1834 0.0150762 13.6032 0.195745 13.9681C0.327124 14.2346 0.515157 14.4408 0.746954 14.6251C1.02252 14.8442 1.36745 15.0303 1.78352 15.2089C2.27992 15.4206 2.88585 15.6195 3.16142 15.6925C3.87321 15.8767 4.55572 15.9935 5.24743 15.9992C6.23294 16.0083 7.08164 15.7766 7.68925 15.1836C7.98774 15.2202 8.28824 15.2385 8.589 15.2383C8.90673 15.2376 9.22414 15.2176 9.53945 15.1785C10.1456 15.7753 10.9976 16.0091 11.9867 15.9997C12.6783 15.9942 13.3608 15.8774 14.0708 15.6929C14.3482 15.6199 14.9539 15.421 15.4505 15.2093C15.8666 15.0304 16.2115 14.8443 16.4889 14.6256C16.719 14.4412 16.9069 14.2351 17.0383 13.9686C17.2208 13.6036 17.2536 13.1838 17.1168 12.7897C17.2432 12.4881 17.2761 12.1432 17.1757 11.7618Z"
+                                                fill="#c8c8c8"
+                                            />
+                                            <path
+                                                fillRule="evenodd"
+                                                clipRule="evenodd"
+                                                d="M14.8736 7.61911C14.8736 4.11671 12.0353 1.27749 8.53268 1.27749C5.03011 1.27749 2.19063 4.11688 2.19063 7.61911V7.70112C2.19063 7.71476 2.19046 7.72849 2.19029 7.74204L2.19254 7.78095L2.19338 7.81351L2.19472 7.85175L2.19514 7.8643L2.19681 7.90581C2.19748 7.92171 2.19832 7.93744 2.19915 7.95325C2.20065 7.98363 2.20247 8.01401 2.2051 8.0443C2.20568 8.06271 2.2065 8.07359 2.20735 8.08438L2.21028 8.12388L2.21212 8.14706C2.21716 8.20748 2.22302 8.26773 2.22971 8.32798L2.2302 8.33166L2.23522 8.37593L2.24091 8.42237C2.24284 8.43785 2.24501 8.45334 2.24702 8.46882C2.25152 8.50287 2.25635 8.53693 2.2615 8.57091C2.26325 8.58237 2.26493 8.59392 2.26677 8.60538C2.29102 8.76045 2.32043 8.91149 2.35547 9.06128L2.35589 9.06321L2.36618 9.10672L2.37087 9.10111C2.55497 8.88103 2.81907 8.75969 3.11455 8.75969C3.35128 8.75969 3.5943 8.83802 3.83781 8.99241C3.99932 9.095 4.17789 9.27668 4.36166 9.50521C4.5317 9.26906 4.77002 9.11216 5.04266 9.06923C5.09463 9.06103 5.14718 9.05685 5.19981 9.05685C5.82215 9.05685 6.19687 9.59684 6.33847 10.0826C6.40842 10.2467 6.74558 10.9942 7.25403 11.4998C8.02691 12.2719 8.2203 13.0686 7.83779 13.9218H7.83913C8.18004 13.9247 8.48 13.9274 8.77 13.9298C9.13184 14.7247 9.90413 15.5005 10.4105 14.9936C10.7476 14.2461 10.8179 14.0819 10.9596 13.59C11.3342 13.05 11.9566 13.05 12.0092 13.05C12.0619 13.054 12.1138 13.062 12.3862 13.105C12.6245 13.262 12.7948 13.498 12.9787 13.27C13.1572 13.088 13.3188 12.985 13.5622 12.831C13.8054 12.753 14.0419 12.753 14.3027 12.753C14.539 12.848 14.7175 13.021 14.727 12.979L14.7362 12.937C14.7536 12.865 14.7789 12.721L14.7929 12.621L14.7998 12.583L14.8056 12.545L14.8177 12.459L14.8239 12.412L14.8281 12.378L14.8357 12.311L14.8438 12.233L14.862 12.008C14.868 11.941 14.8736 11.875 14.8736 7.61911Z"
+                                                fill="#e8e8e8"
+                                            />
+                                            <path
+                                                fillRule="evenodd"
+                                                clipRule="evenodd"
+                                                d="M10.5922 5.89302C10.6911 5.928 10.7646 6.03444 10.8346 6.13578C10.9291 6.27268 11.0172 6.40013 11.1522 6.32833C11.3116 6.24356 11.4422 6.11352 11.5276 5.95452C11.613 5.79553 11.6494 5.61483 11.6322 5.4352C11.6193 5.30087 11.5768 5.17108 11.5076 5.05518C11.4385 4.93927 11.3445 4.84014 11.2326 4.76492C11.1205 4.68971 10.9932 4.64029 10.8598 4.62021C10.7263 4.60014 10.5901 4.60992 10.4609 4.64884C10.3317 4.68774 10.2128 4.75481 10.1126 4.8452C10.0124 4.93559 9.93351 5.04706 9.88162 5.1716C9.82974 5.29613 9.80606 5.43063 9.81234 5.5654C9.81869 5.70021 9.85476 5.83185 9.91811 5.95101C9.9807 6.06875 10.1196 6.01318 10.2662 5.95452C10.3811 5.90858 10.5009 5.86072 10.5922 5.89302ZM6.29303 5.89302C6.19412 5.928 6.12056 6.03452 6.0506 6.13578C5.95604 6.27276 5.86793 6.40013 5.73295 6.32833C5.53257 6.22222 5.37891 6.04523 5.30189 5.83201C5.22487 5.61875 5.23004 5.38445 5.31636 5.17479C5.40269 4.96512 5.564 4.79512 5.76885 4.69792C5.9737 4.60072 6.2074 4.58328 6.42441 4.64901C6.59721 4.70104 6.75068 4.80312 6.86549 4.94235C6.9803 5.08159 7.05118 5.25172 7.06934 5.43126C7.08742 5.6108 7.05185 5.79168 6.96717 5.95101C6.90449 6.06875 6.76558 6.01318 6.61897 5.95461C6.50399 5.90858 6.38441 5.86072 6.29303 5.89302ZM9.92706 9.80521C10.6085 9.26839 10.8588 8.39191 10.8588 7.852C10.8588 7.42522 10.5717 7.55953 10.112 7.78715L10.0861 7.79995C9.66413 8.0089 9.10247 8.28714 8.4859 8.28714C7.86925 8.28714 7.30758 8.0089 6.88574 7.79987C6.41119 7.56481 6.11353 7.41736 6.11353 7.85208C6.11353 8.40907 6.37981 9.32362 7.11068 9.85492C7.20716 9.65919 7.34298 9.48546 7.50967 9.34454C7.67628 9.20362 7.87026 9.0986 8.07929 9.03601C8.15226 9.01425 8.22741 9.13986 8.30431 9.26848C8.37854 9.39249 8.45444 9.51935 8.53159 9.51935C8.61385 9.51935 8.6946 9.39433 8.77351 9.27233C8.85594 9.14471 8.93636 9.02044 9.0141 9.0453C9.40531 9.1709 9.73259 9.44329 9.92706 9.80521Z"
+                                                fill="#888888"
+                                            />
+                                            <path
+                                                d="M9.9269 9.80513C9.572 10.0848 9.10029 10.2723 8.48598 10.2723C7.90883 10.2723 7.45746 10.1068 7.11068 9.85483C7.20716 9.6591 7.34298 9.48529 7.50967 9.34446C7.67628 9.20354 7.87026 9.09852 8.07929 9.03593C8.22255 8.99316 8.37444 9.51935 8.53159 9.51935C8.69979 9.51935 8.86188 8.99659 9.0141 9.04521C9.40522 9.1709 9.73242 9.44329 9.9269 9.80513Z"
+                                                fill="#aaaaaa"
+                                            />
+                                            <path
+                                                fillRule="evenodd"
+                                                clipRule="evenodd"
+                                                d="M4.66358 6.65226C4.58251 6.70648 4.4893 6.73987 4.39222 6.74941C4.29514 6.75904 4.1972 6.74448 4.1071 6.70707C4.03508 6.67736 3.96963 6.63368 3.91453 6.57854C3.85943 6.52347 3.81575 6.45803 3.78601 6.38598C3.74869 6.29586 3.73417 6.19795 3.74377 6.10088C3.75336 6.00381 3.78676 5.91059 3.84099 5.8295C3.90616 5.73193 3.9988 5.65589 4.1072 5.61099C4.2156 5.56608 4.33488 5.55433 4.44995 5.57725C4.56503 5.60015 4.67072 5.65668 4.75366 5.73963C4.83659 5.82264 4.89305 5.92841 4.91588 6.04348C4.93875 6.15854 4.92699 6.27778 4.8821 6.38615C4.8372 6.49452 4.7611 6.58707 4.66358 6.65226ZM13.15 6.65226C13.0689 6.70648 12.9757 6.73987 12.8786 6.74941C12.7814 6.75904 12.6835 6.74448 12.5934 6.70707C12.5214 6.67728 12.4559 6.63368 12.4009 6.57854C12.3458 6.52347 12.3021 6.45803 12.2723 6.38598C12.2351 6.29586 12.2206 6.19795 12.2301 6.10088C12.2398 6.00381 12.2732 5.91059 12.3273 5.8295C12.376 5.75653 12.4404 5.69536 12.5156 5.65024C12.5908 5.60514 12.6751 5.5773 12.7624 5.56873C12.8497 5.56014 12.9378 5.57104 13.0203 5.60062C13.1029 5.63021 13.1779 5.67774 13.2399 5.7398C13.3229 5.82272 13.3794 5.92841 13.4023 6.04348C13.4252 6.15854 13.4134 6.27778 13.3685 6.38615C13.3235 6.49452 13.2475 6.58707 13.15 6.65226Z"
+                                                fill="#bbbbbb"
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>HuggingFace</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            HuggingFace
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.github_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.github_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(effectiveCompany.github_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="17" height="16" viewBox="0 0 17 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path fillRule="evenodd" clipRule="evenodd" d="M8.20253 0C3.67286 0 0 3.67231 0 8.20253C0 11.8265 2.35041 14.9011 5.60925 15.9857C6.01935 16.0618 6.16996 15.8078 6.16996 15.5913C6.16996 15.3957 6.16236 14.7494 6.15866 14.064C3.87671 14.5603 3.39533 13.0963 3.39533 13.0963C3.02206 12.1484 2.4845 11.8961 2.4845 11.8961C1.74015 11.387 2.54057 11.3974 2.54057 11.3974C3.36425 11.4554 3.79782 12.2428 3.79782 12.2428C4.52957 13.4968 5.71683 13.1343 6.18496 12.9246C6.25863 12.3946 6.47107 12.0325 6.70568 11.8278C4.88381 11.6207 2.96871 10.9172 2.96871 7.77417C2.96871 6.87878 3.28905 6.14693 3.81368 5.57263C3.7286 5.36595 3.44781 4.53163 3.89334 3.40185C3.89334 3.40185 4.58205 3.18126 6.14921 4.24258C6.80369 4.0609 7.50534 3.96984 8.20242 3.96658C8.8995 3.96984 9.6018 4.0609 10.2573 4.24258C11.8229 3.18137 12.5107 3.40174 12.5107 3.40174C12.9571 4.53141 12.6765 5.36574 12.5912 5.57231C13.1171 6.14671 13.4353 6.87845 13.4353 7.77385C13.4353 10.9246 11.5165 11.6181 9.69004 11.8212C9.98419 12.0759 10.2464 12.575 10.2464 13.3403C10.2464 14.4378 10.2371 15.3212 10.2371 15.5913C10.2371 15.8097 10.3845 16.0653 10.8003 15.9849C14.058 14.8991 16.4052 11.8255 16.4052 8.20264C16.4052 3.67231 12.7322 0 8.20253 0Z" fill={themeColors.text.primary} />
-                                            <path d="M3.10759 11.7765C3.08944 11.8174 3.02533 11.8297 2.96697 11.8015C2.90721 11.7748 2.87406 11.7191 2.8933 11.6783C2.91101 11.6364 2.97512 11.6248 3.03456 11.6527C3.09411 11.6796 3.12802 11.7356 3.10759 11.7765ZM3.43891 12.1473C3.39979 12.1836 3.32318 12.1668 3.27156 12.1095C3.21766 12.0522 3.20778 11.9756 3.24744 11.9389C3.28765 11.9027 3.36197 11.9196 3.41555 11.9769C3.46933 12.0347 3.47988 12.1105 3.43891 12.1473ZM3.7623 12.62C3.71199 12.6551 3.62973 12.6224 3.57887 12.5493C3.52856 12.4763 3.52856 12.3888 3.57996 12.3537C3.63103 12.3187 3.71198 12.3505 3.7636 12.4226C3.81359 12.4968 3.81359 12.5842 3.7623 12.62ZM4.20641 13.0765C4.16143 13.126 4.06569 13.1127 3.9956 13.045C3.92388 12.9789 3.90389 12.885 3.94888 12.8355C3.99452 12.7858 4.09079 12.7996 4.16143 12.867C4.2326 12.9328 4.25423 13.0274 4.20641 13.0765ZM4.81766 13.3413C4.79766 13.4054 4.70573 13.4347 4.61272 13.4073C4.51981 13.3792 4.45906 13.304 4.47797 13.2391C4.4971 13.1745 4.5899 13.1441 4.68335 13.1733C4.77604 13.2012 4.837 13.276 4.81766 13.3413ZM5.48867 13.3902C5.49084 13.4579 5.41217 13.5141 5.3148 13.5152C5.21657 13.5173 5.13714 13.4626 5.13605 13.3961C5.13605 13.3276 5.2132 13.2722 5.311 13.2705C5.4088 13.2684 5.48867 13.323 5.48867 13.3901M6.1135 13.2842C6.12513 13.3501 6.05743 13.4179 5.9605 13.4359C5.86531 13.4535 5.77718 13.4127 5.76512 13.3474C5.75316 13.2797 5.82217 13.212 5.91725 13.1945C6.01429 13.1775 6.10111 13.2172 6.1135 13.2842Z" fill={themeColors.text.primary} />
+                                        <svg
+                                            width="17"
+                                            height="16"
+                                            viewBox="0 0 17 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                fillRule="evenodd"
+                                                clipRule="evenodd"
+                                                d="M8.20253 0C3.67286 0 0 3.67231 0 8.20253C0 11.8265 2.35041 14.9011 5.60925 15.9857C6.01935 16.0618 6.16996 15.8078 6.16996 15.5913C6.16996 15.3957 6.16236 14.7494 6.15866 14.064C3.87671 14.5603 3.39533 13.0963 3.39533 13.0963C3.02206 12.1484 2.4845 11.8961 2.4845 11.8961C1.74015 11.387 2.54057 11.3974 2.54057 11.3974C3.36425 11.4554 3.79782 12.2428 3.79782 12.2428C4.52957 13.4968 5.71683 13.1343 6.18496 12.9246C6.25863 12.3946 6.47107 12.0325 6.70568 11.8278C4.88381 11.6207 2.96871 10.9172 2.96871 7.77417C2.96871 6.87878 3.28905 6.14693 3.81368 5.57263C3.7286 5.36595 3.44781 4.53163 3.89334 3.40185C3.89334 3.40185 4.58205 3.18126 6.14921 4.24258C6.80369 4.0609 7.50534 3.96984 8.20242 3.96658C8.8995 3.96984 9.6018 4.0609 10.2573 4.24258C11.8229 3.18137 12.5107 3.40174 12.5107 3.40174C12.9571 4.53141 12.6765 5.36574 12.5912 5.57231C13.1171 6.14671 13.4353 6.87845 13.4353 7.77385C13.4353 10.9246 11.5165 11.6181 9.69004 11.8212C9.98419 12.0759 10.2464 12.575 10.2464 13.3403C10.2464 14.4378 10.2371 15.3212 10.2371 15.5913C10.2371 15.8097 10.3845 16.0653 10.8003 15.9849C14.058 14.8991 16.4052 11.8255 16.4052 8.20264C16.4052 3.67231 12.7322 0 8.20253 0Z"
+                                                fill={themeColors.text.primary}
+                                            />
+                                            <path
+                                                d="M3.10759 11.7765C3.08944 11.8174 3.02533 11.8297 2.96697 11.8015C2.90721 11.7748 2.87406 11.7191 2.8933 11.6783C2.91101 11.6364 2.97512 11.6248 3.03456 11.6527C3.09411 11.6796 3.12802 11.7356 3.10759 11.7765ZM3.43891 12.1473C3.39979 12.1836 3.32318 12.1668 3.27156 12.1095C3.21766 12.0522 3.20778 11.9756 3.24744 11.9389C3.28765 11.9027 3.36197 11.9196 3.41555 11.9769C3.46933 12.0347 3.47988 12.1105 3.43891 12.1473ZM3.7623 12.62C3.71199 12.6551 3.62973 12.6224 3.57887 12.5493C3.52856 12.4763 3.52856 12.3888 3.57996 12.3537C3.63103 12.3187 3.71198 12.3505 3.7636 12.4226C3.81359 12.4968 3.81359 12.5842 3.7623 12.62ZM4.20641 13.0765C4.16143 13.126 4.06569 13.1127 3.9956 13.045C3.92388 12.9789 3.90389 12.885 3.94888 12.8355C3.99452 12.7858 4.09079 12.7996 4.16143 12.867C4.2326 12.9328 4.25423 13.0274 4.20641 13.0765ZM4.81766 13.3413C4.79766 13.4054 4.70573 13.4347 4.61272 13.4073C4.51981 13.3792 4.45906 13.304 4.47797 13.2391C4.4971 13.1745 4.5899 13.1441 4.68335 13.1733C4.77604 13.2012 4.837 13.276 4.81766 13.3413ZM5.48867 13.3902C5.49084 13.4579 5.41217 13.5141 5.3148 13.5152C5.21657 13.5173 5.13714 13.4626 5.13605 13.3961C5.13605 13.3276 5.2132 13.2722 5.311 13.2705C5.4088 13.2684 5.48867 13.323 5.48867 13.3901M6.1135 13.2842C6.12513 13.3501 6.05743 13.4179 5.9605 13.4359C5.86531 13.4535 5.77718 13.4127 5.76512 13.3474C5.75316 13.2797 5.82217 13.212 5.91725 13.1945C6.01429 13.1775 6.10111 13.2172 6.1135 13.2842Z"
+                                                fill={themeColors.text.primary}
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>GitHub</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            GitHub
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.x_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.x_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(effectiveCompany.x_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                        <svg
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 16 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M13.7266 0.599976L8.5378 6.66373M8.5378 6.66373L14.4143 13.3444C14.8641 13.8562 14.4519 14.6 13.7204 14.6H12.4307C12.1586 14.6 11.9022 14.4889 11.7359 14.2999L6.6653 8.53623M8.5378 6.66373L3.46718 0.900101C3.30093 0.711101 3.04368 0.599976 2.77243 0.599976H1.48268C0.750301 0.599976 0.339051 1.34373 0.788801 1.8556L6.6653 8.53623M1.47655 14.6L6.6653 8.53623"
+                                                stroke={
+                                                    themeColors.text.primary
+                                                }
+                                                strokeWidth="1.2"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>X/Twitter</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            X/Twitter
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.tiktok_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.tiktok_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(effectiveCompany.tiktok_url)
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="14" height="16" viewBox="0 0 14 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M7.30051 0.0133332C8.17383 0 9.04049 0.00666658 9.90714 0C9.96048 1.01999 10.3271 2.05997 11.0738 2.77997C11.8205 3.51996 12.8738 3.85995 13.9004 3.97328V6.65992C12.9404 6.62658 11.9738 6.42659 11.1005 6.01326C10.7205 5.83993 10.3671 5.61993 10.0205 5.39327C10.0138 7.33991 10.0271 9.28655 10.0071 11.2265C9.95381 12.1598 9.64715 13.0865 9.10715 13.8532C8.23383 15.1331 6.72052 15.9665 5.1672 15.9931C4.21388 16.0465 3.26056 15.7865 2.44724 15.3065C1.10059 14.5132 0.153933 13.0598 0.0139343 11.4999C0.000601121 11.1665 -0.00606546 10.8332 0.00726771 10.5065C0.127266 9.23988 0.753925 8.02657 1.72725 7.19991C2.8339 6.23992 4.38055 5.77993 5.82719 6.05326C5.84053 7.03991 5.80053 8.02657 5.80053 9.01322C5.14054 8.79989 4.36721 8.85989 3.78722 9.25988C3.36723 9.53321 3.04723 9.95321 2.88057 10.4265C2.74057 10.7665 2.78057 11.1399 2.78723 11.4999C2.94723 12.5932 4.00055 13.5132 5.12054 13.4132C5.86719 13.4065 6.58052 12.9732 6.96718 12.3398C7.09384 12.1198 7.23384 11.8932 7.24051 11.6332C7.30718 10.4399 7.28051 9.25322 7.28718 8.0599C7.29384 5.37327 7.28051 2.6933 7.30051 0.0133332Z" fill={themeColors.text.primary} />
+                                        <svg
+                                            width="14"
+                                            height="16"
+                                            viewBox="0 0 14 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M7.30051 0.0133332C8.17383 0 9.04049 0.00666658 9.90714 0C9.96048 1.01999 10.3271 2.05997 11.0738 2.77997C11.8205 3.51996 12.8738 3.85995 13.9004 3.97328V6.65992C12.9404 6.62658 11.9738 6.42659 11.1005 6.01326C10.7205 5.83993 10.3671 5.61993 10.0205 5.39327C10.0138 7.33991 10.0271 9.28655 10.0071 11.2265C9.95381 12.1598 9.64715 13.0865 9.10715 13.8532C8.23383 15.1331 6.72052 15.9665 5.1672 15.9931C4.21388 16.0465 3.26056 15.7865 2.44724 15.3065C1.10059 14.5132 0.153933 13.0598 0.0139343 11.4999C0.000601121 11.1665 -0.00606546 10.8332 0.00726771 10.5065C0.127266 9.23988 0.753925 8.02657 1.72725 7.19991C2.8339 6.23992 4.38055 5.77993 5.82719 6.05326C5.84053 7.03991 5.80053 8.02657 5.80053 9.01322C5.14054 8.79989 4.36721 8.85989 3.78722 9.25988C3.36723 9.53321 3.04723 9.95321 2.88057 10.4265C2.74057 10.7665 2.78057 11.1399 2.78723 11.4999C2.94723 12.5932 4.00055 13.5132 5.12054 13.4132C5.86719 13.4065 6.58052 12.9732 6.96718 12.3398C7.09384 12.1198 7.23384 11.8932 7.24051 11.6332C7.30718 10.4399 7.28051 9.25322 7.28718 8.0599C7.29384 5.37327 7.28051 2.6933 7.30051 0.0133332Z"
+                                                fill={themeColors.text.primary}
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>TikTok</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            TikTok
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.instagram_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.instagram_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(
+                                                effectiveCompany.instagram_url
+                                            )
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M4.10087 0.0490097C3.35607 0.0841262 2.84746 0.203009 2.40279 0.377659C1.94266 0.557033 1.55258 0.797657 1.16449 1.18715C0.776462 1.57664 0.537413 1.96695 0.35938 2.42789C0.187064 2.87344 0.0702807 3.38252 0.0373808 4.12772C0.00448091 4.87293 -0.00281073 5.1125 0.000864258 7.01346C0.00448091 8.91431 0.0128809 9.1526 0.0489891 9.89938C0.0845724 10.644 0.202989 11.1525 0.377696 11.5973C0.557363 12.0575 0.797695 12.4474 1.18736 12.8356C1.57697 13.2238 1.96698 13.4623 2.42898 13.6406C2.87418 13.8127 3.38337 13.93 4.12846 13.9626C4.87355 13.9952 5.11336 14.0028 7.01374 13.9992C8.91411 13.9955 9.1534 13.9871 9.89994 13.9517C10.6466 13.9163 11.1524 13.797 11.5973 13.6231C12.0575 13.4431 12.4477 13.2031 12.8356 12.8134C13.2235 12.4236 13.4624 12.033 13.6403 11.5718C13.8128 11.1266 13.93 10.6175 13.9623 9.8729C13.995 9.12571 14.0027 8.88718 13.9991 6.98657C13.9954 5.0859 13.9868 4.84761 13.9514 4.10112C13.916 3.35463 13.7974 2.84772 13.6228 2.40264C13.4429 1.94245 13.2028 1.55284 12.8134 1.16434C12.4239 0.775841 12.033 0.537142 11.572 0.359634C11.1265 0.187259 10.6176 0.0698346 9.87253 0.0376347C9.12744 0.00543477 8.88763 -0.00290686 6.98655 0.000826458C5.08547 0.00444311 4.84748 0.0126098 4.10087 0.0490097ZM4.18265 12.7033C3.50015 12.6736 3.12956 12.5602 2.88258 12.4653C2.55557 12.3393 2.32258 12.187 2.07647 11.9432C1.83031 11.6995 1.67917 11.4657 1.55148 11.1394C1.45558 10.8924 1.34008 10.5222 1.30817 9.83971C1.27346 9.10208 1.26617 8.88059 1.26209 7.01171C1.258 5.14289 1.26518 4.92164 1.29749 4.18372C1.32666 3.50181 1.44076 3.13081 1.53549 2.88394C1.66149 2.55652 1.81328 2.32394 2.05757 2.07801C2.30187 1.83202 2.53497 1.68053 2.86158 1.55284C3.10833 1.45653 3.47845 1.34202 4.16066 1.30953C4.89887 1.27453 5.12007 1.26753 6.98865 1.26345C8.85724 1.25936 9.07902 1.26636 9.81752 1.29891C10.4994 1.32855 10.8706 1.44154 11.1172 1.53691C11.4443 1.66291 11.6772 1.81423 11.9231 2.059C12.1691 2.30364 12.3207 2.53593 12.4484 2.86323C12.5448 3.10923 12.6594 3.47923 12.6916 4.16191C12.7267 4.90011 12.7347 5.12149 12.738 6.9899C12.7414 8.85831 12.7348 9.08021 12.7024 9.81789C12.6727 10.5004 12.5595 10.8711 12.4644 11.1184C12.3384 11.4453 12.1866 11.6784 11.9421 11.9242C11.6977 12.1701 11.4649 12.3215 11.1381 12.4492C10.8917 12.5454 10.5211 12.6602 9.83951 12.6927C9.10125 12.7274 8.88005 12.7347 7.01076 12.7387C5.14147 12.7428 4.92086 12.7352 4.18265 12.7033ZM9.88921 3.25873C9.88949 3.42488 9.93903 3.58722 10.0316 3.72521C10.1241 3.8632 10.2555 3.97065 10.4091 4.03396C10.5627 4.09727 10.7317 4.1136 10.8946 4.08089C11.0575 4.04818 11.207 3.96789 11.3243 3.85018C11.4416 3.73248 11.5213 3.58264 11.5534 3.41962C11.5855 3.2566 11.5685 3.08772 11.5046 2.93434C11.4407 2.78097 11.3328 2.64998 11.1945 2.55795C11.0561 2.46593 10.8936 2.41699 10.7275 2.41734C10.5047 2.4178 10.2913 2.5067 10.1341 2.66448C9.97693 2.82226 9.88884 3.03601 9.88921 3.25873ZM3.40577 7.00699C3.40968 8.99218 5.02195 10.5978 7.00668 10.5941C8.99152 10.5903 10.5982 8.97818 10.5945 6.99299C10.5907 5.0078 8.97811 3.40171 6.99303 3.40562C5.00795 3.40952 3.40204 5.02203 3.40577 7.00699ZM4.66664 7.00448C4.66573 6.543 4.80169 6.09161 5.05732 5.70739C5.31294 5.32317 5.67677 5.02338 6.10277 4.84594C6.52878 4.66849 6.99784 4.62135 7.45063 4.71049C7.90343 4.79962 8.31963 5.02102 8.64659 5.34669C8.97356 5.67236 9.19661 6.08767 9.28755 6.54011C9.37848 6.99255 9.33321 7.46179 9.15745 7.8885C8.9817 8.31521 8.68336 8.68022 8.30017 8.93737C7.91697 9.19453 7.46612 9.33228 7.00464 9.3332C6.69821 9.33384 6.39465 9.27412 6.1113 9.15743C5.82796 9.04074 5.57038 8.86938 5.35327 8.65313C5.13616 8.43688 4.96377 8.17999 4.84596 7.89711C4.72815 7.61423 4.66722 7.31091 4.66664 7.00448Z" fill={themeColors.text.primary} />
+                                        <svg
+                                            width="14"
+                                            height="14"
+                                            viewBox="0 0 14 14"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M4.10087 0.0490097C3.35607 0.0841262 2.84746 0.203009 2.40279 0.377659C1.94266 0.557033 1.55258 0.797657 1.16449 1.18715C0.776462 1.57664 0.537413 1.96695 0.35938 2.42789C0.187064 2.87344 0.0702807 3.38252 0.0373808 4.12772C0.00448091 4.87293 -0.00281073 5.1125 0.000864258 7.01346C0.00448091 8.91431 0.0128809 9.1526 0.0489891 9.89938C0.0845724 10.644 0.202989 11.1525 0.377696 11.5973C0.557363 12.0575 0.797695 12.4474 1.18736 12.8356C1.57697 13.2238 1.96698 13.4623 2.42898 13.6406C2.87418 13.8127 3.38337 13.93 4.12846 13.9626C4.87355 13.9952 5.11336 14.0028 7.01374 13.9992C8.91411 13.9955 9.1534 13.9871 9.89994 13.9517C10.6466 13.9163 11.1524 13.797 11.5973 13.6231C12.0575 13.4431 12.4477 13.2031 12.8356 12.8134C13.2235 12.4236 13.4624 12.033 13.6403 11.5718C13.8128 11.1266 13.93 10.6175 13.9623 9.8729C13.995 9.12571 14.0027 8.88718 13.9991 6.98657C13.9954 5.0859 13.9868 4.84761 13.9514 4.10112C13.916 3.35463 13.7974 2.84772 13.6228 2.40264C13.4429 1.94245 13.2028 1.55284 12.8134 1.16434C12.4239 0.775841 12.033 0.537142 11.572 0.359634C11.1265 0.187259 10.6176 0.0698346 9.87253 0.0376347C9.12744 0.00543477 8.88763 -0.00290686 6.98655 0.000826458C5.08547 0.00444311 4.84748 0.0126098 4.10087 0.0490097ZM4.18265 12.7033C3.50015 12.6736 3.12956 12.5602 2.88258 12.4653C2.55557 12.3393 2.32258 12.187 2.07647 11.9432C1.83031 11.6995 1.67917 11.4657 1.55148 11.1394C1.45558 10.8924 1.34008 10.5222 1.30817 9.83971C1.27346 9.10208 1.26617 8.88059 1.26209 7.01171C1.258 5.14289 1.26518 4.92164 1.29749 4.18372C1.32666 3.50181 1.44076 3.13081 1.53549 2.88394C1.66149 2.55652 1.81328 2.32394 2.05757 2.07801C2.30187 1.83202 2.53497 1.68053 2.86158 1.55284C3.10833 1.45653 3.47845 1.34202 4.16066 1.30953C4.89887 1.27453 5.12007 1.26753 6.98865 1.26345C8.85724 1.25936 9.07902 1.26636 9.81752 1.29891C10.4994 1.32855 10.8706 1.44154 11.1172 1.53691C11.4443 1.66291 11.6772 1.81423 11.9231 2.059C12.1691 2.30364 12.3207 2.53593 12.4484 2.86323C12.5448 3.10923 12.6594 3.47923 12.6916 4.16191C12.7267 4.90011 12.7347 5.12149 12.738 6.9899C12.7414 8.85831 12.7348 9.08021 12.7024 9.81789C12.6727 10.5004 12.5595 10.8711 12.4644 11.1184C12.3384 11.4453 12.1866 11.6784 11.9421 11.9242C11.6977 12.1701 11.4649 12.3215 11.1381 12.4492C10.8917 12.5454 10.5211 12.6602 9.83951 12.6927C9.10125 12.7274 8.88005 12.7347 7.01076 12.7387C5.14147 12.7428 4.92086 12.7352 4.18265 12.7033ZM9.88921 3.25873C9.88949 3.42488 9.93903 3.58722 10.0316 3.72521C10.1241 3.8632 10.2555 3.97065 10.4091 4.03396C10.5627 4.09727 10.7317 4.1136 10.8946 4.08089C11.0575 4.04818 11.207 3.96789 11.3243 3.85018C11.4416 3.73248 11.5213 3.58264 11.5534 3.41962C11.5855 3.2566 11.5685 3.08772 11.5046 2.93434C11.4407 2.78097 11.3328 2.64998 11.1945 2.55795C11.0561 2.46593 10.8936 2.41699 10.7275 2.41734C10.5047 2.4178 10.2913 2.5067 10.1341 2.66448C9.97693 2.82226 9.88884 3.03601 9.88921 3.25873ZM3.40577 7.00699C3.40968 8.99218 5.02195 10.5978 7.00668 10.5941C8.99152 10.5903 10.5982 8.97818 10.5945 6.99299C10.5907 5.0078 8.97811 3.40171 6.99303 3.40562C5.00795 3.40952 3.40204 5.02203 3.40577 7.00699ZM4.66664 7.00448C4.66573 6.543 4.80169 6.09161 5.05732 5.70739C5.31294 5.32317 5.67677 5.02338 6.10277 4.84594C6.52878 4.66849 6.99784 4.62135 7.45063 4.71049C7.90343 4.79962 8.31963 5.02102 8.64659 5.34669C8.97356 5.67236 9.19661 6.08767 9.28755 6.54011C9.37848 6.99255 9.33321 7.46179 9.15745 7.8885C8.9817 8.31521 8.68336 8.68022 8.30017 8.93737C7.91697 9.19453 7.46612 9.33228 7.00464 9.3332C6.69821 9.33384 6.39465 9.27412 6.1113 9.15743C5.82796 9.04074 5.57038 8.86938 5.35327 8.65313C5.13616 8.43688 4.96377 8.17999 4.84596 7.89711C4.72815 7.61423 4.66722 7.31091 4.66664 7.00448Z"
+                                                fill={themeColors.text.primary}
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Instagram</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            Instagram
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.facebook_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.facebook_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(
+                                                effectiveCompany.facebook_url
+                                            )
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="9" height="14" viewBox="0 0 9 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M6.24324 0C4.07816 0 2.27027 1.80789 2.27027 3.97297V5.2973H0.189189C0.139013 5.2973 0.0908919 5.31723 0.0554121 5.35271C0.0199322 5.38819 0 5.43631 0 5.48649V8.51351C0 8.61795 0.0847568 8.7027 0.189189 8.7027H2.27027V13.8108C2.27027 13.9152 2.35503 14 2.45946 14H5.48649C5.53666 14 5.58478 13.9801 5.62026 13.9446C5.65574 13.9091 5.67568 13.861 5.67568 13.8108V8.7027H7.75676C7.79894 8.70259 7.83988 8.68837 7.87306 8.66232C7.90624 8.63627 7.92977 8.59987 7.93989 8.55892L8.69665 5.53189C8.70353 5.50407 8.70399 5.47504 8.69801 5.44701C8.69203 5.41897 8.67976 5.39266 8.66212 5.37007C8.64448 5.34747 8.62194 5.32918 8.59619 5.31658C8.57045 5.30397 8.54218 5.29738 8.51351 5.2973H5.67568V3.97297C5.67764 3.82305 5.73806 3.67983 5.84408 3.57381C5.9501 3.46779 6.09332 3.40737 6.24324 3.40541H8.51351C8.56369 3.40541 8.61181 3.38547 8.64729 3.34999C8.68277 3.31451 8.7027 3.26639 8.7027 3.21622V0.189189C8.7027 0.139013 8.68277 0.0908921 8.64729 0.0554123C8.61181 0.0199324 8.56369 0 8.51351 0H6.24324Z" fill={themeColors.text.primary} />
+                                        <svg
+                                            width="9"
+                                            height="14"
+                                            viewBox="0 0 9 14"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M6.24324 0C4.07816 0 2.27027 1.80789 2.27027 3.97297V5.2973H0.189189C0.139013 5.2973 0.0908919 5.31723 0.0554121 5.35271C0.0199322 5.38819 0 5.43631 0 5.48649V8.51351C0 8.61795 0.0847568 8.7027 0.189189 8.7027H2.27027V13.8108C2.27027 13.9152 2.35503 14 2.45946 14H5.48649C5.53666 14 5.58478 13.9801 5.62026 13.9446C5.65574 13.9091 5.67568 13.861 5.67568 13.8108V8.7027H7.75676C7.79894 8.70259 7.83988 8.68837 7.87306 8.66232C7.90624 8.63627 7.92977 8.59987 7.93989 8.55892L8.69665 5.53189C8.70353 5.50407 8.70399 5.47504 8.69801 5.44701C8.69203 5.41897 8.67976 5.39266 8.66212 5.37007C8.64448 5.34747 8.62194 5.32918 8.59619 5.31658C8.57045 5.30397 8.54218 5.29738 8.51351 5.2973H5.67568V3.97297C5.67764 3.82305 5.73806 3.67983 5.84408 3.57381C5.9501 3.46779 6.09332 3.40737 6.24324 3.40541H8.51351C8.56369 3.40541 8.61181 3.38547 8.64729 3.34999C8.68277 3.31451 8.7027 3.26639 8.7027 3.21622V0.189189C8.7027 0.139013 8.68277 0.0908921 8.64729 0.0554123C8.61181 0.0199324 8.56369 0 8.51351 0H6.24324Z"
+                                                fill={themeColors.text.primary}
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Facebook</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            Facebook
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.youtube_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.youtube_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(
+                                                effectiveCompany.youtube_url
+                                            )
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="19" height="13" viewBox="0 0 19 13" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M4.35458 0.109871C5.52626 3.74932e-08 7.03342 0 8.98174 0H9.05052C10.998 0 12.5052 3.74932e-08 13.6768 0.109871C14.8569 0.221419 15.7879 0.450387 16.536 0.973742C17.3143 1.5189 17.6909 2.24103 17.867 3.16026C18.0323 4.0191 18.0323 5.1069 18.0323 6.4371V6.5629C18.0323 7.8931 18.0323 8.9809 17.867 9.83974C17.6909 10.759 17.3143 11.4811 16.536 12.0263C15.7879 12.5496 14.8569 12.7786 13.676 12.8901C12.5052 13 10.998 13 9.05052 13H8.98174C7.03426 13 5.5271 13 4.35542 12.8901C3.17535 12.7786 2.24439 12.5496 1.49626 12.0263C0.717936 11.4811 0.341355 10.759 0.165226 9.83974C-7.49865e-08 8.9809 0 7.8931 0 6.5629V6.4371C0 5.1069 -7.49865e-08 4.0191 0.165226 3.16026C0.341355 2.24103 0.717936 1.5189 1.49626 0.973742C2.24439 0.450387 3.17535 0.221419 4.35626 0.109871M8.64626 3.93774C8.4321 3.79539 8.17048 3.74313 7.91807 3.79226C7.66565 3.84139 7.44274 3.98797 7.29761 4.20026C7.18858 4.36045 7.12987 4.55084 7.12987 4.74542V8.25458C7.12979 8.43042 7.17737 8.60299 7.26754 8.75395C7.35771 8.9049 7.48711 9.0286 7.64197 9.11188C7.79684 9.19516 7.97138 9.23492 8.14703 9.22692C8.32269 9.21892 8.49289 9.16347 8.63955 9.06645L11.3025 7.32697C11.4371 7.23937 11.5478 7.11966 11.6247 6.97862C11.7016 6.83758 11.7422 6.67963 11.7429 6.519C11.7435 6.35837 11.7042 6.2001 11.6285 6.05843C11.5528 5.91676 11.4431 5.79613 11.3092 5.70742L8.64626 3.93774Z" fill={themeColors.text.primary} />
+                                        <svg
+                                            width="19"
+                                            height="13"
+                                            viewBox="0 0 19 13"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M4.35458 0.109871C5.52626 3.74932e-08 7.03342 0 8.98174 0H9.05052C10.998 0 12.5052 3.74932e-08 13.6768 0.109871C14.8569 0.221419 15.7879 0.450387 16.536 0.973742C17.3143 1.5189 17.6909 2.24103 17.867 3.16026C18.0323 4.0191 18.0323 5.1069 18.0323 6.4371V6.5629C18.0323 7.8931 18.0323 8.9809 17.867 9.83974C17.6909 10.759 17.3143 11.4811 16.536 12.0263C15.7879 12.5496 14.8569 12.7786 13.676 12.8901C12.5052 13 10.998 13 9.05052 13H8.98174C7.03426 13 5.5271 13 4.35542 12.8901C3.17535 12.7786 2.24439 12.5496 1.49626 12.0263C0.717936 11.4811 0.341355 10.759 0.165226 9.83974C-7.49865e-08 8.9809 0 7.8931 0 6.5629V6.4371C0 5.1069 -7.49865e-08 4.0191 0.165226 3.16026C0.341355 2.24103 0.717936 1.5189 1.49626 0.973742C2.24439 0.450387 3.17535 0.221419 4.35626 0.109871M8.64626 3.93774C8.4321 3.79539 8.17048 3.74313 7.91807 3.79226C7.66565 3.84139 7.44274 3.98797 7.29761 4.20026C7.18858 4.36045 7.12987 4.55084 7.12987 4.74542V8.25458C7.12979 8.43042 7.17737 8.60299 7.26754 8.75395C7.35771 8.9049 7.48711 9.0286 7.64197 9.11188C7.79684 9.19516 7.97138 9.23492 8.14703 9.22692C8.32269 9.21892 8.49289 9.16347 8.63955 9.06645L11.3025 7.32697C11.4371 7.23937 11.5478 7.11966 11.6247 6.97862C11.7016 6.83758 11.7422 6.67963 11.7429 6.519C11.7435 6.35837 11.7042 6.2001 11.6285 6.05843C11.5528 5.91676 11.4431 5.79613 11.3092 5.70742L8.64626 3.93774Z"
+                                                fill={themeColors.text.primary}
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>YouTube</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            YouTube
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.crunchbase_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.crunchbase_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(
+                                                effectiveCompany.crunchbase_url
+                                            )
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path fillRule="evenodd" clipRule="evenodd" d="M16 2C16 0.89566 15.1043 0 14 0H2C0.89566 0 0 0.89566 0 2V14C0 15.1043 0.89566 16 2 16H14C15.1043 16 16 15.1043 16 14V2Z" fill={themeColors.text.primary} />
-                                            <path d="M5.92508 9.18122C5.75359 9.54679 5.46202 9.84257 5.09893 10.0193C4.73584 10.196 4.32317 10.2429 3.92967 10.1523C3.53618 10.0617 3.18561 9.83893 2.9364 9.52121C2.68718 9.20349 2.55435 8.80997 2.56005 8.40622C2.56575 8.00246 2.70963 7.61284 2.96772 7.30229C3.2258 6.99173 3.58251 6.77899 3.97841 6.6995C4.37431 6.62002 4.78549 6.6786 5.14345 6.86547C5.5014 7.05234 5.78451 7.35623 5.94561 7.7265H7.31476C7.13683 6.99422 6.69665 6.35256 6.07752 5.92294C5.45839 5.49332 4.70325 5.30554 3.95501 5.39514C3.20676 5.48474 2.51732 5.8455 2.01713 6.40916C1.51694 6.97282 1.24071 7.70027 1.24071 8.45386C1.24071 9.20745 1.51694 9.9349 2.01713 10.4986C2.51732 11.0622 3.20676 11.423 3.95501 11.5126C4.70325 11.6022 5.45839 11.4144 6.07752 10.9848C6.69665 10.5552 7.13683 9.9135 7.31476 9.18122H5.92508Z" fill={themeColors.surface} />
-                                            <path d="M11.6314 5.36473H11.4055C10.8651 5.40419 10.3452 5.58736 9.89941 5.89527V2.46557H8.65007V11.2863H9.90626V10.9645C10.3039 11.2442 10.7621 11.4259 11.2434 11.4946C11.7246 11.5633 12.2153 11.5171 12.6754 11.3598C13.1354 11.2026 13.5516 10.9386 13.8901 10.5896C14.2286 10.2407 14.4796 9.81651 14.6228 9.3519C14.7659 8.88729 14.797 8.3954 14.7136 7.91645C14.6302 7.4375 14.4346 6.98508 14.1429 6.5962C13.8511 6.20732 13.4715 5.89301 13.035 5.67898C12.5985 5.46494 12.1175 5.35726 11.6314 5.36473ZM13.3976 8.66437V8.71913C13.3862 8.79195 13.3701 8.86397 13.3497 8.93477C13.3262 9.01079 13.2976 9.08512 13.2641 9.15725V9.18464C13.1461 9.42999 12.9733 9.64494 12.7591 9.81289C12.5448 9.98085 12.2948 10.0973 12.0284 10.1533L11.8607 10.1807H11.8231C11.7592 10.1842 11.6952 10.1842 11.6314 10.1807C11.5512 10.1804 11.4712 10.1747 11.3918 10.1636H11.337C11.1821 10.1383 11.0313 10.0922 10.8886 10.0267H10.8544C10.7106 9.95601 10.577 9.8662 10.4573 9.75968C10.337 9.65011 10.2322 9.52458 10.1459 9.38659C10.1032 9.31628 10.0654 9.24309 10.0329 9.16752C9.93218 8.93766 9.88189 8.68888 9.88543 8.43794C9.88897 8.187 9.94626 7.93974 10.0534 7.71281C10.1836 7.43798 10.3823 7.20132 10.6305 7.02565C10.8788 6.84998 11.168 6.74124 11.4705 6.70991C11.5309 6.70677 11.5915 6.70677 11.6519 6.70991C12.1083 6.7159 12.5448 6.89802 12.8701 7.21822C13.1954 7.53842 13.3844 7.97193 13.3976 8.42819C13.4029 8.50682 13.4029 8.58573 13.3976 8.66437Z" fill={themeColors.surface} />
+                                        <svg
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 16 16"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                fillRule="evenodd"
+                                                clipRule="evenodd"
+                                                d="M16 2C16 0.89566 15.1043 0 14 0H2C0.89566 0 0 0.89566 0 2V14C0 15.1043 0.89566 16 2 16H14C15.1043 16 16 15.1043 16 14V2Z"
+                                                fill={themeColors.text.primary}
+                                            />
+                                            <path
+                                                d="M5.92508 9.18122C5.75359 9.54679 5.46202 9.84257 5.09893 10.0193C4.73584 10.196 4.32317 10.2429 3.92967 10.1523C3.53618 10.0617 3.18561 9.83893 2.9364 9.52121C2.68718 9.20349 2.55435 8.80997 2.56005 8.40622C2.56575 8.00246 2.70963 7.61284 2.96772 7.30229C3.2258 6.99173 3.58251 6.77899 3.97841 6.6995C4.37431 6.62002 4.78549 6.6786 5.14345 6.86547C5.5014 7.05234 5.78451 7.35623 5.94561 7.7265H7.31476C7.13683 6.99422 6.69665 6.35256 6.07752 5.92294C5.45839 5.49332 4.70325 5.30554 3.95501 5.39514C3.20676 5.48474 2.51732 5.8455 2.01713 6.40916C1.51694 6.97282 1.24071 7.70027 1.24071 8.45386C1.24071 9.20745 1.51694 9.9349 2.01713 10.4986C2.51732 11.0622 3.20676 11.423 3.95501 11.5126C4.70325 11.6022 5.45839 11.4144 6.07752 10.9848C6.69665 10.5552 7.13683 9.9135 7.31476 9.18122H5.92508Z"
+                                                fill={themeColors.surface}
+                                            />
+                                            <path
+                                                d="M11.6314 5.36473H11.4055C10.8651 5.40419 10.3452 5.58736 9.89941 5.89527V2.46557H8.65007V11.2863H9.90626V10.9645C10.3039 11.2442 10.7621 11.4259 11.2434 11.4946C11.7246 11.5633 12.2153 11.5171 12.6754 11.3598C13.1354 11.2026 13.5516 10.9386 13.8901 10.5896C14.2286 10.2407 14.4796 9.81651 14.6228 9.3519C14.7659 8.88729 14.797 8.3954 14.7136 7.91645C14.6302 7.4375 14.4346 6.98508 14.1429 6.5962C13.8511 6.20732 13.4715 5.89301 13.035 5.67898C12.5985 5.46494 12.1175 5.35726 11.6314 5.36473ZM13.3976 8.66437V8.71913C13.3862 8.79195 13.3701 8.86397 13.3497 8.93477C13.3262 9.01079 13.2976 9.08512 13.2641 9.15725V9.18464C13.1461 9.42999 12.9733 9.64494 12.7591 9.81289C12.5448 9.98085 12.2948 10.0973 12.0284 10.1533L11.8607 10.1807H11.8231C11.7592 10.1842 11.6952 10.1842 11.6314 10.1807C11.5512 10.1804 11.4712 10.1747 11.3918 10.1636H11.337C11.1821 10.1383 11.0313 10.0922 10.8886 10.0267H10.8544C10.7106 9.95601 10.577 9.8662 10.4573 9.75968C10.337 9.65011 10.2322 9.52458 10.1459 9.38659C10.1032 9.31628 10.0654 9.24309 10.0329 9.16752C9.93218 8.93766 9.88189 8.68888 9.88543 8.43794C9.88897 8.187 9.94626 7.93974 10.0534 7.71281C10.1836 7.43798 10.3823 7.20132 10.6305 7.02565C10.8788 6.84998 11.168 6.74124 11.4705 6.70991C11.5309 6.70677 11.5915 6.70677 11.6519 6.70991C12.1083 6.7159 12.5448 6.89802 12.8701 7.21822C13.1954 7.53842 13.3844 7.97193 13.3976 8.42819C13.4029 8.50682 13.4029 8.58573 13.3976 8.66437Z"
+                                                fill={themeColors.surface}
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Crunchbase</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            Crunchbase
+                                        </span>
                                     </div>
                                 )}
                                 {effectiveCompany.glassdoor_url && (
                                     <div
-                                        onClick={() => openUrl(effectiveCompany.glassdoor_url)}
-                                        style={{ height: 36, paddingLeft: 16, paddingRight: 16, background: themeColors.surface, borderRadius: 31, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+                                        onClick={() =>
+                                            openUrl(
+                                                effectiveCompany.glassdoor_url
+                                            )
+                                        }
+                                        style={{
+                                            height: 36,
+                                            paddingLeft: 16,
+                                            paddingRight: 16,
+                                            background: themeColors.surface,
+                                            borderRadius: 31,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            cursor: "pointer",
+                                        }}
                                     >
-                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M7.77774 0.000362833C7.73405 -0.00395383 7.69911 0.0308128 7.69911 0.074446V2.08753C7.69911 2.12678 7.73044 2.15718 7.7697 2.16161C9.29744 2.26194 10.4584 2.71583 10.4584 4.30909H7.18082C7.17049 4.30905 7.16025 4.31106 7.1507 4.31499C7.14114 4.31892 7.13246 4.32471 7.12515 4.33201C7.11785 4.33932 7.11205 4.34799 7.10811 4.35754C7.10417 4.36709 7.10216 4.37733 7.10219 4.38766V9.61689C7.10219 9.66052 7.13719 9.69546 7.18082 9.69546H13.0161C13.0598 9.69546 13.0947 9.66052 13.0947 9.61689V4.28284C13.0947 2.97769 12.6283 1.91696 11.6854 1.1749C10.8168 0.494037 9.51497 0.0833127 7.77774 0.000362833ZM0.0785754 4.30909C0.068246 4.30905 0.0580111 4.31106 0.0484605 4.31499C0.03891 4.31893 0.0302327 4.32471 0.0229286 4.33202C0.0156246 4.33932 0.00983826 4.348 0.00590316 4.35755C0.00196806 4.3671 -3.80119e-05 4.37733 5.45427e-07 4.38766V9.61234C5.45427e-07 9.65597 0.0350005 9.69091 0.0785754 9.69091H3.35626C3.35626 11.2842 2.19531 11.7381 0.667624 11.8384C0.628308 11.8428 0.598091 11.8732 0.598091 11.9125V13.9256C0.598091 13.9692 0.633091 14.004 0.676724 13.9996C2.41395 13.9167 3.7146 13.506 4.58324 12.825C5.52608 12.083 5.99251 11.0223 5.99251 9.71716V4.38766C5.99255 4.37733 5.99053 4.36709 5.98659 4.35754C5.98265 4.34799 5.97686 4.33932 5.96955 4.33201C5.96224 4.32471 5.95356 4.31892 5.94401 4.31499C5.93445 4.31106 5.92421 4.30905 5.91388 4.30909H0.0785754Z" fill={themeColors.text.primary} />
+                                        <svg
+                                            width="14"
+                                            height="14"
+                                            viewBox="0 0 14 14"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path
+                                                d="M7.77774 0.000362833C7.73405 -0.00395383 7.69911 0.0308128 7.69911 0.074446V2.08753C7.69911 2.12678 7.73044 2.15718 7.7697 2.16161C9.29744 2.26194 10.4584 2.71583 10.4584 4.30909H7.18082C7.17049 4.30905 7.16025 4.31106 7.1507 4.31499C7.14114 4.31892 7.13246 4.32471 7.12515 4.33201C7.11785 4.33932 7.11205 4.34799 7.10811 4.35754C7.10417 4.36709 7.10216 4.37733 7.10219 4.38766V9.61689C7.10219 9.66052 7.13719 9.69546 7.18082 9.69546H13.0161C13.0598 9.69546 13.0947 9.66052 13.0947 9.61689V4.28284C13.0947 2.97769 12.6283 1.91696 11.6854 1.1749C10.8168 0.494037 9.51497 0.0833127 7.77774 0.000362833ZM0.0785754 4.30909C0.068246 4.30905 0.0580111 4.31106 0.0484605 4.31499C0.03891 4.31893 0.0302327 4.32471 0.0229286 4.33202C0.0156246 4.33932 0.00983826 4.348 0.00590316 4.35755C0.00196806 4.3671 -3.80119e-05 4.37733 5.45427e-07 4.38766V9.61234C5.45427e-07 9.65597 0.0350005 9.69091 0.0785754 9.69091H3.35626C3.35626 11.2842 2.19531 11.7381 0.667624 11.8384C0.628308 11.8428 0.598091 11.8732 0.598091 11.9125V13.9256C0.598091 13.9692 0.633091 14.004 0.676724 13.9996C2.41395 13.9167 3.7146 13.506 4.58324 12.825C5.52608 12.083 5.99251 11.0223 5.99251 9.71716V4.38766C5.99255 4.37733 5.99053 4.36709 5.98659 4.35754C5.98265 4.34799 5.97686 4.33932 5.96955 4.33201C5.96224 4.32471 5.95356 4.31892 5.94401 4.31499C5.93445 4.31106 5.92421 4.30905 5.91388 4.30909H0.0785754Z"
+                                                fill={themeColors.text.primary}
+                                            />
                                         </svg>
-                                        <span style={{ color: themeColors.text.primary, fontSize: 14, fontFamily: "Inter", fontWeight: 400 }}>Glassdoor</span>
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: 400,
+                                            }}
+                                        >
+                                            Glassdoor
+                                        </span>
                                     </div>
                                 )}
                             </div>
@@ -12755,16 +13160,17 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 agriculture: "Agriculture",
                                 other: "Other",
                             }
-                            const COMPANY_TYPE_LABELS: Record<string, string> = {
-                                startup: "Startup",
-                                enterprise: "Enterprise",
-                                public_company: "Public Company",
-                                agency: "Agency",
-                                nonprofit: "Nonprofit",
-                                government: "Government",
-                                university: "University",
-                                other: "Other",
-                            }
+                            const COMPANY_TYPE_LABELS: Record<string, string> =
+                                {
+                                    startup: "Startup",
+                                    enterprise: "Enterprise",
+                                    public_company: "Public Company",
+                                    agency: "Agency",
+                                    nonprofit: "Nonprofit",
+                                    government: "Government",
+                                    university: "University",
+                                    other: "Other",
+                                }
                             const labelField = (
                                 map: Record<string, string>,
                                 val: string | null | undefined
@@ -12798,9 +13204,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 if (!hq) return null
                                 const addr = hq.address?.trim()
                                 if (addr) return addr
-                                const parts = [hq.city?.trim(), hq.country?.trim()].filter(
-                                    Boolean
-                                ) as string[]
+                                const parts = [
+                                    hq.city?.trim(),
+                                    hq.country?.trim(),
+                                ].filter(Boolean) as string[]
                                 return parts.length ? parts.join(", ") : null
                             }
                             /** Canonical API values like "501-1000", "10000+" — add thousands separators + " employees". */
@@ -12865,7 +13272,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                           )!,
                                       }
                                     : null,
-                                labelField(COMPANY_TYPE_LABELS, c.company_type) &&
+                                labelField(
+                                    COMPANY_TYPE_LABELS,
+                                    c.company_type
+                                ) &&
                                 c.company_type !== "enterprise" &&
                                 c.company_type !== "other"
                                     ? {
@@ -13284,7 +13694,12 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
 
 // ─── MAP AGENT PANEL ──────────────────────────────────────────────────────────
 // Haversine distance between two coordinates in km.
-function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+function haversineKm(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number
+): number {
     const R = 6371
     const dLat = ((lat2 - lat1) * Math.PI) / 180
     const dLng = ((lng2 - lng1) * Math.PI) / 180
@@ -13301,7 +13716,11 @@ function jobPostedTsMs(j: HomepageJob): number {
     return Number.isFinite(t) ? t : 0
 }
 
-function jobDistKmFromRef(j: HomepageJob, refLat: number, refLng: number): number {
+function jobDistKmFromRef(
+    j: HomepageJob,
+    refLat: number,
+    refLng: number
+): number {
     const jLat = j.location_lat ?? j.company?.headquarters?.lat ?? null
     const jLng = j.location_lng ?? j.company?.headquarters?.lng ?? null
     if (jLat == null || jLng == null) return Number.POSITIVE_INFINITY
@@ -13328,7 +13747,11 @@ function sortChipCompanyFeed(
     refLat: number,
     refLng: number
 ): HomepageJob[] {
-    const sortedNearby = sortNearbyJobsByDistanceThenPosted(nearby, refLat, refLng)
+    const sortedNearby = sortNearbyJobsByDistanceThenPosted(
+        nearby,
+        refLat,
+        refLng
+    )
     const remote = anywhere
         .filter((j) => j.workplace_type === "remote")
         .sort((a, b) => jobPostedTsMs(b) - jobPostedTsMs(a))
@@ -13353,11 +13776,11 @@ const FIFTY_MILES_KM = 80.47
 // categories relevant to a job-commute context are re-enabled.
 // OverlayView is used instead of AdvancedMarkerElement (which requires mapId).
 const MAP_POI_STYLES = [
-    { featureType: "poi",               stylers: [{ visibility: "off" }] }, // hide everything
-    { featureType: "poi.business",      stylers: [{ visibility: "on"  }] }, // restaurants, cafes, bars, gyms, grocery
-    { featureType: "poi.park",          stylers: [{ visibility: "on"  }] }, // parks, beaches
-    { featureType: "poi.attraction",    stylers: [{ visibility: "on"  }] }, // tourist spots
-    { featureType: "poi.sports_complex",stylers: [{ visibility: "on"  }] }, // stadiums, sports venues
+    { featureType: "poi", stylers: [{ visibility: "off" }] }, // hide everything
+    { featureType: "poi.business", stylers: [{ visibility: "on" }] }, // restaurants, cafes, bars, gyms, grocery
+    { featureType: "poi.park", stylers: [{ visibility: "on" }] }, // parks, beaches
+    { featureType: "poi.attraction", stylers: [{ visibility: "on" }] }, // tourist spots
+    { featureType: "poi.sports_complex", stylers: [{ visibility: "on" }] }, // stadiums, sports venues
 ]
 
 // Script load state shared across instances — avoids duplicate injection.
@@ -13427,35 +13850,54 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const mapInstanceRef = React.useRef<any>(null)
     const markersRef = React.useRef<any[]>([])
     const [mapsReady, setMapsReady] = React.useState(false)
-    const [userLoc, setUserLoc] = React.useState<{ lat: number; lng: number } | null>(null)
+    const [userLoc, setUserLoc] = React.useState<{
+        lat: number
+        lng: number
+    } | null>(null)
     const [jobs, setJobs] = React.useState<MapCompanyEntry[]>([])
     const [totalJobCount, setTotalJobCount] = React.useState(0)
     // Accumulates chips across viewport moves — never discards already-loaded chips
     const accJobsRef = React.useRef(new Map<string, MapCompanyEntry>())
     // Center of the last /jobs/map fetch; skip re-fetch if still within ~50km
-    const lastFetchCenterRef = React.useRef<{ lat: number; lng: number } | null>(null)
+    const lastFetchCenterRef = React.useRef<{
+        lat: number
+        lng: number
+    } | null>(null)
     // Stable ref to jobsApiUrl so the idle listener closure stays fresh
     const jobsApiUrlRef = React.useRef(jobsApiUrl)
-    React.useEffect(() => { jobsApiUrlRef.current = jobsApiUrl }, [jobsApiUrl])
+    React.useEffect(() => {
+        jobsApiUrlRef.current = jobsApiUrl
+    }, [jobsApiUrl])
     // Stable refs for filter values so chip click handler (imperative) reads current values
-    const filterDaysRef = React.useRef<"1d"|"3d"|"7d"|"30d">("7d")
+    const filterDaysRef = React.useRef<"1d" | "3d" | "7d" | "30d">("7d")
     const filterTypeRef = React.useRef("")
     const filterSeniorityRef = React.useRef("")
     // Feed always visible on both mobile and desktop — empty array until first fetch resolves
-    const [selectedJobs, setSelectedJobs] = React.useState<HomepageJob[] | null>([])
+    const [selectedJobs, setSelectedJobs] = React.useState<
+        HomepageJob[] | null
+    >([])
     // Keep parent swipe deck in sync with the feed list so swipe-between-jobs works on mobile
     const onFeedJobsChangeRef = React.useRef(onFeedJobsChange)
-    React.useEffect(() => { onFeedJobsChangeRef.current = onFeedJobsChange }, [onFeedJobsChange])
     React.useEffect(() => {
-        if (selectedJobs && selectedJobs.length > 0) onFeedJobsChangeRef.current?.(selectedJobs)
+        onFeedJobsChangeRef.current = onFeedJobsChange
+    }, [onFeedJobsChange])
+    React.useEffect(() => {
+        if (selectedJobs && selectedJobs.length > 0)
+            onFeedJobsChangeRef.current?.(selectedJobs)
     }, [selectedJobs])
     const [travelTimes, setTravelTimes] = React.useState<
-        Record<string, { drivingMins: number | null; walkingMins: number | null }>
+        Record<
+            string,
+            { drivingMins: number | null; walkingMins: number | null }
+        >
     >({})
     // Selected chip for the nearby jobs overlay
-    const [selectedChipEntry, setSelectedChipEntry] = React.useState<MapCompanyEntry | null>(null)
+    const [selectedChipEntry, setSelectedChipEntry] =
+        React.useState<MapCompanyEntry | null>(null)
     // Filters for the nearby jobs overlay
-    const [filterDays, setFilterDays] = React.useState<"1d"|"3d"|"7d"|"30d">("7d")
+    const [filterDays, setFilterDays] = React.useState<
+        "1d" | "3d" | "7d" | "30d"
+    >("7d")
     const [filterType, setFilterType] = React.useState("")
     const [filterSeniority, setFilterSeniority] = React.useState("")
     const [filterDaysOpen, setFilterDaysOpen] = React.useState(false)
@@ -13467,21 +13909,42 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // bottom padding and border-radius are always visible in the collapsed state.
     const MOBILE_FEED_COLLAPSED_H = 248
     const mobileFeedExpandedH = React.useRef(
-        typeof window !== "undefined" ? Math.round(window.innerHeight * 0.90) : 700
+        typeof window !== "undefined"
+            ? Math.round(window.innerHeight * 0.9)
+            : 700
     )
-    const mobileFeedMaxSlide = React.useRef(mobileFeedExpandedH.current - MOBILE_FEED_COLLAPSED_H)
+    const mobileFeedMaxSlide = React.useRef(
+        mobileFeedExpandedH.current - MOBILE_FEED_COLLAPSED_H
+    )
     // mobileFeedDragY drives everything: 0 = expanded, maxSlide = collapsed
     const mobileFeedDragY = useMotionValue(mobileFeedMaxSlide.current)
     // height = expandedH - dragY  (grows from collapsed 248px up to 90vh as dragY → 0)
-    const mobileFeedHeightPx = useTransform(mobileFeedDragY, (y) => mobileFeedExpandedH.current - y)
-    const mobileFeedScrimOpacity = useTransform(mobileFeedDragY, [0, mobileFeedMaxSlide.current], [0.6, 0])
-    const mobileFeedOuterPad = useTransform(mobileFeedDragY, [0, mobileFeedMaxSlide.current], [0, 4])
-    const mobileFeedBottomRadius = useTransform(mobileFeedDragY, [0, mobileFeedMaxSlide.current], [0, 36])
+    const mobileFeedHeightPx = useTransform(
+        mobileFeedDragY,
+        (y) => mobileFeedExpandedH.current - y
+    )
+    const mobileFeedScrimOpacity = useTransform(
+        mobileFeedDragY,
+        [0, mobileFeedMaxSlide.current],
+        [0.6, 0]
+    )
+    const mobileFeedOuterPad = useTransform(
+        mobileFeedDragY,
+        [0, mobileFeedMaxSlide.current],
+        [0, 4]
+    )
+    const mobileFeedBottomRadius = useTransform(
+        mobileFeedDragY,
+        [0, mobileFeedMaxSlide.current],
+        [0, 36]
+    )
     // Location button fades out quickly as sheet begins to expand (fades within first 35% of drag)
     // Committed state — used for aria-labels and chip/close reset; visual state is the motion value.
     const [mobileFeedExpanded, setMobileFeedExpanded] = React.useState(false)
     const mobileFeedExpandedRef = React.useRef(false)
-    React.useEffect(() => { mobileFeedExpandedRef.current = mobileFeedExpanded }, [mobileFeedExpanded])
+    React.useEffect(() => {
+        mobileFeedExpandedRef.current = mobileFeedExpanded
+    }, [mobileFeedExpanded])
 
     // Recalculate expanded height on viewport resize (e.g. rotation, browser chrome show/hide).
     // rAF-throttled so it runs at most once per paint — no jank.
@@ -13504,92 +13967,142 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             })
         }
         window.addEventListener("resize", onResize)
-        return () => { window.removeEventListener("resize", onResize); cancelAnimationFrame(rafId) }
+        return () => {
+            window.removeEventListener("resize", onResize)
+            cancelAnimationFrame(rafId)
+        }
     }, [isMobile, mobileFeedDragY]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    const snapMobileFeed = React.useCallback((expand: boolean) => {
-        const target = expand ? 0 : mobileFeedMaxSlide.current
-        animate(mobileFeedDragY, target, { type: "spring", stiffness: 380, damping: 42 })
-        setMobileFeedExpanded(expand)
-    }, [mobileFeedDragY])
+    const snapMobileFeed = React.useCallback(
+        (expand: boolean) => {
+            const target = expand ? 0 : mobileFeedMaxSlide.current
+            animate(mobileFeedDragY, target, {
+                type: "spring",
+                stiffness: 380,
+                damping: 42,
+            })
+            setMobileFeedExpanded(expand)
+        },
+        [mobileFeedDragY]
+    )
 
-    const handleMobileFeedDragStart = React.useCallback((e: React.TouchEvent | React.PointerEvent) => {
-        const isTouchEvent = "touches" in e
-        const startY = isTouchEvent
-            ? (e as React.TouchEvent).touches[0].clientY
-            : (e as React.PointerEvent).clientY
-        const startX = isTouchEvent
-            ? (e as React.TouchEvent).touches[0].clientX
-            : (e as React.PointerEvent).clientX
-        const touchId = isTouchEvent ? (e as React.TouchEvent).touches[0].identifier : undefined
-        const startDragY = mobileFeedDragY.get()
-        // Drag is only engaged after the threshold — taps on the input still focus normally.
-        let dragging = false
+    const handleMobileFeedDragStart = React.useCallback(
+        (e: React.TouchEvent | React.PointerEvent) => {
+            const isTouchEvent = "touches" in e
+            const startY = isTouchEvent
+                ? (e as React.TouchEvent).touches[0].clientY
+                : (e as React.PointerEvent).clientY
+            const startX = isTouchEvent
+                ? (e as React.TouchEvent).touches[0].clientX
+                : (e as React.PointerEvent).clientX
+            const touchId = isTouchEvent
+                ? (e as React.TouchEvent).touches[0].identifier
+                : undefined
+            const startDragY = mobileFeedDragY.get()
+            // Drag is only engaged after the threshold — taps on the input still focus normally.
+            let dragging = false
 
-        const getCoords = (ev: TouchEvent | PointerEvent): { x: number; y: number } => {
-            if ("changedTouches" in ev) {
-                const t = touchId !== undefined
-                    ? Array.from(ev.changedTouches).find((t) => t.identifier === touchId)
-                    : ev.changedTouches[0]
-                return { x: t?.clientX ?? startX, y: t?.clientY ?? startY }
+            const getCoords = (
+                ev: TouchEvent | PointerEvent
+            ): { x: number; y: number } => {
+                if ("changedTouches" in ev) {
+                    const t =
+                        touchId !== undefined
+                            ? Array.from(ev.changedTouches).find(
+                                  (t) => t.identifier === touchId
+                              )
+                            : ev.changedTouches[0]
+                    return { x: t?.clientX ?? startX, y: t?.clientY ?? startY }
+                }
+                return {
+                    x: (ev as PointerEvent).clientX,
+                    y: (ev as PointerEvent).clientY,
+                }
             }
-            return { x: (ev as PointerEvent).clientX, y: (ev as PointerEvent).clientY }
-        }
 
-        const cleanup = () => {
-            if (isTouchEvent) {
-                document.removeEventListener("touchmove", onMove as EventListener)
-                document.removeEventListener("touchend", onEnd as EventListener)
-            } else {
-                window.removeEventListener("pointermove", onMove as EventListener)
-                window.removeEventListener("pointerup", onEnd as EventListener)
+            const cleanup = () => {
+                if (isTouchEvent) {
+                    document.removeEventListener(
+                        "touchmove",
+                        onMove as EventListener
+                    )
+                    document.removeEventListener(
+                        "touchend",
+                        onEnd as EventListener
+                    )
+                } else {
+                    window.removeEventListener(
+                        "pointermove",
+                        onMove as EventListener
+                    )
+                    window.removeEventListener(
+                        "pointerup",
+                        onEnd as EventListener
+                    )
+                }
             }
-        }
 
-        const onMove = (ev: TouchEvent | PointerEvent) => {
-            const { x, y } = getCoords(ev)
-            const deltaY = startY - y  // positive = dragged up
-            const deltaX = Math.abs(x - startX)
-            if (!dragging) {
-                // Abort if mostly horizontal — let horizontal scroll/swipe pass through
-                if (deltaX > Math.abs(deltaY)) { cleanup(); return }
-                // Wait for 8px vertical movement before engaging
-                if (Math.abs(deltaY) < 8) return
-                dragging = true
-            }
-            // Only prevent scroll/focus-keyboard once drag is confirmed
-            ev.preventDefault()
-            const max = mobileFeedMaxSlide.current
-            mobileFeedDragY.set(Math.max(0, Math.min(max, startDragY - deltaY)))
-        }
-
-        const onEnd = (ev: TouchEvent | PointerEvent) => {
-            if (dragging) {
-                const currentY = mobileFeedDragY.get()
+            const onMove = (ev: TouchEvent | PointerEvent) => {
+                const { x, y } = getCoords(ev)
+                const deltaY = startY - y // positive = dragged up
+                const deltaX = Math.abs(x - startX)
+                if (!dragging) {
+                    // Abort if mostly horizontal — let horizontal scroll/swipe pass through
+                    if (deltaX > Math.abs(deltaY)) {
+                        cleanup()
+                        return
+                    }
+                    // Wait for 8px vertical movement before engaging
+                    if (Math.abs(deltaY) < 8) return
+                    dragging = true
+                }
+                // Only prevent scroll/focus-keyboard once drag is confirmed
+                ev.preventDefault()
                 const max = mobileFeedMaxSlide.current
-                snapMobileFeed(currentY < max * 0.6)
+                mobileFeedDragY.set(
+                    Math.max(0, Math.min(max, startDragY - deltaY))
+                )
             }
-            cleanup()
-        }
 
-        if (isTouchEvent) {
-            // { passive: false } required so preventDefault() on touchmove actually works
-            document.addEventListener("touchmove", onMove as EventListener, { passive: false })
-            document.addEventListener("touchend", onEnd as EventListener)
-        } else {
-            window.addEventListener("pointermove", onMove as EventListener)
-            window.addEventListener("pointerup", onEnd as EventListener)
-        }
-    }, [mobileFeedDragY, snapMobileFeed])
+            const onEnd = (ev: TouchEvent | PointerEvent) => {
+                if (dragging) {
+                    const currentY = mobileFeedDragY.get()
+                    const max = mobileFeedMaxSlide.current
+                    snapMobileFeed(currentY < max * 0.6)
+                }
+                cleanup()
+            }
+
+            if (isTouchEvent) {
+                // { passive: false } required so preventDefault() on touchmove actually works
+                document.addEventListener(
+                    "touchmove",
+                    onMove as EventListener,
+                    { passive: false }
+                )
+                document.addEventListener("touchend", onEnd as EventListener)
+            } else {
+                window.addEventListener("pointermove", onMove as EventListener)
+                window.addEventListener("pointerup", onEnd as EventListener)
+            }
+        },
+        [mobileFeedDragY, snapMobileFeed]
+    )
 
     // Search query for the feed — seeded from profile job title, editable by user
     const [mapSearchQuery, setMapSearchQuery] = React.useState(defaultSearch)
     const mapSearchQueryRef = React.useRef(defaultSearch)
-    React.useEffect(() => { mapSearchQueryRef.current = mapSearchQuery }, [mapSearchQuery])
-    // Debounced value — API calls only fire 400ms after the user stops typing
-    const [debouncedMapSearchQuery, setDebouncedMapSearchQuery] = React.useState(defaultSearch)
     React.useEffect(() => {
-        const t = setTimeout(() => setDebouncedMapSearchQuery(mapSearchQuery), 400)
+        mapSearchQueryRef.current = mapSearchQuery
+    }, [mapSearchQuery])
+    // Debounced value — API calls only fire 400ms after the user stops typing
+    const [debouncedMapSearchQuery, setDebouncedMapSearchQuery] =
+        React.useState(defaultSearch)
+    React.useEffect(() => {
+        const t = setTimeout(
+            () => setDebouncedMapSearchQuery(mapSearchQuery),
+            400
+        )
         return () => clearTimeout(t)
     }, [mapSearchQuery])
     const mapSearchInputRef = React.useRef<HTMLInputElement>(null)
@@ -13600,21 +14113,32 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // Expose a focus() handle to the parent so it can refocus after closing job/company panels
     React.useEffect(() => {
         if (searchFocusRef) {
-            (searchFocusRef as React.MutableRefObject<(() => void) | null>).current = () => {
+            ;(
+                searchFocusRef as React.MutableRefObject<(() => void) | null>
+            ).current = () => {
                 if (!isMobile) mapSearchInputRef.current?.focus()
             }
         }
     }, [isMobile, searchFocusRef])
     // Stable ref to userLoc so imperative chip-click handlers can read the current position
     const userLocRef = React.useRef<{ lat: number; lng: number } | null>(null)
-    React.useEffect(() => { userLocRef.current = userLoc }, [userLoc])
+    React.useEffect(() => {
+        userLocRef.current = userLoc
+    }, [userLoc])
     // Coords used for the last overlay fetch — used by load-more sentinel (chip or auto)
-    const overlayFetchCoordsRef = React.useRef<{ lat: number; lng: number } | null>(null)
+    const overlayFetchCoordsRef = React.useRef<{
+        lat: number
+        lng: number
+    } | null>(null)
     // Infinite scroll state for the overlay
-    const [overlayNextCursor, setOverlayNextCursor] = React.useState<string | null>(null)
+    const [overlayNextCursor, setOverlayNextCursor] = React.useState<
+        string | null
+    >(null)
     const [isLoadingOverlay, setIsLoadingOverlay] = React.useState(false)
     // How many of the currently displayed company-view jobs are "nearby" (geocoded within radius)
-    const [nearbyJobCount, setNearbyJobCount] = React.useState<number | null>(null)
+    const [nearbyJobCount, setNearbyJobCount] = React.useState<number | null>(
+        null
+    )
     const overlayScrollRef = React.useRef<HTMLDivElement>(null)
     // Overscroll-to-collapse: when expanded and scroll is at top, a downward drag collapses the sheet.
     // Must be an imperative listener (non-passive) so we can call preventDefault on the touchmove.
@@ -13648,17 +14172,26 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                     if (Math.abs(deltaY) < 6) return
                     decided = true
                     isCollapse = deltaY < 0 // finger moving down = collapse
-                    if (!isCollapse) { tracking = false; return }
+                    if (!isCollapse) {
+                        tracking = false
+                        return
+                    }
                 }
                 if (isCollapse) {
                     e.preventDefault()
                     const max = mobileFeedMaxSlide.current
-                    mobileFeedDragY.set(Math.max(0, Math.min(max, startDragY - deltaY)))
+                    mobileFeedDragY.set(
+                        Math.max(0, Math.min(max, startDragY - deltaY))
+                    )
                 }
             }
 
             const onTouchEnd = () => {
-                if (!tracking || !isCollapse) { tracking = false; isCollapse = false; return }
+                if (!tracking || !isCollapse) {
+                    tracking = false
+                    isCollapse = false
+                    return
+                }
                 tracking = false
                 isCollapse = false
                 const currentY = mobileFeedDragY.get()
@@ -13687,9 +14220,14 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const filterDaysPillRef = React.useRef<HTMLDivElement>(null)
     const filterSeniorityPillRef = React.useRef<HTMLDivElement>(null)
     const filterTypePillRef = React.useRef<HTMLDivElement>(null)
-    const [filterDropdownPos, setFilterDropdownPos] = React.useState<{ top: number; left: number } | null>(null)
+    const [filterDropdownPos, setFilterDropdownPos] = React.useState<{
+        top: number
+        left: number
+    } | null>(null)
     // Starts filled if we already have a cached precise location from a previous session
-    const [atPreciseLocation, setAtPreciseLocation] = React.useState(() => preciseLocRef.current !== null)
+    const [atPreciseLocation, setAtPreciseLocation] = React.useState(
+        () => preciseLocRef.current !== null
+    )
     // Overlays need a laid-out map — first idle means projection/panes are valid
     const [mapHasIdle, setMapHasIdle] = React.useState(false)
     const isDark = themeColors.background !== lightColors.background
@@ -13713,15 +14251,30 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         let cancelled = false
         fetch(`${jobsApiUrl}/geo`)
             .then((r) => (r.ok ? r.json() : {}))
-            .then(({ lat, lng }: { lat?: number | null; lng?: number | null }) => {
-                if (cancelled) return
-                if (typeof lat === "number" && typeof lng === "number" && !isNaN(lat) && !isNaN(lng)) {
-                    setUserLoc({ lat, lng })
-                    setAtPreciseLocation(true)
+            .then(
+                ({
+                    lat,
+                    lng,
+                }: {
+                    lat?: number | null
+                    lng?: number | null
+                }) => {
+                    if (cancelled) return
+                    if (
+                        typeof lat === "number" &&
+                        typeof lng === "number" &&
+                        !isNaN(lat) &&
+                        !isNaN(lng)
+                    ) {
+                        setUserLoc({ lat, lng })
+                        setAtPreciseLocation(true)
+                    }
                 }
-            })
+            )
             .catch(() => {})
-        return () => { cancelled = true }
+        return () => {
+            cancelled = true
+        }
     }, [jobsApiUrl, isStatic])
 
     // Init the map after Maps JS API loads and the container div is in the DOM
@@ -13761,7 +14314,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const cLat = mapCenter.lat()
             const cLng = mapCenter.lng()
             const last = lastFetchCenterRef.current
-            if (last && Math.abs(cLat - last.lat) < 0.45 && Math.abs(cLng - last.lng) < 0.45) return
+            if (
+                last &&
+                Math.abs(cLat - last.lat) < 0.45 &&
+                Math.abs(cLng - last.lng) < 0.45
+            )
+                return
 
             lastFetchCenterRef.current = { lat: cLat, lng: cLng }
 
@@ -13773,26 +14331,40 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const maxLat = ne.lat() + latSpan * 0.6
             const minLng = sw.lng() - lngSpan * 0.6
             const maxLng = ne.lng() + lngSpan * 0.6
-            const daysMap: Record<string, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }
-            const sinceTs = Math.floor(Date.now() / 1000) - (daysMap[filterDaysRef.current] ?? 7) * 24 * 60 * 60
+            const daysMap: Record<string, number> = {
+                "1d": 1,
+                "3d": 3,
+                "7d": 7,
+                "30d": 30,
+            }
+            const sinceTs =
+                Math.floor(Date.now() / 1000) -
+                (daysMap[filterDaysRef.current] ?? 7) * 24 * 60 * 60
 
             // Pass center so backend orders by distance (closest first) and limits to 100
             const params = new URLSearchParams({
                 since: String(sinceTs),
-                min_lat: String(minLat), max_lat: String(maxLat),
-                min_lng: String(minLng), max_lng: String(maxLng),
-                center_lat: String(cLat), center_lng: String(cLng),
+                min_lat: String(minLat),
+                max_lat: String(maxLat),
+                min_lng: String(minLng),
+                max_lng: String(maxLng),
+                center_lat: String(cLat),
+                center_lng: String(cLng),
                 limit: String(MAX_CHIPS),
             })
             const q = mapSearchQueryRef.current.trim()
             if (q) params.set("q", q)
-            if (filterTypeRef.current) params.set("employment_type", filterTypeRef.current)
-            if (filterSeniorityRef.current) params.set("seniority_level", filterSeniorityRef.current)
+            if (filterTypeRef.current)
+                params.set("employment_type", filterTypeRef.current)
+            if (filterSeniorityRef.current)
+                params.set("seniority_level", filterSeniorityRef.current)
 
             fetch(`${apiUrl}/jobs/map?${params}`)
                 .then((r) => (r.ok ? r.json() : { data: [] }))
                 .then(({ data }: { data: MapCompanyEntry[] }) => {
-                    const entries: MapCompanyEntry[] = Array.isArray(data) ? data : []
+                    const entries: MapCompanyEntry[] = Array.isArray(data)
+                        ? data
+                        : []
                     entries
                         .filter((e) => e.chip_lat != null && e.chip_lng != null)
                         .forEach((e) => {
@@ -13805,12 +14377,16 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                     const nearest = all
                         .map((e) => ({
                             e,
-                            d: (e.chip_lat - cLat) ** 2 + (e.chip_lng - cLng) ** 2,
+                            d:
+                                (e.chip_lat - cLat) ** 2 +
+                                (e.chip_lng - cLng) ** 2,
                         }))
                         .sort((a, b) => a.d - b.d)
                         .slice(0, MAX_CHIPS)
                         .map((x) => x.e)
-                    setTotalJobCount(all.reduce((sum, e) => sum + e.job_count, 0))
+                    setTotalJobCount(
+                        all.reduce((sum, e) => sum + e.job_count, 0)
+                    )
                     setJobs(nearest)
                 })
                 .catch(() => {})
@@ -13840,9 +14416,15 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     }, [userLoc])
 
     // Keep filter refs in sync
-    React.useEffect(() => { filterDaysRef.current = filterDays }, [filterDays])
-    React.useEffect(() => { filterTypeRef.current = filterType }, [filterType])
-    React.useEffect(() => { filterSeniorityRef.current = filterSeniority }, [filterSeniority])
+    React.useEffect(() => {
+        filterDaysRef.current = filterDays
+    }, [filterDays])
+    React.useEffect(() => {
+        filterTypeRef.current = filterType
+    }, [filterType])
+    React.useEffect(() => {
+        filterSeniorityRef.current = filterSeniority
+    }, [filterSeniority])
 
     // When debounced search query OR any filter changes, bust the chip cache and force a fresh viewport fetch
     React.useEffect(() => {
@@ -13858,8 +14440,15 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // Auto-fetch nearby jobs on both mobile and desktop whenever user location or filters change (skip when company chip is open)
     React.useEffect(() => {
         if (!userLoc || selectedChipEntry) return
-        const daysMap: Record<string, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }
-        const sinceTs = Math.floor(Date.now() / 1000) - (daysMap[filterDays] ?? 7) * 24 * 60 * 60
+        const daysMap: Record<string, number> = {
+            "1d": 1,
+            "3d": 3,
+            "7d": 7,
+            "30d": 30,
+        }
+        const sinceTs =
+            Math.floor(Date.now() / 1000) -
+            (daysMap[filterDays] ?? 7) * 24 * 60 * 60
         setSelectedJobs([])
         setOverlayNextCursor(null)
         overlayFetchCoordsRef.current = userLoc
@@ -13873,20 +14462,35 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         })
         if (filterType) p.set("employment_type", filterType)
         if (filterSeniority) p.set("seniority_level", filterSeniority)
-        if (debouncedMapSearchQuery.trim()) p.set("q", debouncedMapSearchQuery.trim())
+        if (debouncedMapSearchQuery.trim())
+            p.set("q", debouncedMapSearchQuery.trim())
         setIsLoadingOverlay(true)
         fetch(`${jobsApiUrl}/jobs?${p}`)
             .then((r) => (r.ok ? r.json() : { data: [] }))
             .then(({ data }: { data: HomepageJob[] }) => {
                 const jobs = Array.isArray(data) ? data : []
-                const sorted = sortNearbyJobsByDistanceThenPosted(jobs, userLoc.lat, userLoc.lng)
+                const sorted = sortNearbyJobsByDistanceThenPosted(
+                    jobs,
+                    userLoc.lat,
+                    userLoc.lng
+                )
                 setSelectedJobs(sorted)
                 setOverlayNextCursor(sorted.length >= 30 ? "more" : null)
                 setIsLoadingOverlay(false)
             })
-            .catch(() => { setSelectedJobs([]); setIsLoadingOverlay(false) })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userLoc, filterDays, filterType, filterSeniority, selectedChipEntry, debouncedMapSearchQuery])
+            .catch(() => {
+                setSelectedJobs([])
+                setIsLoadingOverlay(false)
+            })
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        userLoc,
+        filterDays,
+        filterType,
+        filterSeniority,
+        selectedChipEntry,
+        debouncedMapSearchQuery,
+    ])
 
     // Place / refresh company chips whenever jobs or map changes
     React.useEffect(() => {
@@ -13897,7 +14501,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
 
         // Always clear old chips first — if jobs is empty (e.g. filter returned no results in
         // this viewport) we still need to remove stale chips from the previous unfiltered state.
-        markersRef.current.forEach((m) => { if (typeof m.setMap === "function") m.setMap(null) })
+        markersRef.current.forEach((m) => {
+            if (typeof m.setMap === "function") m.setMap(null)
+        })
         markersRef.current = []
 
         if (jobs.length === 0) return
@@ -13917,23 +14523,32 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             if (entry.company_logo_url) {
                 const img = document.createElement("img")
                 img.src = entry.company_logo_url
-                img.style.cssText = "width:20px;height:20px;border-radius:10px;object-fit:cover;background:#F5F5F5;flex-shrink:0;"
-                img.onerror = () => { img.style.display = "none" }
+                img.style.cssText =
+                    "width:20px;height:20px;border-radius:10px;object-fit:cover;background:#F5F5F5;flex-shrink:0;"
+                img.onerror = () => {
+                    img.style.display = "none"
+                }
                 chip.appendChild(img)
             } else {
                 const dot = document.createElement("div")
-                dot.style.cssText = "width:20px;height:20px;border-radius:10px;background:#F5F5F5;flex-shrink:0;"
+                dot.style.cssText =
+                    "width:20px;height:20px;border-radius:10px;background:#F5F5F5;flex-shrink:0;"
                 chip.appendChild(dot)
             }
 
             const span = document.createElement("span")
             span.textContent = String(entry.job_count)
-            span.style.cssText = "font-size:14px;font-weight:600;color:#000;line-height:21px;"
+            span.style.cssText =
+                "font-size:14px;font-weight:600;color:#000;line-height:21px;"
             chip.appendChild(span)
             return chip
         }
 
-        const placeChip = (entry: MapCompanyEntry, lat: number, lng: number) => {
+        const placeChip = (
+            entry: MapCompanyEntry,
+            lat: number,
+            lng: number
+        ) => {
             const map = mapInstanceRef.current
             if (!map || !gm.OverlayView) return
             const chip = buildChip(entry)
@@ -13951,8 +14566,15 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
 
                 // Mirror whatever filters are active on the map — chips already respect all filters,
                 // so if a chip is visible there are matching jobs within this window.
-                const daysMap: Record<string, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 }
-                const sinceTs = Math.floor(Date.now() / 1000) - (daysMap[filterDaysRef.current] ?? 7) * 24 * 60 * 60
+                const daysMap: Record<string, number> = {
+                    "1d": 1,
+                    "3d": 3,
+                    "7d": 7,
+                    "30d": 30,
+                }
+                const sinceTs =
+                    Math.floor(Date.now() / 1000) -
+                    (daysMap[filterDaysRef.current] ?? 7) * 24 * 60 * 60
 
                 // Company view: fetch nearby (geocoded within 50km) + all jobs globally in parallel
                 const nearbyParams = new URLSearchParams({
@@ -13969,27 +14591,63 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                     limit: "50",
                 })
                 const q = mapSearchQueryRef.current.trim()
-                if (q) { nearbyParams.set("q", q); allParams.set("q", q) }
+                if (q) {
+                    nearbyParams.set("q", q)
+                    allParams.set("q", q)
+                }
                 const et = filterTypeRef.current
-                if (et) { nearbyParams.set("employment_type", et); allParams.set("employment_type", et) }
+                if (et) {
+                    nearbyParams.set("employment_type", et)
+                    allParams.set("employment_type", et)
+                }
                 const sl = filterSeniorityRef.current
-                if (sl) { nearbyParams.set("seniority_level", sl); allParams.set("seniority_level", sl) }
+                if (sl) {
+                    nearbyParams.set("seniority_level", sl)
+                    allParams.set("seniority_level", sl)
+                }
 
                 Promise.all([
-                    fetch(`${jobsApiUrl}/jobs?${nearbyParams}`).then((r) => (r.ok ? r.json() : { data: [] })),
-                    fetch(`${jobsApiUrl}/jobs?${allParams}`).then((r) => (r.ok ? r.json() : { data: [] })),
+                    fetch(`${jobsApiUrl}/jobs?${nearbyParams}`).then((r) =>
+                        r.ok ? r.json() : { data: [] }
+                    ),
+                    fetch(`${jobsApiUrl}/jobs?${allParams}`).then((r) =>
+                        r.ok ? r.json() : { data: [] }
+                    ),
                 ])
-                    .then(([nearbyRes, allRes]: [{ data: HomepageJob[] }, { data: HomepageJob[] }]) => {
-                        const nearby: HomepageJob[] = Array.isArray(nearbyRes.data) ? nearbyRes.data : []
-                        const all: HomepageJob[] = Array.isArray(allRes.data) ? allRes.data : []
-                        const nearbyIds = new Set(nearby.map((j) => j.id))
-                        const anywhere = all.filter((j) => !nearbyIds.has(j.id))
-                        const combined = sortChipCompanyFeed(nearby, anywhere, chipLat, chipLng)
-                        setNearbyJobCount(nearby.length)
-                        setSelectedJobs(combined)
-                        setOverlayNextCursor(null)
+                    .then(
+                        ([nearbyRes, allRes]: [
+                            { data: HomepageJob[] },
+                            { data: HomepageJob[] },
+                        ]) => {
+                            const nearby: HomepageJob[] = Array.isArray(
+                                nearbyRes.data
+                            )
+                                ? nearbyRes.data
+                                : []
+                            const all: HomepageJob[] = Array.isArray(
+                                allRes.data
+                            )
+                                ? allRes.data
+                                : []
+                            const nearbyIds = new Set(nearby.map((j) => j.id))
+                            const anywhere = all.filter(
+                                (j) => !nearbyIds.has(j.id)
+                            )
+                            const combined = sortChipCompanyFeed(
+                                nearby,
+                                anywhere,
+                                chipLat,
+                                chipLng
+                            )
+                            setNearbyJobCount(nearby.length)
+                            setSelectedJobs(combined)
+                            setOverlayNextCursor(null)
+                        }
+                    )
+                    .catch(() => {
+                        setSelectedJobs([])
+                        setNearbyJobCount(null)
                     })
-                    .catch(() => { setSelectedJobs([]); setNearbyJobCount(null) })
             })
 
             // OverlayView: custom HTML on raster map without needing a mapId
@@ -13998,10 +14656,10 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             el.appendChild(chip)
 
             const overlay = new gm.OverlayView()
-            overlay.onAdd = function(this: any) {
+            overlay.onAdd = function (this: any) {
                 this.getPanes().overlayMouseTarget.appendChild(el)
             }
-            overlay.draw = function(this: any) {
+            overlay.draw = function (this: any) {
                 const proj = this.getProjection()
                 if (!proj) return
                 const p = proj.fromLatLngToDivPixel(new gm.LatLng(lat, lng))
@@ -14012,7 +14670,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                     el.style.transform = "translate(-50%, -100%)"
                 }
             }
-            overlay.onRemove = function() {
+            overlay.onRemove = function () {
                 el.parentNode?.removeChild(el)
             }
             overlay.setMap(map)
@@ -14022,7 +14680,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         // FNV-1a 32-bit — fast, deterministic scatter per company
         const fnv = (s: string, seed = 0) => {
             let h = (2166136261 + seed) >>> 0
-            for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0
+            for (let i = 0; i < s.length; i++)
+                h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0
             return h
         }
 
@@ -14033,7 +14692,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         const CLUSTER_THRESHOLD = 0.008
         const SCATTER_BASE = 0.0013
 
-        const pts: Array<{ entry: MapCompanyEntry; lat: number; lng: number }> = []
+        const pts: Array<{ entry: MapCompanyEntry; lat: number; lng: number }> =
+            []
         for (const entry of jobs) {
             pts.push({ entry, lat: entry.chip_lat, lng: entry.chip_lng })
         }
@@ -14061,15 +14721,18 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 // so the layout looks organic rather than a geometric pattern.
                 // Chips drift at most ~SCATTER_BASE * sqrt(n) * 1.3 from their original
                 // coords — enough to separate visually, small enough to stay on land.
-                const cosLat = Math.cos(pts[i].lat * Math.PI / 180)
+                const cosLat = Math.cos((pts[i].lat * Math.PI) / 180)
                 for (let k = 0; k < cluster.length; k++) {
                     const id = cluster[k].entry.company_id
-                    const angle = (fnv(id) % 100000) / 100000 * Math.PI * 2
-                    const r = SCATTER_BASE * Math.sqrt(k + 1) * (0.7 + (fnv(id, 1) % 1000) / 1000 * 0.6)
+                    const angle = ((fnv(id) % 100000) / 100000) * Math.PI * 2
+                    const r =
+                        SCATTER_BASE *
+                        Math.sqrt(k + 1) *
+                        (0.7 + ((fnv(id, 1) % 1000) / 1000) * 0.6)
                     placeChip(
                         cluster[k].entry,
                         cluster[k].lat + r * Math.cos(angle),
-                        cluster[k].lng + r * Math.sin(angle) / cosLat,
+                        cluster[k].lng + (r * Math.sin(angle)) / cosLat
                     )
                 }
             }
@@ -14082,12 +14745,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     React.useEffect(() => {
         if (!selectedJobs || !userLoc || isStatic) return
 
-        const updates: Record<string, { drivingMins: number | null; walkingMins: number | null }> = {}
+        const updates: Record<
+            string,
+            { drivingMins: number | null; walkingMins: number | null }
+        > = {}
 
         for (const job of selectedJobs) {
             // Use per-job coords when available (retail stores), fall back to HQ
-            const jobLat = job.location_lat ?? job.company?.headquarters?.lat ?? null
-            const jobLng = job.location_lng ?? job.company?.headquarters?.lng ?? null
+            const jobLat =
+                job.location_lat ?? job.company?.headquarters?.lat ?? null
+            const jobLng =
+                job.location_lng ?? job.company?.headquarters?.lng ?? null
             if (jobLat == null || jobLng == null) continue
 
             const km = haversineKm(userLoc.lat, userLoc.lng, jobLat, jobLng)
@@ -14096,7 +14764,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             // Walking: only show if under 2.5 km straight-line (~30 min at 5 km/h)
             const walkingMins = km <= 2.5 ? Math.round((km / 5) * 60) : null
             // Driving: road distance ≈ straight-line × 1.4, urban speed ≈ 40 km/h
-            const drivingMins = Math.round((km * 1.4 / 40) * 60)
+            const drivingMins = Math.round(((km * 1.4) / 40) * 60)
 
             updates[job.id] = { drivingMins, walkingMins }
         }
@@ -14122,14 +14790,19 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         // Hit /geo immediately so the map moves without waiting on GPS permission
         fetch(`${jobsApiUrl}/geo`)
             .then((r) => r.json())
-            .then((d) => { if (d?.lat && d?.lng) panTo({ lat: d.lat, lng: d.lng }) })
+            .then((d) => {
+                if (d?.lat && d?.lng) panTo({ lat: d.lat, lng: d.lng })
+            })
             .catch(() => {})
 
         // Then try GPS — cache and upgrade to precise coords if available
         if (typeof navigator !== "undefined" && navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
-                    const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+                    const loc = {
+                        lat: pos.coords.latitude,
+                        lng: pos.coords.longitude,
+                    }
                     preciseLocRef.current = loc
                     panTo(loc)
                 },
@@ -14164,13 +14837,27 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // X icon for company feed close button (12×12, primaryText)
     const companyFeedCloseIcon = (
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
-            <path d="M11.1016 0.599976L0.601562 11.1M0.601562 0.599976L11.1016 11.1" stroke={textPrimary} strokeOpacity="0.95" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+                d="M11.1016 0.599976L0.601562 11.1M0.601562 0.599976L11.1016 11.1"
+                stroke={textPrimary}
+                strokeOpacity="0.95"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
         </svg>
     )
     // X icon for search bar clear button (standard 14×14 in a 24×24 tap target)
     const mapSearchClearIcon = (
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
-            <path d="M8.60156 0.599976L0.601562 8.59998M0.601562 0.599976L8.60156 8.59998" stroke={textPrimary} strokeOpacity="0.65" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+                d="M8.60156 0.599976L0.601562 8.59998M0.601562 0.599976L8.60156 8.59998"
+                stroke={textPrimary}
+                strokeOpacity="0.65"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
         </svg>
     )
     const mapSearchClearButtonStyle: React.CSSProperties = {
@@ -14230,7 +14917,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 }
             `}</style>
             {/* Map fills the panel */}
-            <div ref={mapContainerRef} style={{ flex: 1, width: "100%" }} aria-label="Jobs map" />
+            <div
+                ref={mapContainerRef}
+                style={{ flex: 1, width: "100%" }}
+                aria-label="Jobs map"
+            />
 
             {/* Waiting for script — only shown when key is present */}
             {!mapsReady && googleMapsApiKey && (
@@ -14271,7 +14962,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 }}
             >
                 {/* Close */}
-                <button aria-label="Close map" onClick={onClose} style={tbStyle}>
+                <button
+                    aria-label="Close map"
+                    onClick={onClose}
+                    style={tbStyle}
+                >
                     <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
                         <path
                             d="M25.25 14.75L14.75 25.25M14.75 14.75L25.25 25.25"
@@ -14290,7 +14985,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         onClick={handleCurrentLocation}
                         style={tbStyle}
                     >
-                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 40 40"
+                            fill="none"
+                        >
                             <path
                                 d="M13.3134 20.2602C13.2307 20.2397 13.1563 20.194 13.1006 20.1295C13.0448 20.0651 13.0104 19.9849 13.002 19.9001C12.9936 19.8152 13.0117 19.7299 13.0538 19.6557C13.0959 19.5816 13.1599 19.5223 13.2371 19.486L26.4105 13.0396C26.4874 13.0032 26.5737 12.9915 26.6575 13.0061C26.7413 13.0206 26.8186 13.0607 26.8788 13.1209C26.939 13.1811 26.9791 13.2584 26.9936 13.3422C27.0082 13.426 26.9965 13.5123 26.9601 13.5892L20.5137 26.7627C20.4775 26.8398 20.4183 26.9039 20.3442 26.946C20.2701 26.9882 20.1848 27.0063 20.0999 26.998C20.0151 26.9898 19.9349 26.9554 19.8704 26.8997C19.8059 26.8441 19.7602 26.7698 19.7395 26.6871L19.8555 20.4451C19.8373 20.3725 19.7996 20.3062 19.7466 20.2534C19.6936 20.2005 19.6272 20.163 19.5546 20.145L13.3134 20.2602Z"
                                 fill={atPreciseLocation ? tbIcon : "none"}
@@ -14335,7 +15035,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 padding: 0,
                             }}
                         >
-                            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                            <svg
+                                width="40"
+                                height="40"
+                                viewBox="0 0 40 40"
+                                fill="none"
+                            >
                                 <path
                                     d="M20 13V27M13 20H27"
                                     stroke={tbIcon}
@@ -14364,7 +15069,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 padding: 0,
                             }}
                         >
-                            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                            <svg
+                                width="40"
+                                height="40"
+                                viewBox="0 0 40 40"
+                                fill="none"
+                            >
                                 <path
                                     d="M13 19.5286H27"
                                     stroke={tbIcon}
@@ -14394,7 +15104,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         onClick={handleCurrentLocation}
                         style={tbStyle}
                     >
-                        <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 40 40"
+                            fill="none"
+                        >
                             <path
                                 d="M13.3134 20.2602C13.2307 20.2397 13.1563 20.194 13.1006 20.1295C13.0448 20.0651 13.0104 19.9849 13.002 19.9001C12.9936 19.8152 13.0117 19.7299 13.0538 19.6557C13.0959 19.5816 13.1599 19.5223 13.2371 19.486L26.4105 13.0396C26.4874 13.0032 26.5737 12.9915 26.6575 13.0061C26.7413 13.0206 26.8186 13.0607 26.8788 13.1209C26.939 13.1811 26.9791 13.2584 26.9936 13.3422C27.0082 13.426 26.9965 13.5123 26.9601 13.5892L20.5137 26.7627C20.4775 26.8398 20.4183 26.9039 20.3442 26.946C20.2701 26.9882 20.1848 27.0063 20.0999 26.998C20.0151 26.9898 19.9349 26.9554 19.8704 26.8997C19.8059 26.8441 19.7602 26.7698 19.7395 26.6871L19.8555 20.4451C19.8373 20.3725 19.7996 20.3062 19.7466 20.2534C19.6936 20.2005 19.6272 20.163 19.5546 20.145L13.3134 20.2602Z"
                                 fill={atPreciseLocation ? tbIcon : "none"}
@@ -14428,14 +15143,23 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 {selectedJobs !== null && (
                     <motion.div
                         ref={(el) => {
-                            ;(overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>).current = el
-                            if (feedRef) (feedRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+                            ;(
+                                overlayMotionWrapRef as React.MutableRefObject<HTMLDivElement | null>
+                            ).current = el
+                            if (feedRef)
+                                (
+                                    feedRef as React.MutableRefObject<HTMLDivElement | null>
+                                ).current = el
                         }}
                         data-layer="map-job-feed" // also known as nearby jobs card overlay
                         initial={false}
                         animate={{}}
                         exit={{}}
-                        transition={{ type: "spring", stiffness: 380, damping: 40 }}
+                        transition={{
+                            type: "spring",
+                            stiffness: 380,
+                            damping: 40,
+                        }}
                         style={{
                             position: "absolute",
                             left: 0,
@@ -14460,95 +15184,190 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         }}
                     >
                         {/* Dropdown menus — rendered outside overflow:hidden sheet, positioned relative to motion.div */}
-                        {(filterDaysOpen || filterSeniorityOpen || filterTypeOpen) && filterDropdownPos && (() => {
-                            const menuStyle: React.CSSProperties = {
-                                position: "absolute",
-                                top: filterDropdownPos.top,
-                                left: filterDropdownPos.left,
-                                zIndex: 50,
-                                width: 196,
-                                padding: 10,
-                                background: themeColors.surfaceMenu,
-                                boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
-                                borderRadius: 28,
-                                outline: `0.1px ${themeColors.border.subtle} solid`,
-                                outlineOffset: -0.1,
-                                display: "flex",
-                                flexDirection: "column",
-                                gap: 4,
-                            }
-                            const itemStyle = (active: boolean): React.CSSProperties => ({
-                                alignSelf: "stretch",
-                                height: 36,
-                                paddingLeft: 12,
-                                paddingRight: 12,
-                                borderRadius: 28,
-                                justifyContent: "space-between",
-                                display: "flex",
-                                alignItems: "center",
-                                cursor: "pointer",
-                                background: "transparent",
-                                color: themeColors.text.primary,
-                                fontSize: 14,
-                                fontFamily: "Inter",
-                                fontWeight: "400",
-                                border: "none",
-                                width: "100%",
-                                textAlign: "left" as const,
-                                transition: "background 0.15s",
-                            })
-                            const hoverBg = themeColors.hover.default
-                            const checkmark = (
-                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
-                                    <path d="M1 6L4.5 9.5L11 2" stroke={themeColors.text.primary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                            )
-                            const renderMenu = (opts: { value: string; label: string }[], current: string, onSelect: (v: string) => void) => (
-                                <div data-filter-pill style={menuStyle}>
-                                    <style>{`.mfi:hover{background:${hoverBg} !important}`}</style>
-                                    {opts.map((o) => (
-                                        <button
-                                            key={o.value}
-                                            className="mfi"
-                                            style={itemStyle(current === o.value)}
-                                            onClick={(e) => { e.stopPropagation(); onSelect(o.value); setFilterDropdownPos(null) }}
-                                        >
-                                            <span>{o.label}</span>
-                                            {current === o.value && checkmark}
-                                        </button>
-                                    ))}
-                                </div>
-                            )
-                            if (filterDaysOpen) return renderMenu([
-                                { value: "1d", label: "Past 24 hours" },
-                                { value: "3d", label: "Past 3 days" },
-                                { value: "7d", label: "Past 7 days" },
-                                { value: "30d", label: "Past 30 days" },
-                            ], filterDays, (v) => { setFilterDays(v as typeof filterDays); setFilterDaysOpen(false) })
-                            if (filterSeniorityOpen) return renderMenu([
-                                { value: "", label: "All levels" },
-                                { value: "internship", label: "Intern" },
-                                { value: "entry,new_grad", label: "Entry level" },
-                                { value: "mid,senior", label: "Senior" },
-                                { value: "staff,manager", label: "Manager" },
-                                { value: "director,executive", label: "Director / Executive" },
-                            ], filterSeniority, (v) => { setFilterSeniority(v); setFilterSeniorityOpen(false) })
-                            if (filterTypeOpen) return renderMenu([
-                                { value: "", label: "All types" },
-                                { value: "full_time", label: "Full-time" },
-                                { value: "part_time", label: "Part-time" },
-                                { value: "contract,temporary", label: "Contract" },
-                            ], filterType, (v) => { setFilterType(v); setFilterTypeOpen(false) })
-                            return null
-                        })()}
-
+                        {(filterDaysOpen ||
+                            filterSeniorityOpen ||
+                            filterTypeOpen) &&
+                            filterDropdownPos &&
+                            (() => {
+                                const menuStyle: React.CSSProperties = {
+                                    position: "absolute",
+                                    top: filterDropdownPos.top,
+                                    left: filterDropdownPos.left,
+                                    zIndex: 50,
+                                    width: 196,
+                                    padding: 10,
+                                    background: themeColors.surfaceMenu,
+                                    boxShadow:
+                                        "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                    borderRadius: 28,
+                                    outline: `0.1px ${themeColors.border.subtle} solid`,
+                                    outlineOffset: -0.1,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 4,
+                                }
+                                const itemStyle = (
+                                    active: boolean
+                                ): React.CSSProperties => ({
+                                    alignSelf: "stretch",
+                                    height: 36,
+                                    paddingLeft: 12,
+                                    paddingRight: 12,
+                                    borderRadius: 28,
+                                    justifyContent: "space-between",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    cursor: "pointer",
+                                    background: "transparent",
+                                    color: themeColors.text.primary,
+                                    fontSize: 14,
+                                    fontFamily: "Inter",
+                                    fontWeight: "400",
+                                    border: "none",
+                                    width: "100%",
+                                    textAlign: "left" as const,
+                                    transition: "background 0.15s",
+                                })
+                                const hoverBg = themeColors.hover.default
+                                const checkmark = (
+                                    <svg
+                                        width="12"
+                                        height="12"
+                                        viewBox="0 0 12 12"
+                                        fill="none"
+                                        style={{ flexShrink: 0 }}
+                                    >
+                                        <path
+                                            d="M1 6L4.5 9.5L11 2"
+                                            stroke={themeColors.text.primary}
+                                            strokeWidth="1.2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    </svg>
+                                )
+                                const renderMenu = (
+                                    opts: { value: string; label: string }[],
+                                    current: string,
+                                    onSelect: (v: string) => void
+                                ) => (
+                                    <div data-filter-pill style={menuStyle}>
+                                        <style>{`.mfi:hover{background:${hoverBg} !important}`}</style>
+                                        {opts.map((o) => (
+                                            <button
+                                                key={o.value}
+                                                className="mfi"
+                                                style={itemStyle(
+                                                    current === o.value
+                                                )}
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    onSelect(o.value)
+                                                    setFilterDropdownPos(null)
+                                                }}
+                                            >
+                                                <span>{o.label}</span>
+                                                {current === o.value &&
+                                                    checkmark}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )
+                                if (filterDaysOpen)
+                                    return renderMenu(
+                                        [
+                                            {
+                                                value: "1d",
+                                                label: "Past 24 hours",
+                                            },
+                                            {
+                                                value: "3d",
+                                                label: "Past 3 days",
+                                            },
+                                            {
+                                                value: "7d",
+                                                label: "Past 7 days",
+                                            },
+                                            {
+                                                value: "30d",
+                                                label: "Past 30 days",
+                                            },
+                                        ],
+                                        filterDays,
+                                        (v) => {
+                                            setFilterDays(
+                                                v as typeof filterDays
+                                            )
+                                            setFilterDaysOpen(false)
+                                        }
+                                    )
+                                if (filterSeniorityOpen)
+                                    return renderMenu(
+                                        [
+                                            { value: "", label: "All levels" },
+                                            {
+                                                value: "internship",
+                                                label: "Intern",
+                                            },
+                                            {
+                                                value: "entry,new_grad",
+                                                label: "Entry level",
+                                            },
+                                            {
+                                                value: "mid,senior",
+                                                label: "Senior",
+                                            },
+                                            {
+                                                value: "staff,manager",
+                                                label: "Manager",
+                                            },
+                                            {
+                                                value: "director,executive",
+                                                label: "Director / Executive",
+                                            },
+                                        ],
+                                        filterSeniority,
+                                        (v) => {
+                                            setFilterSeniority(v)
+                                            setFilterSeniorityOpen(false)
+                                        }
+                                    )
+                                if (filterTypeOpen)
+                                    return renderMenu(
+                                        [
+                                            { value: "", label: "All types" },
+                                            {
+                                                value: "full_time",
+                                                label: "Full-time",
+                                            },
+                                            {
+                                                value: "part_time",
+                                                label: "Part-time",
+                                            },
+                                            {
+                                                value: "contract,temporary",
+                                                label: "Contract",
+                                            },
+                                        ],
+                                        filterType,
+                                        (v) => {
+                                            setFilterType(v)
+                                            setFilterTypeOpen(false)
+                                        }
+                                    )
+                                return null
+                            })()}
 
                         {/* Mobile: wide drag zone in the top-padding space — easier grab target above the pill */}
                         {isMobile && (
                             <div
                                 role="button"
                                 tabIndex={0}
-                                aria-label={mobileFeedExpanded ? "Collapse feed" : "Expand feed"}
+                                aria-label={
+                                    mobileFeedExpanded
+                                        ? "Collapse feed"
+                                        : "Expand feed"
+                                }
                                 onPointerDown={handleMobileFeedDragStart}
                                 onTouchStart={handleMobileFeedDragStart}
                                 onKeyDown={(e) => {
@@ -14569,7 +15388,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
 
                         {/* Search bar — desktop only */}
                         {!isMobile && (
-                        <div
+                            <div
                                 style={{
                                     height: 56,
                                     paddingLeft: 20,
@@ -14582,20 +15401,48 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     gap: 8,
                                     marginBottom: 8,
                                     flexShrink: 0,
-                                    boxShadow: isDark ? "none" : "0px 4px 16px rgba(0,0,0,0.13)",
+                                    boxShadow: isDark
+                                        ? "none"
+                                        : "0px 4px 16px rgba(0,0,0,0.13)",
                                 }}
                             >
-                                <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                        <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.52237C12.6167 8.09309 11.9837 9.59948 10.8571 10.7101C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7101C1.2345 9.59948 0.601563 8.09309 0.601562 6.52237C0.601563 4.95166 1.2345 3.44527 2.36113 2.33461C3.48777 1.22394 5.01581 0.599976 6.60911 0.599976C8.20241 0.599976 9.73045 1.22394 10.8571 2.33461C11.9837 3.44527 12.6167 4.95166 12.6167 6.52237Z" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                <div
+                                    style={{
+                                        flexShrink: 0,
+                                        width: 16,
+                                        height: 16,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                    }}
+                                >
+                                    <svg
+                                        width="16"
+                                        height="16"
+                                        viewBox="0 0 16 16"
+                                        fill="none"
+                                    >
+                                        <path
+                                            d="M10.9289 10.8023L14.7616 14.6M12.6167 6.52237C12.6167 8.09309 11.9837 9.59948 10.8571 10.7101C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7101C1.2345 9.59948 0.601563 8.09309 0.601562 6.52237C0.601563 4.95166 1.2345 3.44527 2.36113 2.33461C3.48777 1.22394 5.01581 0.599976 6.60911 0.599976C8.20241 0.599976 9.73045 1.22394 10.8571 2.33461C11.9837 3.44527 12.6167 4.95166 12.6167 6.52237Z"
+                                            stroke={textSecondary}
+                                            strokeWidth="1.2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
                                     </svg>
                                 </div>
                                 <input
                                     ref={mapSearchInputRef}
                                     type="text"
                                     value={mapSearchQuery}
-                                    onChange={(e) => setMapSearchQuery(e.target.value)}
-                                    placeholder={selectedChipEntry ? `Search jobs at ${selectedChipEntry.company_name}` : "Search jobs"}
+                                    onChange={(e) =>
+                                        setMapSearchQuery(e.target.value)
+                                    }
+                                    placeholder={
+                                        selectedChipEntry
+                                            ? `Search jobs at ${selectedChipEntry.company_name}`
+                                            : "Search jobs"
+                                    }
                                     style={{
                                         flex: 1,
                                         background: "transparent",
@@ -14603,7 +15450,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         outline: "none",
                                         color: textPrimary,
                                         // 16px on iOS Safari prevents auto-zoom; 14px on Android + desktop
-                                        fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 14,
+                                        fontSize:
+                                            typeof navigator !== "undefined" &&
+                                            /iPhone|iPad|iPod/.test(
+                                                navigator.userAgent
+                                            )
+                                                ? 16
+                                                : 14,
                                         fontFamily: "Inter",
                                         fontWeight: "400",
                                         lineHeight: "24px",
@@ -14616,10 +15469,16 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         onClick={(e) => {
                                             e.stopPropagation()
                                             setMapSearchQuery("")
-                                            requestAnimationFrame(() => mapSearchInputRef.current?.focus())
+                                            requestAnimationFrame(() =>
+                                                mapSearchInputRef.current?.focus()
+                                            )
                                         }}
-                                        onPointerDown={(e) => e.stopPropagation()}
-                                        onTouchStart={(e) => e.stopPropagation()}
+                                        onPointerDown={(e) =>
+                                            e.stopPropagation()
+                                        }
+                                        onTouchStart={(e) =>
+                                            e.stopPropagation()
+                                        }
                                         style={mapSearchClearButtonStyle}
                                     >
                                         {mapSearchClearIcon}
@@ -14633,8 +15492,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 background: sheetBg,
                                 borderTopLeftRadius: 36,
                                 borderTopRightRadius: 36,
-                                borderBottomLeftRadius: isMobile ? mobileFeedBottomRadius : 36,
-                                borderBottomRightRadius: isMobile ? mobileFeedBottomRadius : 36,
+                                borderBottomLeftRadius: isMobile
+                                    ? mobileFeedBottomRadius
+                                    : 36,
+                                borderBottomRightRadius: isMobile
+                                    ? mobileFeedBottomRadius
+                                    : 36,
                                 overflow: "hidden",
                                 flex: 1,
                                 minHeight: 0,
@@ -14652,13 +15515,24 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     <div
                                         role="button"
                                         tabIndex={0}
-                                        aria-label={mobileFeedExpanded ? "Collapse feed" : "Expand feed"}
-                                        onPointerDown={handleMobileFeedDragStart}
+                                        aria-label={
+                                            mobileFeedExpanded
+                                                ? "Collapse feed"
+                                                : "Expand feed"
+                                        }
+                                        onPointerDown={
+                                            handleMobileFeedDragStart
+                                        }
                                         onTouchStart={handleMobileFeedDragStart}
                                         onKeyDown={(e) => {
-                                            if (e.key === "Enter" || e.key === " ") {
+                                            if (
+                                                e.key === "Enter" ||
+                                                e.key === " "
+                                            ) {
                                                 e.preventDefault()
-                                                snapMobileFeed(!mobileFeedExpanded)
+                                                snapMobileFeed(
+                                                    !mobileFeedExpanded
+                                                )
                                             }
                                         }}
                                         style={{
@@ -14674,8 +15548,23 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             outline: "none",
                                         }}
                                     >
-                                        <svg width="36" height="4" viewBox="0 0 36 4" fill="none" aria-hidden>
-                                            <rect width="36" height="4" rx="2" fill={isDark ? "rgba(255,255,255,0.35)" : "#858585"} />
+                                        <svg
+                                            width="36"
+                                            height="4"
+                                            viewBox="0 0 36 4"
+                                            fill="none"
+                                            aria-hidden
+                                        >
+                                            <rect
+                                                width="36"
+                                                height="4"
+                                                rx="2"
+                                                fill={
+                                                    isDark
+                                                        ? "rgba(255,255,255,0.35)"
+                                                        : "#858585"
+                                                }
+                                            />
                                         </svg>
                                     </div>
                                 </>
@@ -14700,11 +15589,14 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             setSelectedJobs([])
                                             if (isMobile) snapMobileFeed(false)
                                             // Desktop only — on mobile this would pop the keyboard unexpectedly
-                                            if (!isMobile) requestAnimationFrame(() => mapSearchInputRef.current?.focus())
+                                            if (!isMobile)
+                                                requestAnimationFrame(() =>
+                                                    mapSearchInputRef.current?.focus()
+                                                )
                                         }}
                                         style={{
                                             position: "absolute",
-                                            top: isMobile ? 4 : 14,
+                                            top: isMobile ? 0 : 14,
                                             right: isMobile ? 12 : 14,
                                             flexShrink: 0,
                                             width: 28,
@@ -14733,7 +15625,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     style={{
                                         overflowY: "auto",
                                         overflowX: "hidden",
-                                        padding: isMobile ? "0 12px 12px" : (selectedChipEntry ? "0 16px 16px" : "16px 16px 16px"),
+                                        padding: isMobile
+                                            ? "0 12px 12px"
+                                            : selectedChipEntry
+                                              ? "0 16px 16px"
+                                              : "16px 16px 16px",
                                         display: "flex",
                                         flexDirection: "column",
                                         gap: 10,
@@ -14744,515 +15640,1424 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         position: "relative",
                                     }}
                                 >
-                                {/* Mobile: sticky chrome + gradient so jobs scroll underneath; desktop: in-flow */}
-                                {(() => {
-                                    const filterStrip = (() => {
-                                    const pillBorderLight = "0.33px solid rgba(0,0,0,0.18)"
-                                    const pillStyle = (isActive: boolean, isOpen: boolean): React.CSSProperties => ({
-                                        height: 36,
-                                        paddingLeft: 10,
-                                        paddingRight: 10,
-                                        borderRadius: 50,
-                                        // Dark maps: shared surface #303030 (themeColors.surface); light: outlined pills
-                                        background: isDark ? themeColors.surface : "transparent",
-                                        border: isDark ? "none" : pillBorderLight,
-                                        cursor: "pointer",
-                                        display: "flex",
-                                        alignItems: "center",
-                                        gap: 5,
-                                        outline: "none",
-                                        whiteSpace: "nowrap",
-                                        flexShrink: 0,
-                                    })
-                                    const daysOpts: { value: "1d"|"3d"|"7d"|"30d"; label: string }[] = [
-                                        { value: "1d", label: "Past 24 hours" },
-                                        { value: "3d", label: "Past 3 days" },
-                                        { value: "7d", label: "Past 7 days" },
-                                        { value: "30d", label: "Past 30 days" },
-                                    ]
-                                    const daysLabel = daysOpts.find((o) => o.value === filterDays)?.label ?? "Past 7 days"
-                                    const seniorityLabelMap: Record<string, string> = {
-                                        "internship": "Intern",
-                                        "entry,new_grad": "Entry level",
-                                        "mid,senior": "Senior",
-                                        "staff,manager": "Manager",
-                                        "director,executive": "Director / Executive",
-                                    }
-                                    const seniorityLabel = filterSeniority
-                                        ? (seniorityLabelMap[filterSeniority] ?? filterSeniority)
-                                        : "Experience"
-                                    const typeLabel = filterType
-                                        ? (filterType === "full_time"
-                                            ? "Full-time"
-                                            : filterType === "part_time"
-                                              ? "Part-time"
-                                              : filterType === "contract,temporary"
-                                                ? "Contract"
-                                                : filterType.charAt(0).toUpperCase() + filterType.slice(1))
-                                        : "Type"
-                                    const chevron = (
-                                        <svg width="9" height="6" viewBox="0 0 10 6" fill="none">
-                                            <path d="M0.601562 0.599976L4.60156 4.59998L8.60156 0.599976" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        </svg>
-                                    )
-                                    const openPill = (
-                                        pillRef: React.RefObject<HTMLDivElement>,
-                                        openFn: (v: boolean) => void,
-                                        closeFns: Array<(v: boolean) => void>,
-                                        currentOpen: boolean,
-                                    ) => (e: React.MouseEvent) => {
-                                        e.stopPropagation()
-                                        if (currentOpen) {
-                                            openFn(false)
-                                            setFilterDropdownPos(null)
-                                        } else {
-                                            closeFns.forEach((fn) => fn(false))
-                                            const el = pillRef.current
-                                            const wrap = overlayMotionWrapRef.current
-                                            if (el && wrap) {
-                                                const r = el.getBoundingClientRect()
-                                                const w = wrap.getBoundingClientRect()
-                                                setFilterDropdownPos({ top: r.bottom - w.top + 4, left: r.left - w.left })
-                                            }
-                                            openFn(true)
-                                        }
-                                    }
-                                    return (
-                                        <div
-                                            className="MapFeedFilterStrip"
-                                            style={{
-                                                display: "flex",
-                                                gap: 6,
-                                                flexShrink: 0,
-                                                overflowX: "auto",
-                                                overflowY: "visible",
-                                                marginLeft: isMobile ? -12 : -16,
-                                                marginRight: isMobile ? -12 : -16,
-                                                paddingLeft: isMobile ? 12 : 16,
-                                                paddingRight: isMobile ? 12 : 16,
-                                            }}
-                                        >
-                                            <style>{`.MapFeedFilterStrip::-webkit-scrollbar { display: none; } .MapFeedFilterStrip { scrollbar-width: none; }`}</style>
-                                            {/* Days pill */}
-                                            {isMobile ? (
-                                                <div ref={filterDaysPillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
-                                                    <div style={{ ...pillStyle(false, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textSecondary, fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
-                                                        {chevron}
-                                                    </div>
-                                                    <select
-                                                        value={filterDays}
-                                                        onChange={(e) => setFilterDays(e.target.value as "1d"|"3d"|"7d"|"30d")}
-                                                        style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }}
-                                                    >
-                                                        {daysOpts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                                                    </select>
-                                                </div>
-                                            ) : (
-                                                <div ref={filterDaysPillRef} data-filter-pill style={{ flexShrink: 0 }}>
-                                                    <button style={pillStyle(false, filterDaysOpen)}
-                                                        onClick={openPill(filterDaysPillRef, setFilterDaysOpen, [setFilterSeniorityOpen, setFilterTypeOpen], filterDaysOpen)}>
-                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{daysLabel}</span>
-                                                        {chevron}
-                                                    </button>
-                                                </div>
-                                            )}
-                                            {/* Seniority pill */}
-                                            {isMobile ? (
-                                                <div ref={filterSeniorityPillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
-                                                    <div style={{ ...pillStyle(!!filterSeniority, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textSecondary, fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
-                                                        {chevron}
-                                                    </div>
-                                                    <select
-                                                        value={filterSeniority}
-                                                        onChange={(e) => setFilterSeniority(e.target.value)}
-                                                        style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }}
-                                                    >
-                                                        <option value="">All levels</option>
-                                                        <option value="internship">Intern</option>
-                                                        <option value="entry,new_grad">Entry level</option>
-                                                        <option value="mid,senior">Senior</option>
-                                                        <option value="staff,manager">Manager</option>
-                                                        <option value="director,executive">Director / Executive</option>
-                                                    </select>
-                                                </div>
-                                            ) : (
-                                                <div ref={filterSeniorityPillRef} data-filter-pill style={{ flexShrink: 0 }}>
-                                                    <button style={pillStyle(!!filterSeniority, filterSeniorityOpen)}
-                                                        onClick={openPill(filterSeniorityPillRef, setFilterSeniorityOpen, [setFilterDaysOpen, setFilterTypeOpen], filterSeniorityOpen)}>
-                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{seniorityLabel}</span>
-                                                        {chevron}
-                                                    </button>
-                                                </div>
-                                            )}
-                                            {/* Type pill */}
-                                            {isMobile ? (
-                                                <div ref={filterTypePillRef} data-filter-pill style={{ flexShrink: 0, position: "relative" }}>
-                                                    <div style={{ ...pillStyle(!!filterType, false), pointerEvents: "none", userSelect: "none" }}>
-                                                        <span style={{ color: textSecondary, fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
-                                                        {chevron}
-                                                    </div>
-                                                    <select
-                                                        value={filterType}
-                                                        onChange={(e) => setFilterType(e.target.value)}
-                                                        style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }}
-                                                    >
-                                                        <option value="">All types</option>
-                                                        <option value="full_time">Full-time</option>
-                                                        <option value="part_time">Part-time</option>
-                                                        <option value="contract,temporary">Contract</option>
-                                                    </select>
-                                                </div>
-                                            ) : (
-                                                <div ref={filterTypePillRef} data-filter-pill style={{ flexShrink: 0 }}>
-                                                    <button style={pillStyle(!!filterType, filterTypeOpen)}
-                                                        onClick={openPill(filterTypePillRef, setFilterTypeOpen, [setFilterDaysOpen, setFilterSeniorityOpen], filterTypeOpen)}>
-                                                        <span style={{ color: textSecondary, fontSize: 13, fontFamily: "Inter", fontWeight: "400" }}>{typeLabel}</span>
-                                                        {chevron}
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )
-                                })();
-                                    const companyWebsiteUrl = selectedJobs?.[0]?.company.website_url ?? null
-                                    const companyHeaderRow = selectedChipEntry ? (
-                                        <div
-                                            role={companyWebsiteUrl ? "link" : undefined}
-                                            tabIndex={companyWebsiteUrl ? 0 : undefined}
-                                            onClick={companyWebsiteUrl ? (e) => { e.stopPropagation(); window.open(companyWebsiteUrl, "_blank", "noopener,noreferrer") } : undefined}
-                                            onKeyDown={companyWebsiteUrl ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); window.open(companyWebsiteUrl, "_blank", "noopener,noreferrer") } } : undefined}
-                                            style={{
+                                    {/* Mobile: sticky chrome + gradient so jobs scroll underneath; desktop: in-flow */}
+                                    {(() => {
+                                        const filterStrip = (() => {
+                                            const pillBorderLight =
+                                                "0.33px solid rgba(0,0,0,0.18)"
+                                            const pillStyle = (
+                                                isActive: boolean,
+                                                isOpen: boolean
+                                            ): React.CSSProperties => ({
+                                                height: 36,
+                                                paddingLeft: 10,
+                                                paddingRight: 10,
+                                                borderRadius: 50,
+                                                // Dark maps: shared surface #303030 (themeColors.surface); light: outlined pills
+                                                background: isDark
+                                                    ? themeColors.surface
+                                                    : "transparent",
+                                                border: isDark
+                                                    ? "none"
+                                                    : pillBorderLight,
+                                                cursor: "pointer",
                                                 display: "flex",
                                                 alignItems: "center",
-                                                gap: 6,
-                                                paddingLeft: 6,
-                                                paddingRight: 6,
-                                                flexShrink: 0,
-                                                cursor: companyWebsiteUrl ? "pointer" : "default",
+                                                gap: 5,
                                                 outline: "none",
-                                            }}>
-                                            {selectedChipEntry.company_logo_url ? (
-                                                <img
-                                                    src={selectedChipEntry.company_logo_url}
-                                                    alt=""
-                                                    style={{ width: 16, height: 16, borderRadius: 8, objectFit: "cover", flexShrink: 0 }}
-                                                    onError={(e) => { ;(e.target as HTMLImageElement).style.display = "none" }}
-                                                />
-                                            ) : (
-                                                <div style={{ width: 16, height: 16, borderRadius: 8, background: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)", flexShrink: 0 }} />
-                                            )}
-                                            <span style={{ fontSize: 15, fontFamily: "Inter", fontWeight: "400", color: textPrimary, lineHeight: "22.5px" }}>
-                                                {selectedChipEntry.company_name}
-                                            </span>
-                                            {companyWebsiteUrl && (
-                                                <svg width="9" height="6" viewBox="0 0 10 6" fill="none" style={{ transform: "rotate(-90deg)", flexShrink: 0, marginLeft: -2 }}>
-                                                    <path d="M0.601562 0.599976L4.60156 4.59998L8.60156 0.599976" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                                                whiteSpace: "nowrap",
+                                                flexShrink: 0,
+                                            })
+                                            const daysOpts: {
+                                                value:
+                                                    | "1d"
+                                                    | "3d"
+                                                    | "7d"
+                                                    | "30d"
+                                                label: string
+                                            }[] = [
+                                                {
+                                                    value: "1d",
+                                                    label: "Past 24 hours",
+                                                },
+                                                {
+                                                    value: "3d",
+                                                    label: "Past 3 days",
+                                                },
+                                                {
+                                                    value: "7d",
+                                                    label: "Past 7 days",
+                                                },
+                                                {
+                                                    value: "30d",
+                                                    label: "Past 30 days",
+                                                },
+                                            ]
+                                            const daysLabel =
+                                                daysOpts.find(
+                                                    (o) =>
+                                                        o.value === filterDays
+                                                )?.label ?? "Past 7 days"
+                                            const seniorityLabelMap: Record<
+                                                string,
+                                                string
+                                            > = {
+                                                internship: "Intern",
+                                                "entry,new_grad": "Entry level",
+                                                "mid,senior": "Senior",
+                                                "staff,manager": "Manager",
+                                                "director,executive":
+                                                    "Director / Executive",
+                                            }
+                                            const seniorityLabel =
+                                                filterSeniority
+                                                    ? (seniorityLabelMap[
+                                                          filterSeniority
+                                                      ] ?? filterSeniority)
+                                                    : "Experience"
+                                            const typeLabel = filterType
+                                                ? filterType === "full_time"
+                                                    ? "Full-time"
+                                                    : filterType === "part_time"
+                                                      ? "Part-time"
+                                                      : filterType ===
+                                                          "contract,temporary"
+                                                        ? "Contract"
+                                                        : filterType
+                                                              .charAt(0)
+                                                              .toUpperCase() +
+                                                          filterType.slice(1)
+                                                : "Type"
+                                            const chevron = (
+                                                <svg
+                                                    width="9"
+                                                    height="6"
+                                                    viewBox="0 0 10 6"
+                                                    fill="none"
+                                                >
+                                                    <path
+                                                        d="M0.601562 0.599976L4.60156 4.59998L8.60156 0.599976"
+                                                        stroke={textSecondary}
+                                                        strokeWidth="1.2"
+                                                        strokeLinecap="round"
+                                                        strokeLinejoin="round"
+                                                    />
                                                 </svg>
-                                            )}
-                                        </div>
-                                    ) : null;
-                                    if (isMobile) {
-                                        return (
-                                            <>
-                                            <div
-                                                style={{
-                                                    position: "sticky",
-                                                    top: 0,
-                                                    zIndex: 10,
-                                                    paddingBottom: 0,
-                                                    marginLeft: -12,
-                                                    marginRight: -12,
-                                                    paddingLeft: 12,
-                                                    paddingRight: 12,
-                                                    background: isDark
-                                                        ? `linear-gradient(180deg, #212121 0px, #212121 1px, rgba(33,33,33,0.98) 8%, rgba(33,33,33,0.93) 18%, rgba(33,33,33,0.82) 30%, rgba(33,33,33,0.65) 45%, rgba(33,33,33,0.44) 60%, rgba(33,33,33,0.22) 73%, rgba(33,33,33,0.07) 84%, rgba(33,33,33,0) 92%)`
-                                                        : `linear-gradient(180deg, #fff 0px, #fff 1px, rgba(255,255,255,0.98) 8%, rgba(255,255,255,0.93) 18%, rgba(255,255,255,0.82) 30%, rgba(255,255,255,0.65) 45%, rgba(255,255,255,0.44) 60%, rgba(255,255,255,0.22) 73%, rgba(255,255,255,0.07) 84%, rgba(255,255,255,0) 92%)`,
-                                                }}
-                                            >
-                                                {!selectedChipEntry && (
-                                                    <div
-                                                        role="button"
-                                                        tabIndex={0}
-                                                        aria-label={mobileFeedExpanded ? "Collapse feed" : "Expand feed"}
-                                                        onPointerDown={handleMobileFeedDragStart}
-                                                        onTouchStart={handleMobileFeedDragStart}
-                                                        onKeyDown={(e) => {
-                                                            if (e.key === "Enter" || e.key === " ") {
-                                                                e.preventDefault()
-                                                                snapMobileFeed(!mobileFeedExpanded)
-                                                            }
-                                                        }}
-                                                        style={{
-                                                            flexShrink: 0,
-                                                            position: "relative",
-                                                            zIndex: 4,
-                                                            cursor: "ns-resize",
-                                                            outline: "none",
-                                                        }}
-                                                    >
+                                            )
+                                            const openPill =
+                                                (
+                                                    pillRef: React.RefObject<HTMLDivElement>,
+                                                    openFn: (
+                                                        v: boolean
+                                                    ) => void,
+                                                    closeFns: Array<
+                                                        (v: boolean) => void
+                                                    >,
+                                                    currentOpen: boolean
+                                                ) =>
+                                                (e: React.MouseEvent) => {
+                                                    e.stopPropagation()
+                                                    if (currentOpen) {
+                                                        openFn(false)
+                                                        setFilterDropdownPos(
+                                                            null
+                                                        )
+                                                    } else {
+                                                        closeFns.forEach((fn) =>
+                                                            fn(false)
+                                                        )
+                                                        const el =
+                                                            pillRef.current
+                                                        const wrap =
+                                                            overlayMotionWrapRef.current
+                                                        if (el && wrap) {
+                                                            const r =
+                                                                el.getBoundingClientRect()
+                                                            const w =
+                                                                wrap.getBoundingClientRect()
+                                                            setFilterDropdownPos(
+                                                                {
+                                                                    top:
+                                                                        r.bottom -
+                                                                        w.top +
+                                                                        4,
+                                                                    left:
+                                                                        r.left -
+                                                                        w.left,
+                                                                }
+                                                            )
+                                                        }
+                                                        openFn(true)
+                                                    }
+                                                }
+                                            return (
+                                                <div
+                                                    className="MapFeedFilterStrip"
+                                                    style={{
+                                                        display: "flex",
+                                                        gap: 6,
+                                                        flexShrink: 0,
+                                                        overflowX: "auto",
+                                                        overflowY: "visible",
+                                                        marginLeft: isMobile
+                                                            ? -12
+                                                            : -16,
+                                                        marginRight: isMobile
+                                                            ? -12
+                                                            : -16,
+                                                        paddingLeft: isMobile
+                                                            ? 12
+                                                            : 16,
+                                                        paddingRight: isMobile
+                                                            ? 12
+                                                            : 16,
+                                                    }}
+                                                >
+                                                    <style>{`.MapFeedFilterStrip::-webkit-scrollbar { display: none; } .MapFeedFilterStrip { scrollbar-width: none; }`}</style>
+                                                    {/* Days pill */}
+                                                    {isMobile ? (
                                                         <div
+                                                            ref={
+                                                                filterDaysPillRef
+                                                            }
+                                                            data-filter-pill
                                                             style={{
-                                                                height: 44,
-                                                                paddingLeft: 14,
-                                                                paddingRight: mapSearchQuery ? 10 : 14,
-                                                                background: isDark ? themeColors.surface : sheetBg,
-                                                                borderRadius: 50,
-                                                                display: "flex",
-                                                                alignItems: "center",
-                                                                gap: 6,
-                                                                border: isDark ? "none" : "0.33px solid rgba(0,0,0,0.18)",
+                                                                flexShrink: 0,
+                                                                position:
+                                                                    "relative",
                                                             }}
                                                         >
-                                                            <div style={{ flexShrink: 0, width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                                                    <path d="M10.9289 10.8023L14.7616 14.6M12.6167 6.52237C12.6167 8.09309 11.9837 9.59948 10.8571 10.7101C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7101C1.2345 9.59948 0.601563 8.09309 0.601562 6.52237C0.601563 4.95166 1.2345 3.44527 2.36113 2.33461C3.48777 1.22394 5.01581 0.599976 6.60911 0.599976C8.20241 0.599976 9.73045 1.22394 10.8571 2.33461C11.9837 3.44527 12.6167 4.95166 12.6167 6.52237Z" stroke={textSecondary} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                </svg>
-                                                            </div>
-                                                            <input
-                                                                ref={mapSearchInputRef}
-                                                                type="text"
-                                                                value={mapSearchQuery}
-                                                                onChange={(e) => setMapSearchQuery(e.target.value)}
-                                                                placeholder={selectedChipEntry ? `Search jobs at ${selectedChipEntry.company_name}` : "Search jobs"}
+                                                            <div
                                                                 style={{
-                                                                    flex: 1,
-                                                                    background: "transparent",
-                                                                    border: "none",
-                                                                    outline: "none",
-                                                                    color: textPrimary,
-                                                                    fontSize: (typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? 16 : 14,
-                                                                    fontFamily: "Inter",
-                                                                    fontWeight: "400",
-                                                                    lineHeight: "20px",
+                                                                    ...pillStyle(
+                                                                        false,
+                                                                        false
+                                                                    ),
+                                                                    pointerEvents:
+                                                                        "none",
+                                                                    userSelect:
+                                                                        "none",
                                                                 }}
-                                                            />
-                                                            {mapSearchQuery && (
-                                                                <button
-                                                                    type="button"
-                                                                    aria-label="Clear search"
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation()
-                                                                        setMapSearchQuery("")
-                                                                        requestAnimationFrame(() => mapSearchInputRef.current?.focus())
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        color: textSecondary,
+                                                                        fontSize:
+                                                                            typeof navigator !==
+                                                                                "undefined" &&
+                                                                            /iPhone|iPad|iPod/.test(
+                                                                                navigator.userAgent
+                                                                            )
+                                                                                ? 16
+                                                                                : 13,
+                                                                        fontFamily:
+                                                                            "Inter",
+                                                                        fontWeight:
+                                                                            "400",
                                                                     }}
-                                                                    onPointerDown={(e) => e.stopPropagation()}
-                                                                    onTouchStart={(e) => e.stopPropagation()}
-                                                                    style={mapSearchClearButtonStyle}
                                                                 >
-                                                                    {mapSearchClearIcon}
-                                                                </button>
-                                                            )}
+                                                                    {daysLabel}
+                                                                </span>
+                                                                {chevron}
+                                                            </div>
+                                                            <select
+                                                                value={
+                                                                    filterDays
+                                                                }
+                                                                onChange={(e) =>
+                                                                    setFilterDays(
+                                                                        e.target
+                                                                            .value as
+                                                                            | "1d"
+                                                                            | "3d"
+                                                                            | "7d"
+                                                                            | "30d"
+                                                                    )
+                                                                }
+                                                                style={{
+                                                                    position:
+                                                                        "absolute",
+                                                                    inset: 0,
+                                                                    opacity: 0,
+                                                                    cursor: "pointer",
+                                                                    width: "100%",
+                                                                    height: "100%",
+                                                                }}
+                                                            >
+                                                                {daysOpts.map(
+                                                                    (o) => (
+                                                                        <option
+                                                                            key={
+                                                                                o.value
+                                                                            }
+                                                                            value={
+                                                                                o.value
+                                                                            }
+                                                                        >
+                                                                            {
+                                                                                o.label
+                                                                            }
+                                                                        </option>
+                                                                    )
+                                                                )}
+                                                            </select>
                                                         </div>
-                                                    </div>
-                                                )}
-                                                {companyHeaderRow}
-                                            </div>
-                                            {!selectedChipEntry && filterStrip}
-                                            </>
-                                        );
-                                    }
-                                    // Desktop: company header is sticky; filter strip is in-flow
-                                    if (selectedChipEntry) {
-                                        return (
-                                            <div style={{
-                                                position: "sticky",
-                                                top: 0,
-                                                zIndex: 10,
-                                                marginLeft: -16,
-                                                marginRight: -16,
-                                                paddingLeft: 16,
-                                                paddingRight: 16,
-                                                paddingTop: 16,
-                                                background: isDark
-                                                    ? `linear-gradient(180deg, #212121 0%, #212121 40%, rgba(33,33,33,0.93) 52%, rgba(33,33,33,0.82) 60%, rgba(33,33,33,0.65) 68%, rgba(33,33,33,0.44) 76%, rgba(33,33,33,0.22) 84%, rgba(33,33,33,0.07) 91%, rgba(33,33,33,0) 97%)`
-                                                    : `linear-gradient(180deg, #fff 0%, #fff 40%, rgba(255,255,255,0.93) 52%, rgba(255,255,255,0.82) 60%, rgba(255,255,255,0.65) 68%, rgba(255,255,255,0.44) 76%, rgba(255,255,255,0.22) 84%, rgba(255,255,255,0.07) 91%, rgba(255,255,255,0) 97%)`,
-                                            }}>
-                                                {companyHeaderRow}
-                                            </div>
-                                        )
-                                    }
-                                    return filterStrip;
-                                })()}
-
-                                {/* Section label skeleton — fill matches job card bg (avoid homepageSkeleton opacity, which reads as wrong color) */}
-                                {selectedChipEntry && nearbyJobCount === null && (
-                                    <div
-                                        style={{
-                                            alignSelf: "flex-start",
-                                            marginLeft: 4,
-                                            marginRight: 4,
-                                            marginTop: 12,
-                                            width: 118,
-                                            height: 21,
-                                            borderRadius: 9999,
-                                            backgroundColor: cardBg,
-                                            animation: "mapFeedLabelSkeletonPulse 1.4s ease-in-out infinite",
-                                        }}
-                                    />
-                                )}
-
-                                {(selectedChipEntry && nearbyJobCount === null) ? (
-                                    // Company feed loading — skeleton cards, count from chip's job_count (max 10)
-                                    Array.from({ length: Math.min(selectedChipEntry.job_count ?? 5, 10) }).map((_, i) => (
-                                        <div key={i} style={{ background: cardBg, borderRadius: 28, padding: "16px 20px", flexShrink: 0 }}>
-                                            <div style={{ height: 18, width: "65%", background: themeColors.hover.default, borderRadius: 6, marginBottom: 10, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
-                                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                                <div style={{ width: 16, height: 16, borderRadius: 8, background: themeColors.hover.default, flexShrink: 0, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
-                                                <div style={{ height: 13, width: "40%", background: themeColors.hover.default, borderRadius: 6, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (selectedChipEntry && nearbyJobCount !== null && selectedJobs.length === 0) ? (
-                                    // Company feed loaded — no results
-                                    <div style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "400", color: textSecondary }}>
-                                        No search results found
-                                    </div>
-                                ) : (!selectedChipEntry && selectedJobs.length === 0 && mapSearchQuery.trim()) ? (
-                                    // Regular feed — search returned no results
-                                    <div style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "400", color: textSecondary }}>
-                                        No search results found
-                                    </div>
-                                ) : (
-                                    <>
-                                        {/* Section label once loaded — hidden if 0 nearby */}
-                                        {selectedChipEntry && nearbyJobCount !== null && nearbyJobCount > 0 && (
-                                            <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "400", color: textSecondary, display: "block" }}>
-                                                {`${nearbyJobCount} job${nearbyJobCount === 1 ? "" : "s"} nearby`}
-                                            </span>
-                                        )}
-                                        {selectedJobs.map((job, idx) => {
-                                            // Insert "X jobs anywhere" divider before the first non-nearby job
-                                            const anywhereLabelHere = selectedChipEntry && nearbyJobCount !== null && idx === nearbyJobCount && selectedJobs.length > nearbyJobCount
-                                            const anywhereTotalCount = selectedJobs.length - (nearbyJobCount ?? 0)
-                                            const tt = travelTimes[job.id] ?? null
-                                            const driveMins = tt?.drivingMins ?? null
-                                            const walkMins = tt?.walkingMins ?? null
-                                            const isWalkable = walkMins !== null && walkMins <= 30
-                                            const timeDisplay = isWalkable ? walkMins : driveMins
-                                            const hasTime = timeDisplay !== null
-
-                                            const postedMs = job.posted_at
-                                                ? Date.now() - new Date(job.posted_at).getTime()
-                                                : null
-                                            const postedStr =
-                                                postedMs === null
-                                                    ? null
-                                                    : postedMs < 3600000
-                                                      ? `${Math.floor(postedMs / 60000)} min ago`
-                                                      : postedMs < 86400000
-                                                        ? `${Math.floor(postedMs / 3600000)}h ago`
-                                                        : `${Math.floor(postedMs / 86400000)}d ago`
-
-                                            const dotSpan = (
-                                                <span style={{ color: textSecondary, fontSize: 12, fontFamily: "Inter" }}>•</span>
+                                                    ) : (
+                                                        <div
+                                                            ref={
+                                                                filterDaysPillRef
+                                                            }
+                                                            data-filter-pill
+                                                            style={{
+                                                                flexShrink: 0,
+                                                            }}
+                                                        >
+                                                            <button
+                                                                style={pillStyle(
+                                                                    false,
+                                                                    filterDaysOpen
+                                                                )}
+                                                                onClick={openPill(
+                                                                    filterDaysPillRef,
+                                                                    setFilterDaysOpen,
+                                                                    [
+                                                                        setFilterSeniorityOpen,
+                                                                        setFilterTypeOpen,
+                                                                    ],
+                                                                    filterDaysOpen
+                                                                )}
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        color: textSecondary,
+                                                                        fontSize: 13,
+                                                                        fontFamily:
+                                                                            "Inter",
+                                                                        fontWeight:
+                                                                            "400",
+                                                                    }}
+                                                                >
+                                                                    {daysLabel}
+                                                                </span>
+                                                                {chevron}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                    {/* Seniority pill */}
+                                                    {isMobile ? (
+                                                        <div
+                                                            ref={
+                                                                filterSeniorityPillRef
+                                                            }
+                                                            data-filter-pill
+                                                            style={{
+                                                                flexShrink: 0,
+                                                                position:
+                                                                    "relative",
+                                                            }}
+                                                        >
+                                                            <div
+                                                                style={{
+                                                                    ...pillStyle(
+                                                                        !!filterSeniority,
+                                                                        false
+                                                                    ),
+                                                                    pointerEvents:
+                                                                        "none",
+                                                                    userSelect:
+                                                                        "none",
+                                                                }}
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        color: textSecondary,
+                                                                        fontSize:
+                                                                            typeof navigator !==
+                                                                                "undefined" &&
+                                                                            /iPhone|iPad|iPod/.test(
+                                                                                navigator.userAgent
+                                                                            )
+                                                                                ? 16
+                                                                                : 13,
+                                                                        fontFamily:
+                                                                            "Inter",
+                                                                        fontWeight:
+                                                                            "400",
+                                                                    }}
+                                                                >
+                                                                    {
+                                                                        seniorityLabel
+                                                                    }
+                                                                </span>
+                                                                {chevron}
+                                                            </div>
+                                                            <select
+                                                                value={
+                                                                    filterSeniority
+                                                                }
+                                                                onChange={(e) =>
+                                                                    setFilterSeniority(
+                                                                        e.target
+                                                                            .value
+                                                                    )
+                                                                }
+                                                                style={{
+                                                                    position:
+                                                                        "absolute",
+                                                                    inset: 0,
+                                                                    opacity: 0,
+                                                                    cursor: "pointer",
+                                                                    width: "100%",
+                                                                    height: "100%",
+                                                                }}
+                                                            >
+                                                                <option value="">
+                                                                    All levels
+                                                                </option>
+                                                                <option value="internship">
+                                                                    Intern
+                                                                </option>
+                                                                <option value="entry,new_grad">
+                                                                    Entry level
+                                                                </option>
+                                                                <option value="mid,senior">
+                                                                    Senior
+                                                                </option>
+                                                                <option value="staff,manager">
+                                                                    Manager
+                                                                </option>
+                                                                <option value="director,executive">
+                                                                    Director /
+                                                                    Executive
+                                                                </option>
+                                                            </select>
+                                                        </div>
+                                                    ) : (
+                                                        <div
+                                                            ref={
+                                                                filterSeniorityPillRef
+                                                            }
+                                                            data-filter-pill
+                                                            style={{
+                                                                flexShrink: 0,
+                                                            }}
+                                                        >
+                                                            <button
+                                                                style={pillStyle(
+                                                                    !!filterSeniority,
+                                                                    filterSeniorityOpen
+                                                                )}
+                                                                onClick={openPill(
+                                                                    filterSeniorityPillRef,
+                                                                    setFilterSeniorityOpen,
+                                                                    [
+                                                                        setFilterDaysOpen,
+                                                                        setFilterTypeOpen,
+                                                                    ],
+                                                                    filterSeniorityOpen
+                                                                )}
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        color: textSecondary,
+                                                                        fontSize: 13,
+                                                                        fontFamily:
+                                                                            "Inter",
+                                                                        fontWeight:
+                                                                            "400",
+                                                                    }}
+                                                                >
+                                                                    {
+                                                                        seniorityLabel
+                                                                    }
+                                                                </span>
+                                                                {chevron}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                    {/* Type pill */}
+                                                    {isMobile ? (
+                                                        <div
+                                                            ref={
+                                                                filterTypePillRef
+                                                            }
+                                                            data-filter-pill
+                                                            style={{
+                                                                flexShrink: 0,
+                                                                position:
+                                                                    "relative",
+                                                            }}
+                                                        >
+                                                            <div
+                                                                style={{
+                                                                    ...pillStyle(
+                                                                        !!filterType,
+                                                                        false
+                                                                    ),
+                                                                    pointerEvents:
+                                                                        "none",
+                                                                    userSelect:
+                                                                        "none",
+                                                                }}
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        color: textSecondary,
+                                                                        fontSize:
+                                                                            typeof navigator !==
+                                                                                "undefined" &&
+                                                                            /iPhone|iPad|iPod/.test(
+                                                                                navigator.userAgent
+                                                                            )
+                                                                                ? 16
+                                                                                : 13,
+                                                                        fontFamily:
+                                                                            "Inter",
+                                                                        fontWeight:
+                                                                            "400",
+                                                                    }}
+                                                                >
+                                                                    {typeLabel}
+                                                                </span>
+                                                                {chevron}
+                                                            </div>
+                                                            <select
+                                                                value={
+                                                                    filterType
+                                                                }
+                                                                onChange={(e) =>
+                                                                    setFilterType(
+                                                                        e.target
+                                                                            .value
+                                                                    )
+                                                                }
+                                                                style={{
+                                                                    position:
+                                                                        "absolute",
+                                                                    inset: 0,
+                                                                    opacity: 0,
+                                                                    cursor: "pointer",
+                                                                    width: "100%",
+                                                                    height: "100%",
+                                                                }}
+                                                            >
+                                                                <option value="">
+                                                                    All types
+                                                                </option>
+                                                                <option value="full_time">
+                                                                    Full-time
+                                                                </option>
+                                                                <option value="part_time">
+                                                                    Part-time
+                                                                </option>
+                                                                <option value="contract,temporary">
+                                                                    Contract
+                                                                </option>
+                                                            </select>
+                                                        </div>
+                                                    ) : (
+                                                        <div
+                                                            ref={
+                                                                filterTypePillRef
+                                                            }
+                                                            data-filter-pill
+                                                            style={{
+                                                                flexShrink: 0,
+                                                            }}
+                                                        >
+                                                            <button
+                                                                style={pillStyle(
+                                                                    !!filterType,
+                                                                    filterTypeOpen
+                                                                )}
+                                                                onClick={openPill(
+                                                                    filterTypePillRef,
+                                                                    setFilterTypeOpen,
+                                                                    [
+                                                                        setFilterDaysOpen,
+                                                                        setFilterSeniorityOpen,
+                                                                    ],
+                                                                    filterTypeOpen
+                                                                )}
+                                                            >
+                                                                <span
+                                                                    style={{
+                                                                        color: textSecondary,
+                                                                        fontSize: 13,
+                                                                        fontFamily:
+                                                                            "Inter",
+                                                                        fontWeight:
+                                                                            "400",
+                                                                    }}
+                                                                >
+                                                                    {typeLabel}
+                                                                </span>
+                                                                {chevron}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             )
-                                            const infoText = (txt: string) => (
-                                                <span style={{ color: textSecondary, fontSize: 12, fontFamily: "Inter", lineHeight: "18px" }}>{txt}</span>
-                                            )
-
+                                        })()
+                                        const companyWebsiteUrl =
+                                            selectedJobs?.[0]?.company
+                                                .website_url ?? null
+                                        const companyHeaderRow =
+                                            selectedChipEntry ? (
+                                                <div
+                                                    role={
+                                                        companyWebsiteUrl
+                                                            ? "link"
+                                                            : undefined
+                                                    }
+                                                    tabIndex={
+                                                        companyWebsiteUrl
+                                                            ? 0
+                                                            : undefined
+                                                    }
+                                                    onClick={
+                                                        companyWebsiteUrl
+                                                            ? (e) => {
+                                                                  e.stopPropagation()
+                                                                  window.open(
+                                                                      companyWebsiteUrl,
+                                                                      "_blank",
+                                                                      "noopener,noreferrer"
+                                                                  )
+                                                              }
+                                                            : undefined
+                                                    }
+                                                    onKeyDown={
+                                                        companyWebsiteUrl
+                                                            ? (e) => {
+                                                                  if (
+                                                                      e.key ===
+                                                                          "Enter" ||
+                                                                      e.key ===
+                                                                          " "
+                                                                  ) {
+                                                                      e.preventDefault()
+                                                                      window.open(
+                                                                          companyWebsiteUrl,
+                                                                          "_blank",
+                                                                          "noopener,noreferrer"
+                                                                      )
+                                                                  }
+                                                              }
+                                                            : undefined
+                                                    }
+                                                    style={{
+                                                        display: "inline-flex",
+                                                        alignItems: "center",
+                                                        gap: 6,
+                                                        paddingLeft: 6,
+                                                        paddingRight: 6,
+                                                        flexShrink: 0,
+                                                        width: "fit-content",
+                                                        cursor: companyWebsiteUrl
+                                                            ? "pointer"
+                                                            : "default",
+                                                        outline: "none",
+                                                    }}
+                                                >
+                                                    {selectedChipEntry.company_logo_url ? (
+                                                        <img
+                                                            src={
+                                                                selectedChipEntry.company_logo_url
+                                                            }
+                                                            alt=""
+                                                            style={{
+                                                                width: 16,
+                                                                height: 16,
+                                                                borderRadius: 8,
+                                                                objectFit:
+                                                                    "cover",
+                                                                flexShrink: 0,
+                                                            }}
+                                                            onError={(e) => {
+                                                                ;(
+                                                                    e.target as HTMLImageElement
+                                                                ).style.display =
+                                                                    "none"
+                                                            }}
+                                                        />
+                                                    ) : (
+                                                        <div
+                                                            style={{
+                                                                width: 16,
+                                                                height: 16,
+                                                                borderRadius: 8,
+                                                                background:
+                                                                    isDark
+                                                                        ? "rgba(255,255,255,0.12)"
+                                                                        : "rgba(0,0,0,0.08)",
+                                                                flexShrink: 0,
+                                                            }}
+                                                        />
+                                                    )}
+                                                    <span
+                                                        style={{
+                                                            fontSize: 15,
+                                                            fontFamily: "Inter",
+                                                            fontWeight: "400",
+                                                            color: textPrimary,
+                                                            lineHeight:
+                                                                "22.5px",
+                                                        }}
+                                                    >
+                                                        {
+                                                            selectedChipEntry.company_name
+                                                        }
+                                                    </span>
+                                                    {companyWebsiteUrl && (
+                                                        <svg
+                                                            width="9"
+                                                            height="6"
+                                                            viewBox="0 0 10 6"
+                                                            fill="none"
+                                                            style={{
+                                                                transform:
+                                                                    "rotate(-90deg)",
+                                                                flexShrink: 0,
+                                                                marginLeft: -2,
+                                                            }}
+                                                        >
+                                                            <path
+                                                                d="M0.601562 0.599976L4.60156 4.59998L8.60156 0.599976"
+                                                                stroke={
+                                                                    textSecondary
+                                                                }
+                                                                strokeWidth="1.2"
+                                                                strokeLinecap="round"
+                                                                strokeLinejoin="round"
+                                                            />
+                                                        </svg>
+                                                    )}
+                                                </div>
+                                            ) : null
+                                        if (isMobile) {
                                             return (
-                                                <React.Fragment key={job.id}>
-                                                {anywhereLabelHere && (
-                                                    <span style={{ paddingLeft: 4, paddingTop: 12, fontSize: 14, fontFamily: "Inter", fontWeight: "400", color: textSecondary, display: "block" }}>
-                                                        {`${anywhereTotalCount} job${anywhereTotalCount === 1 ? "" : "s"} anywhere`}
+                                                <>
+                                                    <div
+                                                        style={{
+                                                            position: "sticky",
+                                                            top: 0,
+                                                            zIndex: 10,
+                                                            paddingBottom: 0,
+                                                            marginLeft: -12,
+                                                            marginRight: -12,
+                                                            paddingLeft: 12,
+                                                            paddingRight: 12,
+                                                            background: isDark
+                                                                ? `linear-gradient(180deg, #212121 0px, #212121 1px, rgba(33,33,33,0.98) 8%, rgba(33,33,33,0.93) 18%, rgba(33,33,33,0.82) 30%, rgba(33,33,33,0.65) 45%, rgba(33,33,33,0.44) 60%, rgba(33,33,33,0.22) 73%, rgba(33,33,33,0.07) 84%, rgba(33,33,33,0) 92%)`
+                                                                : `linear-gradient(180deg, #fff 0px, #fff 1px, rgba(255,255,255,0.98) 8%, rgba(255,255,255,0.93) 18%, rgba(255,255,255,0.82) 30%, rgba(255,255,255,0.65) 45%, rgba(255,255,255,0.44) 60%, rgba(255,255,255,0.22) 73%, rgba(255,255,255,0.07) 84%, rgba(255,255,255,0) 92%)`,
+                                                        }}
+                                                    >
+                                                        {!selectedChipEntry && (
+                                                            <div
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                aria-label={
+                                                                    mobileFeedExpanded
+                                                                        ? "Collapse feed"
+                                                                        : "Expand feed"
+                                                                }
+                                                                onPointerDown={
+                                                                    handleMobileFeedDragStart
+                                                                }
+                                                                onTouchStart={
+                                                                    handleMobileFeedDragStart
+                                                                }
+                                                                onKeyDown={(
+                                                                    e
+                                                                ) => {
+                                                                    if (
+                                                                        e.key ===
+                                                                            "Enter" ||
+                                                                        e.key ===
+                                                                            " "
+                                                                    ) {
+                                                                        e.preventDefault()
+                                                                        snapMobileFeed(
+                                                                            !mobileFeedExpanded
+                                                                        )
+                                                                    }
+                                                                }}
+                                                                style={{
+                                                                    flexShrink: 0,
+                                                                    position:
+                                                                        "relative",
+                                                                    zIndex: 4,
+                                                                    cursor: "ns-resize",
+                                                                    outline:
+                                                                        "none",
+                                                                }}
+                                                            >
+                                                                <div
+                                                                    style={{
+                                                                        height: 44,
+                                                                        paddingLeft: 14,
+                                                                        paddingRight:
+                                                                            mapSearchQuery
+                                                                                ? 10
+                                                                                : 14,
+                                                                        background:
+                                                                            isDark
+                                                                                ? themeColors.surface
+                                                                                : sheetBg,
+                                                                        borderRadius: 50,
+                                                                        display:
+                                                                            "flex",
+                                                                        alignItems:
+                                                                            "center",
+                                                                        gap: 6,
+                                                                        border: isDark
+                                                                            ? "none"
+                                                                            : "0.33px solid rgba(0,0,0,0.18)",
+                                                                    }}
+                                                                >
+                                                                    <div
+                                                                        style={{
+                                                                            flexShrink: 0,
+                                                                            width: 16,
+                                                                            height: 16,
+                                                                            display:
+                                                                                "flex",
+                                                                            alignItems:
+                                                                                "center",
+                                                                            justifyContent:
+                                                                                "center",
+                                                                        }}
+                                                                    >
+                                                                        <svg
+                                                                            width="16"
+                                                                            height="16"
+                                                                            viewBox="0 0 16 16"
+                                                                            fill="none"
+                                                                        >
+                                                                            <path
+                                                                                d="M10.9289 10.8023L14.7616 14.6M12.6167 6.52237C12.6167 8.09309 11.9837 9.59948 10.8571 10.7101C9.73045 11.8208 8.20241 12.4448 6.60911 12.4448C5.01581 12.4448 3.48777 11.8208 2.36113 10.7101C1.2345 9.59948 0.601563 8.09309 0.601562 6.52237C0.601563 4.95166 1.2345 3.44527 2.36113 2.33461C3.48777 1.22394 5.01581 0.599976 6.60911 0.599976C8.20241 0.599976 9.73045 1.22394 10.8571 2.33461C11.9837 3.44527 12.6167 4.95166 12.6167 6.52237Z"
+                                                                                stroke={
+                                                                                    textSecondary
+                                                                                }
+                                                                                strokeWidth="1.2"
+                                                                                strokeLinecap="round"
+                                                                                strokeLinejoin="round"
+                                                                            />
+                                                                        </svg>
+                                                                    </div>
+                                                                    <input
+                                                                        ref={
+                                                                            mapSearchInputRef
+                                                                        }
+                                                                        type="text"
+                                                                        value={
+                                                                            mapSearchQuery
+                                                                        }
+                                                                        onChange={(
+                                                                            e
+                                                                        ) =>
+                                                                            setMapSearchQuery(
+                                                                                e
+                                                                                    .target
+                                                                                    .value
+                                                                            )
+                                                                        }
+                                                                        placeholder={
+                                                                            selectedChipEntry
+                                                                                ? `Search jobs at ${selectedChipEntry.company_name}`
+                                                                                : "Search jobs"
+                                                                        }
+                                                                        style={{
+                                                                            flex: 1,
+                                                                            background:
+                                                                                "transparent",
+                                                                            border: "none",
+                                                                            outline:
+                                                                                "none",
+                                                                            color: textPrimary,
+                                                                            fontSize:
+                                                                                typeof navigator !==
+                                                                                    "undefined" &&
+                                                                                /iPhone|iPad|iPod/.test(
+                                                                                    navigator.userAgent
+                                                                                )
+                                                                                    ? 16
+                                                                                    : 14,
+                                                                            fontFamily:
+                                                                                "Inter",
+                                                                            fontWeight:
+                                                                                "400",
+                                                                            lineHeight:
+                                                                                "20px",
+                                                                        }}
+                                                                    />
+                                                                    {mapSearchQuery && (
+                                                                        <button
+                                                                            type="button"
+                                                                            aria-label="Clear search"
+                                                                            onClick={(
+                                                                                e
+                                                                            ) => {
+                                                                                e.stopPropagation()
+                                                                                setMapSearchQuery(
+                                                                                    ""
+                                                                                )
+                                                                                requestAnimationFrame(
+                                                                                    () =>
+                                                                                        mapSearchInputRef.current?.focus()
+                                                                                )
+                                                                            }}
+                                                                            onPointerDown={(
+                                                                                e
+                                                                            ) =>
+                                                                                e.stopPropagation()
+                                                                            }
+                                                                            onTouchStart={(
+                                                                                e
+                                                                            ) =>
+                                                                                e.stopPropagation()
+                                                                            }
+                                                                            style={
+                                                                                mapSearchClearButtonStyle
+                                                                            }
+                                                                        >
+                                                                            {
+                                                                                mapSearchClearIcon
+                                                                            }
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                        {companyHeaderRow}
+                                                    </div>
+                                                    {!selectedChipEntry &&
+                                                        filterStrip}
+                                                </>
+                                            )
+                                        }
+                                        // Desktop: company header is sticky; filter strip is in-flow
+                                        if (selectedChipEntry) {
+                                            return (
+                                                <div
+                                                    style={{
+                                                        position: "sticky",
+                                                        top: 0,
+                                                        zIndex: 10,
+                                                        marginLeft: -16,
+                                                        marginRight: -16,
+                                                        paddingLeft: 16,
+                                                        paddingRight: 16,
+                                                        paddingTop: 16,
+                                                        background: isDark
+                                                            ? `linear-gradient(180deg, #212121 0%, #212121 40%, rgba(33,33,33,0.93) 52%, rgba(33,33,33,0.82) 60%, rgba(33,33,33,0.65) 68%, rgba(33,33,33,0.44) 76%, rgba(33,33,33,0.22) 84%, rgba(33,33,33,0.07) 91%, rgba(33,33,33,0) 97%)`
+                                                            : `linear-gradient(180deg, #fff 0%, #fff 40%, rgba(255,255,255,0.93) 52%, rgba(255,255,255,0.82) 60%, rgba(255,255,255,0.65) 68%, rgba(255,255,255,0.44) 76%, rgba(255,255,255,0.22) 84%, rgba(255,255,255,0.07) 91%, rgba(255,255,255,0) 97%)`,
+                                                    }}
+                                                >
+                                                    {companyHeaderRow}
+                                                </div>
+                                            )
+                                        }
+                                        return filterStrip
+                                    })()}
+
+                                    {/* Section label skeleton — fill matches job card bg (avoid homepageSkeleton opacity, which reads as wrong color) */}
+                                    {selectedChipEntry &&
+                                        nearbyJobCount === null && (
+                                            <div
+                                                style={{
+                                                    alignSelf: "flex-start",
+                                                    marginLeft: 4,
+                                                    marginRight: 4,
+                                                    marginTop: 12,
+                                                    width: 118,
+                                                    height: 21,
+                                                    borderRadius: 9999,
+                                                    backgroundColor: cardBg,
+                                                    animation:
+                                                        "mapFeedLabelSkeletonPulse 1.4s ease-in-out infinite",
+                                                }}
+                                            />
+                                        )}
+
+                                    {selectedChipEntry &&
+                                    nearbyJobCount === null ? (
+                                        // Company feed loading — skeleton cards, count from chip's job_count (max 10)
+                                        Array.from({
+                                            length: Math.min(
+                                                selectedChipEntry.job_count ??
+                                                    5,
+                                                10
+                                            ),
+                                        }).map((_, i) => (
+                                            <div
+                                                key={i}
+                                                style={{
+                                                    background: cardBg,
+                                                    borderRadius: 28,
+                                                    padding: "16px 20px",
+                                                    flexShrink: 0,
+                                                }}
+                                            >
+                                                <div
+                                                    style={{
+                                                        height: 18,
+                                                        width: "65%",
+                                                        background:
+                                                            themeColors.hover
+                                                                .default,
+                                                        borderRadius: 6,
+                                                        marginBottom: 10,
+                                                        animation:
+                                                            "homepageSkeleton 1.4s ease-in-out infinite",
+                                                    }}
+                                                />
+                                                <div
+                                                    style={{
+                                                        display: "flex",
+                                                        gap: 8,
+                                                        alignItems: "center",
+                                                    }}
+                                                >
+                                                    <div
+                                                        style={{
+                                                            width: 16,
+                                                            height: 16,
+                                                            borderRadius: 8,
+                                                            background:
+                                                                themeColors
+                                                                    .hover
+                                                                    .default,
+                                                            flexShrink: 0,
+                                                            animation:
+                                                                "homepageSkeleton 1.4s ease-in-out infinite",
+                                                        }}
+                                                    />
+                                                    <div
+                                                        style={{
+                                                            height: 13,
+                                                            width: "40%",
+                                                            background:
+                                                                themeColors
+                                                                    .hover
+                                                                    .default,
+                                                            borderRadius: 6,
+                                                            animation:
+                                                                "homepageSkeleton 1.4s ease-in-out infinite",
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : selectedChipEntry &&
+                                      nearbyJobCount !== null &&
+                                      selectedJobs.length === 0 ? (
+                                        // Company feed loaded — no results
+                                        <div
+                                            style={{
+                                                paddingLeft: 4,
+                                                paddingTop: 12,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: "400",
+                                                color: textSecondary,
+                                            }}
+                                        >
+                                            No search results found
+                                        </div>
+                                    ) : !selectedChipEntry &&
+                                      selectedJobs.length === 0 &&
+                                      mapSearchQuery.trim() ? (
+                                        // Regular feed — search returned no results
+                                        <div
+                                            style={{
+                                                paddingLeft: 4,
+                                                paddingTop: 12,
+                                                fontSize: 14,
+                                                fontFamily: "Inter",
+                                                fontWeight: "400",
+                                                color: textSecondary,
+                                            }}
+                                        >
+                                            No search results found
+                                        </div>
+                                    ) : (
+                                        <>
+                                            {/* Section label once loaded — hidden if 0 nearby */}
+                                            {selectedChipEntry &&
+                                                nearbyJobCount !== null &&
+                                                nearbyJobCount > 0 && (
+                                                    <span
+                                                        style={{
+                                                            paddingLeft: 4,
+                                                            paddingTop: 12,
+                                                            fontSize: 14,
+                                                            fontFamily: "Inter",
+                                                            fontWeight: "400",
+                                                            color: textSecondary,
+                                                            display: "block",
+                                                        }}
+                                                    >
+                                                        {`${nearbyJobCount} job${nearbyJobCount === 1 ? "" : "s"} nearby`}
                                                     </span>
                                                 )}
+                                            {selectedJobs.map((job, idx) => {
+                                                // Insert "X jobs anywhere" divider before the first non-nearby job
+                                                const anywhereLabelHere =
+                                                    selectedChipEntry &&
+                                                    nearbyJobCount !== null &&
+                                                    idx === nearbyJobCount &&
+                                                    selectedJobs.length >
+                                                        nearbyJobCount
+                                                const anywhereTotalCount =
+                                                    selectedJobs.length -
+                                                    (nearbyJobCount ?? 0)
+                                                const tt =
+                                                    travelTimes[job.id] ?? null
+                                                const driveMins =
+                                                    tt?.drivingMins ?? null
+                                                const walkMins =
+                                                    tt?.walkingMins ?? null
+                                                const isWalkable =
+                                                    walkMins !== null &&
+                                                    walkMins <= 30
+                                                const timeDisplay = isWalkable
+                                                    ? walkMins
+                                                    : driveMins
+                                                const hasTime =
+                                                    timeDisplay !== null
+
+                                                const postedMs = job.posted_at
+                                                    ? Date.now() -
+                                                      new Date(
+                                                          job.posted_at
+                                                      ).getTime()
+                                                    : null
+                                                const postedStr =
+                                                    postedMs === null
+                                                        ? null
+                                                        : postedMs < 3600000
+                                                          ? `${Math.floor(postedMs / 60000)} min ago`
+                                                          : postedMs < 86400000
+                                                            ? `${Math.floor(postedMs / 3600000)}h ago`
+                                                            : `${Math.floor(postedMs / 86400000)}d ago`
+
+                                                const dotSpan = (
+                                                    <span
+                                                        style={{
+                                                            color: textSecondary,
+                                                            fontSize: 12,
+                                                            fontFamily: "Inter",
+                                                        }}
+                                                    >
+                                                        •
+                                                    </span>
+                                                )
+                                                const infoText = (
+                                                    txt: string
+                                                ) => (
+                                                    <span
+                                                        style={{
+                                                            color: textSecondary,
+                                                            fontSize: 12,
+                                                            fontFamily: "Inter",
+                                                            lineHeight: "18px",
+                                                        }}
+                                                    >
+                                                        {txt}
+                                                    </span>
+                                                )
+
+                                                return (
+                                                    <React.Fragment
+                                                        key={job.id}
+                                                    >
+                                                        {anywhereLabelHere && (
+                                                            <span
+                                                                style={{
+                                                                    paddingLeft: 4,
+                                                                    paddingTop: 12,
+                                                                    fontSize: 14,
+                                                                    fontFamily:
+                                                                        "Inter",
+                                                                    fontWeight:
+                                                                        "400",
+                                                                    color: textSecondary,
+                                                                    display:
+                                                                        "block",
+                                                                }}
+                                                            >
+                                                                {`${anywhereTotalCount} job${anywhereTotalCount === 1 ? "" : "s"} anywhere`}
+                                                            </span>
+                                                        )}
+                                                        <div
+                                                            role="button"
+                                                            tabIndex={0}
+                                                            aria-label={`${job.title} at ${job.company.name}, open job listing`}
+                                                            onClick={() => {
+                                                                if (
+                                                                    onJobSelect
+                                                                ) {
+                                                                    onJobSelect(
+                                                                        job
+                                                                    )
+                                                                } else if (
+                                                                    typeof window !==
+                                                                    "undefined"
+                                                                ) {
+                                                                    window.open(
+                                                                        job.apply_url,
+                                                                        "_blank",
+                                                                        "noopener,noreferrer"
+                                                                    )
+                                                                }
+                                                            }}
+                                                            onKeyDown={(e) => {
+                                                                if (
+                                                                    e.key ===
+                                                                        "Enter" ||
+                                                                    e.key ===
+                                                                        " "
+                                                                ) {
+                                                                    if (
+                                                                        onJobSelect
+                                                                    ) {
+                                                                        onJobSelect(
+                                                                            job
+                                                                        )
+                                                                    } else if (
+                                                                        typeof window !==
+                                                                        "undefined"
+                                                                    ) {
+                                                                        window.open(
+                                                                            job.apply_url,
+                                                                            "_blank",
+                                                                            "noopener,noreferrer"
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }}
+                                                            style={{
+                                                                background:
+                                                                    cardBg,
+                                                                borderRadius: 28,
+                                                                padding:
+                                                                    "16px 20px",
+                                                                cursor: "pointer",
+                                                                flexShrink: 0,
+                                                                outline: "none",
+                                                            }}
+                                                        >
+                                                            {/* Title */}
+                                                            <div
+                                                                style={{
+                                                                    color: textPrimary,
+                                                                    fontSize: 16,
+                                                                    fontFamily:
+                                                                        "Inter",
+                                                                    fontWeight:
+                                                                        "500",
+                                                                    lineHeight:
+                                                                        "24px",
+                                                                    marginBottom: 8,
+                                                                    whiteSpace:
+                                                                        "nowrap",
+                                                                    overflow:
+                                                                        "hidden",
+                                                                    textOverflow:
+                                                                        "ellipsis",
+                                                                }}
+                                                            >
+                                                                {job.title}
+                                                            </div>
+                                                            {/* Meta row */}
+                                                            <div
+                                                                style={{
+                                                                    display:
+                                                                        "flex",
+                                                                    flexWrap:
+                                                                        "wrap",
+                                                                    alignItems:
+                                                                        "center",
+                                                                    gap: 6,
+                                                                }}
+                                                            >
+                                                                {!selectedChipEntry &&
+                                                                    (job.company
+                                                                        .logo_url ? (
+                                                                        <img
+                                                                            src={
+                                                                                job
+                                                                                    .company
+                                                                                    .logo_url
+                                                                            }
+                                                                            alt=""
+                                                                            style={{
+                                                                                width: 16,
+                                                                                height: 16,
+                                                                                borderRadius: 8,
+                                                                                objectFit:
+                                                                                    "cover",
+                                                                            }}
+                                                                            onError={(
+                                                                                e
+                                                                            ) => {
+                                                                                ;(
+                                                                                    e.target as HTMLImageElement
+                                                                                ).style.display =
+                                                                                    "none"
+                                                                            }}
+                                                                        />
+                                                                    ) : (
+                                                                        <div
+                                                                            style={{
+                                                                                width: 16,
+                                                                                height: 16,
+                                                                                borderRadius: 8,
+                                                                                background:
+                                                                                    isDark
+                                                                                        ? "rgba(255,255,255,0.12)"
+                                                                                        : "rgba(0,0,0,0.08)",
+                                                                            }}
+                                                                        />
+                                                                    ))}
+                                                                {!selectedChipEntry &&
+                                                                    infoText(
+                                                                        job
+                                                                            .company
+                                                                            .name
+                                                                    )}
+                                                                {postedStr && (
+                                                                    <>
+                                                                        {!selectedChipEntry &&
+                                                                            dotSpan}
+                                                                        {infoText(
+                                                                            postedStr
+                                                                        )}
+                                                                    </>
+                                                                )}
+                                                                {hasTime && (
+                                                                    <>
+                                                                        {
+                                                                            dotSpan
+                                                                        }
+                                                                        {isWalkable ? (
+                                                                            <svg
+                                                                                width="9"
+                                                                                height="14"
+                                                                                viewBox="0 0 9 14"
+                                                                                fill="none"
+                                                                                aria-label="Walking"
+                                                                            >
+                                                                                <path
+                                                                                    d="M1.08504 13.7746L3.01605 11.4757C3.20609 11.2551 3.23061 11.1937 3.3103 10.9608L3.46356 10.4888L2.42756 9.18919L2.10265 10.6788L0.19616 12.9408C-0.42299 13.6642 0.576233 14.3753 1.08504 13.7746ZM5.79304 13.5845C6.18537 14.3937 7.3746 13.8972 6.94549 13.0267L5.63365 10.3662C5.53557 10.1639 5.38844 9.94931 5.27197 9.77769L4.43213 8.58839L4.49343 8.41677C4.72638 7.7547 4.79994 7.35012 4.84898 6.68805L4.97772 4.8306C5.04515 3.94785 4.52408 3.27353 3.61681 3.27353C2.93636 3.27353 2.47659 3.61682 1.85132 4.22984L0.870483 5.19841C0.545582 5.51718 0.441368 5.77465 0.410717 6.1915L0.294243 7.71182C0.263592 8.09185 0.47815 8.36774 0.833698 8.37998C1.18925 8.40453 1.40381 8.19606 1.44672 7.78533L1.58772 6.11794L2.05974 5.68883C2.23139 5.53557 2.45821 5.63979 2.44594 5.81143L2.3356 7.22753C2.28043 7.93862 2.45207 8.27578 2.94249 8.88882L4.24209 10.5256C4.37696 10.691 4.38922 10.7585 4.44439 10.8566L5.79304 13.5845ZM8.03059 5.79304H6.54091L5.57235 4.71413L5.47426 6.27733L5.87273 6.66966C6.08115 6.88422 6.26506 6.94555 6.64512 6.94555H8.03059C8.41677 6.94555 8.6742 6.72484 8.6742 6.36314C8.6742 6.01986 8.41061 5.79304 8.03059 5.79304ZM4.33405 2.69729C5.08193 2.69729 5.68269 2.09653 5.68269 1.34865C5.68269 0.60076 5.08193 0 4.33405 0C3.58616 0 2.9854 0.60076 2.9854 1.34865C2.9854 2.09653 3.58616 2.69729 4.33405 2.69729Z"
+                                                                                    fill={
+                                                                                        textSecondary
+                                                                                    }
+                                                                                />
+                                                                            </svg>
+                                                                        ) : (
+                                                                            <svg
+                                                                                width="16"
+                                                                                height="12"
+                                                                                viewBox="0 0 16 12"
+                                                                                fill="none"
+                                                                                aria-label="Driving"
+                                                                            >
+                                                                                <path
+                                                                                    d="M2.6717 3.69381C2.82049 2.98869 3.13747 2.06361 3.35095 1.68841C3.52562 1.38437 3.71322 1.24852 4.06254 1.20324C4.55419 1.13855 5.65392 1.09326 7.65282 1.09326C9.65825 1.09326 10.7579 1.12561 11.2432 1.20324C11.5925 1.25499 11.7736 1.38437 11.9548 1.68841C12.1747 2.05715 12.4722 2.98869 12.6404 3.69381C12.6987 3.93316 12.5952 4.02373 12.3494 4.01079C11.2755 3.93963 9.99463 3.87494 7.65282 3.87494C5.31753 3.87494 4.03666 3.93963 2.96281 4.01079C2.71052 4.02373 2.61348 3.93316 2.6717 3.69381ZM2.98869 8.47443C2.40001 8.47443 1.94717 8.0216 1.94717 7.4329C1.94717 6.83777 2.40001 6.39139 2.98869 6.39139C3.57736 6.39139 4.03019 6.83777 4.03019 7.4329C4.03019 8.0216 3.57736 8.47443 2.98869 8.47443ZM5.94502 8.21562C5.49866 8.21562 5.19462 7.91163 5.19462 7.46522C5.19462 7.02537 5.49866 6.72132 5.94502 6.72132H9.36712C9.80703 6.72132 10.1111 7.02537 10.1111 7.46522C10.1111 7.91163 9.80703 8.21562 9.36712 8.21562H5.94502ZM12.317 8.47443C11.7283 8.47443 11.2819 8.0216 11.2819 7.4329C11.2819 6.83777 11.7283 6.39139 12.317 6.39139C12.9122 6.39139 13.3585 6.83777 13.3585 7.4329C13.3585 8.0216 12.9122 8.47443 12.317 8.47443ZM15.3057 8.55849V7.41998C15.3057 6.3267 15.0857 5.71861 14.4906 4.94233L13.9407 4.2372C13.7079 3.07278 13.2744 1.85014 13.0545 1.37143C12.7052 0.640433 12.0388 0.207008 11.1785 0.0905664C10.745 0.0323451 9.3283 0 7.65282 0C5.98384 0 4.56712 0.0388141 4.1337 0.0905664C3.27332 0.194071 2.60054 0.640433 2.25768 1.37143C2.03127 1.85014 1.60432 3.07278 1.36496 4.2372L0.821562 4.94233C0.219946 5.71861 0 6.3267 0 7.41998V8.55849C0 11.3171 15.3057 11.3182 15.3057 8.55849ZM0.86038 12H1.61726C2.10243 12 2.47763 11.6248 2.47763 11.1461V9.53531L0 8.35798V11.1461C0 11.6248 0.375203 12 0.86038 12ZM13.6885 12H14.4518C14.9369 12 15.3057 11.6248 15.3057 11.1461V8.35798L12.8345 9.53531V11.1461C12.8345 11.6248 13.2032 12 13.6885 12Z"
+                                                                                    fill={
+                                                                                        textSecondary
+                                                                                    }
+                                                                                />
+                                                                            </svg>
+                                                                        )}
+                                                                        {infoText(
+                                                                            `${timeDisplay} min`
+                                                                        )}
+                                                                    </>
+                                                                )}
+                                                                {job.visa_sponsorship ===
+                                                                    "yes" && (
+                                                                    <>
+                                                                        {
+                                                                            dotSpan
+                                                                        }
+                                                                        {infoText(
+                                                                            "Sponsors visa"
+                                                                        )}
+                                                                    </>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </React.Fragment>
+                                                )
+                                            })}
+                                            {isLoadingOverlay && (
                                                 <div
-                                                    role="button"
-                                                    tabIndex={0}
-                                                    aria-label={`${job.title} at ${job.company.name}, open job listing`}
-                                                    onClick={() => {
-                                                        if (onJobSelect) {
-                                                            onJobSelect(job)
-                                                        } else if (typeof window !== "undefined") {
-                                                            window.open(job.apply_url, "_blank", "noopener,noreferrer")
-                                                        }
-                                                    }}
-                                                    onKeyDown={(e) => {
-                                                        if (e.key === "Enter" || e.key === " ") {
-                                                            if (onJobSelect) {
-                                                                onJobSelect(job)
-                                                            } else if (typeof window !== "undefined") {
-                                                                window.open(job.apply_url, "_blank", "noopener,noreferrer")
-                                                            }
-                                                        }
-                                                    }}
                                                     style={{
                                                         background: cardBg,
                                                         borderRadius: 28,
                                                         padding: "16px 20px",
-                                                        cursor: "pointer",
                                                         flexShrink: 0,
-                                                        outline: "none",
                                                     }}
                                                 >
-                                                    {/* Title */}
                                                     <div
                                                         style={{
-                                                            color: textPrimary,
-                                                            fontSize: 16,
-                                                            fontFamily: "Inter",
-                                                            fontWeight: "500",
-                                                            lineHeight: "24px",
-                                                            marginBottom: 8,
-                                                            whiteSpace: "nowrap",
-                                                            overflow: "hidden",
-                                                            textOverflow: "ellipsis",
+                                                            height: 18,
+                                                            width: "65%",
+                                                            background:
+                                                                themeColors
+                                                                    .hover
+                                                                    .default,
+                                                            borderRadius: 6,
+                                                            marginBottom: 10,
+                                                            animation:
+                                                                "homepageSkeleton 1.4s ease-in-out infinite",
+                                                        }}
+                                                    />
+                                                    <div
+                                                        style={{
+                                                            display: "flex",
+                                                            gap: 8,
+                                                            alignItems:
+                                                                "center",
                                                         }}
                                                     >
-                                                        {job.title}
-                                                    </div>
-                                                    {/* Meta row */}
-                                                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-                                                        {!selectedChipEntry && (job.company.logo_url ? (
-                                                            <img
-                                                                src={job.company.logo_url}
-                                                                alt=""
-                                                                style={{ width: 16, height: 16, borderRadius: 8, objectFit: "cover" }}
-                                                                onError={(e) => { ;(e.target as HTMLImageElement).style.display = "none" }}
-                                                            />
-                                                        ) : (
-                                                            <div style={{ width: 16, height: 16, borderRadius: 8, background: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)" }} />
-                                                        ))}
-                                                        {!selectedChipEntry && infoText(job.company.name)}
-                                                        {postedStr && <>{!selectedChipEntry && dotSpan}{infoText(postedStr)}</>}
-                                                        {hasTime && (
-                                                            <>
-                                                                {dotSpan}
-                                                                {isWalkable ? (
-                                                                    <svg width="9" height="14" viewBox="0 0 9 14" fill="none" aria-label="Walking">
-                                                                        <path d="M1.08504 13.7746L3.01605 11.4757C3.20609 11.2551 3.23061 11.1937 3.3103 10.9608L3.46356 10.4888L2.42756 9.18919L2.10265 10.6788L0.19616 12.9408C-0.42299 13.6642 0.576233 14.3753 1.08504 13.7746ZM5.79304 13.5845C6.18537 14.3937 7.3746 13.8972 6.94549 13.0267L5.63365 10.3662C5.53557 10.1639 5.38844 9.94931 5.27197 9.77769L4.43213 8.58839L4.49343 8.41677C4.72638 7.7547 4.79994 7.35012 4.84898 6.68805L4.97772 4.8306C5.04515 3.94785 4.52408 3.27353 3.61681 3.27353C2.93636 3.27353 2.47659 3.61682 1.85132 4.22984L0.870483 5.19841C0.545582 5.51718 0.441368 5.77465 0.410717 6.1915L0.294243 7.71182C0.263592 8.09185 0.47815 8.36774 0.833698 8.37998C1.18925 8.40453 1.40381 8.19606 1.44672 7.78533L1.58772 6.11794L2.05974 5.68883C2.23139 5.53557 2.45821 5.63979 2.44594 5.81143L2.3356 7.22753C2.28043 7.93862 2.45207 8.27578 2.94249 8.88882L4.24209 10.5256C4.37696 10.691 4.38922 10.7585 4.44439 10.8566L5.79304 13.5845ZM8.03059 5.79304H6.54091L5.57235 4.71413L5.47426 6.27733L5.87273 6.66966C6.08115 6.88422 6.26506 6.94555 6.64512 6.94555H8.03059C8.41677 6.94555 8.6742 6.72484 8.6742 6.36314C8.6742 6.01986 8.41061 5.79304 8.03059 5.79304ZM4.33405 2.69729C5.08193 2.69729 5.68269 2.09653 5.68269 1.34865C5.68269 0.60076 5.08193 0 4.33405 0C3.58616 0 2.9854 0.60076 2.9854 1.34865C2.9854 2.09653 3.58616 2.69729 4.33405 2.69729Z" fill={textSecondary}/>
-                                                                    </svg>
-                                                                ) : (
-                                                                    <svg width="16" height="12" viewBox="0 0 16 12" fill="none" aria-label="Driving">
-                                                                        <path d="M2.6717 3.69381C2.82049 2.98869 3.13747 2.06361 3.35095 1.68841C3.52562 1.38437 3.71322 1.24852 4.06254 1.20324C4.55419 1.13855 5.65392 1.09326 7.65282 1.09326C9.65825 1.09326 10.7579 1.12561 11.2432 1.20324C11.5925 1.25499 11.7736 1.38437 11.9548 1.68841C12.1747 2.05715 12.4722 2.98869 12.6404 3.69381C12.6987 3.93316 12.5952 4.02373 12.3494 4.01079C11.2755 3.93963 9.99463 3.87494 7.65282 3.87494C5.31753 3.87494 4.03666 3.93963 2.96281 4.01079C2.71052 4.02373 2.61348 3.93316 2.6717 3.69381ZM2.98869 8.47443C2.40001 8.47443 1.94717 8.0216 1.94717 7.4329C1.94717 6.83777 2.40001 6.39139 2.98869 6.39139C3.57736 6.39139 4.03019 6.83777 4.03019 7.4329C4.03019 8.0216 3.57736 8.47443 2.98869 8.47443ZM5.94502 8.21562C5.49866 8.21562 5.19462 7.91163 5.19462 7.46522C5.19462 7.02537 5.49866 6.72132 5.94502 6.72132H9.36712C9.80703 6.72132 10.1111 7.02537 10.1111 7.46522C10.1111 7.91163 9.80703 8.21562 9.36712 8.21562H5.94502ZM12.317 8.47443C11.7283 8.47443 11.2819 8.0216 11.2819 7.4329C11.2819 6.83777 11.7283 6.39139 12.317 6.39139C12.9122 6.39139 13.3585 6.83777 13.3585 7.4329C13.3585 8.0216 12.9122 8.47443 12.317 8.47443ZM15.3057 8.55849V7.41998C15.3057 6.3267 15.0857 5.71861 14.4906 4.94233L13.9407 4.2372C13.7079 3.07278 13.2744 1.85014 13.0545 1.37143C12.7052 0.640433 12.0388 0.207008 11.1785 0.0905664C10.745 0.0323451 9.3283 0 7.65282 0C5.98384 0 4.56712 0.0388141 4.1337 0.0905664C3.27332 0.194071 2.60054 0.640433 2.25768 1.37143C2.03127 1.85014 1.60432 3.07278 1.36496 4.2372L0.821562 4.94233C0.219946 5.71861 0 6.3267 0 7.41998V8.55849C0 11.3171 15.3057 11.3182 15.3057 8.55849ZM0.86038 12H1.61726C2.10243 12 2.47763 11.6248 2.47763 11.1461V9.53531L0 8.35798V11.1461C0 11.6248 0.375203 12 0.86038 12ZM13.6885 12H14.4518C14.9369 12 15.3057 11.6248 15.3057 11.1461V8.35798L12.8345 9.53531V11.1461C12.8345 11.6248 13.2032 12 13.6885 12Z" fill={textSecondary}/>
-                                                                    </svg>
-                                                                )}
-                                                                {infoText(`${timeDisplay} min`)}
-                                                            </>
-                                                        )}
-                                                        {job.visa_sponsorship === "yes" && (
-                                                            <>{dotSpan}{infoText("Sponsors visa")}</>
-                                                        )}
+                                                        <div
+                                                            style={{
+                                                                width: 16,
+                                                                height: 16,
+                                                                borderRadius: 8,
+                                                                background:
+                                                                    themeColors
+                                                                        .hover
+                                                                        .default,
+                                                                flexShrink: 0,
+                                                                animation:
+                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
+                                                            }}
+                                                        />
+                                                        <div
+                                                            style={{
+                                                                height: 13,
+                                                                width: "40%",
+                                                                background:
+                                                                    themeColors
+                                                                        .hover
+                                                                        .default,
+                                                                borderRadius: 6,
+                                                                animation:
+                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
+                                                            }}
+                                                        />
                                                     </div>
                                                 </div>
-                                                </React.Fragment>
-                                            )
-                                        })}
-                                        {isLoadingOverlay && (
-                                            <div style={{ background: cardBg, borderRadius: 28, padding: "16px 20px", flexShrink: 0 }}>
-                                                <div style={{ height: 18, width: "65%", background: themeColors.hover.default, borderRadius: 6, marginBottom: 10, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
-                                                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                                    <div style={{ width: 16, height: 16, borderRadius: 8, background: themeColors.hover.default, flexShrink: 0, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
-                                                    <div style={{ height: 13, width: "40%", background: themeColors.hover.default, borderRadius: 6, animation: "homepageSkeleton 1.4s ease-in-out infinite" }} />
-                                                </div>
-                                            </div>
-                                        )}
-                                    </>
-                                )}
-                            </div>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
                             </div>
                         </motion.div>
                         {/* Right-edge drag handle — desktop only, resizes the feed width */}
@@ -15408,13 +17213,23 @@ const HomepageJobs = React.memo(function HomepageJobs({
     const [loadingNear, setLoadingNear] = React.useState(true)
     const [nearbyBasedOnLocation, setNearbyBasedOnLocation] =
         React.useState(true) // true until we know we fell back to keyword search
-    const [geoCoords, setGeoCoords] = React.useState<{ lat: number; lng: number } | null>(null)
+    const [geoCoords, setGeoCoords] = React.useState<{
+        lat: number
+        lng: number
+    } | null>(null)
 
     // Geo is IP-based — fetch once per jobsApiUrl, cache in a ref so query changes don't re-hit /geo
-    const geoCacheRef = React.useRef<{ lat: number; lng: number } | null | "pending">(null)
+    const geoCacheRef = React.useRef<
+        { lat: number; lng: number } | null | "pending"
+    >(null)
     const geoCacheUrlRef = React.useRef<string | null>(null)
-    const geoResolversRef = React.useRef<Array<(v: { lat: number; lng: number } | null) => void>>([])
-    const getGeo = React.useCallback((): Promise<{ lat: number; lng: number } | null> => {
+    const geoResolversRef = React.useRef<
+        Array<(v: { lat: number; lng: number } | null) => void>
+    >([])
+    const getGeo = React.useCallback((): Promise<{
+        lat: number
+        lng: number
+    } | null> => {
         if (!jobsApiUrl) return Promise.resolve(null)
         if (geoCacheUrlRef.current !== jobsApiUrl) {
             geoCacheRef.current = null
@@ -15432,16 +17247,32 @@ const HomepageJobs = React.memo(function HomepageJobs({
         return fetch(`${jobsApiUrl}/geo`, { signal: ctrl.signal })
             .finally(() => clearTimeout(timer))
             .then((r) => (r.ok ? r.json() : {}))
-            .then(({ lat, lng }: { lat?: number | null; lng?: number | null }) => {
-                const valid =
-                    typeof lat === "number" && typeof lng === "number" &&
-                    !isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
-                const result = valid ? { lat: lat as number, lng: lng as number } : null
-                geoCacheRef.current = result
-                geoResolversRef.current.forEach((res) => res(result))
-                geoResolversRef.current = []
-                return result
-            })
+            .then(
+                ({
+                    lat,
+                    lng,
+                }: {
+                    lat?: number | null
+                    lng?: number | null
+                }) => {
+                    const valid =
+                        typeof lat === "number" &&
+                        typeof lng === "number" &&
+                        !isNaN(lat) &&
+                        !isNaN(lng) &&
+                        lat >= -90 &&
+                        lat <= 90 &&
+                        lng >= -180 &&
+                        lng <= 180
+                    const result = valid
+                        ? { lat: lat as number, lng: lng as number }
+                        : null
+                    geoCacheRef.current = result
+                    geoResolversRef.current.forEach((res) => res(result))
+                    geoResolversRef.current = []
+                    return result
+                }
+            )
             .catch(() => {
                 geoCacheRef.current = null
                 geoResolversRef.current.forEach((res) => res(null))
@@ -15534,9 +17365,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
             async ([picks, { lat, lng }]) => {
                 const fallback = fallbackPromise ? await fallbackPromise : []
                 const allPicks = dedupeByCompany([...picks, ...fallback], 6)
-                const excludeIds = [
-                    ...new Set(allPicks.map((j) => j.id)),
-                ]
+                const excludeIds = [...new Set(allPicks.map((j) => j.id))]
                 // Companies already shown above — avoid repeating them in Near You.
                 const excludeCompanies = new Set(
                     allPicks.map((j) => j.company.name.trim().toLowerCase())
@@ -18219,7 +20048,9 @@ const MessageBubble = React.memo(
                                     minWidth: 0,
                                     boxSizing: "border-box",
                                     alignSelf: "flex-end",
-                                    cursor: onJobChipClick ? "pointer" : "default",
+                                    cursor: onJobChipClick
+                                        ? "pointer"
+                                        : "default",
                                 }}
                             >
                                 {msg.jobContext.logoUrl && (
@@ -18248,7 +20079,8 @@ const MessageBubble = React.memo(
                                         flex: "1 1 0%",
                                     }}
                                 >
-                                    {msg.jobContext.title} at {msg.jobContext.companyName}
+                                    {msg.jobContext.title} at{" "}
+                                    {msg.jobContext.companyName}
                                 </div>
                             </div>
                         )}
@@ -21043,9 +22875,25 @@ Extract this structure:
                 if (extracted.resumeText) saveResume(extracted.resumeText)
 
                 // Save inferred seniority level for backend personalization
-                const validSeniority = ["intern","new_grad","entry","mid","senior","staff","manager","director","executive"]
-                if (extracted.seniorityLevel && validSeniority.includes(extracted.seniorityLevel)) {
-                    localStorage.setItem("you_seniority", extracted.seniorityLevel)
+                const validSeniority = [
+                    "intern",
+                    "new_grad",
+                    "entry",
+                    "mid",
+                    "senior",
+                    "staff",
+                    "manager",
+                    "director",
+                    "executive",
+                ]
+                if (
+                    extracted.seniorityLevel &&
+                    validSeniority.includes(extracted.seniorityLevel)
+                ) {
+                    localStorage.setItem(
+                        "you_seniority",
+                        extracted.seniorityLevel
+                    )
                 }
 
                 // Auto-fill only empty profile fields
@@ -21176,52 +23024,73 @@ Extract this structure:
     })
     React.useEffect(() => {
         if (typeof window !== "undefined") {
-            localStorage.setItem("curastem_map_job_width", String(mapJobPanelWidth))
+            localStorage.setItem(
+                "curastem_map_job_width",
+                String(mapJobPanelWidth)
+            )
         }
     }, [mapJobPanelWidth])
     const mapJobPanelRef = React.useRef<HTMLDivElement>(null)
     const mapDocOverlayRef = React.useRef<HTMLDivElement>(null)
-    const mapJobDragStart = React.useRef<{ x: number; width: number } | null>(null)
-    const handleMapJobPanelDragStart = React.useCallback((e: React.PointerEvent) => {
-        e.preventDefault()
-        e.stopPropagation()
-        const startX = e.clientX
-        let didDrag = false
-        // Use whichever overlay panel is currently mounted
-        const activeEl = mapDocOverlayRef.current ?? mapJobPanelRef.current
-        mapJobDragStart.current = { x: startX, width: activeEl?.offsetWidth ?? mapJobPanelWidth }
-        const setWidth = (w: number) => {
-            if (mapJobPanelRef.current) mapJobPanelRef.current.style.width = `${w}px`
-            if (mapDocOverlayRef.current) mapDocOverlayRef.current.style.width = `${w}px`
-        }
-        const onMove = (ev: PointerEvent) => {
-            if (!mapJobDragStart.current) return
-            if (Math.abs(ev.clientX - startX) > 4) didDrag = true
-            const delta = mapJobDragStart.current.x - ev.clientX
-            const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
-            const maxW = Math.min(640, containerWidth * 0.4)
-            const newWidth = Math.max(320, Math.min(mapJobDragStart.current.width + delta, maxW))
-            setWidth(newWidth)
-        }
-        const onUp = (ev: PointerEvent) => {
-            if (!mapJobDragStart.current) return
-            if (!didDrag) {
-                setMapJobPanelWidth(428)
-                setWidth(428)
-            } else {
-                const delta = mapJobDragStart.current.x - ev.clientX
-                const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
-                const maxW = Math.min(640, containerWidth * 0.4)
-                const newWidth = Math.max(320, Math.min(mapJobDragStart.current.width + delta, maxW))
-                setMapJobPanelWidth(newWidth)
+    const mapJobDragStart = React.useRef<{ x: number; width: number } | null>(
+        null
+    )
+    const handleMapJobPanelDragStart = React.useCallback(
+        (e: React.PointerEvent) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const startX = e.clientX
+            let didDrag = false
+            // Use whichever overlay panel is currently mounted
+            const activeEl = mapDocOverlayRef.current ?? mapJobPanelRef.current
+            mapJobDragStart.current = {
+                x: startX,
+                width: activeEl?.offsetWidth ?? mapJobPanelWidth,
             }
-            mapJobDragStart.current = null
-            window.removeEventListener("pointermove", onMove)
-            window.removeEventListener("pointerup", onUp)
-        }
-        window.addEventListener("pointermove", onMove)
-        window.addEventListener("pointerup", onUp)
-    }, [mapJobPanelWidth])
+            const setWidth = (w: number) => {
+                if (mapJobPanelRef.current)
+                    mapJobPanelRef.current.style.width = `${w}px`
+                if (mapDocOverlayRef.current)
+                    mapDocOverlayRef.current.style.width = `${w}px`
+            }
+            const onMove = (ev: PointerEvent) => {
+                if (!mapJobDragStart.current) return
+                if (Math.abs(ev.clientX - startX) > 4) didDrag = true
+                const delta = mapJobDragStart.current.x - ev.clientX
+                const containerWidth =
+                    containerRef.current?.clientWidth ?? window.innerWidth
+                const maxW = Math.min(640, containerWidth * 0.4)
+                const newWidth = Math.max(
+                    320,
+                    Math.min(mapJobDragStart.current.width + delta, maxW)
+                )
+                setWidth(newWidth)
+            }
+            const onUp = (ev: PointerEvent) => {
+                if (!mapJobDragStart.current) return
+                if (!didDrag) {
+                    setMapJobPanelWidth(428)
+                    setWidth(428)
+                } else {
+                    const delta = mapJobDragStart.current.x - ev.clientX
+                    const containerWidth =
+                        containerRef.current?.clientWidth ?? window.innerWidth
+                    const maxW = Math.min(640, containerWidth * 0.4)
+                    const newWidth = Math.max(
+                        320,
+                        Math.min(mapJobDragStart.current.width + delta, maxW)
+                    )
+                    setMapJobPanelWidth(newWidth)
+                }
+                mapJobDragStart.current = null
+                window.removeEventListener("pointermove", onMove)
+                window.removeEventListener("pointerup", onUp)
+            }
+            window.addEventListener("pointermove", onMove)
+            window.addEventListener("pointerup", onUp)
+        },
+        [mapJobPanelWidth]
+    )
 
     // Map job feed (left overlay) — resizable from right edge, width persisted
     const [mapFeedWidth, setMapFeedWidth] = React.useState(() => {
@@ -21236,46 +23105,67 @@ Extract this structure:
     })
     React.useEffect(() => {
         if (typeof window !== "undefined") {
-            localStorage.setItem("curastem_map_feed_width", String(mapFeedWidth))
+            localStorage.setItem(
+                "curastem_map_feed_width",
+                String(mapFeedWidth)
+            )
         }
     }, [mapFeedWidth])
     const mapFeedRef = React.useRef<HTMLDivElement>(null)
     const mapSearchFocusRef = React.useRef<(() => void) | null>(null)
-    const mapFeedDragStart = React.useRef<{ x: number; width: number } | null>(null)
-    const handleMapFeedDragStart = React.useCallback((e: React.PointerEvent) => {
-        e.preventDefault()
-        e.stopPropagation()
-        const startX = e.clientX
-        let didDrag = false
-        mapFeedDragStart.current = { x: startX, width: mapFeedRef.current?.offsetWidth ?? mapFeedWidth }
-        const onMove = (ev: PointerEvent) => {
-            if (!mapFeedDragStart.current) return
-            if (Math.abs(ev.clientX - startX) > 4) didDrag = true
-            const delta = ev.clientX - mapFeedDragStart.current.x // dragging right = wider
-            const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
-            const maxW = Math.min(640, containerWidth * 0.4)
-            const newWidth = Math.max(280, Math.min(mapFeedDragStart.current.width + delta, maxW))
-            if (mapFeedRef.current) mapFeedRef.current.style.width = `${newWidth}px`
-        }
-        const onUp = (ev: PointerEvent) => {
-            if (!mapFeedDragStart.current) return
-            if (!didDrag) {
-                setMapFeedWidth(428)
-                if (mapFeedRef.current) mapFeedRef.current.style.width = "428px"
-            } else {
-                const delta = ev.clientX - mapFeedDragStart.current.x
-                const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
-                const maxW = Math.min(640, containerWidth * 0.4)
-                const newWidth = Math.max(280, Math.min(mapFeedDragStart.current.width + delta, maxW))
-                setMapFeedWidth(newWidth)
+    const mapFeedDragStart = React.useRef<{ x: number; width: number } | null>(
+        null
+    )
+    const handleMapFeedDragStart = React.useCallback(
+        (e: React.PointerEvent) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const startX = e.clientX
+            let didDrag = false
+            mapFeedDragStart.current = {
+                x: startX,
+                width: mapFeedRef.current?.offsetWidth ?? mapFeedWidth,
             }
-            mapFeedDragStart.current = null
-            window.removeEventListener("pointermove", onMove)
-            window.removeEventListener("pointerup", onUp)
-        }
-        window.addEventListener("pointermove", onMove)
-        window.addEventListener("pointerup", onUp)
-    }, [mapFeedWidth])
+            const onMove = (ev: PointerEvent) => {
+                if (!mapFeedDragStart.current) return
+                if (Math.abs(ev.clientX - startX) > 4) didDrag = true
+                const delta = ev.clientX - mapFeedDragStart.current.x // dragging right = wider
+                const containerWidth =
+                    containerRef.current?.clientWidth ?? window.innerWidth
+                const maxW = Math.min(640, containerWidth * 0.4)
+                const newWidth = Math.max(
+                    280,
+                    Math.min(mapFeedDragStart.current.width + delta, maxW)
+                )
+                if (mapFeedRef.current)
+                    mapFeedRef.current.style.width = `${newWidth}px`
+            }
+            const onUp = (ev: PointerEvent) => {
+                if (!mapFeedDragStart.current) return
+                if (!didDrag) {
+                    setMapFeedWidth(428)
+                    if (mapFeedRef.current)
+                        mapFeedRef.current.style.width = "428px"
+                } else {
+                    const delta = ev.clientX - mapFeedDragStart.current.x
+                    const containerWidth =
+                        containerRef.current?.clientWidth ?? window.innerWidth
+                    const maxW = Math.min(640, containerWidth * 0.4)
+                    const newWidth = Math.max(
+                        280,
+                        Math.min(mapFeedDragStart.current.width + delta, maxW)
+                    )
+                    setMapFeedWidth(newWidth)
+                }
+                mapFeedDragStart.current = null
+                window.removeEventListener("pointermove", onMove)
+                window.removeEventListener("pointerup", onUp)
+            }
+            window.addEventListener("pointermove", onMove)
+            window.addEventListener("pointerup", onUp)
+        },
+        [mapFeedWidth]
+    )
 
     const [remoteAppMutation, setRemoteAppMutation] = React.useState<any>(null)
     const [remoteAppEvent, setRemoteAppEvent] = React.useState<any>(null)
@@ -21365,7 +23255,8 @@ Extract this structure:
     const [isMapOpen, setIsMapOpen] = React.useState(false)
 
     // True when any agent sidebar panel is open (docs, whiteboard, apps, jobs, map)
-    const isAgentOpen = isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen || isMapOpen
+    const isAgentOpen =
+        isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen || isMapOpen
 
     // Delayed flag so context-aware placeholder only shows after the overlay
     // slide-up animation is well underway (~halfway through 250ms).
@@ -23051,35 +24942,34 @@ Do not include markdown formatting or explanations.`
                                             )
                                             // Only serve from cache when AI enrichment is confirmed done;
                                             // otherwise fetch fresh so the AI gets the latest enriched data.
-                                            const j: any =
-                                                cached?.aiDone
-                                                    ? {
-                                                          job_description:
-                                                              cached.desc,
-                                                          job_summary:
-                                                              cached.detailSummary,
-                                                          visa_sponsorship:
-                                                              cached.detailVisaSponsorship,
-                                                          company: {
-                                                              description:
-                                                                  cached.detailCompanyDesc,
-                                                          },
-                                                          keywords:
-                                                              cached.apiKeywords,
-                                                          experience_years_min:
-                                                              cached.detailExperienceYearsMin,
-                                                          job_city:
-                                                              cached.detailJobCity,
-                                                          job_state:
-                                                              cached.detailJobState,
-                                                          job_country:
-                                                              cached.detailJobCountry,
-                                                      }
-                                                    : await fetch(
-                                                          `${jobsApiUrl}/jobs/${jobId}`
-                                                      ).then((r) =>
-                                                          r.ok ? r.json() : null
-                                                      )
+                                            const j: any = cached?.aiDone
+                                                ? {
+                                                      job_description:
+                                                          cached.desc,
+                                                      job_summary:
+                                                          cached.detailSummary,
+                                                      visa_sponsorship:
+                                                          cached.detailVisaSponsorship,
+                                                      company: {
+                                                          description:
+                                                              cached.detailCompanyDesc,
+                                                      },
+                                                      keywords:
+                                                          cached.apiKeywords,
+                                                      experience_years_min:
+                                                          cached.detailExperienceYearsMin,
+                                                      job_city:
+                                                          cached.detailJobCity,
+                                                      job_state:
+                                                          cached.detailJobState,
+                                                      job_country:
+                                                          cached.detailJobCountry,
+                                                  }
+                                                : await fetch(
+                                                      `${jobsApiUrl}/jobs/${jobId}`
+                                                  ).then((r) =>
+                                                      r.ok ? r.json() : null
+                                                  )
                                             if (j) {
                                                 responsePayload = {
                                                     title: j.title,
@@ -23656,7 +25546,12 @@ Do not include markdown formatting or explanations.`
     })
     const [isYourChatsHovered, setIsYourChatsHovered] = React.useState(false)
     React.useEffect(() => {
-        try { localStorage.setItem("sidebar_chats_expanded", String(isYourChatsExpanded)) } catch {}
+        try {
+            localStorage.setItem(
+                "sidebar_chats_expanded",
+                String(isYourChatsExpanded)
+            )
+        } catch {}
     }, [isYourChatsExpanded])
 
     React.useEffect(() => {
@@ -25073,7 +26968,13 @@ Do not include markdown formatting or explanations.`
     // --- EFFECT: MINIMIZE CHAT WHEN DOC, WHITEBOARD, APP, JOBS, OR MAP OPENS ---
     // Save previous height and restore when closing
     React.useEffect(() => {
-        if (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen || isMapOpen) {
+        if (
+            isDocOpen ||
+            isWhiteboardOpen ||
+            isAppOpen ||
+            isJobOpen ||
+            isMapOpen
+        ) {
             // Calculate proper initial height based on constraints
             const containerHeight =
                 containerRef.current?.clientHeight || window.innerHeight
@@ -25516,7 +27417,9 @@ Do not include markdown formatting or explanations.`
 
     // Persists precise GPS coords across map panel open/close cycles.
     // Stored here (parent) so re-mounting MapAgentPanel doesn't lose the cached position.
-    const preciseLocRef = React.useRef<{ lat: number; lng: number } | null>(null)
+    const preciseLocRef = React.useRef<{ lat: number; lng: number } | null>(
+        null
+    )
 
     const toggleMap = React.useCallback(() => {
         if (isMapOpen) {
@@ -25589,55 +27492,88 @@ Do not include markdown formatting or explanations.`
     closeJobDetailRef.current = closeJobDetail
     React.useEffect(() => {
         if (!isMobileLayout || !isMapOpen || !isJobOpen) return
-        const sheet = document.querySelector(".MapJobOverlay") as HTMLElement | null
+        const sheet = document.querySelector(
+            ".MapJobOverlay"
+        ) as HTMLElement | null
         if (!sheet) return
         const pullY = mapJobDragYRef.current
-        let lastY = 0, startY = 0, startX = 0, pressed = false
-        let activePointerId = -1, pullCaptureActive = false
-        const scrollEl = () => sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
+        let lastY = 0,
+            startY = 0,
+            startX = 0,
+            pressed = false
+        let activePointerId = -1,
+            pullCaptureActive = false
+        const scrollEl = () =>
+            sheet.querySelector("[data-pull-scroll]") as HTMLElement | null
         const GESTURE_MIN = 10
         const releaseCap = () => {
             if (!pullCaptureActive || activePointerId < 0) return
-            try { if (sheet.hasPointerCapture(activePointerId)) sheet.releasePointerCapture(activePointerId) } catch { /**/ }
-            pullCaptureActive = false; activePointerId = -1
+            try {
+                if (sheet.hasPointerCapture(activePointerId))
+                    sheet.releasePointerCapture(activePointerId)
+            } catch {
+                /**/
+            }
+            pullCaptureActive = false
+            activePointerId = -1
         }
         const settle = () => {
-            releaseCap(); pressed = false; lockMobileToolGesture(null)
+            releaseCap()
+            pressed = false
+            lockMobileToolGesture(null)
             if (pullY.get() < 88) {
-                animate(pullY, 0, { type: "spring", stiffness: 420, damping: 38 })
+                animate(pullY, 0, {
+                    type: "spring",
+                    stiffness: 420,
+                    damping: 38,
+                })
             } else {
                 closeJobDetailRef.current()
             }
         }
         const onDown = (e: PointerEvent) => {
             if (e.pointerType === "mouse" && e.button !== 0) return
-            pressed = true; pullCaptureActive = false; activePointerId = e.pointerId
+            pressed = true
+            pullCaptureActive = false
+            activePointerId = e.pointerId
             lockMobileToolGesture(null)
-            startX = e.clientX; startY = e.clientY; lastY = e.clientY
+            startX = e.clientX
+            startY = e.clientY
+            lastY = e.clientY
         }
         const onMove = (e: PointerEvent) => {
             if (!pressed) return
             let axis = mobileToolGestureAxisRef.current
             if (axis === "x") return
-            const adx = Math.abs(e.clientX - startX), ady = Math.abs(e.clientY - startY)
+            const adx = Math.abs(e.clientX - startX),
+                ady = Math.abs(e.clientY - startY)
             if (axis === null) {
                 if (adx < GESTURE_MIN && ady < GESTURE_MIN) return
                 lockMobileToolGesture(adx > ady * 1.35 ? "x" : "y")
                 axis = mobileToolGestureAxisRef.current
                 if (axis === "x") return
             }
-            const dy = e.clientY - lastY; lastY = e.clientY
+            const dy = e.clientY - lastY
+            lastY = e.clientY
             const py = pullY.get()
             const sc = scrollEl()
             const atTop = sc == null || sc.scrollTop <= 1
             if (!(py > 0 || (atTop && dy > 0))) return
             if (!pullCaptureActive) {
-                try { sheet.setPointerCapture(e.pointerId); pullCaptureActive = true; activePointerId = e.pointerId } catch { /**/ }
+                try {
+                    sheet.setPointerCapture(e.pointerId)
+                    pullCaptureActive = true
+                    activePointerId = e.pointerId
+                } catch {
+                    /**/
+                }
             }
             pullY.set(Math.max(0, py + dy))
             if (e.pointerType === "touch" && e.cancelable) e.preventDefault()
         }
-        const onTouchMove = (e: TouchEvent) => { if (pullY.get() > 2 && e.cancelable) e.preventDefault() }
+        const onTouchMove = (e: TouchEvent) => {
+            if (pullY.get() > 2 && e.cancelable) e.preventDefault()
+        }
         sheet.addEventListener("pointerdown", onDown)
         sheet.addEventListener("pointermove", onMove)
         sheet.addEventListener("pointerup", settle)
@@ -30417,7 +32353,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             writeJobChipStore({
                 id: payload.jobContext.id,
                 title: payload.jobContext.title,
-                    company: {
+                company: {
                     name: payload.jobContext.companyName,
                     logo_url: payload.jobContext.logoUrl,
                     description: null,
@@ -30729,7 +32665,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
 
             // aiOverrideText lets callers show a friendly display message while
             // sending a more explicit instruction to the AI (e.g. "Create resume" button)
-            let textToSend = isP2PContext ? sanitizeMessage(aiOverrideText ?? textToCheck) : (aiOverrideText ?? textToCheck)
+            let textToSend = isP2PContext
+                ? sanitizeMessage(aiOverrideText ?? textToCheck)
+                : (aiOverrideText ?? textToCheck)
             // Inject selected skills context (Skills API) so the model can use them
             if (selectedSkills.length > 0) {
                 const skillContext = selectedSkills
@@ -31368,7 +33306,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
         let activeWidth: number
         let activeHeight: number
 
-        if (isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen || isMapOpen) {
+        if (
+            isDocOpen ||
+            isWhiteboardOpen ||
+            isAppOpen ||
+            isJobOpen ||
+            isMapOpen
+        ) {
             return {
                 width: "100%",
                 height: "100%",
@@ -31944,7 +33888,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     gradientBackground={overlayGradientBg}
                     value={inputText}
                     onChange={(e) => {
-                        const newValue = isP2PContext ? sanitizeMessage(e.target.value) : e.target.value
+                        const newValue = isP2PContext
+                            ? sanitizeMessage(e.target.value)
+                            : e.target.value
                         inputTextRef.current = newValue
                         setInputText(newValue)
                         if (
@@ -32090,21 +34036,36 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
         // Map panel — shown when map is open and no whiteboard/app is layered on top.
         // On desktop, job detail and doc panels overlay the map so closing them never remounts MapAgentPanel.
         // On mobile, doc/whiteboard/app replace the map entirely (no overlay room).
-        if (isMapOpen && !isWhiteboardOpen && !isAppOpen && !(isMobileLayout && isDocOpen)) {
+        if (
+            isMapOpen &&
+            !isWhiteboardOpen &&
+            !isAppOpen &&
+            !(isMobileLayout && isDocOpen)
+        ) {
             // Desktop: map is fullscreen — no rounded corners, no shadow
             const mapPanelRadius = isMobileLayout ? "28px 28px 0 0" : "0"
             return (
                 // Outer shell: overflow:visible so box-shadow isn't clipped (same pattern as other tool panels)
-                <div style={{
-                    width: "100%",
-                    height: "100%",
-                    position: "relative",
-                    overflow: "visible",
-                    borderRadius: mapPanelRadius,
-                    boxShadow: "none",
-                }}>
+                <div
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        position: "relative",
+                        overflow: "visible",
+                        borderRadius: mapPanelRadius,
+                        boxShadow: "none",
+                    }}
+                >
                     {/* Inner clip: keeps map tiles inside rounded corners */}
-                    <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", borderRadius: mapPanelRadius }}>
+                    <div
+                        style={{
+                            width: "100%",
+                            height: "100%",
+                            position: "relative",
+                            overflow: "hidden",
+                            borderRadius: mapPanelRadius,
+                        }}
+                    >
                         <MapAgentPanel
                             jobsApiUrl={jobsApiUrl}
                             googleMapsApiKey={googleMapsApiKey}
@@ -32113,151 +34074,190 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             onClose={() => setIsMapOpen(false)}
                             preciseLocRef={preciseLocRef}
                             onJobSelect={openJobDetail}
-                            onFeedJobsChange={isMobileLayout ? (jobs) => {
-                                setJobDeckExtras((prev) => {
-                                    const merged = [...prev]
-                                    for (const j of jobs) {
-                                        if (!merged.some((x) => x.id === j.id)) merged.push(j)
-                                    }
-                                    return merged
-                                })
-                            } : undefined}
-                            onFeedDragStart={isMobileLayout ? undefined : handleMapFeedDragStart}
+                            onFeedJobsChange={
+                                isMobileLayout
+                                    ? (jobs) => {
+                                          setJobDeckExtras((prev) => {
+                                              const merged = [...prev]
+                                              for (const j of jobs) {
+                                                  if (
+                                                      !merged.some(
+                                                          (x) => x.id === j.id
+                                                      )
+                                                  )
+                                                      merged.push(j)
+                                              }
+                                              return merged
+                                          })
+                                      }
+                                    : undefined
+                            }
+                            onFeedDragStart={
+                                isMobileLayout
+                                    ? undefined
+                                    : handleMapFeedDragStart
+                            }
                             feedRef={isMobileLayout ? undefined : mapFeedRef}
-                            feedWidth={isMobileLayout ? undefined : mapFeedWidth}
+                            feedWidth={
+                                isMobileLayout ? undefined : mapFeedWidth
+                            }
                             defaultSearch={youWork}
-                            searchFocusRef={isMobileLayout ? undefined : mapSearchFocusRef}
+                            searchFocusRef={
+                                isMobileLayout ? undefined : mapSearchFocusRef
+                            }
                         />
                         {/* Desktop only — slides in from the right over the map, same animation as the tool panel */}
                         <AnimatePresence>
-                        {!isMobileLayout && showJobPanel && selectedJob && (
-                            <motion.div
-                                ref={mapJobPanelRef}
-                                initial={{ x: "100%" }}
-                                animate={{ x: 0 }}
-                                exit={{ x: "100%" }}
-                                transition={{ duration: 0.25, ease: "easeInOut" }}
-                                style={{
-                                    position: "absolute",
-                                    top: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    width: mapJobPanelWidth,
-                                    maxWidth: "min(640px, 40%)",
-                                    zIndex: 30,
-                                    // Padding creates the floating-panel gap; overflow visible so radius shows
-                                    padding: "12px 12px 12px 0",
-                                    overflow: "visible",
-                                    boxSizing: "border-box",
-                                }}
-                            >
-                                {/* Left-edge drag handle */}
-                                <div
-                                    onPointerDown={handleMapJobPanelDragStart}
+                            {!isMobileLayout && showJobPanel && selectedJob && (
+                                <motion.div
+                                    ref={mapJobPanelRef}
+                                    initial={{ x: "100%" }}
+                                    animate={{ x: 0 }}
+                                    exit={{ x: "100%" }}
+                                    transition={{
+                                        duration: 0.25,
+                                        ease: "easeInOut",
+                                    }}
                                     style={{
                                         position: "absolute",
                                         top: 0,
-                                        left: 0,
-                                        width: 12,
+                                        right: 0,
                                         bottom: 0,
-                                        cursor: "ew-resize",
-                                        zIndex: 1,
+                                        width: mapJobPanelWidth,
+                                        maxWidth: "min(640px, 40%)",
+                                        zIndex: 30,
+                                        // Padding creates the floating-panel gap; overflow visible so radius shows
+                                        padding: "12px 12px 12px 0",
+                                        overflow: "visible",
+                                        boxSizing: "border-box",
                                     }}
-                                />
-                                <div style={{
-                                    width: "100%",
-                                    height: "100%",
-                                    borderRadius: 36,
-                                    overflow: "hidden",
-                                }}>
-                                    <JobDetailPanel
-                                        job={selectedJob}
-                                        jobsApiUrl={jobsApiUrl}
-                                        onClose={closeJobDetail}
-                                        themeColors={themeColors}
-                                        isMobile={false}
-                                        resumeAnimPhase={resumeAnimPhase}
-                                        onCreateResume={handleCreateResume}
-                                        jobSwipeDeck={jobCycleDeck}
-                                        mobileToolGestureAxis={mobileToolGestureAxis}
-                                        onJobDetailFetched={(jobId, entry) => {
-                                            broadcastData({ type: "job-detail-cache", payload: { jobId, entry } })
+                                >
+                                    {/* Left-edge drag handle */}
+                                    <div
+                                        onPointerDown={
+                                            handleMapJobPanelDragStart
+                                        }
+                                        style={{
+                                            position: "absolute",
+                                            top: 0,
+                                            left: 0,
+                                            width: 12,
+                                            bottom: 0,
+                                            cursor: "ew-resize",
+                                            zIndex: 1,
                                         }}
                                     />
-                                </div>
-                            </motion.div>
-                        )}
+                                    <div
+                                        style={{
+                                            width: "100%",
+                                            height: "100%",
+                                            borderRadius: 36,
+                                            overflow: "hidden",
+                                        }}
+                                    >
+                                        <JobDetailPanel
+                                            job={selectedJob}
+                                            jobsApiUrl={jobsApiUrl}
+                                            onClose={closeJobDetail}
+                                            themeColors={themeColors}
+                                            isMobile={false}
+                                            resumeAnimPhase={resumeAnimPhase}
+                                            onCreateResume={handleCreateResume}
+                                            jobSwipeDeck={jobCycleDeck}
+                                            mobileToolGestureAxis={
+                                                mobileToolGestureAxis
+                                            }
+                                            onJobDetailFetched={(
+                                                jobId,
+                                                entry
+                                            ) => {
+                                                broadcastData({
+                                                    type: "job-detail-cache",
+                                                    payload: { jobId, entry },
+                                                })
+                                            }}
+                                        />
+                                    </div>
+                                </motion.div>
+                            )}
                         </AnimatePresence>
 
                         {/* Desktop only — DocEditor slides in from right over map, same pattern as job detail */}
                         <AnimatePresence>
-                        {!isMobileLayout && isDocOpen && (
-                            <motion.div
-                                ref={mapDocOverlayRef}
-                                initial={{ x: "100%" }}
-                                animate={{ x: 0 }}
-                                exit={{ x: "100%" }}
-                                transition={{ duration: 0.25, ease: "easeInOut" }}
-                                style={{
-                                    position: "absolute",
-                                    top: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    width: mapJobPanelWidth,
-                                    maxWidth: "min(640px, 40%)",
-                                    zIndex: 31,
-                                    padding: "12px 12px 12px 0",
-                                    overflow: "visible",
-                                    boxSizing: "border-box",
-                                }}
-                            >
-                                {/* Left-edge drag handle */}
-                                <div
-                                    onPointerDown={handleMapJobPanelDragStart}
+                            {!isMobileLayout && isDocOpen && (
+                                <motion.div
+                                    ref={mapDocOverlayRef}
+                                    initial={{ x: "100%" }}
+                                    animate={{ x: 0 }}
+                                    exit={{ x: "100%" }}
+                                    transition={{
+                                        duration: 0.25,
+                                        ease: "easeInOut",
+                                    }}
                                     style={{
                                         position: "absolute",
                                         top: 0,
-                                        left: 0,
-                                        width: 12,
+                                        right: 0,
                                         bottom: 0,
-                                        cursor: "ew-resize",
-                                        zIndex: 1,
-                                    }}
-                                />
-                                <div
-                                    data-doc-overlay-panel
-                                    style={{
-                                        width: "100%",
-                                        height: "100%",
-                                        borderRadius: 36,
-                                        overflow: "hidden",
+                                        width: mapJobPanelWidth,
+                                        maxWidth: "min(640px, 40%)",
+                                        zIndex: 31,
+                                        padding: "12px 12px 12px 0",
+                                        overflow: "visible",
+                                        boxSizing: "border-box",
                                     }}
                                 >
-                                    <DocEditor
-                                        content={docContent}
-                                        onChange={handleDocChange}
-                                        settings={docSettings}
-                                        onSettingsChange={setDocSettings}
-                                        themeColors={chatThemeColors}
-                                        isMobileLayout={false}
-                                        remoteCursors={remoteCursors}
-                                        onCursorMove={handleDocPointerMove}
-                                        onClose={handleDocClose}
-                                        docType={docType}
-                                        hideContent={
-                                            resumeAnimPhase === "landing" ||
-                                            resumeAnimPhase === "orbiting"
+                                    {/* Left-edge drag handle */}
+                                    <div
+                                        onPointerDown={
+                                            handleMapJobPanelDragStart
                                         }
-                                        docCompany={
-                                            docType === "resume" || docType === "cover_letter"
-                                                ? selectedJob?.company?.name?.trim() || docCompany
-                                                : ""
-                                        }
-                                        userDisplayName={youName}
+                                        style={{
+                                            position: "absolute",
+                                            top: 0,
+                                            left: 0,
+                                            width: 12,
+                                            bottom: 0,
+                                            cursor: "ew-resize",
+                                            zIndex: 1,
+                                        }}
                                     />
-                                </div>
-                            </motion.div>
-                        )}
+                                    <div
+                                        data-doc-overlay-panel
+                                        style={{
+                                            width: "100%",
+                                            height: "100%",
+                                            borderRadius: 36,
+                                            overflow: "hidden",
+                                        }}
+                                    >
+                                        <DocEditor
+                                            content={docContent}
+                                            onChange={handleDocChange}
+                                            settings={docSettings}
+                                            onSettingsChange={setDocSettings}
+                                            themeColors={chatThemeColors}
+                                            isMobileLayout={false}
+                                            remoteCursors={remoteCursors}
+                                            onCursorMove={handleDocPointerMove}
+                                            onClose={handleDocClose}
+                                            docType={docType}
+                                            hideContent={
+                                                resumeAnimPhase === "landing" ||
+                                                resumeAnimPhase === "orbiting"
+                                            }
+                                            docCompany={
+                                                docType === "resume" ||
+                                                docType === "cover_letter"
+                                                    ? selectedJob?.company?.name?.trim() ||
+                                                      docCompany
+                                                    : ""
+                                            }
+                                            userDisplayName={youName}
+                                        />
+                                    </div>
+                                </motion.div>
+                            )}
                         </AnimatePresence>
                     </div>
                 </div>
@@ -32859,7 +34859,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     hideGradient={true}
                                     value={inputText}
                                     onChange={(e) => {
-                                        const newValue = isP2PContext ? sanitizeMessage(e.target.value) : e.target.value
+                                        const newValue = isP2PContext
+                                            ? sanitizeMessage(e.target.value)
+                                            : e.target.value
                                         inputTextRef.current = newValue
                                         setInputText(newValue)
                                         if (
@@ -33107,9 +35109,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     {messages.map((msg, idx) => {
                         const isModelMessage = msg.role === "model"
                         const shouldShowAd =
-                            adIndices.has(idx) &&
-                            showAds &&
-                            !!koahPublisherId
+                            adIndices.has(idx) && showAds && !!koahPublisherId
 
                         return (
                             <React.Fragment key={idx}>
@@ -33159,8 +35159,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     }
                                     onJobChipClick={(jobId) => {
                                         // jobCycleDeck already covers homepage jobs, message job cards, and extras
-                                        const fromDeck = jobCycleDeck.find((j) => j.id === jobId)
-                                        if (fromDeck) { openJobDetail(fromDeck); return }
+                                        const fromDeck = jobCycleDeck.find(
+                                            (j) => j.id === jobId
+                                        )
+                                        if (fromDeck) {
+                                            openJobDetail(fromDeck)
+                                            return
+                                        }
                                         // Chip store covers jobs that were only ever opened directly (survives reload)
                                         const stored = readJobChipStore()[jobId]
                                         if (stored) openJobDetail(stored)
@@ -33170,7 +35175,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     <AdCarousel
                                         userMessage={
                                             idx > 0
-                                                ? (messages[idx - 1]?.text ?? "")
+                                                ? (messages[idx - 1]?.text ??
+                                                  "")
                                                 : ""
                                         }
                                         aiResponse={msg.text}
@@ -33252,7 +35258,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         justifyContent: "flex-end",
                         alignItems: "center",
                         zIndex:
-                            isMobileLayout && (isDocOpen || isJobOpen || isMapOpen)
+                            isMobileLayout &&
+                            (isDocOpen || isJobOpen || isMapOpen)
                                 ? 10001
                                 : 1000,
                         pointerEvents: "none",
@@ -33272,7 +35279,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         }
                         value={inputText}
                         onChange={(e) => {
-                            const newValue = isP2PContext ? sanitizeMessage(e.target.value) : e.target.value
+                            const newValue = isP2PContext
+                                ? sanitizeMessage(e.target.value)
+                                : e.target.value
                             inputTextRef.current = newValue
                             setInputText(newValue)
                             const now = Date.now()
@@ -34485,9 +36494,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             left: 0,
                             bottom: 0,
                             background: themeColors.background,
-                            borderRadius: isMobileLayout
-                                ? "0 28px 28px 0"
-                                : 0,
+                            borderRadius: isMobileLayout ? "0 28px 28px 0" : 0,
                             overflow: "visible",
                             flexDirection: "column",
                             justifyContent: "flex-start",
@@ -34787,8 +36794,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                 chat.notes
                                             ) {
                                                 if (
-                                                    chat.docType ===
-                                                        "resume" ||
+                                                    chat.docType === "resume" ||
                                                     chat.docType ===
                                                         "cover_letter"
                                                 ) {
@@ -35188,7 +37194,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             {canCollapseChats &&
                                                 isYourChatsHovered &&
                                                 !isYourChatsExpanded && (
-                                                    <div data-svg-wrapper style={{ position: "relative", top: 2 }}>
+                                                    <div
+                                                        data-svg-wrapper
+                                                        style={{
+                                                            position:
+                                                                "relative",
+                                                            top: 2,
+                                                        }}
+                                                    >
                                                         <svg
                                                             width="6"
                                                             height="10"
@@ -35215,7 +37228,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             {canCollapseChats &&
                                                 isYourChatsExpanded &&
                                                 isYourChatsHovered && (
-                                                    <div data-svg-wrapper style={{ position: "relative", top: 2 }}>
+                                                    <div
+                                                        data-svg-wrapper
+                                                        style={{
+                                                            position:
+                                                                "relative",
+                                                            top: 2,
+                                                        }}
+                                                    >
                                                         <svg
                                                             width="10"
                                                             height="6"
@@ -35369,15 +37389,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                             chat.id ||
                                                         menuOpenChatId ===
                                                             chat.id
-                                                            ? themeColors
-                                                                  .hover
+                                                            ? themeColors.hover
                                                                   .default
                                                             : currentChatId ===
-                                                              chat.id
-                                                            ? themeColors
-                                                                  .hover
-                                                                  .medium
-                                                            : "transparent",
+                                                                chat.id
+                                                              ? themeColors
+                                                                    .hover
+                                                                    .medium
+                                                              : "transparent",
                                                 }}
                                             >
                                                 {editingChatId === chat.id ? (
@@ -35624,9 +37643,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 top: 0,
                                 position: "absolute",
                                 background: themeColors.background,
-                                borderRadius: isMobileLayout
-                                    ? "0 28px 0 0"
-                                    : 0,
+                                borderRadius: isMobileLayout ? "0 28px 0 0" : 0,
                                 flexDirection: "column",
                                 justifyContent: "flex-start",
                                 alignItems: "flex-start",
@@ -37221,12 +39238,12 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             !isMobileLayout && isMapOpen
                                 ? 0
                                 : !isMobileLayout &&
-                                  (isDocOpen ||
-                                      isWhiteboardOpen ||
-                                      isAppOpen ||
-                                      isJobOpen)
-                                ? chatWidth
-                                : "100%",
+                                    (isDocOpen ||
+                                        isWhiteboardOpen ||
+                                        isAppOpen ||
+                                        isJobOpen)
+                                  ? chatWidth
+                                  : "100%",
                         flexGrow:
                             !isMobileLayout &&
                             (isDocOpen ||
@@ -37491,7 +39508,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
 
             {/* Job detail over map (mobile) — fresh ModalSheet slides up on top of the map sheet */}
             <ModalSheet
-                isOpen={isMobileLayout && isMapOpen && isJobOpen && !!selectedJob && resumeAnimPhase === "idle" && !isDocOpen}
+                isOpen={
+                    isMobileLayout &&
+                    isMapOpen &&
+                    isJobOpen &&
+                    !!selectedJob &&
+                    resumeAnimPhase === "idle" &&
+                    !isDocOpen
+                }
                 onClose={closeJobDetail}
                 themeColors={themeColors}
                 zIndex={30001}
@@ -37508,7 +39532,14 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 }}
             >
                 {selectedJob && (
-                    <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
+                    <div
+                        style={{
+                            width: "100%",
+                            height: "100%",
+                            position: "relative",
+                            overflow: "hidden",
+                        }}
+                    >
                         <JobDetailPanel
                             job={selectedJob}
                             jobsApiUrl={jobsApiUrl}
@@ -37525,7 +39556,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             }
                             mobileToolGestureAxis={mobileToolGestureAxis}
                             onJobDetailFetched={(jobId, entry) => {
-                                broadcastData({ type: "job-detail-cache", payload: { jobId, entry } })
+                                broadcastData({
+                                    type: "job-detail-cache",
+                                    payload: { jobId, entry },
+                                })
                             }}
                         />
                     </div>
