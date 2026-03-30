@@ -4,142 +4,140 @@
  * applicants and support local communities. Consider joining us on this mission. Questions?
  * Contact developers@curastem.org
  *
- * Apple Jobs public search API fetcher.
+ * Apple Jobs — HTML search results fetcher.
  *
- * Apple exposes a public, unauthenticated JSON search API for all their
- * global job listings. No API key required. Uses HTTP POST.
+ * The legacy POST `https://jobs.apple.com/api/role/search` returns 301 → apple.com/pagenotfound.
+ * The careers site serves filterable search pages with server-rendered rows, e.g.
+ *   https://jobs.apple.com/en-us/search?location=united-states-USA
+ * Pagination uses `&page=` (1-based). Each row includes title, location, posted date, and
+ * a link to `/en-us/details/{id}/{slug}`. Full job descriptions are not in the list HTML;
+ * `description_raw` is left null (enrichment can fill later).
  *
- * API format: POST https://jobs.apple.com/api/role/search
- * Body: { "query": "", "filters": {}, "page": 1, "locale": "en-us", "sort": "newest" }
- *
- * Apple is a single-source fetcher — covers Apple's entire global job catalog:
- *   - Apple Retail Store positions worldwide (non-tech, customer-facing)
- *   - Corporate roles at Apple Park and regional offices
- *   - Engineering, design, marketing, operations
- *   - AppleCare support specialists (non-tech / entry-level)
- *
- * Apple Retail is one of the largest global retail employers and strongly
- * aligns with Curastem's mission to include non-tech and customer-service roles.
- *
- * Pagination: page-based (1-indexed), ~20 results per page. We cap at
- * MAX_PAGES per cron run to manage latency.
+ * `base_url` must be a jobs.apple.com search URL (path + query filters you want), for example:
+ *   https://jobs.apple.com/en-us/search?location=united-states-USA
  */
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
 import {
-  normalizeEmploymentType,
   normalizeLocation,
   normalizeWorkplaceType,
   parseEpochSeconds,
 } from "../../utils/normalize.ts";
 
-interface AppleRoleLocation {
-  city: string | null;
-  state: string | null;
-  countryCode: string | null;
-  name: string | null;    // pre-formatted name, e.g. "Cupertino, CA, United States"
-}
-
-interface AppleRole {
-  positionId: string;
-  postingTitle: string;
-  locations: AppleRoleLocation[];
-  employmentType: string | null;   // "Full-time" | "Part-time"
-  isRemote: boolean | null;
-  postingDate: string | null;      // ISO 8601 or "YYYY-MM-DD"
-  transformedPostingTitle: string; // URL slug for the job detail page
-  team: { teamName: string | null } | null;
-}
-
-interface AppleSearchResponse {
-  searchResults: AppleRole[];
-  totalRecords: number;
-}
-
-const API_URL = "https://jobs.apple.com/api/role/search";
-const PAGE_SIZE = 20;
-// Cap at 50 pages (1,000 jobs) per cron run; Apple has ~1,500–3,000 open
-// roles at any time, so 50 pages gives us strong coverage.
+const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 const MAX_PAGES = 50;
 
-/**
- * Build location string from Apple's locations array.
- * Apple can list multiple locations per role — we use the first one.
- */
-function buildLocation(locations: AppleRoleLocation[]): string | null {
-  if (!locations || locations.length === 0) return null;
-  const first = locations[0];
-  if (first.name) return first.name;
-  const parts = [first.city, first.state, first.countryCode].filter(Boolean);
-  return parts.length > 0 ? parts.join(", ") : null;
+const LINK_RE =
+  /<a[^>]*class="[^"]*link-inline[^"]*t-intro[^"]*"[^>]*href="(\/en-us\/details\/[^"?]+)[^"]*"[^>]*>([^<]*)<\/a>/gi;
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\u00a0/g, " ");
+}
+
+function externalIdFromPath(path: string): string | null {
+  const parts = path.split("/").filter(Boolean);
+  const idx = parts.indexOf("details");
+  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
+  return null;
+}
+
+function extractLocationForward(html: string, linkStart: number): string | null {
+  const window = html.slice(linkStart, linkStart + 4500);
+  const loc =
+    window.match(/search-store-name-container-\d+">([^<]+)</i) ??
+    window.match(/class="table--advanced-search__location-sub"[^>]*>([^<]+)</i);
+  return loc ? decodeHtmlEntities(loc[1].trim()) : null;
+}
+
+function extractPostedForward(html: string, linkStart: number): string | null {
+  const window = html.slice(linkStart, linkStart + 1500);
+  const m = window.match(/class="job-posted-date"[^>]*>([^<]+)</i);
+  return m ? m[1].trim() : null;
 }
 
 export const appleFetcher: JobSource = {
   sourceType: "apple",
 
-  async fetch(_source: SourceRow): Promise<NormalizedJob[]> {
+  async fetch(source: SourceRow): Promise<NormalizedJob[]> {
+    const base = new URL(source.base_url.trim());
+    if (base.hostname !== "jobs.apple.com") {
+      throw new Error(`apple: base_url must be on jobs.apple.com, got ${base.hostname}`);
+    }
+
     const jobs: NormalizedJob[] = [];
-    let page = 1;
+    const seen = new Set<string>();
 
-    while (page <= MAX_PAGES) {
-      const body = JSON.stringify({
-        query: "",
-        filters: {},
-        page,
-        locale: "en-us",
-        sort: "newest",
-      });
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const url = new URL(base.toString());
+      url.searchParams.set("page", String(page));
 
-      const res = await fetch(API_URL, {
-        method: "POST",
+      const res = await fetch(url.toString(), {
         headers: {
-          "User-Agent": "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)",
-          "Content-Type": "application/json",
-          Accept: "application/json",
+          "User-Agent": USER_AGENT,
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "en-US,en;q=0.9",
         },
-        body,
       });
 
       if (!res.ok) {
-        throw new Error(`Apple Jobs API error ${res.status} on page ${page}`);
+        throw new Error(`apple: search HTML ${res.status} for ${url}`);
       }
 
-      const data = (await res.json()) as AppleSearchResponse;
-      const results = data.searchResults ?? [];
+      const html = await res.text();
+      let pageNew = 0;
 
-      if (results.length === 0) break;
+      LINK_RE.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = LINK_RE.exec(html)) !== null) {
+        const path = m[1];
+        const titleRaw = m[2];
+        const title = decodeHtmlEntities(titleRaw.trim());
+        if (!title) continue;
 
-      for (const role of results) {
-        try {
-          const locationStr = buildLocation(role.locations ?? []);
-          const workplaceHint = role.isRemote ? "remote" : locationStr;
-          const applyUrl = `https://jobs.apple.com/en-us/details/${role.positionId}/${role.transformedPostingTitle}`;
+        const external_id = externalIdFromPath(path);
+        if (!external_id) continue;
+        if (seen.has(external_id)) continue;
+        seen.add(external_id);
+        pageNew++;
 
-          jobs.push({
-            external_id: role.positionId,
-            title: role.postingTitle,
-            location: normalizeLocation(locationStr),
-            employment_type: normalizeEmploymentType(role.employmentType),
-            workplace_type: normalizeWorkplaceType(workplaceHint, locationStr),
-            apply_url: applyUrl,
-            source_url: applyUrl,
-            // Apple's search API does not return full descriptions.
-            // The detail page is behind a JS-rendered frontend.
-            description_raw: null,
-            salary_min: null,
-            salary_max: null,
-            salary_currency: null,
-            salary_period: null,
-            posted_at: parseEpochSeconds(role.postingDate),
-            company_name: "Apple",
-          });
-        } catch {
-          continue;
-        }
+        const linkStart = m.index ?? 0;
+        const locationStr = extractLocationForward(html, linkStart);
+        const postedRaw = extractPostedForward(html, linkStart);
+        const posted_at = parseEpochSeconds(postedRaw);
+
+        const applyUrl = `https://jobs.apple.com${path.split("?")[0]}`;
+
+        jobs.push({
+          external_id,
+          title,
+          location: normalizeLocation(locationStr),
+          employment_type: null,
+          workplace_type: normalizeWorkplaceType(locationStr, locationStr),
+          apply_url: applyUrl,
+          source_url: applyUrl,
+          description_raw: null,
+          salary_min: null,
+          salary_max: null,
+          salary_currency: null,
+          salary_period: null,
+          posted_at,
+          company_name: "Apple",
+          company_logo_url: null,
+          company_website_url: null,
+        });
       }
 
-      if (results.length < PAGE_SIZE) break;
-      page++;
+      if (pageNew === 0) break;
+    }
+
+    if (jobs.length === 0) {
+      throw new Error(`apple: 0 jobs parsed from ${source.base_url} (${source.company_handle})`);
     }
 
     return jobs;

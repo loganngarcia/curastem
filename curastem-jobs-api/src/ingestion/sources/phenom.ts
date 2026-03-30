@@ -125,12 +125,20 @@ function addJobUrlsFromLocXml(xml: string, jobUrls: Set<string>): void {
 
 async function fetchSitemapJobUrls(baseUrl: string): Promise<string[]> {
   const indexUrl = new URL("sitemap_index.xml", baseUrl).href;
-  const res = await fetch(indexUrl, {
+  let res = await fetch(indexUrl, {
     headers: { "User-Agent": USER_AGENT, Accept: "application/xml,text/xml,*/*" },
     redirect: "follow",
   });
+  // Some tenants expose only `sitemap.xml` (no index) or return 404 for `sitemap_index.xml`.
   if (!res.ok) {
-    throw new Error(`phenom: sitemap index ${res.status} (${indexUrl})`);
+    const flatUrl = new URL("sitemap.xml", baseUrl).href;
+    res = await fetch(flatUrl, {
+      headers: { "User-Agent": USER_AGENT, Accept: "application/xml,text/xml,*/*" },
+      redirect: "follow",
+    });
+    if (!res.ok) {
+      throw new Error(`phenom: sitemap ${res.status} (tried sitemap_index.xml and sitemap.xml under ${baseUrl})`);
+    }
   }
   const indexXml = await res.text();
   const sitemapLocs = [...indexXml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map((m) => m[1].trim());

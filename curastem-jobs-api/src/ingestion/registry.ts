@@ -38,7 +38,11 @@ import { catsoneFetcher } from "./sources/catsone.ts";
 import { oracleCeFetcher } from "./sources/oracle_ce.ts";
 import { brillioFetcher } from "./sources/brillio.ts";
 import { phenomFetcher } from "./sources/phenom.ts";
+import { paradoxFetcher } from "./sources/paradox.ts";
 import { jobviteFetcher } from "./sources/jobvite.ts";
+import { eightfoldFetcher } from "./sources/eightfold.ts";
+import { uberSitesFetcher } from "./sources/uber_sites.ts";
+import { talentbrewFetcher } from "./sources/talentbrew.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -67,7 +71,11 @@ const REGISTRY: Record<SourceType, JobSource> = {
   oracle_ce: oracleCeFetcher,
   brillio: brillioFetcher,
   phenom: phenomFetcher,
+  paradox: paradoxFetcher,
   jobvite: jobviteFetcher,
+  eightfold: eightfoldFetcher,
+  uber_sites: uberSitesFetcher,
+  talentbrew: talentbrewFetcher,
 };
 
 /**
@@ -132,8 +140,15 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   brillio: 72,
   // Phenom SSR — sitemap discovery + embedded `phApp.ddo` job payload (apply often redirects to Workday)
   phenom: 77,
+  // Paradox SSR — listing pagination + JSON-LD JobPosting (same trust as Phenom)
+  paradox: 76,
   // Jobvite static HTML listing + per-job description (employer's own ATS — high trust)
   jobvite: 100,
+  // TalentBrew — employer Radancy-hosted HTML (listing + detail; apply often redirects to iCIMS/SF)
+  talentbrew: 82,
+  // Eightfold PCS — employer-configured board; structured JSON from their public PCS API
+  eightfold: 86,
+  uber_sites: 90,
 };
 
 export function getSourcePriority(sourceType: string): number {

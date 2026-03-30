@@ -268,11 +268,34 @@ export type SourceType =
    */
   | "phenom"
   /**
+   * Paradox AI career sites — paginated HTML job lists + `application/ld+json` JobPosting on each job page.
+   * `base_url` is the listing root (page 1), e.g. `https://careers.amctheatres.com/` (see paradox.ts).
+   */
+  | "paradox"
+  /**
    * Jobvite career sites (`jobs.jobvite.com/{slug}/jobs`).
    * Listing: static HTML `<tr>` rows — title + location per job, no pagination.
    * Detail: full description from `div.jv-job-detail-description`. See jobvite.ts.
    */
   | "jobvite"
+  /**
+   * Radancy TalentBrew HTML career sites — `search-jobs` listing + per-job `/job/...` pages
+   * (`div.job-description__description` or `div.ats-description`). `base_url` is the search root
+   * (e.g. `https://www.schwabjobs.com/search-jobs`). See talentbrew.ts.
+   */
+  | "talentbrew"
+  /**
+   * Eightfold PCS career sites (`{company}.eightfold.ai`). Unauthenticated
+   * `GET /api/pcsx/search` + `GET /api/pcsx/position_details`. `base_url` must be a
+   * careers URL with `?domain=` (tenant id, e.g. `starbucks.com`). See eightfold.ts.
+   */
+  | "eightfold"
+  /**
+   * Uber corporate careers (uber-sites Fusion RPC). `base_url` is
+   * `https://www.uber.com/api/loadSearchJobsResults?localeCode=en` or a `/…/careers/list/` URL
+   * (locale is inferred). See uber_sites.ts.
+   */
+  | "uber_sites"
   /**
    * Oracle Fusion HCM Candidate Experience — public ADF REST `recruitingCEJobRequisitions`
    * (`/hcmRestApi/resources/latest/...`). `base_url` is the CE sites URL with locale, e.g.

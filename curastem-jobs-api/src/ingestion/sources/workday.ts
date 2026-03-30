@@ -90,11 +90,18 @@ async function fetchSessionCookie(origin: string, tenant: string): Promise<strin
       "Accept-Language": "en-US",
     },
   });
-  // Extract just the name=value part of every Set-Cookie header
-  const raw = res.headers.get("set-cookie") ?? "";
-  return raw
-    .split(",")
-    .map((c) => c.trim().split(";")[0].trim())
+  // Workday sends multiple Set-Cookie headers (PLAY_SESSION, CF, etc.). `get("set-cookie")`
+  // only returns the first; missing cookies breaks WAF/session for some tenants.
+  const h = res.headers as Headers & { getSetCookie?: () => string[] };
+  const lines =
+    typeof h.getSetCookie === "function"
+      ? h.getSetCookie()
+      : (() => {
+          const single = res.headers.get("set-cookie");
+          return single ? [single] : [];
+        })();
+  return lines
+    .map((line) => line.trim().split(";")[0].trim())
     .filter(Boolean)
     .join("; ");
 }
@@ -135,7 +142,7 @@ export const workdayFetcher: JobSource = {
     const origin = url.origin;
 
     // Preflight: get session cookie so Workday's WAF accepts our datacenter IP
-    const cookieHeader = await fetchSessionCookie(origin, tenant);;
+    const cookieHeader = await fetchSessionCookie(origin, tenant);
 
     const commonHeaders: Record<string, string> = {
       "User-Agent": BROWSER_UA,
