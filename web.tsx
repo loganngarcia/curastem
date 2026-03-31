@@ -102,6 +102,12 @@ const haptic = {
     },
 }
 
+/** iOS Safari auto-zooms focused inputs when font-size is below 16px */
+function iosSafariInputFontPx(): 14 | 16 {
+    if (typeof navigator === "undefined") return 14
+    return /iPhone|iPad|iPod/.test(navigator.userAgent) ? 16 : 14
+}
+
 // -----------------------------------------------------------------------------
 // UI Sounds
 // -----------------------------------------------------------------------------
@@ -3295,6 +3301,7 @@ const ToolbarButton = React.memo(
             onMouseDown={(e) => e.preventDefault()}
             onPointerDown={(e) => e.preventDefault()}
             onClick={(e) => {
+                haptic.light()
                 onHoverChange(false)
                 onClick(e)
             }}
@@ -3453,6 +3460,7 @@ const HeaderActions = React.memo(
                     className="DownloadButton"
                     ref={downloadRef}
                     onClick={(e) => {
+                        haptic.light()
                         onDownloadHoverChange(false)
                         onDownloadClick(e)
                     }}
@@ -3509,6 +3517,7 @@ const HeaderActions = React.memo(
                     data-layer="close button"
                     className="CloseButton"
                     onClick={() => {
+                        haptic.light()
                         onCloseHoverChange(false)
                         onCloseClick()
                     }}
@@ -5496,7 +5505,10 @@ const DocEditor = React.memo(function DocEditor({
                         }}
                     >
                         <div
-                            onClick={() => updateFontSize(selectedFontSize - 1)}
+                            onClick={() => {
+                                haptic.light()
+                                updateFontSize(selectedFontSize - 1)
+                            }}
                             onMouseDown={(e) => e.preventDefault()}
                             onPointerDown={(e) => e.preventDefault()}
                             onMouseEnter={() => setIsFontDecreaseHovered(true)}
@@ -5583,7 +5595,10 @@ const DocEditor = React.memo(function DocEditor({
                             {fontSizeInput}
                         </div>
                         <div
-                            onClick={() => updateFontSize(selectedFontSize + 1)}
+                            onClick={() => {
+                                haptic.light()
+                                updateFontSize(selectedFontSize + 1)
+                            }}
                             onMouseDown={(e) => e.preventDefault()}
                             onPointerDown={(e) => e.preventDefault()}
                             onMouseEnter={() => setIsFontIncreaseHovered(true)}
@@ -6056,6 +6071,7 @@ const DocEditor = React.memo(function DocEditor({
                                             key={item.id}
                                             onClick={(e) => {
                                                 e.stopPropagation()
+                                                haptic.light()
                                                 item.onClick()
                                             }}
                                             onMouseEnter={() =>
@@ -6164,7 +6180,9 @@ const DocEditor = React.memo(function DocEditor({
                         style={{
                             outline: "none",
                             minHeight: "100%",
-                            paddingBottom: "48px", // adds padding bottom to the doc editor to end text less abruptly
+                            paddingBottom: isMobileLayout
+                                ? "max(160px, calc(48px + env(safe-area-inset-bottom, 0px) + 88px))"
+                                : "48px", // mobile: extra space so text clears the floating chat input bar
                             fontSize: "var(--doc-p-size)",
                             fontFamily: "var(--doc-current-font)",
                             lineHeight: 1.6,
@@ -6341,6 +6359,7 @@ const AddPeopleOverlayContent = React.memo(function AddPeopleOverlayContent({
     }, [])
 
     const handleCopyLink = () => {
+        haptic.light()
         const url = typeof window !== "undefined" ? window.location.href : ""
         const callId =
             typeof window !== "undefined" && window.location.hash
@@ -6546,7 +6565,10 @@ const AddPeopleOverlayContent = React.memo(function AddPeopleOverlayContent({
             <div
                 data-svg-wrapper
                 data-layer="close-button"
-                onClick={() => setShowAddPeopleOverlay(false)}
+                onClick={() => {
+                    haptic.light()
+                    setShowAddPeopleOverlay(false)
+                }}
                 style={{
                     cursor: "pointer",
                     flexShrink: 0,
@@ -7739,6 +7761,7 @@ const ChatInput = React.memo(function ChatInput({
                     </svg>
                 ),
                 onClick: () => {
+                    haptic.light()
                     setShowAddPeopleOverlay(true)
                     setShowMenu(false)
                 },
@@ -7770,6 +7793,7 @@ const ChatInput = React.memo(function ChatInput({
                     </svg>
                 ),
                 onClick: () => {
+                    haptic.light()
                     if (onReport) onReport()
                     setShowMenu(false)
                 },
@@ -7817,6 +7841,7 @@ const ChatInput = React.memo(function ChatInput({
                     </svg>
                 ),
                 onClick: () => {
+                    haptic.light()
                     if (onScreenShare) onScreenShare()
                     setShowMenu(false)
                 },
@@ -7846,12 +7871,49 @@ const ChatInput = React.memo(function ChatInput({
                 </svg>
             ),
             onClick: () => {
+                haptic.light()
                 onFileSelect()
                 setShowMenu(false)
             },
             className: "AddFilesPhotos",
             isDestructive: false,
             hasSeparator: false,
+        })
+
+        items.push({
+            id: "map",
+            label: "Find jobs",
+            icon: (
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        d="M5.66679 3.75386V14.8414M10.3336 1.14046V12.228M1 5.3499C1 4.1622 1 3.56874 1.30567 3.22262C1.41379 3.09895 1.54524 3.00095 1.69224 2.93328C2.7936 2.42538 4.23719 3.76241 5.40234 3.72119C5.55556 3.71575 5.70879 3.69397 5.8589 3.65741C7.55761 3.24129 8.62164 1.26179 10.3686 1.02068C11.3696 0.880672 12.4686 1.4858 13.4051 1.80936C14.1751 2.07537 14.5601 2.20837 14.7802 2.52494C15.0004 2.8415 15.0004 3.26307 15.0004 4.10309V10.6537C15.0004 11.8406 15.0004 12.4349 14.6947 12.781C14.5875 12.9032 14.4558 13.0015 14.3081 13.0695C13.2068 13.5774 11.7632 12.2412 10.598 12.2824C10.4441 12.2878 10.2911 12.3089 10.1415 12.3454C8.44275 12.7615 7.37872 14.741 5.63179 14.9829C4.63543 15.1214 1.8618 14.3996 1.22012 13.4779C1 13.1613 1 12.7413 1 11.8997V5.3499Z"
+                        stroke={
+                            isMapOpen
+                                ? themeColors.semantic.accent
+                                : themeColors.text.primary
+                        }
+                        strokeOpacity="0.95"
+                        strokeWidth="1.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                    />
+                </svg>
+            ),
+            trailingCheck: isMapOpen,
+            onClick: () => {
+                haptic.light()
+                toggleMap?.()
+                setShowMenu(false)
+            },
+            className: "JobsMap",
+            isDestructive: false,
+            hasSeparator: true,
         })
 
         items.push({
@@ -7881,13 +7943,14 @@ const ChatInput = React.memo(function ChatInput({
             ),
             trailingCheck: activeAgentChip === "app",
             onClick: () => {
+                haptic.light()
                 if (!isAppOpen) toggleApp?.()
                 setShowMenu(false)
                 setActiveAgentChip(activeAgentChip === "app" ? null : "app")
             },
             className: "CreateApp",
             isDestructive: false,
-            hasSeparator: true,
+            hasSeparator: false,
         })
 
         items.push({
@@ -7917,6 +7980,7 @@ const ChatInput = React.memo(function ChatInput({
             ),
             trailingCheck: activeAgentChip === "doc",
             onClick: () => {
+                haptic.light()
                 if (!isDocOpen && toggleDoc) toggleDoc()
                 setShowMenu(false)
                 setActiveAgentChip(activeAgentChip === "doc" ? null : "doc")
@@ -7952,6 +8016,7 @@ const ChatInput = React.memo(function ChatInput({
             ),
             trailingCheck: activeAgentChip === "whiteboard",
             onClick: () => {
+                haptic.light()
                 if (!isWhiteboardOpen && toggleWhiteboard) toggleWhiteboard()
                 setShowMenu(false)
                 setActiveAgentChip(
@@ -7959,40 +8024,6 @@ const ChatInput = React.memo(function ChatInput({
                 )
             },
             className: "Whiteboard",
-            isDestructive: false,
-        })
-
-        items.push({
-            id: "map",
-            label: "Find jobs",
-            icon: (
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                >
-                    <path
-                        d="M5.66679 3.75386V14.8414M10.3336 1.14046V12.228M1 5.3499C1 4.1622 1 3.56874 1.30567 3.22262C1.41379 3.09895 1.54524 3.00095 1.69224 2.93328C2.7936 2.42538 4.23719 3.76241 5.40234 3.72119C5.55556 3.71575 5.70879 3.69397 5.8589 3.65741C7.55761 3.24129 8.62164 1.26179 10.3686 1.02068C11.3696 0.880672 12.4686 1.4858 13.4051 1.80936C14.1751 2.07537 14.5601 2.20837 14.7802 2.52494C15.0004 2.8415 15.0004 3.26307 15.0004 4.10309V10.6537C15.0004 11.8406 15.0004 12.4349 14.6947 12.781C14.5875 12.9032 14.4558 13.0015 14.3081 13.0695C13.2068 13.5774 11.7632 12.2412 10.598 12.2824C10.4441 12.2878 10.2911 12.3089 10.1415 12.3454C8.44275 12.7615 7.37872 14.741 5.63179 14.9829C4.63543 15.1214 1.8618 14.3996 1.22012 13.4779C1 13.1613 1 12.7413 1 11.8997V5.3499Z"
-                        stroke={
-                            isMapOpen
-                                ? themeColors.semantic.accent
-                                : themeColors.text.primary
-                        }
-                        strokeOpacity="0.95"
-                        strokeWidth="1.2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    />
-                </svg>
-            ),
-            trailingCheck: isMapOpen,
-            onClick: () => {
-                toggleMap?.()
-                setShowMenu(false)
-            },
-            className: "JobsMap",
             isDestructive: false,
         })
 
@@ -8416,6 +8447,7 @@ const ChatInput = React.memo(function ChatInput({
                                                                             e
                                                                         ) => {
                                                                             e.stopPropagation()
+                                                                            haptic.light()
                                                                             insertChipAtCursor(
                                                                                 skill
                                                                             )
@@ -8552,7 +8584,7 @@ const ChatInput = React.memo(function ChatInput({
                                             e.stopPropagation()
                                             setIsAddFilesTooltipHovered(false)
                                             if (attachments.length < 10) {
-                                                haptic.medium()
+                                                haptic.light()
                                                 setShowMenu(!showMenu)
                                             }
                                         }}
@@ -8879,6 +8911,7 @@ const ChatInput = React.memo(function ChatInput({
                                             className="AgentChip"
                                             onClick={(e) => {
                                                 e.stopPropagation()
+                                                haptic.light()
                                                 setActiveAgentChip(null)
                                             }}
                                             onMouseEnter={() =>
@@ -9066,9 +9099,10 @@ const ChatInput = React.memo(function ChatInput({
                                         }
                                         onClick={() => {
                                             if (isLoading && onStop) {
+                                                haptic.light()
                                                 onStop()
                                             } else if (hasContent) {
-                                                haptic.medium()
+                                                haptic.light()
                                                 sendAndDismissKeyboard()
                                             }
                                         }}
@@ -9222,7 +9256,7 @@ const ChatInput = React.memo(function ChatInput({
                                     e.stopPropagation()
                                     setIsAddFilesTooltipHovered(false)
                                     if (attachments.length < 10) {
-                                        haptic.medium()
+                                        haptic.light()
                                         setShowMenu(!showMenu)
                                     }
                                 }}
@@ -9636,6 +9670,7 @@ const ChatInput = React.memo(function ChatInput({
                                                                             e
                                                                         ) => {
                                                                             e.stopPropagation()
+                                                                            haptic.light()
                                                                             insertChipAtCursor(
                                                                                 skill
                                                                             )
@@ -9756,9 +9791,13 @@ const ChatInput = React.memo(function ChatInput({
                                               : "Send"
                                     }
                                     onClick={() => {
-                                        if (isLoading && onStop) onStop()
-                                        else if (hasContent)
+                                        if (isLoading && onStop) {
+                                            haptic.light()
+                                            onStop()
+                                        } else if (hasContent) {
+                                            haptic.light()
                                             sendAndDismissKeyboard()
+                                        }
                                     }}
                                     style={{
                                         cursor: "pointer",
@@ -11068,16 +11107,48 @@ const BigJobCard = ({
                 )}
             </div>
             {job ? (
-                <span
+                <div
                     style={{
-                        color: themeColors.text.secondary,
-                        fontSize: timeFs,
-                        fontFamily: "Inter",
-                        fontWeight: 400,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        flexWrap: "wrap",
                     }}
                 >
-                    {jobTimeAgo(job.posted_at)}
-                </span>
+                    <span
+                        style={{
+                            color: themeColors.text.secondary,
+                            fontSize: timeFs,
+                            fontFamily: "Inter",
+                            fontWeight: 400,
+                        }}
+                    >
+                        {jobTimeAgo(job.posted_at)}
+                    </span>
+                    {job.visa_sponsorship === "yes" && (
+                        <>
+                            <span
+                                style={{
+                                    color: themeColors.text.secondary,
+                                    fontSize: timeFs,
+                                }}
+                            >
+                                •
+                            </span>
+                            <span
+                                style={{
+                                    color: themeColors.text.secondary,
+                                    fontSize: timeFs,
+                                    fontFamily: "Inter",
+                                    fontWeight: 400,
+                                    whiteSpace: "nowrap",
+                                }}
+                            >
+                                Sponsors visa
+                            </span>
+                        </>
+                    )}
+                </div>
             ) : (
                 <JobSkeleton
                     themeColors={themeColors}
@@ -11212,6 +11283,29 @@ const StackedJobCard = ({
                         >
                             {jobTimeAgo(job.posted_at)}
                         </span>
+                        {job.visa_sponsorship === "yes" && (
+                            <>
+                                <span
+                                    style={{
+                                        color: themeColors.text.secondary,
+                                        fontSize: metaFs,
+                                    }}
+                                >
+                                    •
+                                </span>
+                                <span
+                                    style={{
+                                        color: themeColors.text.secondary,
+                                        fontSize: metaFs,
+                                        fontFamily: "Inter",
+                                        fontWeight: 400,
+                                        whiteSpace: "nowrap",
+                                    }}
+                                >
+                                    Sponsors visa
+                                </span>
+                            </>
+                        )}
                     </>
                 ) : (
                     <JobSkeleton
@@ -11244,10 +11338,10 @@ const RowJobCard = ({
             style={{
                 alignSelf: "stretch",
                 minWidth: 0,
+                height: isMobile ? 58 : 60,
                 paddingLeft: 24,
                 paddingRight: 24,
-                paddingTop: 20,
-                paddingBottom: 20,
+                boxSizing: "border-box",
                 background: themeColors.surfaceHighlight,
                 borderRadius: 48,
                 justifyContent: "flex-start",
@@ -11556,7 +11650,7 @@ const KeywordOrbitOverlay = React.memo(function KeywordOrbitOverlay({
             style={{
                 position: "fixed",
                 inset: 0,
-                // Above mobile ModalSheet (30000) so resume keyword orbit is visible on phone.
+                // Above mobile ModalSheet (30000) so orbit is visible; below chat input (40000).
                 zIndex: 35000,
                 pointerEvents: "none",
             }}
@@ -12355,7 +12449,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                         }}
                     >
                         <motion.div
-                            onClick={() => openUrl(job.apply_url)}
+                            onClick={() => {
+                                haptic.light()
+                                openUrl(job.apply_url)
+                            }}
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.97 }}
                             transition={{
@@ -12396,11 +12493,15 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 role="button"
                                 aria-hidden={previewOnly}
                                 tabIndex={previewOnly ? -1 : 0}
-                                onClick={() =>
-                                    !previewOnly &&
-                                    resumeAnimPhase === "idle" &&
+                                onClick={() => {
+                                    if (
+                                        previewOnly ||
+                                        resumeAnimPhase !== "idle"
+                                    )
+                                        return
+                                    haptic.light()
                                     onCreateResume(job, apiKeywords)
-                                }
+                                }}
                                 whileHover={
                                     previewOnly ? undefined : { scale: 1.02 }
                                 }
@@ -14560,6 +14661,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const chip = buildChip(entry)
             chip.addEventListener("click", (e) => {
                 e.stopPropagation()
+                haptic.light()
                 const chipLat = entry.chip_lat
                 const chipLng = entry.chip_lng
                 setSelectedChipEntry(entry)
@@ -14781,6 +14883,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     }, [selectedJobs, userLoc, isStatic])
 
     const handleCurrentLocation = React.useCallback(() => {
+        haptic.light()
         const panTo = (loc: { lat: number; lng: number }) => {
             setAtPreciseLocation(true)
             setUserLoc(loc) // triggers the re-center useEffect which calls panTo
@@ -14970,7 +15073,10 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 {/* Close */}
                 <button
                     aria-label="Close map"
-                    onClick={onClose}
+                    onClick={() => {
+                        haptic.light()
+                        onClose()
+                    }}
                     style={tbStyle}
                 >
                     <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
@@ -15268,6 +15374,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                 )}
                                                 onClick={(e) => {
                                                     e.stopPropagation()
+                                                    haptic.light()
                                                     onSelect(o.value)
                                                     setFilterDropdownPos(null)
                                                 }}
@@ -15455,14 +15562,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         border: "none",
                                         outline: "none",
                                         color: textPrimary,
-                                        // 16px on iOS Safari prevents auto-zoom; 14px on Android + desktop
-                                        fontSize:
-                                            typeof navigator !== "undefined" &&
-                                            /iPhone|iPad|iPod/.test(
-                                                navigator.userAgent
-                                            )
-                                                ? 16
-                                                : 14,
+                                        fontSize: iosSafariInputFontPx(),
                                         fontFamily: "Inter",
                                         fontWeight: "400",
                                         lineHeight: "24px",
@@ -15590,6 +15690,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     <button
                                         aria-label="Close company view"
                                         onClick={() => {
+                                            haptic.light()
                                             setSelectedChipEntry(null)
                                             setNearbyJobCount(null)
                                             setSelectedJobs([])
@@ -15772,6 +15873,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                 ) =>
                                                 (e: React.MouseEvent) => {
                                                     e.stopPropagation()
+                                                    haptic.light()
                                                     if (currentOpen) {
                                                         openFn(false)
                                                         setFilterDropdownPos(
@@ -15879,7 +15981,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                 value={
                                                                     filterDays
                                                                 }
-                                                                onChange={(e) =>
+                                                                onChange={(e) => {
+                                                                    haptic.light()
                                                                     setFilterDays(
                                                                         e.target
                                                                             .value as
@@ -15888,7 +15991,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                             | "7d"
                                                                             | "30d"
                                                                     )
-                                                                }
+                                                                }}
                                                                 style={{
                                                                     position:
                                                                         "absolute",
@@ -16010,12 +16113,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                 value={
                                                                     filterSeniority
                                                                 }
-                                                                onChange={(e) =>
+                                                                onChange={(e) => {
+                                                                    haptic.light()
                                                                     setFilterSeniority(
                                                                         e.target
                                                                             .value
                                                                     )
-                                                                }
+                                                                }}
                                                                 style={{
                                                                     position:
                                                                         "absolute",
@@ -16140,12 +16244,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                 value={
                                                                     filterType
                                                                 }
-                                                                onChange={(e) =>
+                                                                onChange={(e) => {
+                                                                    haptic.light()
                                                                     setFilterType(
                                                                         e.target
                                                                             .value
                                                                     )
-                                                                }
+                                                                }}
                                                                 style={{
                                                                     position:
                                                                         "absolute",
@@ -16508,13 +16613,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                                 "none",
                                                                             color: textPrimary,
                                                                             fontSize:
-                                                                                typeof navigator !==
-                                                                                    "undefined" &&
-                                                                                /iPhone|iPad|iPod/.test(
-                                                                                    navigator.userAgent
-                                                                                )
-                                                                                    ? 16
-                                                                                    : 14,
+                                                                                iosSafariInputFontPx(),
                                                                             fontFamily:
                                                                                 "Inter",
                                                                             fontWeight:
@@ -17121,22 +17220,20 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
 function dedupeByCompany(jobs: HomepageJob[], limit: number): HomepageJob[] {
     const seen = new Set<string>()
     const unique: HomepageJob[] = []
-    const dupes: HomepageJob[] = []
     for (const j of jobs) {
         const key = j.company.name.trim().toLowerCase()
         if (!seen.has(key)) {
             seen.add(key)
             unique.push(j)
-        } else {
-            dupes.push(j)
+            if (unique.length >= limit) break
         }
     }
-    return [...unique, ...dupes].slice(0, limit)
+    return unique
 }
 
 // ─── MAP PREVIEW CARD ─────────────────────────────────────────────────────────
-// Replaces the BigJobCard in "Jobs near you" — shows a Google Static Maps
-// thumbnail at the user's /geo location and opens the Maps panel on click.
+// Homepage "What's your next job?" block — Google Static Maps thumbnail at
+// geo location; opens the Maps panel on click.
 function MapPreviewCard({
     googleMapsApiKey,
     geoCoords,
@@ -17249,6 +17346,9 @@ const HomepageJobs = React.memo(function HomepageJobs({
         lat: number
         lng: number
     } | null>(null)
+    // Lazy-load Top Picks: only fire API calls when user scrolls near Section 3.
+    const [topPicksTriggered, setTopPicksTriggered] = React.useState(false)
+    const topPicksSentinelRef = React.useRef<HTMLDivElement>(null)
 
     // Geo is IP-based — fetch once per jobsApiUrl, cache in a ref so query changes don't re-hit /geo
     const geoCacheRef = React.useRef<
@@ -17313,13 +17413,9 @@ const HomepageJobs = React.memo(function HomepageJobs({
             })
     }, [jobsApiUrl])
 
+    // ── NEAR fetch (runs immediately — needed for Section 1 above the fold) ──────
     React.useEffect(() => {
-        if (!jobsApiUrl) {
-            setLoadingPicks(false)
-            setLoadingNear(false)
-            return
-        }
-        setLoadingPicks(true)
+        if (!jobsApiUrl) { setLoadingNear(false); return }
         setLoadingNear(true)
         setNearbyBasedOnLocation(true)
         let cancelled = false
@@ -17327,165 +17423,184 @@ const HomepageJobs = React.memo(function HomepageJobs({
         const fetchJ = (url: string) => {
             const ctrl = new AbortController()
             const id = setTimeout(() => ctrl.abort(), 10000)
-            return fetch(url, { signal: ctrl.signal }).finally(() =>
-                clearTimeout(id)
-            )
+            return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
         }
-
-        const since3Days = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
-        const api = (params: string): Promise<HomepageJob[]> => {
-            const url = `${jobsApiUrl}/jobs?${params}&limit=6&since=${since3Days}`
-            return fetchJ(url)
+        const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
+        const api = (params: string, limit = 6, since = since7d): Promise<HomepageJob[]> =>
+            fetchJ(`${jobsApiUrl}/jobs?${params}&limit=${limit}&since=${since}`)
                 .then((r) => (r.ok ? r.json() : { data: [] }))
-                .then(
-                    ({ data }) =>
-                        (Array.isArray(data) ? data : []) as HomepageJob[]
-                )
+                .then(({ data }) => (Array.isArray(data) ? data : []) as HomepageJob[])
                 .catch(() => [] as HomepageJob[])
+
+        const nearPromise = getGeo().then(async (coords) => {
+            const lat = coords?.lat ?? NaN
+            const lng = coords?.lng ?? NaN
+            const hasCoords =
+                !isNaN(lat) && !isNaN(lng) &&
+                lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+
+            if (hasCoords) setGeoCoords({ lat, lng })
+
+            if (!hasCoords) {
+                setNearbyBasedOnLocation(false)
+                const fbQ = FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
+                const fb = await api(`q=${encodeURIComponent(fbQ)}`, 8)
+                // SQL path already returns newest-first; vector path may not — sort to be safe.
+                const sorted = [...fb].sort((a, b) => {
+                    const ta = a.posted_at ? new Date(a.posted_at).getTime() : 0
+                    const tb = b.posted_at ? new Date(b.posted_at).getTime() : 0
+                    return tb - ta
+                })
+                return dedupeByCompany(sorted, 8)
+            }
+
+            const buildNearParams = (withQ: boolean) => {
+                const p = new URLSearchParams({
+                    near_lat: String(lat),
+                    near_lng: String(lng),
+                    radius_km: "75",
+                    exclude_remote: "true",
+                    since: String(since7d),
+                })
+                if (withQ && userQuery.trim()) p.set("q", userQuery.trim())
+                return p.toString()
+            }
+
+            const byNewest = (jobs: HomepageJob[]) =>
+                [...jobs].sort((a, b) => {
+                    const ta = a.posted_at ? new Date(a.posted_at).getTime() : 0
+                    const tb = b.posted_at ? new Date(b.posted_at).getTime() : 0
+                    return tb - ta
+                })
+
+            const nearResults = await api(buildNearParams(true), 12)
+            const deduped = dedupeByCompany(byNewest(nearResults), 8)
+            if (deduped.length >= 8 || !userQuery.trim()) return deduped
+            const nearResults2 = await api(buildNearParams(false), 12)
+            return dedupeByCompany(byNewest([...nearResults, ...nearResults2]), 8)
+        })
+
+        const safetyTimer = setTimeout(() => { if (!cancelled) setLoadingNear(false) }, 12000)
+        nearPromise
+            .then((near) => { if (!cancelled) { setNearJobs(near); setLoadingNear(false) } })
+            .catch(() => { if (!cancelled) setLoadingNear(false) })
+
+        return () => { cancelled = true; clearTimeout(safetyTimer) }
+    }, [jobsApiUrl, userQuery, getGeo])
+
+    // ── PICKS fetch (lazy — only fires once the sentinel enters the viewport) ────
+    React.useEffect(() => {
+        if (!jobsApiUrl || !topPicksTriggered) return
+        setLoadingPicks(true)
+        let cancelled = false
+
+        const fetchJ = (url: string) => {
+            const ctrl = new AbortController()
+            const id = setTimeout(() => ctrl.abort(), 10000)
+            return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
         }
+        const since7d  = Math.floor(Date.now() / 1000) - 7  * 24 * 60 * 60
+        const since14d = Math.floor(Date.now() / 1000) - 14 * 24 * 60 * 60
+        const api = (params: string, limit = 6, since = since7d): Promise<HomepageJob[]> =>
+            fetchJ(`${jobsApiUrl}/jobs?${params}&limit=${limit}&since=${since}`)
+                .then((r) => (r.ok ? r.json() : { data: [] }))
+                .then(({ data }) => (Array.isArray(data) ? data : []) as HomepageJob[])
+                .catch(() => [] as HomepageJob[])
 
-        const primaryQuery =
-            userQuery.trim() ||
-            FALLBACK_QUERIES[
-                Math.floor(Math.random() * FALLBACK_QUERIES.length)
-            ]
-        const fallbackQuery =
-            FALLBACK_QUERIES[
-                Math.floor(Math.random() * FALLBACK_QUERIES.length)
-            ]
-
-        // Lazy fallback fetch — only materialises when picks returns fewer than 6 results.
+        const fallbackQuery = FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
         let fallbackPromise: Promise<HomepageJob[]> | null = null
         const getFallback = (): Promise<HomepageJob[]> => {
             if (!fallbackPromise)
-                fallbackPromise = api(`q=${encodeURIComponent(fallbackQuery)}`)
+                fallbackPromise = api(`q=${encodeURIComponent(fallbackQuery)}`, 8)
             return fallbackPromise
         }
 
-        const picksPromise = api(`q=${encodeURIComponent(primaryQuery)}`).then(
-            (picks) => {
+        let picksPromise: Promise<HomepageJob[]>
+        if (userQuery.trim()) {
+            const q = encodeURIComponent(userQuery.trim())
+            picksPromise = (async (): Promise<HomepageJob[]> => {
+                // Step 1: 7-day window, limit=15 for a larger dedup pool.
+                const primary = await api(`q=${q}`, 15)
                 if (cancelled) return []
-                const dedupedPicks = dedupeByCompany(picks, 6)
-                setNextJobs(dedupedPicks.slice(0, 3))
-                if (dedupedPicks.length >= 6) {
-                    setTopJobs(dedupedPicks.slice(3, 6))
-                    setLoadingPicks(false)
-                } else {
-                    // Fewer than 6 deduped picks — pull fallback results to fill the top row.
-                    getFallback().then((fallback) => {
-                        if (cancelled) return
-                        const deduped = dedupeByCompany(
-                            [...picks, ...fallback],
-                            6
-                        )
-                        setNextJobs(deduped.slice(0, 3))
-                        setTopJobs(deduped.slice(3, 6))
-                        setLoadingPicks(false)
-                    })
+                let deduped = dedupeByCompany(primary, 10)
+                if (deduped.length >= 10) {
+                    setNextJobs(deduped); setTopJobs(deduped); setLoadingPicks(false)
+                    return deduped
                 }
-                return picks
+                // Step 2: widen to 14 days, fetch only the still-needed count.
+                const stillNeeded = 10 - deduped.length
+                const wider = await api(`q=${q}`, stillNeeded + 5, since14d)
+                if (cancelled) return deduped
+                deduped = dedupeByCompany([...primary, ...wider], 10)
+                if (deduped.length >= 10) {
+                    setNextJobs(deduped); setTopJobs(deduped); setLoadingPicks(false)
+                    return deduped
+                }
+                // Step 3: last resort — fill remaining from diverse fallback.
+                const fallback = await getFallback()
+                if (cancelled) return deduped
+                const final = dedupeByCompany([...deduped, ...fallback], 10)
+                if (!cancelled) { setNextJobs(final); setTopJobs(final); setLoadingPicks(false) }
+                return final
+            })()
+        } else {
+            // No job title — 5 distinct random categories, mobile shows all 10, desktop 3.
+            const usedIdx = new Set<number>()
+            const diverseQueries: string[] = []
+            while (diverseQueries.length < 5) {
+                const idx = Math.floor(Math.random() * FALLBACK_QUERIES.length)
+                if (!usedIdx.has(idx)) { usedIdx.add(idx); diverseQueries.push(FALLBACK_QUERIES[idx]) }
             }
-        )
-
-        // Geo lookup — cached per jobsApiUrl so query changes don't re-hit /geo
-        const geoPromise = getGeo().then((coords) => ({
-            lat: coords?.lat ?? NaN,
-            lng: coords?.lng ?? NaN,
-        }))
-
-        const nearPromise = Promise.all([picksPromise, geoPromise]).then(
-            async ([picks, { lat, lng }]) => {
-                const fallback = fallbackPromise ? await fallbackPromise : []
-                const allPicks = dedupeByCompany([...picks, ...fallback], 6)
-                const excludeIds = [...new Set(allPicks.map((j) => j.id))]
-                // Companies already shown above — avoid repeating them in Near You.
-                const excludeCompanies = new Set(
-                    allPicks.map((j) => j.company.name.trim().toLowerCase())
+            picksPromise = Promise.all(
+                diverseQueries.map((q) =>
+                    api(`q=${encodeURIComponent(q)}`, 4).catch(() => [] as HomepageJob[])
                 )
-
-                const hasCoords =
-                    !isNaN(lat) &&
-                    !isNaN(lng) &&
-                    lat >= -90 &&
-                    lat <= 90 &&
-                    lng >= -180 &&
-                    lng <= 180
-
-                if (hasCoords) setGeoCoords({ lat, lng })
-
-                if (!hasCoords) {
-                    setNearbyBasedOnLocation(false)
-                    // Reuse already-in-flight fallback fetch rather than making a new request.
-                    const fb = await getFallback()
-                    return dedupeByCompany(fb, 5)
+            ).then((batches) => {
+                if (cancelled) return []
+                const seen = new Set<string>()
+                const picks: HomepageJob[] = []
+                for (const batch of batches) {
+                    for (const job of batch) {
+                        const co = job.company.name.trim().toLowerCase()
+                        if (!seen.has(co)) { seen.add(co); picks.push(job); break }
+                    }
                 }
-
-                const buildNearParams = (withQ: boolean) => {
-                    const params = new URLSearchParams({
-                        limit: "8",
-                        near_lat: String(lat),
-                        near_lng: String(lng),
-                        radius_km: "75",
-                        exclude_remote: "true",
-                        since: String(since3Days),
-                    })
-                    if (excludeIds.length > 0)
-                        params.set("exclude_ids", excludeIds.join(","))
-                    if (withQ && userQuery.trim())
-                        params.set("q", userQuery.trim())
-                    return params.toString()
-                }
-
-                const dedupeNear = (results: HomepageJob[]) =>
-                    dedupeByCompany(
-                        results.filter(
-                            (j) =>
-                                !excludeCompanies.has(
-                                    j.company.name.trim().toLowerCase()
-                                )
-                        ),
-                        5
-                    )
-
-                const nearResults = await api(buildNearParams(true))
-                const deduped = dedupeNear(nearResults)
-                if (deduped.length >= 5 || !userQuery.trim()) return deduped
-                const nearResults2 = await api(buildNearParams(false))
-                return dedupeNear([...nearResults, ...nearResults2])
-            }
-        )
-
-        const safetyTimer = setTimeout(() => {
-            if (!cancelled) {
-                setLoadingPicks(false)
-                setLoadingNear(false)
-            }
-        }, 12000)
-
-        picksPromise.catch(() => {
-            if (!cancelled) setLoadingPicks(false)
-        })
-
-        nearPromise
-            .then((near) => {
-                if (!cancelled) {
-                    setNearJobs(near)
-                    setLoadingNear(false)
-                }
+                const extras = dedupeByCompany(batches.flat(), 10).filter(
+                    (j) => !picks.some((p) => p.id === j.id)
+                )
+                const allPicks = dedupeByCompany([...picks, ...extras], 10)
+                setNextJobs(allPicks); setTopJobs(allPicks); setLoadingPicks(false)
+                return allPicks
             })
-            .catch(() => {
-                if (!cancelled) setLoadingNear(false)
-            })
-
-        return () => {
-            cancelled = true
-            clearTimeout(safetyTimer)
         }
-    }, [jobsApiUrl, userQuery, getGeo])
+
+        const safetyTimer = setTimeout(() => { if (!cancelled) setLoadingPicks(false) }, 12000)
+        picksPromise.catch(() => { if (!cancelled) setLoadingPicks(false) })
+
+        return () => { cancelled = true; clearTimeout(safetyTimer) }
+    }, [jobsApiUrl, userQuery, topPicksTriggered])
+
+    // ── IO: trigger picks fetch when user scrolls near Section 3 ─────────────────
+    React.useEffect(() => {
+        if (topPicksTriggered) return
+        const el = topPicksSentinelRef.current
+        if (!el || typeof IntersectionObserver === "undefined") {
+            // Fallback for environments that don't support IO (SSR, old browsers).
+            setTopPicksTriggered(true)
+            return
+        }
+        const io = new IntersectionObserver(
+            ([entry]) => { if (entry.isIntersecting) setTopPicksTriggered(true) },
+            { rootMargin: "300px 0px" } // start loading 300px before entering viewport
+        )
+        io.observe(el)
+        return () => io.disconnect()
+    }, [topPicksTriggered])
 
     React.useEffect(() => {
-        onHomepageDeckJobs?.([...nextJobs, ...nearJobs, ...topJobs])
-    }, [nextJobs, nearJobs, topJobs, onHomepageDeckJobs])
+        // nearJobs now covers both local sections; nextJobs is internal exclusion state only.
+        onHomepageDeckJobs?.([...nearJobs, ...topJobs])
+    }, [nearJobs, topJobs, onHomepageDeckJobs])
 
     const openJob = (job: HomepageJob) => {
         if (onJobClick) {
@@ -17507,9 +17622,13 @@ const HomepageJobs = React.memo(function HomepageJobs({
                   n
               )
 
-    const nextList = pad(nextJobs, 3, loadingPicks)
-    const nearList = pad(nearJobs, 5, loadingNear)
-    const topList = pad(topJobs, 3, loadingPicks)
+    // nearJobs now covers two sections: first 5 slots → map-row section (Section 1),
+    // next 3 slots → featured-card section (Section 2, "Jobs near you / Explore jobs").
+    const nearListFull = pad(nearJobs, 8, loadingNear)
+    const nearList = nearListFull.slice(0, 5)
+    const nextList = nearListFull.slice(5, 8)
+    // Always pad to 10: mobile shows all 10, desktop slices to 3 at render time.
+    const topList = pad(topJobs, 10, loadingPicks)
 
     // Measure the actual rendered container width so layout adapts when the
     // sidebar is resized on desktop, not just when the window hits 768px.
@@ -17573,7 +17692,15 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 display: "flex",
             }}
         >
-            {/* ── SECTION 1: WHAT'S YOUR NEXT JOB ── */}
+            {/* ── SECTION 1: WHAT'S YOUR NEXT JOB + CUSTOMIZE ── */}
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    flexDirection: "column",
+                    gap: m ? 12 : 16,
+                    display: "flex",
+                }}
+            >
             <div
                 style={{
                     alignSelf: "stretch",
@@ -17596,7 +17723,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     What's your next job?
                 </div>
                 {m ? (
-                    // Mobile: big card on top, 2 stacked cards below
+                    // Mobile: 4 row cards on top, map preview card at bottom
                     <div
                         style={{
                             alignSelf: "stretch",
@@ -17605,18 +17732,161 @@ const HomepageJobs = React.memo(function HomepageJobs({
                             display: "flex",
                         }}
                     >
-                        <BigJobCard
-                            job={nextList[0] ?? null}
-                            borderRadius={32}
+                        {nearList.slice(0, 4).map((job, i) => (
+                            <RowJobCard
+                                key={job?.id ?? i}
+                                job={job}
+                                onClick={job ? () => openJob(job) : undefined}
+                                themeColors={themeColors}
+                                isMobile
+                            />
+                        ))}
+                        <MapPreviewCard
+                            googleMapsApiKey={googleMapsApiKey}
+                            geoCoords={geoCoords}
+                            borderRadius={36}
                             style={{ height: 164 }}
-                            onClick={
-                                nextList[0]
-                                    ? () => openJob(nextList[0])
-                                    : undefined
-                            }
+                            onClick={onOpenMap}
                             themeColors={themeColors}
                             isMobile
                         />
+                    </div>
+                ) : (
+                    // Desktop: map preview card left, 4 row cards right
+                    <div
+                        style={{
+                            alignSelf: "stretch",
+                            justifyContent: "center",
+                            alignItems: "stretch",
+                            gap: 12,
+                            display: "flex",
+                        }}
+                    >
+                        <MapPreviewCard
+                            googleMapsApiKey={googleMapsApiKey}
+                            geoCoords={geoCoords}
+                            borderRadius={48}
+                            style={{
+                                width: 272,
+                                minWidth: 272,
+                                maxWidth: 272,
+                                minHeight: 272,
+                            }}
+                            onClick={onOpenMap}
+                            themeColors={themeColors}
+                        />
+                        <div
+                            style={{
+                                flex: "1 1 0",
+                                minWidth: 0,
+                                flexDirection: "column",
+                                gap: 12,
+                                display: "flex",
+                            }}
+                        >
+                            {nearList.slice(1, 5).map((job, i) => (
+                                <RowJobCard
+                                    key={job?.id ?? i}
+                                    job={job}
+                                    onClick={
+                                        job ? () => openJob(job) : undefined
+                                    }
+                                    themeColors={themeColors}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* ── CUSTOMIZE ── */}
+            <div
+                onClick={() => {
+                    haptic.light()
+                    onOpenSettings()
+                }}
+                style={{
+                    alignSelf: "stretch",
+                    height: m ? 58 : 60,
+                    paddingLeft: 24,
+                    paddingRight: 24,
+                    boxSizing: "border-box",
+                    borderRadius: 48,
+                    border:
+                        themeColors.background === lightColors.background
+                            ? `0.33px solid ${themeColors.border.subtle}`
+                            : `1px solid ${themeColors.border.subtle}`,
+                    justifyContent: "flex-start",
+                    alignItems: "center",
+                    gap: 4,
+                    display: "inline-flex",
+                    cursor: "pointer",
+                }}
+            >
+                <div
+                    style={{
+                        flex: "1 1 0",
+                        color: themeColors.text.primary,
+                        fontSize: 15,
+                        fontFamily: "Inter",
+                        fontWeight: 400,
+                        lineHeight: 1.2,
+                    }}
+                >
+                    Customize
+                </div>
+                {/* Magic pencil icon */}
+                <div
+                    data-svg-wrapper
+                    data-layer="magic pencil icon"
+                    style={{
+                        flexShrink: 0,
+                        opacity: 0.95,
+                        display: "flex",
+                    }}
+                >
+                    <svg
+                        width="17"
+                        height="16"
+                        viewBox="0 0 17 16"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+                        <path
+                            d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z"
+                            fill={themeColors.text.primary}
+                        />
+                        <path
+                            d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z"
+                            fill={themeColors.text.primary}
+                        />
+                    </svg>
+                </div>
+            </div>
+            </div>{/* end Section 1 + Customize wrapper */}
+
+            {/* ── SECTION 2: JOBS NEAR YOU ── */}
+            <div
+                style={{
+                    alignSelf: "stretch",
+                    flexDirection: "column",
+                    gap: m ? 24 : 48,
+                    display: "flex",
+                }}
+            >
+                <div style={sectionTitleStyle}>
+                    {nearbyBasedOnLocation ? "Jobs near you" : "Explore jobs"}
+                </div>
+                {m ? (
+                    // Mobile: 2 stacked cards on top, big card at bottom
+                    <div
+                        style={{
+                            alignSelf: "stretch",
+                            flexDirection: "column",
+                            gap: 12,
+                            display: "flex",
+                        }}
+                    >
                         <StackedJobCard
                             job={nextList[1] ?? null}
                             onClick={
@@ -17632,6 +17902,18 @@ const HomepageJobs = React.memo(function HomepageJobs({
                             onClick={
                                 nextList[2]
                                     ? () => openJob(nextList[2])
+                                    : undefined
+                            }
+                            themeColors={themeColors}
+                            isMobile
+                        />
+                        <BigJobCard
+                            job={nextList[0] ?? null}
+                            borderRadius={32}
+                            style={{ height: 164 }}
+                            onClick={
+                                nextList[0]
+                                    ? () => openJob(nextList[0])
                                     : undefined
                             }
                             themeColors={themeColors}
@@ -17691,94 +17973,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 )}
             </div>
 
-            {/* ── SECTION 2: JOBS NEAR YOU ── */}
-            <div
-                style={{
-                    alignSelf: "stretch",
-                    flexDirection: "column",
-                    gap: m ? 24 : 48,
-                    display: "flex",
-                }}
-            >
-                <div style={sectionTitleStyle}>
-                    {nearbyBasedOnLocation ? "Jobs near you" : "Explore jobs"}
-                </div>
-                {m ? (
-                    // Mobile: map preview card on top, 4 row cards below
-                    <div
-                        style={{
-                            alignSelf: "stretch",
-                            flexDirection: "column",
-                            gap: 12,
-                            display: "flex",
-                        }}
-                    >
-                        <MapPreviewCard
-                            googleMapsApiKey={googleMapsApiKey}
-                            geoCoords={geoCoords}
-                            borderRadius={36}
-                            style={{ height: 164 }}
-                            onClick={onOpenMap}
-                            themeColors={themeColors}
-                            isMobile
-                        />
-                        {nearList.slice(0, 4).map((job, i) => (
-                            <RowJobCard
-                                key={job?.id ?? i}
-                                job={job}
-                                onClick={job ? () => openJob(job) : undefined}
-                                themeColors={themeColors}
-                                isMobile
-                            />
-                        ))}
-                    </div>
-                ) : (
-                    // Desktop: map preview card left, 4 row cards right
-                    <div
-                        style={{
-                            alignSelf: "stretch",
-                            justifyContent: "center",
-                            alignItems: "stretch",
-                            gap: 12,
-                            display: "flex",
-                        }}
-                    >
-                        <MapPreviewCard
-                            googleMapsApiKey={googleMapsApiKey}
-                            geoCoords={geoCoords}
-                            borderRadius={48}
-                            style={{
-                                width: 272,
-                                minWidth: 272,
-                                maxWidth: 272,
-                                minHeight: 272,
-                            }}
-                            onClick={onOpenMap}
-                            themeColors={themeColors}
-                        />
-                        <div
-                            style={{
-                                flex: "1 1 0",
-                                minWidth: 0,
-                                flexDirection: "column",
-                                gap: 12,
-                                display: "flex",
-                            }}
-                        >
-                            {nearList.slice(1, 5).map((job, i) => (
-                                <RowJobCard
-                                    key={job?.id ?? i}
-                                    job={job}
-                                    onClick={
-                                        job ? () => openJob(job) : undefined
-                                    }
-                                    themeColors={themeColors}
-                                />
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
+            {/* Sentinel — IO fires picks fetch when user scrolls within 300px of here */}
+            <div ref={topPicksSentinelRef} style={{ height: 0 }} aria-hidden />
 
             {/* ── SECTION 3: TOP PICKS FOR YOU ── */}
             <div
@@ -17791,7 +17987,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
             >
                 <div style={sectionTitleStyle}>Top picks for you</div>
                 {m ? (
-                    // Mobile: 3 stacked cards vertically
+                    // Mobile: up to 10 stacked cards; filter nulls when done loading
+                    // so we don't show ghost skeleton cards if fewer than 10 were found.
                     <div
                         style={{
                             alignSelf: "stretch",
@@ -17800,7 +17997,10 @@ const HomepageJobs = React.memo(function HomepageJobs({
                             display: "flex",
                         }}
                     >
-                        {topList.map((job, i) => (
+                        {(loadingPicks
+                            ? topList
+                            : topList.filter((j): j is HomepageJob => j !== null)
+                        ).map((job, i) => (
                             <StackedJobCard
                                 key={job?.id ?? i}
                                 job={job}
@@ -17821,7 +18021,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
                             display: "flex",
                         }}
                     >
-                        {topList.map((job, i) => (
+                        {topList.slice(0, 3).map((job, i) => (
                             <BigJobCard
                                 key={job?.id ?? i}
                                 job={job}
@@ -17835,67 +18035,6 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 )}
             </div>
 
-            {/* ── SECTION 4: CUSTOMIZE ── */}
-            <div
-                onClick={onOpenSettings}
-                style={{
-                    alignSelf: "stretch",
-                    paddingLeft: 24,
-                    paddingRight: 24,
-                    paddingTop: 19,
-                    paddingBottom: 19,
-                    borderRadius: 48,
-                    border:
-                        themeColors.background === lightColors.background
-                            ? `0.33px solid ${themeColors.border.subtle}`
-                            : `1px solid ${themeColors.border.subtle}`,
-                    justifyContent: "flex-start",
-                    alignItems: "center",
-                    gap: 4,
-                    display: "inline-flex",
-                    cursor: "pointer",
-                }}
-            >
-                <div
-                    style={{
-                        flex: "1 1 0",
-                        color: themeColors.text.primary,
-                        fontSize: 15,
-                        fontFamily: "Inter",
-                        fontWeight: 400,
-                        lineHeight: 1.2,
-                    }}
-                >
-                    Customize
-                </div>
-                {/* Magic pencil icon */}
-                <div
-                    data-svg-wrapper
-                    data-layer="magic pencil icon"
-                    style={{
-                        flexShrink: 0,
-                        opacity: 0.95,
-                        display: "flex",
-                    }}
-                >
-                    <svg
-                        width="17"
-                        height="16"
-                        viewBox="0 0 17 16"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                    >
-                        <path
-                            d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z"
-                            fill={themeColors.text.primary}
-                        />
-                        <path
-                            d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z"
-                            fill={themeColors.text.primary}
-                        />
-                    </svg>
-                </div>
-            </div>
         </div>
     )
 })
@@ -18082,7 +18221,10 @@ const ModalSheet = ({
                             inset: 0,
                             background: themeColors.overlay.black,
                         }}
-                        onClick={onClose}
+                        onClick={() => {
+                            haptic.light()
+                            onClose()
+                        }}
                         aria-hidden
                     />
                     {/* Outer: slide % only. Inner: drag px only — avoids Framer fighting one motion value with animate.y */}
@@ -18342,7 +18484,10 @@ const JoinVideoCallOverlay = ({
                 }}
             >
                 <button
-                    onClick={onVolunteer}
+                    onClick={() => {
+                        haptic.light()
+                        onVolunteer()
+                    }}
                     style={{
                         alignSelf: "stretch",
                         height: 48,
@@ -18378,7 +18523,10 @@ const JoinVideoCallOverlay = ({
                     </span>
                 </button>
                 <button
-                    onClick={onStudent}
+                    onClick={() => {
+                        haptic.light()
+                        onStudent()
+                    }}
                     style={{
                         alignSelf: "stretch",
                         height: 48,
@@ -21673,6 +21821,7 @@ const MiniIDE = React.memo(
                                 data-layer="open code editor button."
                                 className="OpenCodeEditorButton"
                                 onClick={() => {
+                                    haptic.light()
                                     setIsCodeButtonHovered(false)
                                     onModeChange("editor")
                                 }}
@@ -21722,7 +21871,9 @@ const MiniIDE = React.memo(
                                 className="PlayButtonOpensTheWorkingApp50GreyedOutWhenIdeIsAlreadyOpen"
                                 onClick={() => {
                                     setIsPlayButtonHovered(false)
-                                    if (isPlayable) onModeChange("player")
+                                    if (!isPlayable) return
+                                    haptic.light()
+                                    onModeChange("player")
                                 }}
                                 onMouseEnter={() =>
                                     setIsPlayButtonHovered(true)
@@ -22955,6 +23106,7 @@ Extract this structure:
     )
 
     const handleResumeDownload = React.useCallback(() => {
+        haptic.light()
         if (!resumeFile) return
         const link = document.createElement("a")
         link.href = resumeFile.base64
@@ -22966,6 +23118,7 @@ Extract this structure:
     }, [resumeFile])
 
     const handleResumeDelete = React.useCallback(() => {
+        haptic.light()
         setResumeFile(null)
         // Also wipe the plain-text resume so AI tools no longer see stale data
         if (typeof window !== "undefined")
@@ -33906,7 +34059,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     bottom: 0,
                     left: 0,
                     right: 0,
-                    zIndex: 10,
+                    zIndex: 40000,
                     paddingBottom: "env(safe-area-inset-bottom)",
                     pointerEvents: "none",
                 }}
@@ -35292,7 +35445,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         zIndex:
                             isMobileLayout &&
                             (isDocOpen || isJobOpen || isMapOpen)
-                                ? 10001
+                                ? 40000
                                 : 1000,
                         pointerEvents: "none",
                         paddingTop: aiGeneratedSuggestions.length > 0 ? 36 : 0,
@@ -35469,15 +35622,17 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             key={index}
                                             role="button"
                                             tabIndex={6 + index}
-                                            onClick={() =>
+                                            onClick={() => {
+                                                haptic.light()
                                                 handleSendMessage(suggestion)
-                                            }
+                                            }}
                                             onKeyDown={(e) => {
                                                 if (
                                                     e.key === "Enter" ||
                                                     e.key === " "
                                                 ) {
                                                     e.preventDefault()
+                                                    haptic.light()
                                                     handleSendMessage(
                                                         suggestion
                                                     )
@@ -36676,6 +36831,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             onClick={(e) => {
                                                 e.stopPropagation()
                                                 if (canExpand) {
+                                                    haptic.light()
                                                     setIsYourStuffExpanded(
                                                         !isYourStuffExpanded
                                                     )
@@ -37177,10 +37333,12 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             className="ChatTitle"
                                             onClick={(e) => {
                                                 e.stopPropagation()
-                                                if (canCollapseChats)
+                                                if (canCollapseChats) {
+                                                    haptic.light()
                                                     setIsYourChatsExpanded(
                                                         !isYourChatsExpanded
                                                     )
+                                                }
                                             }}
                                             onMouseEnter={() =>
                                                 setIsYourChatsHovered(true)
@@ -37818,10 +37976,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     style={{
                                         flex: "1 1 0",
                                         color: themeColors.text.primary,
-                                        fontSize: 14,
+                                        fontSize: iosSafariInputFontPx(),
                                         fontFamily: "Inter",
                                         fontWeight: "400",
-                                        lineHeight: "19.60px",
+                                        lineHeight:
+                                            iosSafariInputFontPx() === 16
+                                                ? "22px"
+                                                : "19.60px",
                                         background: "transparent",
                                         border: "none",
                                         outline: "none",
@@ -37941,6 +38102,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     aria-label="Open your profile settings"
                                     onClick={(e) => {
                                         e.stopPropagation()
+                                        haptic.light()
                                         setYouButtonOrigin({
                                             x: e.clientX,
                                             y: e.clientY,
@@ -38247,7 +38409,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             transition: "background 0.2s",
                             pointerEvents: "auto",
                         }}
-                        onClick={() => setShowYouSettings(false)}
+                        onClick={() => {
+                            haptic.light()
+                            setShowYouSettings(false)
+                        }}
                         onMouseEnter={() =>
                             !isMobileLayout && setIsSettingsCloseHovered(true)
                         }
@@ -38367,10 +38532,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     style={{
                                         flex: "1 1 0",
                                         color: themeColors.text.primary,
-                                        fontSize: 14,
+                                        fontSize: iosSafariInputFontPx(),
                                         fontFamily: "Inter",
                                         fontWeight: "400",
-                                        lineHeight: "21px",
+                                        lineHeight:
+                                            iosSafariInputFontPx() === 16
+                                                ? "24px"
+                                                : "21px",
                                         overflow: "hidden",
                                         textOverflow: "ellipsis",
                                         whiteSpace: "nowrap",
@@ -38386,6 +38554,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     aria-label="Resume actions"
                                     onClick={(e) => {
                                         e.stopPropagation()
+                                        haptic.light()
                                         setResumeMenuOpen((v) => !v)
                                         setHoveredResumeMenuItem(null)
                                     }}
@@ -38645,10 +38814,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     style={{
                                         flex: "1 1 0",
                                         color: themeColors.text.primary,
-                                        fontSize: 14,
+                                        fontSize: iosSafariInputFontPx(),
                                         fontFamily: "Inter",
                                         fontWeight: "400",
-                                        lineHeight: "21px",
+                                        lineHeight:
+                                            iosSafariInputFontPx() === 16
+                                                ? "24px"
+                                                : "21px",
                                     }}
                                 >
                                     Analyzing resume…
@@ -38678,9 +38850,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             // Upload button
                             <div
                                 className="SettingsResumeUploadBtn"
-                                onClick={() =>
+                                onClick={() => {
+                                    haptic.light()
                                     resumeFileInputRef.current?.click()
-                                }
+                                }}
                                 style={{
                                     ...styles.menuItem,
                                     height: 44,
@@ -38704,10 +38877,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     style={{
                                         flex: "1 1 0",
                                         color: themeColors.text.primary,
-                                        fontSize: 14,
+                                        fontSize: iosSafariInputFontPx(),
                                         fontFamily: "Inter",
                                         fontWeight: "400",
-                                        lineHeight: "21px",
+                                        lineHeight:
+                                            iosSafariInputFontPx() === 16
+                                                ? "24px"
+                                                : "21px",
                                     }}
                                 >
                                     Upload resume
@@ -38790,7 +38966,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     background: "transparent",
                                     border: "none",
                                     color: themeColors.text.primary,
-                                    fontSize: 14,
+                                    fontSize: iosSafariInputFontPx(),
                                     outline: "none",
                                     fontFamily: "Inter",
                                 }}
@@ -38856,7 +39032,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     background: "transparent",
                                     border: "none",
                                     color: themeColors.text.primary,
-                                    fontSize: 14,
+                                    fontSize: iosSafariInputFontPx(),
                                     outline: "none",
                                     fontFamily: "Inter",
                                 }}
@@ -38922,7 +39098,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     background: "transparent",
                                     border: "none",
                                     color: themeColors.text.primary,
-                                    fontSize: 14,
+                                    fontSize: iosSafariInputFontPx(),
                                     outline: "none",
                                     fontFamily: "Inter",
                                 }}
@@ -39036,7 +39212,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     background: "transparent",
                                     border: "none",
                                     color: themeColors.text.primary,
-                                    fontSize: 14,
+                                    fontSize: iosSafariInputFontPx(),
                                     outline: "none",
                                     fontFamily: "Inter",
                                     resize: "none",
@@ -39102,6 +39278,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                 key={chip.id}
                                                 className="InterestChip"
                                                 onClick={() => {
+                                                    haptic.light()
                                                     setYouInterests((prev) => {
                                                         const base = prev.trim()
                                                         return base
@@ -39151,7 +39328,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                     style={{
                                                         color: themeColors.text
                                                             .secondary,
-                                                        fontSize: 14,
+                                                        fontSize:
+                                                            iosSafariInputFontPx(),
                                                         fontFamily: "Inter",
                                                         fontWeight: "400",
                                                         lineHeight: "21px",
@@ -40038,7 +40216,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     return (
                                         <div
                                             key={action.id}
-                                            onClick={action.onClick}
+                                            onClick={() => {
+                                                haptic.light()
+                                                action.onClick()
+                                            }}
                                             data-layer={action.id}
                                             className={action.id}
                                             style={{
