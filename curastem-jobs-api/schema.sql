@@ -98,7 +98,7 @@ CREATE INDEX IF NOT EXISTS idx_sources_enabled ON sources (enabled);
 -- jobs
 -- ──────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS jobs (
-  id              TEXT PRIMARY KEY,   -- deterministic: sha256(source_id + ":" + external_id), hex
+  id              TEXT PRIMARY KEY,   -- deterministic: FNV-1a 64-bit hash of (source_id + ":" + external_id), encoded as 10-char vowels+digits (e.g. "a4u889e47a")
 
   company_id      TEXT NOT NULL REFERENCES companies (id),
   source_id       TEXT NOT NULL REFERENCES sources (id),

@@ -3321,18 +3321,30 @@ export function parseEpochSeconds(raw: string | number | null | undefined): numb
 // Job ID generation (deterministic)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** FNV-1a 64-bit hash — synchronous, no crypto dependency, collision-resistant. */
+function _fnv1a64(s: string): bigint {
+  let h = 14695981039346656037n;
+  for (let i = 0; i < s.length; i++) {
+    h ^= BigInt(s.charCodeAt(i));
+    h = BigInt.asUintN(64, h * 1099511628211n);
+  }
+  return h;
+}
+
 /**
- * Produce a deterministic job ID from source_id and external_id using a
- * simple Base64url encoding without a crypto dependency (Workers have SubtleCrypto
- * but we keep this synchronous for simplicity in the ingestion path).
+ * Produce a deterministic 10-digit numeric job ID from source_id and external_id.
  *
- * The resulting ID is stable: re-ingesting the same job always produces the same ID.
+ * Format: exactly 10 decimal digits, zero-padded (e.g. "0438291750").
+ *
+ * Properties:
+ *   - Stable: same inputs always produce the same ID.
+ *   - 10 billion possible values — negligible collision risk at any practical scale.
+ *   - URL-safe, digits only, easy to share.
+ *   - No crypto dependency (synchronous FNV-1a 64-bit hash mod 10^10).
  */
 export function buildJobId(sourceId: string, externalId: string): string {
-  const raw = `${sourceId}:${externalId}`;
-  // Use btoa for a lightweight, deterministic encoding
-  // Replace chars not safe in URLs
-  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  const h = _fnv1a64(`${sourceId}:${externalId}`);
+  return (h % 10000000000n).toString().padStart(10, "0");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1118,7 +1118,7 @@ function employmentTypeCondition(employment_type: string | undefined): {
 export async function listJobsByIds(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min">
+  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min" | "country">
 ): Promise<ListJobsRow[]> {
   if (ids.length === 0) return [];
 
@@ -1142,7 +1142,7 @@ export async function listJobsByIds(
 async function listJobsByIdsChunk(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min">
+  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min" | "country">
 ): Promise<ListJobsRow[]> {
   const placeholders = ids.map(() => "?").join(", ");
   const conditions: string[] = [`j.id IN (${placeholders})`];
@@ -1164,7 +1164,7 @@ async function listJobsByIdsChunk(
   }
   if (filter.exclude_ids && filter.exclude_ids.length > 0) {
     const valid = filter.exclude_ids.filter(
-      (id) => typeof id === "string" && id.length >= 32 && id.length <= 40
+      (id) => typeof id === "string" && id.length >= 4 && id.length <= 64
     );
     if (valid.length > 0) {
       conditions.push(`j.id NOT IN (${valid.map(() => "?").join(", ")})`);
@@ -1191,6 +1191,10 @@ async function listJobsByIdsChunk(
   if (filter.salary_min !== undefined) {
     conditions.push("j.salary_min IS NOT NULL AND j.salary_min >= ?");
     bindings.push(filter.salary_min);
+  }
+  if (filter.country) {
+    conditions.push("(j.workplace_type = 'remote' OR j.job_country = ?)");
+    bindings.push(filter.country);
   }
 
   const where = conditions.join(" AND ");
@@ -1247,6 +1251,7 @@ export interface ListJobsFilter {
   company?: string;
   posted_since?: number; // unix timestamp — only return jobs posted/seen at or after this time
   salary_min?: number;   // only return jobs where salary_min >= this value (annual, in salary_currency)
+  country?: string;      // ISO 3166-1 alpha-2 — filter to jobs in this country (or remote)
   limit: number;
   cursor?: string; // opaque cursor = base64(last posted_at:id)
 }
@@ -1352,7 +1357,7 @@ export async function listJobs(
   }
   if (filter.exclude_ids && filter.exclude_ids.length > 0) {
     const valid = filter.exclude_ids.filter(
-      (id) => typeof id === "string" && id.length >= 32 && id.length <= 40
+      (id) => typeof id === "string" && id.length >= 4 && id.length <= 64
     );
     if (valid.length > 0) {
       conditions.push(`j.id NOT IN (${valid.map(() => "?").join(", ")})`);
@@ -1385,6 +1390,14 @@ export async function listJobs(
   if (filter.company) {
     conditions.push("c.slug = ?");
     bindings.push(filter.company);
+  }
+  if (filter.country) {
+    // Require an explicit per-job country match or remote — never fall back to company
+    // HQ country, because a US-HQ'd company (Dell, Coca-Cola) can post jobs in India.
+    // Jobs with NULL job_country are excluded when a country filter is active; the
+    // frontend falls back to unfiltered results if the country-specific pool is too sparse.
+    conditions.push("(j.workplace_type = 'remote' OR j.job_country = ?)");
+    bindings.push(filter.country);
   }
   if (filter.posted_since) {
     conditions.push("COALESCE(j.posted_at, j.first_seen_at) >= ?");
@@ -1768,7 +1781,7 @@ export async function listJobsNear(
   }
   if (exclude_ids && exclude_ids.length > 0) {
     const valid = exclude_ids.filter(
-      (id) => typeof id === "string" && id.length >= 32 && id.length <= 40
+      (id) => typeof id === "string" && id.length >= 4 && id.length <= 64
     );
     if (valid.length > 0) {
       conditions.push(`j.id NOT IN (${valid.map(() => "?").join(", ")})`);

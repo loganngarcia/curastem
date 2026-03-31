@@ -223,6 +223,9 @@ export async function handleListJobs(
   const posted_since = sinceRaw ? parseInt(sinceRaw, 10) || undefined : undefined;
   const salaryMinRaw = params.get("salary_min");
   const salary_min = salaryMinRaw ? parseFloat(salaryMinRaw) || undefined : undefined;
+  // ISO 3166-1 alpha-2 country code — restricts results to jobs in that country (or remote).
+  const countryRaw = params.get("country");
+  const country = countryRaw ? countryRaw.toUpperCase().slice(0, 2) : undefined;
 
   const nearLatRaw = params.get("near_lat");
   const nearLngRaw = params.get("near_lng");
@@ -286,21 +289,38 @@ export async function handleListJobs(
       // Determine offset for paginated vector results
       const vectorOffset = cursor ? (decodeVectorCursor(cursor) ?? 0) : 0;
 
-      // Embed the search query — check KV cache first to avoid a Gemini round-trip
-      // (~200ms) for repeated or popular queries. The embedding itself is stable
-      // for a given query string, so a 5-minute TTL is safe and meaningful.
-      let queryVector: number[];
-      const embedCacheKey = `qembed:${q.toLowerCase().trim()}`;
-      const cachedEmbed = await env.RATE_LIMIT_KV.get(embedCacheKey);
-      if (cachedEmbed) {
-        queryVector = JSON.parse(cachedEmbed) as number[];
-      } else {
-        queryVector = await embedQuery(env.GEMINI_API_KEY, q);
+      // Multi-title support: "software engineer, product manager" → embed each
+      // title independently (parallel + individually KV-cached), then average
+      // into a centroid vector. One Vectorize query covers all titles at once
+      // without adding extra round-trips compared to a single-title search.
+      const titles = q.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 5);
+
+      const getEmbedding = async (title: string): Promise<number[]> => {
+        const key = `qembed:${title.toLowerCase()}`;
+        const cached = await env.RATE_LIMIT_KV.get(key);
+        if (cached) return JSON.parse(cached) as number[];
+        const vec = await embedQuery(env.GEMINI_API_KEY, title);
         ctx.waitUntil(
-          env.RATE_LIMIT_KV.put(embedCacheKey, JSON.stringify(queryVector), {
+          env.RATE_LIMIT_KV.put(key, JSON.stringify(vec), {
             expirationTtl: EMBED_CACHE_TTL_SECONDS,
           })
         );
+        return vec;
+      };
+
+      let queryVector: number[];
+      if (titles.length <= 1) {
+        queryVector = await getEmbedding(titles[0] ?? q.trim());
+      } else {
+        // Embed all titles in parallel — each is cached independently so repeat
+        // visits with the same profile pay no Gemini cost.
+        const vectors = await Promise.all(titles.map(getEmbedding));
+        const dims = vectors[0].length;
+        queryVector = new Array(dims).fill(0) as number[];
+        for (const v of vectors) {
+          for (let i = 0; i < dims; i++) queryVector[i] += v[i];
+        }
+        for (let i = 0; i < dims; i++) queryVector[i] /= vectors.length;
       }
 
       const vectorResults = await env.JOBS_VECTORS.query(queryVector, {
@@ -326,6 +346,7 @@ export async function handleListJobs(
           company,
           posted_since,
           salary_min,
+          country,
         });
 
         // Re-rank: blend similarity position with recency so newer jobs surface first
@@ -391,6 +412,7 @@ export async function handleListJobs(
     company,
     posted_since,
     salary_min,
+    country,
     limit,
     cursor,
   });

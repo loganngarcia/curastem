@@ -7612,25 +7612,50 @@ const ChatInput = React.memo(function ChatInput({
         (value.trim().length > 0 && hasExpandedToTwoRows) ||
         activeAgentChip !== null
 
-    // Clear contenteditable when parent resets value to "" (e.g. after send)
+    // Sync value → contenteditable DOM for two cases:
+    //   1. Parent resets to "" after send / clear.
+    //   2. Parent seeds a non-empty value while the DOM is still empty (e.g. ?q= URL param).
     const prevValueRef = React.useRef(value)
     React.useEffect(() => {
-        if (
-            prevValueRef.current !== "" &&
-            value === "" &&
-            selectedSkills.length === 0 &&
-            editableRef.current
-        ) {
+        if (!editableRef.current) {
+            prevValueRef.current = value
+            return
+        }
+        const prev = prevValueRef.current
+        prevValueRef.current = value
+
+        if (prev !== "" && value === "" && selectedSkills.length === 0) {
+            // After send / clear — reset DOM and history
             editableRef.current.innerHTML = ""
             savedEditableContentRef.current = ""
             contentOriginRef.current = "empty"
-            // Message was sent — clear history so undo doesn't restore sent content
             chatUndoStack.current = []
             chatRedoStack.current = []
-            // Cursor is free to follow the peer again
             manualCursorRef.current = false
+        } else if (prev === "" && value !== "") {
+            // URL hydration (?q=) — only write to DOM if it's genuinely empty.
+            // When the user types the first character, onChange fires before this
+            // effect, so the DOM already has the character — skip to avoid cursor reset.
+            const domText = editableRef.current.innerText ?? ""
+            if (domText.trim() === "") {
+                editableRef.current.innerText = value
+                savedEditableContentRef.current = editableRef.current.innerHTML
+                contentOriginRef.current = "local"
+                // Place caret at end of the seeded text
+                requestAnimationFrame(() => {
+                    if (!editableRef.current) return
+                    const range = document.createRange()
+                    range.selectNodeContents(editableRef.current)
+                    range.collapse(false)
+                    const sel = window.getSelection()
+                    if (sel) {
+                        sel.removeAllRanges()
+                        sel.addRange(range)
+                    }
+                    editableRef.current.focus()
+                })
+            }
         }
-        prevValueRef.current = value
     }, [value, selectedSkills.length])
 
     // Apply incoming peer sync: update contenteditable when content came from peer (not local typing).
@@ -10726,22 +10751,59 @@ function jobDetailInitialState(
     return jobDetailFetchPendingState()
 }
 
+// Full job-title phrases work better with vector search than single words.
+// Kept diverse so random samples cover a wide range of industries.
 const FALLBACK_QUERIES = [
     "software engineer",
-    "sales",
-    "product designer",
-    "operations",
-    "marketing",
+    "frontend developer",
+    "backend engineer",
+    "full stack developer",
+    "data scientist",
     "data analyst",
-    "customer success",
-    "retail",
-    "warehouse",
-    "teacher",
-    "nurse",
-    "driver",
-    "cook",
-    "mechanic",
+    "machine learning engineer",
+    "product manager",
+    "product designer",
+    "UX designer",
+    "graphic designer",
+    "marketing manager",
+    "digital marketing specialist",
+    "content writer",
+    "social media manager",
+    "account executive",
+    "sales representative",
+    "business development manager",
+    "customer success manager",
+    "customer support specialist",
+    "operations manager",
+    "project manager",
+    "program manager",
+    "financial analyst",
     "accountant",
+    "human resources manager",
+    "recruiter",
+    "registered nurse",
+    "medical assistant",
+    "physical therapist",
+    "elementary school teacher",
+    "high school teacher",
+    "administrative assistant",
+    "office manager",
+    "warehouse associate",
+    "logistics coordinator",
+    "supply chain analyst",
+    "delivery driver",
+    "retail store associate",
+    "restaurant manager",
+    "line cook",
+    "electrician",
+    "plumber",
+    "automotive mechanic",
+    "civil engineer",
+    "mechanical engineer",
+    "electrical engineer",
+    "DevOps engineer",
+    "cybersecurity analyst",
+    "cloud architect",
 ]
 
 function jobTimeAgo(iso: string | null): string {
@@ -13611,7 +13673,10 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
 
     const shareJob = async () => {
         setIsShareHovered(false)
-        const url = job.apply_url || ""
+        // Share the Curastem deep link so recipients land on our page, not the ATS.
+        const origin =
+            typeof window !== "undefined" ? window.location.origin : "https://curastem.com"
+        const url = `${origin}/?job=${job.id}`
         const text = `${job.title} at ${job.company.name}`
         if (typeof navigator === "undefined") return
         if (navigator.share) {
@@ -13619,10 +13684,10 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                 await navigator.share({ title: text, url, text })
             } catch (e) {
                 if ((e as Error).name !== "AbortError")
-                    navigator.clipboard?.writeText(url || text)
+                    navigator.clipboard?.writeText(url)
             }
         } else {
-            navigator.clipboard?.writeText(url || text)
+            navigator.clipboard?.writeText(url)
         }
     }
 
@@ -17335,7 +17400,6 @@ const HomepageJobs = React.memo(function HomepageJobs({
     onHomepageDeckJobs?: (jobs: HomepageJob[]) => void
     onOpenMap?: () => void
 }) {
-    const [nextJobs, setNextJobs] = React.useState<HomepageJob[]>([])
     const [nearJobs, setNearJobs] = React.useState<HomepageJob[]>([])
     const [topJobs, setTopJobs] = React.useState<HomepageJob[]>([])
     const [loadingPicks, setLoadingPicks] = React.useState(true)
@@ -17347,20 +17411,20 @@ const HomepageJobs = React.memo(function HomepageJobs({
         lng: number
     } | null>(null)
     // Lazy-load Top Picks: only fire API calls when user scrolls near Section 3.
-    const [topPicksTriggered, setTopPicksTriggered] = React.useState(false)
-    const topPicksSentinelRef = React.useRef<HTMLDivElement>(null)
+    const topPicksTriggered = true
 
     // Geo is IP-based — fetch once per jobsApiUrl, cache in a ref so query changes don't re-hit /geo
     const geoCacheRef = React.useRef<
-        { lat: number; lng: number } | null | "pending"
+        { lat: number; lng: number; country: string | null } | null | "pending"
     >(null)
     const geoCacheUrlRef = React.useRef<string | null>(null)
     const geoResolversRef = React.useRef<
-        Array<(v: { lat: number; lng: number } | null) => void>
+        Array<(v: { lat: number; lng: number; country: string | null } | null) => void>
     >([])
     const getGeo = React.useCallback((): Promise<{
         lat: number
         lng: number
+        country: string | null
     } | null> => {
         if (!jobsApiUrl) return Promise.resolve(null)
         if (geoCacheUrlRef.current !== jobsApiUrl) {
@@ -17383,9 +17447,11 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 ({
                     lat,
                     lng,
+                    country,
                 }: {
                     lat?: number | null
                     lng?: number | null
+                    country?: string | null
                 }) => {
                     const valid =
                         typeof lat === "number" &&
@@ -17397,7 +17463,11 @@ const HomepageJobs = React.memo(function HomepageJobs({
                         lng >= -180 &&
                         lng <= 180
                     const result = valid
-                        ? { lat: lat as number, lng: lng as number }
+                        ? {
+                              lat: lat as number,
+                              lng: lng as number,
+                              country: typeof country === "string" ? country.toUpperCase() : null,
+                          }
                         : null
                     geoCacheRef.current = result
                     geoResolversRef.current.forEach((res) => res(result))
@@ -17413,9 +17483,178 @@ const HomepageJobs = React.memo(function HomepageJobs({
             })
     }, [jobsApiUrl])
 
-    // ── NEAR fetch (runs immediately — needed for Section 1 above the fold) ──────
+    const byNewestJobs = (jobs: HomepageJob[]) =>
+        [...jobs].sort((a, b) => {
+            const ta = a.posted_at ? new Date(a.posted_at).getTime() : 0
+            const tb = b.posted_at ? new Date(b.posted_at).getTime() : 0
+            return tb - ta
+        })
+
+    // No job title — SQL-only. Near + Top picks must not chain: picks used to wait on
+    // exclude_ids after near finished (double latency). Use parallel fetches or one pool.
     React.useEffect(() => {
-        if (!jobsApiUrl) { setLoadingNear(false); return }
+        if (!jobsApiUrl || userQuery.trim()) return
+        let cancelled = false
+        setLoadingNear(true)
+        setLoadingPicks(true)
+
+        const fetchJ = (url: string) => {
+            const ctrl = new AbortController()
+            const id = setTimeout(() => ctrl.abort(), 8000)
+            return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
+        }
+        const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
+        const apiMeta = async (
+            searchParams: URLSearchParams,
+            limit: number,
+            country?: string | null
+        ): Promise<{ data: HomepageJob[]; next_cursor: string | null }> => {
+            const u = new URL(`${jobsApiUrl}/jobs`)
+            searchParams.forEach((v, k) => u.searchParams.set(k, v))
+            u.searchParams.set("limit", String(limit))
+            u.searchParams.set("since", String(since7d))
+            if (country) u.searchParams.set("country", country)
+            return fetchJ(u.toString())
+                .then((r) => (r.ok ? r.json() : { data: [], meta: {} }))
+                .then((j: { data?: unknown; meta?: { next_cursor?: string | null } }) => ({
+                    data: Array.isArray(j.data) ? (j.data as HomepageJob[]) : [],
+                    next_cursor: j.meta?.next_cursor ?? null,
+                }))
+                .catch(() => ({ data: [] as HomepageJob[], next_cursor: null as string | null }))
+        }
+
+        ;(async () => {
+            const coords = await getGeo()
+            if (cancelled) return
+
+            const lat = coords?.lat ?? NaN
+            const lng = coords?.lng ?? NaN
+            const country = coords?.country ?? null
+            const hasCoords =
+                !isNaN(lat) &&
+                !isNaN(lng) &&
+                lat >= -90 &&
+                lat <= 90 &&
+                lng >= -180 &&
+                lng <= 180
+
+            // Top picks from the *same* 50 rows as "near" often only had 3–5 unique
+            // companies left after removing 8 near jobs (many postings per company).
+            // Page 2 (cursor) is a fresh slice — enough diversity for 10 cards.
+            const picksFromGlobal = (
+                page1: HomepageJob[],
+                page2: HomepageJob[],
+                nearIds: Set<string>
+            ): HomepageJob[] => {
+                const merged = byNewestJobs([...page2, ...page1])
+                return dedupeByCompany(
+                    merged.filter((j) => !nearIds.has(j.id)),
+                    10
+                )
+            }
+
+            if (!hasCoords) {
+                setNearbyBasedOnLocation(false)
+                // Filter by country; fall back to global if too sparse.
+                const first = await apiMeta(new URLSearchParams(), 50, country)
+                const firstFallback = first.data.length < 8 && country
+                    ? await apiMeta(new URLSearchParams(), 50)
+                    : null
+                const poolData = firstFallback ? firstFallback.data : first.data
+                const poolCursor = firstFallback ? firstFallback.next_cursor : first.next_cursor
+                const near = dedupeByCompany(byNewestJobs(poolData), 8)
+                if (!cancelled) {
+                    setNearJobs(near)
+                    setLoadingNear(false)
+                }
+                const nearIds = new Set(near.map((j) => j.id))
+                let picks: HomepageJob[] = []
+                if (poolCursor) {
+                    const sp = new URLSearchParams()
+                    sp.set("cursor", poolCursor)
+                    const second = await apiMeta(sp, 50, firstFallback ? null : country)
+                    picks = picksFromGlobal(poolData, second.data, nearIds)
+                }
+                if (picks.length < 5 && poolData.length) {
+                    picks = dedupeByCompany(
+                        byNewestJobs(poolData.filter((j) => !nearIds.has(j.id))),
+                        10
+                    )
+                }
+                if (!cancelled) {
+                    setTopJobs(picks)
+                    setLoadingPicks(false)
+                }
+                return
+            }
+
+            setGeoCoords({ lat, lng })
+            setNearbyBasedOnLocation(true)
+            const nearP = new URLSearchParams({
+                near_lat: String(lat),
+                near_lng: String(lng),
+                radius_km: "75",
+                exclude_remote: "true",
+                since: String(since7d),
+            })
+            // Country filter on global pool; near-radius already scopes by geography.
+            const [primaryRes, globalFirst] = await Promise.all([
+                apiMeta(nearP, 24),
+                apiMeta(new URLSearchParams(), 50, country),
+            ])
+            let near = dedupeByCompany(byNewestJobs(primaryRes.data), 8)
+            if (near.length < 8) {
+                near = dedupeByCompany(
+                    [...byNewestJobs(primaryRes.data), ...byNewestJobs(globalFirst.data)],
+                    8
+                )
+            }
+            if (!cancelled) {
+                setNearJobs(near)
+                setLoadingNear(false)
+            }
+            const nearIds = new Set(near.map((j) => j.id))
+            let picks: HomepageJob[] = []
+            // If country filter yielded too few, retry without it for Top picks
+            const globalFirstEffective = globalFirst.data.length < 5 && country
+                ? await apiMeta(new URLSearchParams(), 50)
+                : globalFirst
+            if (globalFirstEffective.next_cursor) {
+                const sp = new URLSearchParams()
+                sp.set("cursor", globalFirstEffective.next_cursor)
+                const globalSecond = await apiMeta(sp, 50)
+                picks = picksFromGlobal(globalFirstEffective.data, globalSecond.data, nearIds)
+            }
+            if (picks.length < 5) {
+                picks = dedupeByCompany(
+                    byNewestJobs(
+                        globalFirst.data.filter((j) => !nearIds.has(j.id))
+                    ),
+                    10
+                )
+            }
+            if (!cancelled) {
+                setTopJobs(picks)
+                setLoadingPicks(false)
+            }
+        })().catch(() => {
+            if (!cancelled) {
+                setLoadingNear(false)
+                setLoadingPicks(false)
+            }
+        })
+
+        return () => {
+            cancelled = true
+        }
+    }, [jobsApiUrl, userQuery, getGeo])
+
+    // ── NEAR fetch (profile job title — vector path may apply via q=) ─────────────
+    React.useEffect(() => {
+        if (!jobsApiUrl || !userQuery.trim()) {
+            if (!jobsApiUrl) setLoadingNear(false)
+            return
+        }
         setLoadingNear(true)
         setNearbyBasedOnLocation(true)
         let cancelled = false
@@ -17426,32 +17665,74 @@ const HomepageJobs = React.memo(function HomepageJobs({
             return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
         }
         const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
-        const api = (params: string, limit = 6, since = since7d): Promise<HomepageJob[]> =>
-            fetchJ(`${jobsApiUrl}/jobs?${params}&limit=${limit}&since=${since}`)
+        const api = (params: string, limit = 6, since = since7d, country?: string | null): Promise<HomepageJob[]> => {
+            const u = new URL(`${jobsApiUrl}/jobs`)
+            if (params) {
+                const sp = new URLSearchParams(params)
+                sp.forEach((v, k) => u.searchParams.set(k, v))
+            }
+            u.searchParams.set("limit", String(limit))
+            u.searchParams.set("since", String(since))
+            if (country) u.searchParams.set("country", country)
+            return fetchJ(u.toString())
                 .then((r) => (r.ok ? r.json() : { data: [] }))
                 .then(({ data }) => (Array.isArray(data) ? data : []) as HomepageJob[])
                 .catch(() => [] as HomepageJob[])
+        }
+
+        const pickFallbacks = (n: number): string[] => {
+            const used = new Set<number>()
+            const out: string[] = []
+            while (out.length < n && used.size < FALLBACK_QUERIES.length) {
+                const i = Math.floor(Math.random() * FALLBACK_QUERIES.length)
+                if (!used.has(i)) {
+                    used.add(i)
+                    out.push(FALLBACK_QUERIES[i])
+                }
+            }
+            return out
+        }
+
+        const speculativeFetches = pickFallbacks(3).map((q) =>
+            api(`q=${encodeURIComponent(q)}`, 6)
+        )
 
         const nearPromise = getGeo().then(async (coords) => {
             const lat = coords?.lat ?? NaN
             const lng = coords?.lng ?? NaN
+            const country = coords?.country ?? null
             const hasCoords =
-                !isNaN(lat) && !isNaN(lng) &&
-                lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+                !isNaN(lat) &&
+                !isNaN(lng) &&
+                lat >= -90 &&
+                lat <= 90 &&
+                lng >= -180 &&
+                lng <= 180
 
             if (hasCoords) setGeoCoords({ lat, lng })
 
             if (!hasCoords) {
                 setNearbyBasedOnLocation(false)
-                const fbQ = FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
-                const fb = await api(`q=${encodeURIComponent(fbQ)}`, 8)
-                // SQL path already returns newest-first; vector path may not — sort to be safe.
-                const sorted = [...fb].sort((a, b) => {
-                    const ta = a.posted_at ? new Date(a.posted_at).getTime() : 0
-                    const tb = b.posted_at ? new Date(b.posted_at).getTime() : 0
-                    return tb - ta
+                speculativeFetches.forEach((p) => {
+                    p.then((jobs) => {
+                        if (cancelled || jobs.length === 0) return
+                        setNearJobs((prev) => {
+                            const seenIds = new Set(prev.map((j) => j.id))
+                            const seenCos = new Set(
+                                prev.map((j) => j.company.name.trim().toLowerCase())
+                            )
+                            const toAdd = byNewestJobs(jobs).filter(
+                                (j) =>
+                                    !seenIds.has(j.id) &&
+                                    !seenCos.has(j.company.name.trim().toLowerCase())
+                            )
+                            return [...prev, ...toAdd].slice(0, 8)
+                        })
+                        setLoadingNear(false)
+                    })
                 })
-                return dedupeByCompany(sorted, 8)
+                const results = await Promise.all(speculativeFetches)
+                return dedupeByCompany(byNewestJobs(results.flat()), 8)
             }
 
             const buildNearParams = (withQ: boolean) => {
@@ -17466,31 +17747,52 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 return p.toString()
             }
 
-            const byNewest = (jobs: HomepageJob[]) =>
-                [...jobs].sort((a, b) => {
-                    const ta = a.posted_at ? new Date(a.posted_at).getTime() : 0
-                    const tb = b.posted_at ? new Date(b.posted_at).getTime() : 0
-                    return tb - ta
-                })
+            const primary = await api(buildNearParams(true), 14)
+            if (!cancelled) {
+                const initial = dedupeByCompany(byNewestJobs(primary), 8)
+                setNearJobs(initial)
+                setLoadingNear(false)
+                if (initial.length >= 8) return initial
+            }
 
-            const nearResults = await api(buildNearParams(true), 12)
-            const deduped = dedupeByCompany(byNewest(nearResults), 8)
-            if (deduped.length >= 8 || !userQuery.trim()) return deduped
-            const nearResults2 = await api(buildNearParams(false), 12)
-            return dedupeByCompany(byNewest([...nearResults, ...nearResults2]), 8)
+            const specResults = await Promise.all(speculativeFetches)
+            const extra = byNewestJobs(specResults.flat())
+            if (!cancelled) {
+                setNearJobs((prev) => {
+                    const seenIds = new Set(prev.map((j) => j.id))
+                    const seenCos = new Set(
+                        prev.map((j) => j.company.name.trim().toLowerCase())
+                    )
+                    const toAdd = extra.filter(
+                        (j) =>
+                            !seenIds.has(j.id) &&
+                            !seenCos.has(j.company.name.trim().toLowerCase())
+                    )
+                    return [...prev, ...toAdd].slice(0, 8)
+                })
+            }
+            return dedupeByCompany(byNewestJobs([...primary, ...specResults.flat()]), 8)
         })
 
-        const safetyTimer = setTimeout(() => { if (!cancelled) setLoadingNear(false) }, 12000)
-        nearPromise
-            .then((near) => { if (!cancelled) { setNearJobs(near); setLoadingNear(false) } })
-            .catch(() => { if (!cancelled) setLoadingNear(false) })
+        const safetyTimer = setTimeout(() => {
+            if (!cancelled) setLoadingNear(false)
+        }, 12000)
+        nearPromise.catch(() => {
+            if (!cancelled) setLoadingNear(false)
+        })
 
-        return () => { cancelled = true; clearTimeout(safetyTimer) }
+        return () => {
+            cancelled = true
+            clearTimeout(safetyTimer)
+        }
     }, [jobsApiUrl, userQuery, getGeo])
 
-    // ── PICKS fetch (lazy — only fires once the sentinel enters the viewport) ────
+    // ── PICKS fetch (when user has a job title — no job title handled above) ─────
     React.useEffect(() => {
-        if (!jobsApiUrl || !topPicksTriggered) return
+        if (!jobsApiUrl || !topPicksTriggered || !userQuery.trim()) {
+            if (!jobsApiUrl) setLoadingPicks(false)
+            return
+        }
         setLoadingPicks(true)
         let cancelled = false
 
@@ -17501,11 +17803,20 @@ const HomepageJobs = React.memo(function HomepageJobs({
         }
         const since7d  = Math.floor(Date.now() / 1000) - 7  * 24 * 60 * 60
         const since14d = Math.floor(Date.now() / 1000) - 14 * 24 * 60 * 60
-        const api = (params: string, limit = 6, since = since7d): Promise<HomepageJob[]> =>
-            fetchJ(`${jobsApiUrl}/jobs?${params}&limit=${limit}&since=${since}`)
+        const api = (params: string, limit = 6, since = since7d, country?: string | null): Promise<HomepageJob[]> => {
+            const u = new URL(`${jobsApiUrl}/jobs`)
+            if (params) {
+                const sp = new URLSearchParams(params)
+                sp.forEach((v, k) => u.searchParams.set(k, v))
+            }
+            u.searchParams.set("limit", String(limit))
+            u.searchParams.set("since", String(since))
+            if (country) u.searchParams.set("country", country)
+            return fetchJ(u.toString())
                 .then((r) => (r.ok ? r.json() : { data: [] }))
                 .then(({ data }) => (Array.isArray(data) ? data : []) as HomepageJob[])
                 .catch(() => [] as HomepageJob[])
+        }
 
         const fallbackQuery = FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
         let fallbackPromise: Promise<HomepageJob[]> | null = null
@@ -17515,90 +17826,53 @@ const HomepageJobs = React.memo(function HomepageJobs({
             return fallbackPromise
         }
 
-        let picksPromise: Promise<HomepageJob[]>
-        if (userQuery.trim()) {
-            const q = encodeURIComponent(userQuery.trim())
-            picksPromise = (async (): Promise<HomepageJob[]> => {
-                // Step 1: 7-day window, limit=15 for a larger dedup pool.
-                const primary = await api(`q=${q}`, 15)
-                if (cancelled) return []
-                let deduped = dedupeByCompany(primary, 10)
-                if (deduped.length >= 10) {
-                    setNextJobs(deduped); setTopJobs(deduped); setLoadingPicks(false)
-                    return deduped
-                }
-                // Step 2: widen to 14 days, fetch only the still-needed count.
-                const stillNeeded = 10 - deduped.length
-                const wider = await api(`q=${q}`, stillNeeded + 5, since14d)
-                if (cancelled) return deduped
-                deduped = dedupeByCompany([...primary, ...wider], 10)
-                if (deduped.length >= 10) {
-                    setNextJobs(deduped); setTopJobs(deduped); setLoadingPicks(false)
-                    return deduped
-                }
-                // Step 3: last resort — fill remaining from diverse fallback.
-                const fallback = await getFallback()
-                if (cancelled) return deduped
-                const final = dedupeByCompany([...deduped, ...fallback], 10)
-                if (!cancelled) { setNextJobs(final); setTopJobs(final); setLoadingPicks(false) }
-                return final
-            })()
-        } else {
-            // No job title — 5 distinct random categories, mobile shows all 10, desktop 3.
-            const usedIdx = new Set<number>()
-            const diverseQueries: string[] = []
-            while (diverseQueries.length < 5) {
-                const idx = Math.floor(Math.random() * FALLBACK_QUERIES.length)
-                if (!usedIdx.has(idx)) { usedIdx.add(idx); diverseQueries.push(FALLBACK_QUERIES[idx]) }
+        const q = encodeURIComponent(userQuery.trim())
+        const picksPromise = (async (): Promise<HomepageJob[]> => {
+            // Resolve country in parallel with the first fetch — geo is cached after the near effect fires.
+            const [primary, geoResult] = await Promise.all([
+                api(`q=${q}`, 24),
+                getGeo(),
+            ])
+            if (cancelled) return []
+            const country = geoResult?.country ?? null
+            let deduped = dedupeByCompany(primary, 10)
+            // Drop skeletons as soon as we have something to show (vector path can lag).
+            if (!cancelled && deduped.length > 0) {
+                setTopJobs(deduped)
+                if (deduped.length >= 3) setLoadingPicks(false)
             }
-            picksPromise = Promise.all(
-                diverseQueries.map((q) =>
-                    api(`q=${encodeURIComponent(q)}`, 4).catch(() => [] as HomepageJob[])
-                )
-            ).then((batches) => {
-                if (cancelled) return []
-                const seen = new Set<string>()
-                const picks: HomepageJob[] = []
-                for (const batch of batches) {
-                    for (const job of batch) {
-                        const co = job.company.name.trim().toLowerCase()
-                        if (!seen.has(co)) { seen.add(co); picks.push(job); break }
-                    }
-                }
-                const extras = dedupeByCompany(batches.flat(), 10).filter(
-                    (j) => !picks.some((p) => p.id === j.id)
-                )
-                const allPicks = dedupeByCompany([...picks, ...extras], 10)
-                setNextJobs(allPicks); setTopJobs(allPicks); setLoadingPicks(false)
-                return allPicks
-            })
-        }
+            if (deduped.length >= 10) {
+                if (!cancelled) setLoadingPicks(false)
+                return deduped
+            }
+            // Step 2: widen to 14 days with country filter.
+            const stillNeeded = 10 - deduped.length
+            const wider = await api(`q=${q}`, stillNeeded + 8, since14d, country || undefined)
+            if (cancelled) return deduped
+            deduped = dedupeByCompany([...primary, ...wider], 10)
+            if (!cancelled) {
+                setTopJobs(deduped)
+                setLoadingPicks(false)
+            }
+            if (deduped.length >= 10) return deduped
+            // Step 3: last resort — fill remaining from diverse fallback.
+            const fallback = await getFallback()
+            if (cancelled) return deduped
+            const final = dedupeByCompany([...deduped, ...fallback], 10)
+            if (!cancelled) {
+                setTopJobs(final)
+                setLoadingPicks(false)
+            }
+            return final
+        })()
 
         const safetyTimer = setTimeout(() => { if (!cancelled) setLoadingPicks(false) }, 12000)
         picksPromise.catch(() => { if (!cancelled) setLoadingPicks(false) })
 
         return () => { cancelled = true; clearTimeout(safetyTimer) }
-    }, [jobsApiUrl, userQuery, topPicksTriggered])
-
-    // ── IO: trigger picks fetch when user scrolls near Section 3 ─────────────────
-    React.useEffect(() => {
-        if (topPicksTriggered) return
-        const el = topPicksSentinelRef.current
-        if (!el || typeof IntersectionObserver === "undefined") {
-            // Fallback for environments that don't support IO (SSR, old browsers).
-            setTopPicksTriggered(true)
-            return
-        }
-        const io = new IntersectionObserver(
-            ([entry]) => { if (entry.isIntersecting) setTopPicksTriggered(true) },
-            { rootMargin: "300px 0px" } // start loading 300px before entering viewport
-        )
-        io.observe(el)
-        return () => io.disconnect()
-    }, [topPicksTriggered])
+    }, [jobsApiUrl, userQuery])
 
     React.useEffect(() => {
-        // nearJobs now covers both local sections; nextJobs is internal exclusion state only.
         onHomepageDeckJobs?.([...nearJobs, ...topJobs])
     }, [nearJobs, topJobs, onHomepageDeckJobs])
 
@@ -17972,9 +18246,6 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     </div>
                 )}
             </div>
-
-            {/* Sentinel — IO fires picks fetch when user scrolls within 300px of here */}
-            <div ref={topPicksSentinelRef} style={{ height: 0 }} aria-hidden />
 
             {/* ── SECTION 3: TOP PICKS FOR YOU ── */}
             <div
@@ -18363,8 +18634,8 @@ const WelcomeOverlay = ({
                         wordWrap: "break-word",
                     }}
                 >
-                    Find thousands of jobs or create AI resumes, practice for
-                    interviews, and get help with school.
+                    Search thousands of jobs and create AI resumes, practice for
+                    interviews, or get help with school.
                 </span>
                 {isMobile ? " " : null}
                 <span
@@ -23438,6 +23709,8 @@ Extract this structure:
 
     // --- STATE: AGENT SIDEBAR — MAP ---
     const [isMapOpen, setIsMapOpen] = React.useState(false)
+    // Company slug from ?company= URL param — seeds the map search box on open.
+    const [mapUrlCompany, setMapUrlCompany] = React.useState<string | null>(null)
 
     // True when any agent sidebar panel is open (docs, whiteboard, apps, jobs, map)
     const isAgentOpen =
@@ -23498,11 +23771,23 @@ Extract this structure:
         setResumeUsedKeywords([])
     }, [selectedJob?.id])
 
+    // Stores the original document title so we can restore it after closing a job panel.
+    const originalDocTitleRef = React.useRef<string>("")
+
     const closeJobDetail = React.useCallback(() => {
         setIsJobOpen(false)
         dataConnectionsRef.current.forEach((conn) => {
             if (conn.open) conn.send({ type: "job-close" })
         })
+        // Remove ?job= from the URL and restore the original page title
+        if (typeof window !== "undefined") {
+            const url = new URL(window.location.href)
+            url.searchParams.delete("job")
+            window.history.replaceState(null, "", url.toString())
+        }
+        if (originalDocTitleRef.current) {
+            document.title = originalDocTitleRef.current
+        }
         // Refocus map search bar on desktop when closing a job detail opened from the map
         requestAnimationFrame(() => mapSearchFocusRef.current?.())
     }, [])
@@ -25849,6 +26134,18 @@ Do not include markdown formatting or explanations.`
             setIsDocOpen(false)
             setIsWhiteboardOpen(false)
             setIsAppOpen(false)
+            // Push ?job=<id> into the URL — preserves any existing ?map or ?settings params
+            // so shared links like /?map&job=<id> open both panels correctly.
+            if (typeof window !== "undefined") {
+                if (!originalDocTitleRef.current)
+                    originalDocTitleRef.current = document.title
+                const url = new URL(window.location.href)
+                if (url.searchParams.get("job") !== job.id) {
+                    url.searchParams.set("job", job.id)
+                    window.history.pushState({ job: job.id }, "", url.toString())
+                }
+                document.title = `${job.title} at ${job.company.name} | Curastem`
+            }
             // Sync the open job panel to all connected peers
             dataConnectionsRef.current.forEach((conn) => {
                 if (conn.open) conn.send({ type: "job-open", payload: job })
@@ -25870,6 +26167,62 @@ Do not include markdown formatting or explanations.`
         window.addEventListener("keydown", onKey)
         return () => window.removeEventListener("keydown", onKey)
     }, [isJobOpen, jobCycleDeck.length, cycleJobDetail])
+
+    // Hydrate job panel from ?job=<id> on first mount so shared / bookmarked
+    // links open the correct panel automatically without any manual page setup.
+    const urlJobHydratedRef = React.useRef(false)
+    React.useEffect(() => {
+        if (urlJobHydratedRef.current) return
+        urlJobHydratedRef.current = true
+        if (typeof window === "undefined") return
+        const jobId = new URLSearchParams(window.location.search).get("job")
+        if (!jobId) return
+        fetch(`${jobsApiUrl}/jobs/${jobId}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => {
+                if (!d) return
+                openJobDetail({
+                    id: jobId,
+                    title: d.title ?? "",
+                    company: {
+                        name: d.company?.name ?? "",
+                        logo_url: d.company?.logo_url ?? null,
+                        description: d.company?.description ?? null,
+                        website_url: d.company?.website_url ?? null,
+                        linkedin_url: d.company?.linkedin_url ?? null,
+                        x_url: d.company?.x_url ?? null,
+                        instagram_url: d.company?.instagram_url ?? null,
+                        tiktok_url: d.company?.tiktok_url ?? null,
+                        github_url: d.company?.github_url ?? null,
+                        youtube_url: d.company?.youtube_url ?? null,
+                        glassdoor_url: d.company?.glassdoor_url ?? null,
+                        crunchbase_url: d.company?.crunchbase_url ?? null,
+                        huggingface_url: d.company?.huggingface_url ?? null,
+                        facebook_url: d.company?.facebook_url ?? null,
+                        employee_count_range:
+                            d.company?.employee_count_range ?? null,
+                        founded_year: d.company?.founded_year ?? null,
+                        headquarters: d.company?.headquarters ?? null,
+                        industry: d.company?.industry ?? null,
+                        company_type: d.company?.company_type ?? null,
+                        total_funding_usd: d.company?.total_funding_usd ?? null,
+                    },
+                    posted_at: d.posted_at ?? null,
+                    apply_url: d.apply_url ?? "",
+                    locations: d.locations ?? null,
+                    employment_type: d.employment_type ?? null,
+                    workplace_type: d.workplace_type ?? null,
+                    salary: d.salary ?? null,
+                    job_summary: d.job_summary ?? null,
+                    seniority_level: d.seniority_level ?? null,
+                    location_lat: d.location_lat ?? null,
+                    location_lng: d.location_lng ?? null,
+                    visa_sponsorship: d.visa_sponsorship ?? null,
+                })
+            })
+            .catch(() => {})
+    }, [openJobDetail])
+
 
     React.useEffect(() => {
         if (typeof window !== "undefined") {
@@ -27618,6 +27971,114 @@ Do not include markdown formatting or explanations.`
             setIsJobOpen(false)
         }
     }, [isMapOpen, isDocOpen, isWhiteboardOpen, isAppOpen])
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // URL-based deep linking — all query-param based so Framer serves every link
+    // from the root page without any redirect rules.
+    //
+    //   ?map               → opens map panel
+    //   ?map&job=<id>      → opens map + job detail
+    //   ?map&company=<s>   → opens map pre-seeded with company search
+    //   ?settings          → opens You / settings sheet
+    //   ?job=<id>          → opens job detail (no map)
+    //   ?q=<text>          → prefills chat input (user must press Send)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Mount: read params once and open the right panels / prefill input.
+    // ?job= hydration is handled by the dedicated urlJobHydratedRef effect above.
+    const urlPanelHydratedRef = React.useRef(false)
+    React.useEffect(() => {
+        if (urlPanelHydratedRef.current) return
+        urlPanelHydratedRef.current = true
+        if (typeof window === "undefined") return
+
+        const params = new URLSearchParams(window.location.search)
+
+        // ?map — open the map, optionally seeded with a company search
+        if (params.has("map")) {
+            setIsMapOpen(true)
+            const company = params.get("company")
+            if (company) setMapUrlCompany(company)
+        }
+
+        // ?settings — open the You / profile settings sheet
+        if (params.has("settings")) setShowYouSettings(true)
+
+        // ?q= — prefill the chat input bar (user still has to press Send)
+        const q = params.get("q")
+        if (q) setInputText(decodeURIComponent(q).replace(/-/g, " "))
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Sync ?map into the URL whenever the map panel opens or closes.
+    // Skips the initial render so we don't immediately overwrite a shared link.
+    const mapOpenPrevRef = React.useRef<boolean | null>(null)
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        if (mapOpenPrevRef.current === null) {
+            mapOpenPrevRef.current = isMapOpen
+            return
+        }
+        mapOpenPrevRef.current = isMapOpen
+        const url = new URL(window.location.href)
+        if (isMapOpen) {
+            if (!url.searchParams.has("map")) {
+                url.searchParams.set("map", "")
+                // Rewrite to bare ?map (no =) for cleanliness
+                const clean = url.toString().replace(/map=(&|$)/, "map$1")
+                window.history.pushState({ panel: "map" }, "", clean)
+            }
+        } else {
+            if (url.searchParams.has("map")) {
+                url.searchParams.delete("map")
+                url.searchParams.delete("company")
+                // keep ?job= — closeJobDetail clears it when the job panel closes
+                window.history.replaceState(null, "", url.toString() || "/")
+            }
+        }
+    }, [isMapOpen])
+
+    // Sync ?settings into the URL whenever the settings sheet opens or closes.
+    const settingsPrevRef = React.useRef<boolean | null>(null)
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        if (settingsPrevRef.current === null) {
+            settingsPrevRef.current = showYouSettings
+            return
+        }
+        settingsPrevRef.current = showYouSettings
+        const url = new URL(window.location.href)
+        if (showYouSettings) {
+            if (!url.searchParams.has("settings")) {
+                url.searchParams.set("settings", "")
+                const clean = url.toString().replace(/settings=(&|$)/, "settings$1")
+                window.history.pushState({ panel: "settings" }, "", clean)
+            }
+        } else {
+            if (url.searchParams.has("settings")) {
+                url.searchParams.delete("settings")
+                window.history.replaceState(null, "", url.toString() || "/")
+            }
+        }
+    }, [showYouSettings])
+
+    // Unified popstate: close map / settings / job when the user presses Back.
+    const isMapOpenRef = React.useRef(isMapOpen)
+    isMapOpenRef.current = isMapOpen
+    const showYouSettingsRef = React.useRef(showYouSettings)
+    showYouSettingsRef.current = showYouSettings
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        const onPop = () => {
+            const params = new URLSearchParams(window.location.search)
+            if (!params.has("map") && isMapOpenRef.current) setIsMapOpen(false)
+            if (!params.has("settings") && showYouSettingsRef.current)
+                setShowYouSettings(false)
+            if (!params.get("job")) closeJobDetail()
+        }
+        window.addEventListener("popstate", onPop)
+        return () => window.removeEventListener("popstate", onPop)
+    }, [closeJobDetail])
 
     // Pull-to-dismiss for the mobile tool overlay (drives ModalSheet's dragY).
     const overlayDragY = useMotionValue(0)
@@ -33040,6 +33501,15 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             setSelectedSkills([])
             if (fileInputRef.current) fileInputRef.current.value = ""
 
+            // Remove ?q= from the URL once the message is sent
+            if (typeof window !== "undefined") {
+                const url = new URL(window.location.href)
+                if (url.searchParams.has("q")) {
+                    url.searchParams.delete("q")
+                    window.history.replaceState(null, "", url.toString() || "/")
+                }
+            }
+
             // Send to Peer
             if (dataConnectionsRef.current.size > 0) {
                 // Filter attachments for P2P limit (3MB)
@@ -34286,7 +34756,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             feedWidth={
                                 isMobileLayout ? undefined : mapFeedWidth
                             }
-                            defaultSearch={youWork}
+                            defaultSearch={mapUrlCompany ?? youWork}
                             searchFocusRef={
                                 isMobileLayout ? undefined : mapSearchFocusRef
                             }
