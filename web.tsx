@@ -10689,14 +10689,14 @@ function jobDetailInitialState(
 
 const FALLBACK_QUERIES = [
     "software engineer",
-    "sales associate",
+    "sales",
     "product designer",
-    "operations manager",
-    "marketing specialist",
+    "operations",
+    "marketing",
     "data analyst",
     "customer success",
-    "retail associate",
-    "warehouse associate",
+    "retail",
+    "warehouse",
     "teacher",
     "nurse",
     "driver",
@@ -13945,6 +13945,10 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     React.useEffect(() => {
         mobileFeedExpandedRef.current = mobileFeedExpanded
     }, [mobileFeedExpanded])
+    // Tracks whether the current expansion was triggered by search bar focus — so blur can undo it.
+    const mobileFeedExpandedBySearchRef = React.useRef(false)
+    // Set before a programmatic .focus() that should NOT trigger expansion (e.g. clear button).
+    const skipSearchFocusExpandRef = React.useRef(false)
 
     // Recalculate expanded height on viewport resize (e.g. rotation, browser chrome show/hide).
     // rAF-throttled so it runs at most once per paint — no jank.
@@ -14068,6 +14072,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 if (dragging) {
                     const currentY = mobileFeedDragY.get()
                     const max = mobileFeedMaxSlide.current
+                    // Drag-initiated expand/collapse clears the search-triggered flag
+                    mobileFeedExpandedBySearchRef.current = false
                     snapMobileFeed(currentY < max * 0.6)
                 }
                 cleanup()
@@ -15622,8 +15628,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         setFilterTypeOpen(false)
                                         setFilterDropdownPos(null)
                                     }}
+                                    onWheel={isMobile && !mobileFeedExpanded ? () => snapMobileFeed(true) : undefined}
+                                    onPointerDown={isMobile && !mobileFeedExpanded ? (e) => {
+                                        if ((e.target as HTMLElement).closest("input,button,a")) return
+                                        handleMobileFeedDragStart(e)
+                                    } : undefined}
+                                    onTouchStart={isMobile && !mobileFeedExpanded ? (e) => {
+                                        if ((e.target as HTMLElement).closest("input,button,a")) return
+                                        handleMobileFeedDragStart(e)
+                                    } : undefined}
                                     style={{
-                                        overflowY: "auto",
+                                        overflowY: isMobile && !mobileFeedExpanded ? "hidden" : "auto",
                                         overflowX: "hidden",
                                         padding: isMobile
                                             ? "0 12px 12px"
@@ -16463,6 +16478,22 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                                     .value
                                                                             )
                                                                         }
+                                                                        onFocus={() => {
+                                                                            if (skipSearchFocusExpandRef.current) {
+                                                                                skipSearchFocusExpandRef.current = false
+                                                                                return
+                                                                            }
+                                                                            if (!mobileFeedExpandedRef.current) {
+                                                                                mobileFeedExpandedBySearchRef.current = true
+                                                                                snapMobileFeed(true)
+                                                                            }
+                                                                        }}
+                                                                        onBlur={() => {
+                                                                            if (mobileFeedExpandedBySearchRef.current) {
+                                                                                mobileFeedExpandedBySearchRef.current = false
+                                                                                snapMobileFeed(false)
+                                                                            }
+                                                                        }}
                                                                         placeholder={
                                                                             selectedChipEntry
                                                                                 ? `Search jobs at ${selectedChipEntry.company_name}`
@@ -16503,6 +16534,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                                 setMapSearchQuery(
                                                                                     ""
                                                                                 )
+                                                                                skipSearchFocusExpandRef.current = true
                                                                                 requestAnimationFrame(
                                                                                     () =>
                                                                                         mapSearchInputRef.current?.focus()

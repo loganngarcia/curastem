@@ -64,6 +64,22 @@ import {
 import { logger } from "../utils/logger.ts";
 
 /**
+ * Maximum wall-clock time for a single source's fetch() call.
+ *
+ * Retail chains and other large sources (Dick's, Nordstrom, Macy's, etc.) can
+ * have tens of thousands of jobs and paginate for many minutes on their first
+ * run. Without a cap, a single slow source kills the entire cron — the Worker
+ * hits Cloudflare's 15-minute scheduled-handler limit and is forcefully
+ * terminated before the catch block can write to KV or update last_fetched_at
+ * for any source, causing an infinite deadlock.
+ *
+ * 90 seconds: comfortably covers the ~15s Workday sources we already handle
+ * and the ~46s a16z first-run. Large-company first-run jobs are ingested
+ * incrementally over multiple cron cycles rather than all at once.
+ */
+const SOURCE_FETCH_TIMEOUT_MS = 90_000;
+
+/**
  * Process a single ingestion source.
  * Returns an IngestionResult with counts and timing for observability.
  *
@@ -102,7 +118,13 @@ async function processSource(
 
   let rawJobs: Awaited<ReturnType<typeof fetcher.fetch>>;
   try {
-    rawJobs = await fetcher.fetch(source, env);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`fetch timed out after ${SOURCE_FETCH_TIMEOUT_MS}ms`)),
+        SOURCE_FETCH_TIMEOUT_MS
+      )
+    );
+    rawJobs = await Promise.race([fetcher.fetch(source, env), timeoutPromise]);
     result.fetched = rawJobs.length;
   } catch (err) {
     result.error = String(err);
