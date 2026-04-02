@@ -30,11 +30,25 @@
  *   https://walmart.wd5.myworkdayjobs.com/wday/cxs/walmart/WalmartExternalCareers/jobs
  *
  * ── Cookie preflight ──────────────────────────────────────────────────────
- * Workday tenants sit behind Cloudflare's bot protection. Requests from
- * Cloudflare Workers' datacenter IPs are blocked with HTTP 400 unless a
- * valid PLAY_SESSION cookie is present. We perform a lightweight GET of the
- * job board HTML page first, extract the session cookie from Set-Cookie, and
- * attach it to all subsequent POST requests for that source.
+ * Workday tenants sit behind Cloudflare's bot protection. A valid
+ * PLAY_SESSION cookie (and sometimes wd-browser-id) is required. We perform
+ * a lightweight GET of the job board HTML page first, collect all Set-Cookie
+ * headers, and attach them to every subsequent request for that source.
+ *
+ * ── Two-phase ingestion ───────────────────────────────────────────────────
+ * Large Workday tenants (Petco 2 k, Morgan Stanley 1.5 k at 1.3 s/page)
+ * would exhaust the 90 s Worker timeout if list pagination and per-job HTML
+ * fetches were interleaved in a single loop. We split the work:
+ *
+ *   Phase 1 — collect stubs: paginate the CXS list API, building an array of
+ *             job stubs with no per-job network calls. Capped at MAX_TOTAL_JOBS
+ *             so even slow tenants finish Phase 1 within ~45 s.
+ *
+ *   Phase 2 — enrich descriptions: batch-fetch the canonical HTML detail page
+ *             for the first MAX_DETAIL_JOBS stubs using DETAIL_FETCH_CONCURRENCY
+ *             parallel requests. Each page embeds schema.org JobPosting JSON-LD
+ *             with a full `description`. Stubs beyond the cap get
+ *             description_raw = null (AI enrichment fills them in later).
  *
  * ── postedOn format ───────────────────────────────────────────────────────
  * The API returns relative strings ("Posted Today", "Posted 3 Days Ago",
@@ -42,12 +56,6 @@
  * seconds at ingest time using the current date as the reference point.
  * Jobs older than 30 days are stored as (now - 30 days) as a conservative
  * lower bound.
- *
- * ── Full job description ─────────────────────────────────────────────────
- * The CXS list response does not include posting body text; `bulletFields` is
- * often just a requisition id. Each public job detail page embeds schema.org
- * `JobPosting` JSON-LD with a full `description` (HTML or plain). We GET the
- * canonical job URL (same cookie session as the API) and parse that block.
  */
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
@@ -75,13 +83,25 @@ interface WorkdayJobsResponse {
 
 // Workday tenants enforce a hard limit of 20 results per page; requesting more returns HTTP 400.
 const PAGE_SIZE = 20;
-// Safety cap: prevents runaway pagination on very large employers (e.g. Walmart, Target).
-const MAX_OFFSET = 5000;
 
-/** Parallel GETs for job detail pages (JSON-LD extraction). */
-const DETAIL_FETCH_CONCURRENCY = 8;
+/** Parallel detail-page GETs per batch in Phase 2. */
+const DETAIL_FETCH_CONCURRENCY = 16;
 
-const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+/**
+ * Maximum job stubs collected from the list API (Phase 1).
+ * Slow tenants can take ~1.3 s per list call; 30 pages × 20 = 600 stubs
+ * costs at most ~39 s, leaving ample budget for Phase 2.
+ */
+const MAX_TOTAL_JOBS = 600;
+
+/**
+ * Maximum per-job HTML detail fetches in Phase 2.
+ * ceil(400 / 16) × ~0.6 s ≈ 15 s. Jobs beyond this cap get
+ * description_raw = null for AI enrichment to fill in later.
+ */
+const MAX_DETAIL_JOBS = 400;
+
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cookie preflight
@@ -91,16 +111,23 @@ const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function fetchSessionCookie(origin: string, tenant: string): Promise<string> {
-  const pageUrl = `${origin}/en-US/${tenant}`;
+  // Try /{tenant} first (shorter, works on all Workday instances); fall back
+  // to /en-US/{tenant} which some tenants redirect to.
+  const pageUrl = `${origin}/${tenant}`;
   const res = await fetch(pageUrl, {
+    redirect: "follow",
     headers: {
       "User-Agent": BROWSER_UA,
       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US",
+      "Accept-Language": "en-US,en;q=0.9",
+      "sec-fetch-site": "none",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-dest": "document",
     },
   });
-  // Workday sends multiple Set-Cookie headers (PLAY_SESSION, CF, etc.). `get("set-cookie")`
-  // only returns the first; missing cookies breaks WAF/session for some tenants.
+  // Collect ALL Set-Cookie headers (PLAY_SESSION + wd-browser-id).
+  // `get("set-cookie")` only returns the first; some tenants (Nordstrom, BofA)
+  // require both cookies for the WAF to accept subsequent requests.
   const h = res.headers as Headers & { getSetCookie?: () => string[] };
   const lines =
     typeof h.getSetCookie === "function"
@@ -217,56 +244,57 @@ export const workdayFetcher: JobSource = {
     const tenant = pathParts[pathParts.length - 2] ?? "jobs";
     const origin = url.origin;
 
-    // Preflight: get session cookie so Workday's WAF accepts our datacenter IP
     const cookieHeader = await fetchSessionCookie(origin, tenant);
 
-    const commonHeaders: Record<string, string> = {
+    const listHeaders: Record<string, string> = {
       "User-Agent": BROWSER_UA,
       "Content-Type": "application/json",
       "Accept": "application/json",
-      "Accept-Language": "en-US",
+      "Accept-Language": "en-US,en;q=0.9",
       "Origin": origin,
       "Referer": `${origin}/en-US/${tenant}`,
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-dest": "empty",
     };
-    if (cookieHeader) commonHeaders["Cookie"] = cookieHeader;
+    if (cookieHeader) listHeaders["Cookie"] = cookieHeader;
 
-    const jobs: NormalizedJob[] = [];
-    let offset = 0;
-    let total = Infinity;
     const nowSec = Math.floor(Date.now() / 1000);
 
-    while (offset < total && offset < MAX_OFFSET) {
+    // ── Phase 1: collect stubs (list API only, no per-job fetches) ────────────
+    type Stub = {
+      posting: WorkdayJobListing;
+      titleText: string;
+      locationRaw: string | null;
+      applyUrl: string;
+      externalId: string;
+    };
+    const stubs: Stub[] = [];
+    let offset = 0;
+    let total = Infinity;
+
+    while (offset < total && stubs.length < MAX_TOTAL_JOBS) {
       const res = await fetch(source.base_url, {
         method: "POST",
-        headers: commonHeaders,
+        headers: listHeaders,
         body: JSON.stringify({ appliedFacets: {}, limit: PAGE_SIZE, offset, searchText: "" }),
       });
 
       if (!res.ok) {
-        throw new Error(`Workday API error ${res.status} for ${source.company_handle}`);
+        throw new Error(`Workday list API ${res.status} for ${source.company_handle}`);
       }
 
       const data = (await res.json()) as WorkdayJobsResponse;
       const batch = data.jobPostings ?? [];
       if (batch.length === 0) break;
 
-      // `total` is sometimes wrong on pages after the first (0 or omitted) even when more jobs exist.
+      // `total` is unreliable on pages after the first (some tenants return 0).
       if (typeof data.total === "number") {
         if (data.total > 0) total = data.total;
         else if (offset === 0) total = 0;
-        // else: keep prior `total` (e.g. Petco page 2+ returns total: 0)
       } else if (offset === 0) {
         total = Infinity;
       }
-
-      type Pending = {
-        posting: WorkdayJobListing;
-        titleText: string;
-        locationRaw: string | null;
-        applyUrl: string;
-        externalId: string;
-      };
-      const pending: Pending[] = [];
 
       for (const posting of batch) {
         try {
@@ -275,59 +303,69 @@ export const workdayFetcher: JobSource = {
 
           const locationRaw = posting.locationsText ?? null;
 
-          // Use jobPostingURL when present and absolute; otherwise build from externalPath.
-          // externalPath is relative (e.g. /job/Location/Title_ID) and requires the
-          // /en-US/{tenant} prefix — without it Workday redirects to the maintenance page.
+          // externalPath is relative (/job/Location/Title_ID); it needs the /en-US/{tenant}
+          // prefix — omitting it redirects to the Workday maintenance page.
           const applyUrl = posting.jobPostingURL?.startsWith("http")
             ? posting.jobPostingURL
             : `${origin}/en-US/${tenant}${posting.externalPath ?? ""}`;
 
-          // id is null on most modern tenants; externalPath is the stable unique key
+          // id is null on most modern tenants; externalPath is the stable unique key.
           const externalId = (posting.id ?? posting.externalPath ?? titleText) as string;
 
-          pending.push({ posting, titleText, locationRaw, applyUrl, externalId });
+          stubs.push({ posting, titleText, locationRaw, applyUrl, externalId });
         } catch {
           continue;
         }
       }
 
-      const descriptions = await mapWithConcurrency(pending, DETAIL_FETCH_CONCURRENCY, (p) =>
-        fetchWorkdayJobDescriptionFromDetailPage(p.applyUrl, cookieHeader, origin, tenant)
-      );
+      if (batch.length < PAGE_SIZE) break;
+      offset += batch.length;
+    }
 
-      for (let i = 0; i < pending.length; i++) {
-        const { posting, titleText, locationRaw, applyUrl, externalId } = pending[i];
-        try {
-          const descriptionFromLd = descriptions[i];
-          const fallbackBullets = posting.bulletFields?.join("\n").trim() || null;
-          // Prefer JSON-LD body. List `bulletFields` is often a bare requisition id (no spaces);
-          // only use bullets as a fallback when they look like real teaser copy.
-          const descriptionRaw =
-            descriptionFromLd ??
-            (fallbackBullets && /\s/.test(fallbackBullets) ? fallbackBullets : null);
+    // ── Phase 2: enrich descriptions (capped batch of detail page GETs) ──────
+    // The CXS list response has no job body text; `bulletFields` is a bare req ID.
+    // Each canonical detail page embeds schema.org JobPosting JSON-LD with the
+    // full description. We cap detail fetches so Phase 2 stays well under 45 s.
+    const toEnrich = stubs.slice(0, MAX_DETAIL_JOBS);
+    const descriptions = await mapWithConcurrency(
+      toEnrich,
+      DETAIL_FETCH_CONCURRENCY,
+      (s) => fetchWorkdayJobDescriptionFromDetailPage(s.applyUrl, cookieHeader, origin, tenant)
+    );
 
-          jobs.push({
-            external_id: String(externalId),
-            title: titleText,
-            location: normalizeLocation(locationRaw),
-            employment_type: normalizeEmploymentType(posting.timeType ?? null),
-            workplace_type: normalizeWorkplaceType(null, locationRaw),
-            apply_url: applyUrl,
-            source_url: applyUrl,
-            description_raw: descriptionRaw,
-            salary_min: null,
-            salary_max: null,
-            salary_currency: null,
-            salary_period: null,
-            posted_at: parseWorkdayPostedOn(posting.postedOn, nowSec),
-            company_name: source.name.replace(/\s*\(Workday\)\s*/i, "").trim(),
-          });
-        } catch {
-          continue;
-        }
+    // ── Build normalised job list ──────────────────────────────────────────────
+    const jobs: NormalizedJob[] = [];
+    for (let i = 0; i < stubs.length; i++) {
+      const { posting, titleText, locationRaw, applyUrl, externalId } = stubs[i];
+      try {
+        const descriptionFromLd = i < MAX_DETAIL_JOBS ? descriptions[i] : null;
+        const fallbackBullets = posting.bulletFields?.join("\n").trim() || null;
+        // Prefer JSON-LD body. bulletFields is usually a bare req ID (no spaces).
+        const descriptionRaw =
+          descriptionFromLd ??
+          (fallbackBullets && /\s/.test(fallbackBullets) ? fallbackBullets : null);
+
+        jobs.push({
+          external_id: String(externalId),
+          title: titleText,
+          location: normalizeLocation(locationRaw),
+          employment_type: normalizeEmploymentType(posting.timeType ?? null),
+          workplace_type: normalizeWorkplaceType(null, locationRaw),
+          apply_url: applyUrl,
+          source_url: applyUrl,
+          description_raw: descriptionRaw,
+          salary_min: null,
+          salary_max: null,
+          salary_currency: null,
+          salary_period: null,
+          posted_at: parseWorkdayPostedOn(posting.postedOn, nowSec),
+          company_name: source.name.replace(/\s*\(Workday\)\s*/i, "").trim(),
+          company_logo_url: null,
+          company_website_url: null,
+        });
+      } catch {
+        continue;
       }
-
-      offset += PAGE_SIZE;
     }
 
     return jobs;

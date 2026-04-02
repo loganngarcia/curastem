@@ -42,6 +42,9 @@ interface JibeJobData {
   state?: string | null;
   country?: string | null;
   location_name?: string | null;
+  /** H-E-B and some tenants use full_location / short_location instead of city/state. */
+  full_location?: string | null;
+  short_location?: string | null;
   employment_type?: string | null;
   posted_date?: string | null;
   /** Often a string; some tenants send a number — never call `.trim()` blindly. */
@@ -68,6 +71,11 @@ function buildLocation(d: JibeJobData): string | null {
   if (city && state) return `${city}, ${state}`;
   if (locName) return locName;
   if (city) return city;
+  // H-E-B and some tenants expose full_location / short_location instead of city/state
+  const fullLoc = (d.full_location ?? "").trim();
+  const shortLoc = (d.short_location ?? "").trim();
+  if (fullLoc) return fullLoc;
+  if (shortLoc) return shortLoc;
   return null;
 }
 

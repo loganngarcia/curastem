@@ -711,8 +711,9 @@ export async function upsertJob(
  * limit for sources with hundreds of jobs. db.batch() counts as exactly ONE
  * subrequest regardless of how many statements are included.
  */
-// Each "existing job" check statement is ~80 bytes; 1000 per chunk ≈ 80KB.
-const EXISTING_CHUNK = 1000;
+// Each SELECT uses 2 bound variables. D1 may enforce SQLite's 999-variable cap across a whole
+// db.batch(); keep chunk small enough that (chunk × 2) ≤ 999.
+const EXISTING_CHUNK = 400;
 
 export async function batchGetExistingJobs(
   db: D1Database,
@@ -753,8 +754,10 @@ export async function batchGetExistingJobs(
  */
 // SQLite allows at most 999 bound parameters per statement.
 // IN() queries also bind one extra `source_id != ?` → cap at 998 keys per chunk.
-const DEDUP_CHUNK = 1000;   // for db.batch() paths (one param per statement)
-const SQL_IN_CHUNK = 998;   // for IN(?) paths with one extra bound param
+// IN (?) + one extra bind — D1 has been observed to fail near ~350 vars on some queries; stay small.
+const SQL_IN_CHUNK = 200;
+/** `DELETE FROM jobs WHERE id IN (...)` — each id is one bound variable; must stay ≤ 999. */
+const DELETE_ID_IN_CHUNK = 998;
 
 export async function batchCheckCrossSourceDups(
   db: D1Database,
@@ -828,9 +831,9 @@ export async function batchDeleteJobsSupersededByHigherPriority(
       .filter((row) => priorityOf(row.source_name) < incomingPriority)
       .map((row) => row.id);
 
-    // Batch the DELETE statements in groups of DEDUP_CHUNK (pure id params, no extra param).
-    for (let j = 0; j < idsToDelete.length; j += DEDUP_CHUNK) {
-      const idChunk = idsToDelete.slice(j, j + DEDUP_CHUNK);
+    // Batch DELETEs — IN(?) must not exceed SQLite's 999 bound-parameter limit (was 1000 → D1 error).
+    for (let j = 0; j < idsToDelete.length; j += DELETE_ID_IN_CHUNK) {
+      const idChunk = idsToDelete.slice(j, j + DELETE_ID_IN_CHUNK);
       const delPh = idChunk.map(() => "?").join(",");
       await db.prepare(`DELETE FROM jobs WHERE id IN (${delPh})`).bind(...idChunk).run();
       deleted += idChunk.length;
@@ -971,10 +974,10 @@ export async function batchUpsertJobs(
     }
   }
 
-  // Chunk inserts and updates to stay under D1's ~1MB batch request body limit.
-  // Each INSERT is ~500 bytes (23 params); 500 inserts ≈ 250KB — safe headroom.
-  // Each UPDATE is ~400 bytes (22 params); 500 updates ≈ 200KB.
-  const UPSERT_CHUNK = 500;
+  // Each INSERT/UPDATE binds ~25 parameters. D1 applies SQLite's bound-parameter limit across
+  // the entire db.batch() — keep chunks small (IBM-scale boards hit errors at ~35×25 when combined
+  // with other statements in the same Worker invocation).
+  const UPSERT_CHUNK = 35;
   for (let i = 0; i < inserts.length; i += UPSERT_CHUNK) {
     await db.batch(inserts.slice(i, i + UPSERT_CHUNK));
   }
@@ -1071,7 +1074,11 @@ export async function batchMarkJobsEmbedded(
 ): Promise<void> {
   if (jobIds.length === 0) return;
   const stmt = db.prepare("UPDATE jobs SET embedding_generated_at = ? WHERE id = ?");
-  await db.batch(jobIds.map((id) => stmt.bind(now, id)));
+  // Two binds per statement — keep each db.batch() under SQLite's cumulative cap for large flushes.
+  const CHUNK = 400;
+  for (let i = 0; i < jobIds.length; i += CHUNK) {
+    await db.batch(jobIds.slice(i, i + CHUNK).map((id) => stmt.bind(now, id)));
+  }
 }
 
 /**
@@ -1646,24 +1653,28 @@ export async function batchGetCompanyLocationCoords(
   const out = new Map<string, { lat: number; lng: number; address: string | null }>();
   if (pairs.length === 0) return out;
 
-  // Build composite keys for the IN clause
+  const GEOCODE_IN_CHUNK = 200;
   const keys = pairs.map((p) => `${p.company_id}|${p.location_key}`);
-  const placeholders = keys.map(() => "?").join(",");
-  const { results } = await db
-    .prepare(
-      `SELECT company_id, location_key, lat, lng, address
-       FROM company_location_geocodes
-       WHERE company_id || '|' || location_key IN (${placeholders})`
-    )
-    .bind(...keys)
-    .all<CompanyLocationRow>();
 
-  for (const row of results ?? []) {
-    out.set(`${row.company_id}|${row.location_key}`, {
-      lat: row.lat,
-      lng: row.lng,
-      address: row.address,
-    });
+  for (let i = 0; i < keys.length; i += GEOCODE_IN_CHUNK) {
+    const chunk = keys.slice(i, i + GEOCODE_IN_CHUNK);
+    const placeholders = chunk.map(() => "?").join(",");
+    const { results } = await db
+      .prepare(
+        `SELECT company_id, location_key, lat, lng, address
+         FROM company_location_geocodes
+         WHERE company_id || '|' || location_key IN (${placeholders})`
+      )
+      .bind(...chunk)
+      .all<CompanyLocationRow>();
+
+    for (const row of results ?? []) {
+      out.set(`${row.company_id}|${row.location_key}`, {
+        lat: row.lat,
+        lng: row.lng,
+        address: row.address,
+      });
+    }
   }
   return out;
 }

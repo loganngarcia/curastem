@@ -92,7 +92,9 @@ async function processSource(
   env: Env,
   source: SourceRow,
   skipEmbeddings = false,
-  jobLimit?: number
+  jobLimit?: number,
+  /** Slice into `fetch()` results after download — `POST /admin/trigger?offset=&limit=` for huge sources (e.g. IBM). */
+  jobOffset?: number
 ): Promise<IngestionResult> {
   const db = env.JOBS_DB;
   const start = Date.now();
@@ -139,8 +141,10 @@ async function processSource(
   // flushed to Vectorize in a single batch call rather than one call per job.
   const pendingVectors: Array<{ id: string; values: number[] }> = [];
 
-  // Apply optional job limit for admin trigger calls
-  const jobsToProcess = jobLimit ? rawJobs.slice(0, jobLimit) : rawJobs;
+  // Optional slice for admin trigger — large single-source runs can exceed D1 limits if processed at once.
+  const sliceStart = jobOffset != null && jobOffset > 0 ? jobOffset : 0;
+  const sliceEnd = jobLimit != null ? sliceStart + jobLimit : undefined;
+  const jobsToProcess = sliceStart > 0 || sliceEnd != null ? rawJobs.slice(sliceStart, sliceEnd) : rawJobs;
 
   // ── Phase 1: Upsert unique companies ──────────────────────────────────────
   // Cache slug → companyId so single-company sources (Greenhouse, Lever, Ashby,
@@ -372,9 +376,18 @@ async function processSource(
     };
   });
 
+  // D1 enforces SQLite's bound-parameter limit across an entire db.batch(); very large single
+  // batchUpsertJobs calls fail with "too many SQL variables" (~780+ jobs on IBM-scale boards).
+  const UPSERT_JOBS_PER_DB_BATCH = 600;
+
   let upsertResults: Array<{ inserted: boolean; needsEmbedding: boolean }>;
   try {
-    upsertResults = await batchUpsertJobs(db, upsertInputs, existingMap);
+    upsertResults = [];
+    for (let start = 0; start < upsertInputs.length; start += UPSERT_JOBS_PER_DB_BATCH) {
+      const slice = upsertInputs.slice(start, start + UPSERT_JOBS_PER_DB_BATCH);
+      const part = await batchUpsertJobs(db, slice, existingMap);
+      upsertResults.push(...part);
+    }
   } catch (batchErr) {
     // Batch failed — retry one-by-one so a single bad job doesn't drop the whole source
     logger.warn("batch_upsert_failed_retrying_individually", { source_id: source.id, count: upsertInputs.length, error: String(batchErr) });
@@ -677,7 +690,9 @@ export async function processSourceById(
   sourceId: string,
   limit?: number,
   /** When set (e.g. metacareers single-job ingest), overrides `sources.base_url` for this run only. */
-  baseUrlOverride?: string
+  baseUrlOverride?: string,
+  /** When set with `limit`, processes `rawJobs.slice(offset, offset+limit)` after fetch. */
+  jobOffset?: number
 ): Promise<IngestionResult | { error: string }> {
   const source = await getSourceById(env.JOBS_DB, sourceId);
   if (!source) {
@@ -689,7 +704,7 @@ export async function processSourceById(
       : source;
   // Skip embeddings so this fits within the 30s Worker request budget.
   // The hourly backfill cron will generate embeddings for all new jobs.
-  return processSource(env, effective, true, limit);
+  return processSource(env, effective, true, limit, jobOffset);
 }
 
 /**

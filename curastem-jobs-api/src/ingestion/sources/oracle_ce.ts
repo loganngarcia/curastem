@@ -99,53 +99,20 @@ interface OracleReqRow {
   ShortDescriptionStr?: string | null;
   WorkplaceType?: string | null;
   WorkplaceTypeCode?: string | null;
+  JobSchedule?: string | null;
 }
 
 interface OracleSearchResponse {
   items?: OracleSearchItem[];
 }
 
-interface OracleDetailRow {
-  ExternalDescriptionStr?: string | null;
-  ExternalPostedStartDate?: string | null;
-  JobSchedule?: string | null;
-  ShortDescriptionStr?: string | null;
-}
-
-interface OracleDetailResponse {
-  items?: OracleDetailRow[];
-}
 
 const PAGE_SIZE = 100;
-/** Safety cap — ~100k jobs at PAGE_SIZE 100 */
+/**
+ * Safety cap. Per-job detail calls (recruitingCEJobRequisitionDetails) are skipped —
+ * see note below — so this purely limits list pagination.
+ */
 const MAX_PAGES = 1000;
-/** Parallel detail GETs per list page (full HTML lives on recruitingCEJobRequisitionDetails only). */
-const DETAIL_FETCH_CONCURRENCY = 6;
-
-async function fetchRequisitionDetail(origin: string, requisitionId: string): Promise<OracleDetailRow | null> {
-  const base = `${origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails`;
-  const finder = buildByIdFinder(encodeFindParamsSegment({ Id: requisitionId }));
-  const url = `${base}?onlyData=true&expand=all&finder=${encodeURIComponent(finder)}`;
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "application/json",
-    },
-  });
-  if (!res.ok) return null;
-  const data = (await res.json()) as OracleDetailResponse;
-  const [row] = data.items ?? [];
-  return row ?? null;
-}
-
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = [];
-  for (let i = 0; i < items.length; i += limit) {
-    const chunk = items.slice(i, i + limit);
-    out.push(...await Promise.all(chunk.map((x) => fn(x))));
-  }
-  return out;
-}
 
 export const oracleCeFetcher: JobSource = {
   sourceType: "oracle_ce",
@@ -196,41 +163,31 @@ export const oracleCeFetcher: JobSource = {
       const batch = item.requisitionList ?? [];
       if (batch.length === 0) break;
 
-      const details = await mapWithConcurrency(batch, DETAIL_FETCH_CONCURRENCY, (r) =>
-        fetchRequisitionDetail(origin, r.Id)
-      );
-
-      for (let i = 0; i < batch.length; i++) {
-        const row = batch[i];
-        const detail = details[i];
+      // Detail fetches (recruitingCEJobRequisitionDetails) are intentionally skipped.
+      // For large tenants (Kroger 18k, Macy's 3k) they would take minutes and exceed
+      // the 90s Worker timeout. ShortDescriptionStr from the list is sufficient for
+      // search/display; AI enrichment fills in full descriptions later.
+      for (const row of batch) {
         try {
           const loc = row.PrimaryLocation ?? null;
           const wpHint = row.WorkplaceTypeCode ?? row.WorkplaceType ?? null;
           const jobPath = `/hcmUI/CandidateExperience/${locale}/sites/${siteNumber}/job/${row.Id}`;
           const applyUrl = `${origin}${jobPath}`;
 
-          const html =
-            detail?.ExternalDescriptionStr
-            ?? detail?.ShortDescriptionStr
-            ?? row.ShortDescriptionStr
-            ?? null;
-          const posted = detail?.ExternalPostedStartDate ?? row.PostedDate ?? null;
-          const schedule = detail?.JobSchedule ?? null;
-
           jobs.push({
             external_id: row.Id,
             title: row.Title,
             location: normalizeLocation(loc),
-            employment_type: normalizeEmploymentType(schedule),
+            employment_type: normalizeEmploymentType(row.JobSchedule ?? null),
             workplace_type: normalizeWorkplaceType(wpHint, loc),
             apply_url: applyUrl,
             source_url: applyUrl,
-            description_raw: html,
+            description_raw: row.ShortDescriptionStr ?? null,
             salary_min: null,
             salary_max: null,
             salary_currency: null,
             salary_period: null,
-            posted_at: parseEpochSeconds(posted),
+            posted_at: parseEpochSeconds(row.PostedDate ?? null),
             company_name: companyName,
             company_logo_url: null,
             company_website_url: null,

@@ -99,6 +99,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-supergoop",     name: "Supergoop (Greenhouse)",     source_type: "greenhouse", company_handle: "supergoop",     base_url: "https://boards-api.greenhouse.io/v1/boards/supergoop/jobs" },
   { id: "gh-goop",          name: "Goop (Greenhouse)",         source_type: "greenhouse", company_handle: "goop",          base_url: "https://boards-api.greenhouse.io/v1/boards/goop/jobs" },
   { id: "gh-godaddy",       name: "GoDaddy (Greenhouse)",      source_type: "greenhouse", company_handle: "godaddy",       base_url: "https://boards-api.greenhouse.io/v1/boards/godaddy/jobs" },
+  // University / events board (distinct from main godaddy board); embed e.g. job-boards.greenhouse.io/embed/job_app?for=eventsandinterns&token=…
+  { id: "gh-eventsandinterns", name: "GoDaddy Events & University (Greenhouse)", source_type: "greenhouse", company_handle: "eventsandinterns", base_url: "https://boards-api.greenhouse.io/v1/boards/eventsandinterns/jobs" },
   { id: "gh-oura",          name: "Oura (Greenhouse)",          source_type: "greenhouse", company_handle: "oura",          base_url: "https://boards-api.greenhouse.io/v1/boards/oura/jobs" },
   { id: "gh-fashionnova",   name: "Fashion Nova (Greenhouse)", source_type: "greenhouse", company_handle: "fashionnova",   base_url: "https://boards-api.greenhouse.io/v1/boards/fashionnova/jobs" },
   { id: "gh-shein",         name: "SHEIN (Greenhouse)",         source_type: "greenhouse", company_handle: "shein",         base_url: "https://boards-api.greenhouse.io/v1/boards/shein/jobs" },
@@ -763,6 +765,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wd-nike",        name: "Nike",             source_type: "workday", company_handle: "nike",           base_url: "https://nike.wd1.myworkdayjobs.com/wday/cxs/nike/nke/jobs" },
   { id: "wd-gap",         name: "Gap Inc",          source_type: "workday", company_handle: "gapinc",         base_url: "https://gapinc.wd1.myworkdayjobs.com/wday/cxs/gapinc/GAPINC/jobs" },
   { id: "wd-tjx",         name: "TJX Companies",    source_type: "workday", company_handle: "tjx",            base_url: "https://tjx.wd1.myworkdayjobs.com/wday/cxs/tjx/TJX_EXTERNAL/jobs" },
+  // Tenant Tencent_Careers — e.g. https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/…/Product-Manager-Intern---Data-Agent_R107221
+  { id: "wd-tencent",     name: "Tencent",          source_type: "workday", company_handle: "tencent",        base_url: "https://tencent.wd1.myworkdayjobs.com/wday/cxs/tencent/Tencent_Careers/jobs" },
   { id: "wd-vfc",         name: "VF Corp (TNF/Vans/Timberland)", source_type: "workday", company_handle: "vfc", base_url: "https://vfc.wd5.myworkdayjobs.com/wday/cxs/vfc/vfc_careers/jobs" },
   { id: "wd-southwest",   name: "Southwest Airlines",source_type: "workday", company_handle: "swa",           base_url: "https://swa.wd1.myworkdayjobs.com/wday/cxs/swa/external/jobs" },
   { id: "wd-chevron",     name: "Chevron",          source_type: "workday", company_handle: "chevron",        base_url: "https://chevron.wd5.myworkdayjobs.com/wday/cxs/chevron/jobs/jobs" },
@@ -1255,7 +1259,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "br-microsoft",   name: "Microsoft (Browser)",       source_type: "browser", company_handle: "microsoft",       base_url: "https://apply.careers.microsoft.com/careers" },
   { id: "br-google",      name: "Google (Browser)",          source_type: "browser", company_handle: "google",          base_url: "https://careers.google.com/jobs/results" },
   { id: "mc-meta", name: "Meta (Metacareers)", source_type: "metacareers", company_handle: "meta", base_url: "https://www.metacareers.com/jobsearch/sitemap.xml" },
-  { id: "br-ibm",         name: "IBM (Browser)",             source_type: "browser", company_handle: "ibm",             base_url: "https://www.ibm.com/careers/search" },
+  // IBM unified search API (same data as www.ibm.com/careers/search + careers.ibm.com JobDetail)
+  { id: "br-ibm",         name: "IBM",                       source_type: "ibm_careers",     company_handle: "ibm",             base_url: "https://www-api.ibm.com/search/api/v2" },
   { id: "br-oracle",      name: "Oracle (Browser)",          source_type: "browser", company_handle: "oracle",          base_url: "https://careers.oracle.com/jobs" },
   { id: "br-bestbuy",     name: "Best Buy (Browser)",        source_type: "browser", company_handle: "bestbuy",         base_url: "https://jobs.bestbuy.com/bby/jobs" },
   { id: "br-kroger",      name: "Kroger (Browser)",          source_type: "browser", company_handle: "kroger",          base_url: "https://jobs.kroger.com/jobs" },
@@ -1678,7 +1683,6 @@ const DISABLED_SOURCE_IDS = [
   "br-progressive",
   "br-adp",
   "br-qualcomm",
-  "br-ibm",
   "br-bofa",
   "br-fedex",
   "br-clay",
@@ -1785,6 +1789,14 @@ export async function seedSources(db: D1Database): Promise<void> {
       `UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-morganstanley'`
     )
     .bind("https://ms.wd5.myworkdayjobs.com/wday/cxs/ms/External/jobs")
+    .run();
+
+  // IBM: switch from browser to public search API (www-api.ibm.com/search/api/v2)
+  await db
+    .prepare(
+      `UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'br-ibm'`
+    )
+    .bind("IBM", "ibm_careers", "https://www-api.ibm.com/search/api/v2")
     .run();
 
   // Starbucks: replace legacy browser placeholder with Eightfold PCS API (see eightfold.ts)

@@ -48,6 +48,7 @@ import { shopifyCareersFetcher } from "./sources/shopify_careers.ts";
 import { activateCareersFetcher } from "./sources/activate_careers.ts";
 import { avatureFetcher } from "./sources/avature.ts";
 import { servicenowSeoFetcher } from "./sources/servicenow_seo.ts";
+import { ibmCareersFetcher } from "./sources/ibm_careers.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -86,6 +87,7 @@ const REGISTRY: Record<SourceType, JobSource> = {
   activate_careers: activateCareersFetcher,
   avature: avatureFetcher,
   servicenow_seo: servicenowSeoFetcher,
+  ibm_careers: ibmCareersFetcher,
 };
 
 /**
@@ -169,6 +171,8 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   avature: 76,
   // ServiceNow SEO sitemap + SSR meta on job pages (employer’s own portal)
   servicenow_seo: 78,
+  // IBM unified search API (official JSON; same listings as careers.ibm.com JobDetail)
+  ibm_careers: 88,
 };
 
 export function getSourcePriority(sourceType: string): number {

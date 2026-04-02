@@ -26,6 +26,12 @@ import {
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 const DETAIL_CONCURRENCY = 8;
+/**
+ * Large Phenom boards (Panera ~7k, Lowe's ~10k+) have many sub-sitemaps.
+ * Fetching all detail pages would exceed the 90s Worker timeout.
+ * Cap at 1000 per run; remaining pages are caught on subsequent hourly runs.
+ */
+const MAX_SITEMAP_JOBS = 1000;
 
 /** Phenom job object from `phApp.ddo.jobDetail.data.job` (partial). */
 interface PhenomJobRow {
@@ -148,6 +154,7 @@ async function fetchSitemapJobUrls(baseUrl: string): Promise<string[]> {
   addJobUrlsFromLocXml(indexXml, jobUrls);
 
   for (const smUrl of sitemapLocs) {
+    if (jobUrls.size >= MAX_SITEMAP_JOBS) break;
     const baseLoc = smUrl.split("?")[0];
     if (/\/job\/[^/]+\/[^/?]+$/.test(baseLoc) || /\/jobs\/[^/]+\/[^/]+\/[^/?]+$/.test(baseLoc)) {
       continue;
@@ -161,7 +168,7 @@ async function fetchSitemapJobUrls(baseUrl: string): Promise<string[]> {
     addJobUrlsFromLocXml(xml, jobUrls);
   }
 
-  return [...jobUrls];
+  return [...jobUrls].slice(0, MAX_SITEMAP_JOBS);
 }
 
 function inferWorkplace(job: PhenomJobRow): WorkplaceType | null {

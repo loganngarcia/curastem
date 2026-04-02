@@ -31,6 +31,12 @@ const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 const DETAIL_CONCURRENCY = 16;
 /** PCS caps results at 10 rows per search request ("Too many rows requested" above that). */
 const PAGE_SIZE = 10;
+/**
+ * Hard cap per ingestion run. Sources with >2000 positions (e.g. Starbucks ~21k)
+ * would otherwise need 2000+ serial list API calls — far exceeding the 90s fetch timeout.
+ * The remaining positions are picked up in subsequent hourly cron runs.
+ */
+const MAX_POSITIONS_PER_RUN = 2000;
 
 const HEADERS = {
   "User-Agent": USER_AGENT,
@@ -211,7 +217,7 @@ export const eightfoldFetcher: JobSource = {
     const listPositions: EightfoldListPosition[] = [];
     let start = 0;
     let total = Infinity;
-    while (start < total) {
+    while (start < total && listPositions.length < MAX_POSITIONS_PER_RUN) {
       const page = await fetchSearchPage(origin, groupDomain, start);
       total = page.count;
       listPositions.push(...page.positions);

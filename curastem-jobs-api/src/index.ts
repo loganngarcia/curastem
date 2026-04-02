@@ -183,6 +183,7 @@ async function handleRequest(
 
   // POST /admin/trigger — manually fire ingestion (requires a valid API key).
   // ?source=<id>  Run a single source synchronously and return its result.
+  // ?source=<id>&limit=N&offset=M  Process fetch().slice(M, M+N) for huge sources (e.g. IBM).
   // (no param)    Queue a full ingestion run in the background via waitUntil.
   if (path === "/admin/trigger" && method === "POST") {
     const sourceId = url.searchParams.get("source");
@@ -199,8 +200,11 @@ async function handleRequest(
         await applyCompanyMetadataCorrections(env.JOBS_DB, env.LOGO_DEV_TOKEN);
         const limitParam = url.searchParams.get("limit");
         const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+        const offsetParam = url.searchParams.get("offset");
+        const parsedOff = offsetParam ? parseInt(offsetParam, 10) : NaN;
+        const jobOffset = Number.isFinite(parsedOff) && parsedOff > 0 ? parsedOff : undefined;
         const metaJobUrl = url.searchParams.get("meta_job_url") ?? undefined;
-        const result = await processSourceById(env, sourceId, limit, metaJobUrl);
+        const result = await processSourceById(env, sourceId, limit, metaJobUrl, jobOffset);
         return jsonOk({ status: "completed", result });
       } catch (triggerErr) {
         logger.error("admin_trigger_source_failed", { source_id: sourceId, error: String(triggerErr) });

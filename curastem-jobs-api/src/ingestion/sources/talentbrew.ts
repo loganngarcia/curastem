@@ -17,6 +17,12 @@ import { normalizeLocation } from "../../utils/normalize.ts";
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 const DETAIL_CONCURRENCY = 8;
 const MAX_SEARCH_PAGES = 80;
+/**
+ * Cap detail page fetches per run. 7-Eleven has 336 search pages (~6k jobs);
+ * fetching all detail pages serially (8 concurrent) would exceed the 90s Worker timeout.
+ * Remaining jobs are fetched in subsequent hourly cron runs.
+ */
+const MAX_DETAIL_JOBS = 500;
 
 function parseSearchRoot(input: string): { origin: string; searchPath: string } {
   const u = new URL(input.trim());
@@ -178,7 +184,7 @@ export const talentbrewFetcher: JobSource = {
       for (const path of extractJobPaths(h)) pathSet.add(path);
     }
 
-    const paths = [...pathSet];
+    const paths = [...pathSet].slice(0, MAX_DETAIL_JOBS);
     if (paths.length === 0) {
       throw new Error(`talentbrew: 0 job links from ${page1Url} (${totalPages} pages)`);
     }

@@ -337,7 +337,12 @@ export type SourceType =
    * `Sitemap:`). Job pages include SSR `<title>` and `og:description`. `base_url` is the
    * sitemap XML URL (see servicenow_seo.ts).
    */
-  | "servicenow_seo";
+  | "servicenow_seo"
+  /**
+   * IBM careers — POST `www-api.ibm.com/search/api/v2` with appId `careers` / scope `careers2`
+   * (same as the public careers search UI). `base_url` is the API endpoint. See ibm_careers.ts.
+   */
+  | "ibm_careers";
 
 export type EmploymentType =
   | "full_time"
