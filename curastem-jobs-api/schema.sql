@@ -73,7 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_companies_slug ON companies (slug);
 CREATE TABLE IF NOT EXISTS sources (
   id              TEXT PRIMARY KEY,   -- UUID v4
   name            TEXT NOT NULL,      -- human-readable, e.g. "Stripe (Greenhouse)"
-  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "activate_careers" | "oracle_ce" | "brillio" | "phenom" | "paradox" | "jobvite" | "workday" | "smartrecruiters" | "rss" | ...
+  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "activate_careers" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "workday" | "smartrecruiters" | "consider" | "getro" | "rss" | ...
   company_handle  TEXT NOT NULL,      -- ATS-specific company slug / board name
   base_url        TEXT NOT NULL,      -- canonical API or job-board URL for this source
   enabled         INTEGER NOT NULL DEFAULT 1,    -- 0 = disabled, skip in cron

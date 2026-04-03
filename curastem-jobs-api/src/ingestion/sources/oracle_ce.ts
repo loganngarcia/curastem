@@ -58,10 +58,6 @@ function buildFindReqsFinder(segment: string): string {
   return `findReqs;${segment}`;
 }
 
-function buildByIdFinder(segment: string): string {
-  return `ById;${segment}`;
-}
-
 interface CxParsed {
   origin: string;
   locale: string;

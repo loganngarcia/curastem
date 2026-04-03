@@ -60,7 +60,11 @@ function parseItem(itemXml: string, companyName: string): NormalizedJob | null {
     normalizeLocation(description ?? "") ??
     normalizeLocation(title);
 
-  const salary = parseSalary(description);
+  // RSS `<description>` is usually a job id (` - 12345`) or a location line, not pay — `parseSalary`
+  // would treat any digits as dollars. Only parse when currency / explicit money markers appear.
+  const d = description?.trim() ?? "";
+  const salary =
+    d && /[$€£¥₹]|\b(?:USD|EUR|GBP|CAD|AUD)\b/i.test(d) ? parseSalary(description) : parseSalary("");
 
   let postedAt: number | null = null;
   if (pubDate) {

@@ -49,10 +49,45 @@ const HEADERS = {
 /** Larger pages mean fewer round-trips for ~15k+ portfolio boards. */
 const PAGE_SIZE = 500;
 
+/** Consider occasionally returns 5xx on search-jobs; brief backoff before failing the run. */
+const SEARCH_JOBS_MAX_ATTEMPTS = 4;
+
+async function postSearchJobs(
+  origin: string,
+  body: Record<string, unknown>,
+  companyHandle: string
+): Promise<Response> {
+  let last: Response | undefined;
+  for (let attempt = 1; attempt <= SEARCH_JOBS_MAX_ATTEMPTS; attempt++) {
+    last = await fetch(`${origin}/api-boards/search-jobs`, {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify(body),
+    });
+    if (last.ok) return last;
+    const retryable = last.status >= 500 && last.status < 600 && attempt < SEARCH_JOBS_MAX_ATTEMPTS;
+    if (retryable) {
+      await new Promise((r) => setTimeout(r, 350 * attempt));
+      continue;
+    }
+    throw new Error(`consider: search-jobs ${last.status} for ${companyHandle}`);
+  }
+  throw new Error(`consider: search-jobs ${last?.status ?? "?"} for ${companyHandle}`);
+}
+
+
 /** Parent board id embedded in the SPA shell (same for all pages on that hostname). */
 const PARENT_BOARD_BY_HOST: Record<string, string> = {
   "jobs.a16z.com": "andreessen-horowitz",
   "portfoliojobs.a16z.com": "andreessen-horowitz",
+  "jobs.sequoiacap.com": "sequoia-capital",
+  "jobs.greylock.com": "greylock-partners",
+  "jobs.kleinerperkins.com": "kleiner-perkins",
+  "jobs.contrary.com": "contrary",
+  "jobs.battery.com": "battery-ventures",
+  "careers.nea.com": "nea",
+  "jobs.lsvp.com": "lightspeed",
+  "jobs.bvp.com": "bessemer-ventures",
 };
 
 const PARENT_BOARD_RE = /"board":\{"id":"([^"]+)","isParent":true\}/;
@@ -206,16 +241,7 @@ export const considerFetcher: JobSource = {
         body.parentSlug = parentBoardId;
       }
 
-      const res = await fetch(`${origin}/api-boards/search-jobs`, {
-        method: "POST",
-        headers: HEADERS,
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        throw new Error(`consider: search-jobs ${res.status} for ${source.company_handle}`);
-      }
-
+      const res = await postSearchJobs(origin, body, source.company_handle);
       const data = (await res.json()) as ConsiderSearchResponse;
       const batch = data.jobs ?? [];
       collected.push(...batch);

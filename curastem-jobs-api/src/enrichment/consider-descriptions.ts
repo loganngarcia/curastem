@@ -1,5 +1,5 @@
 /**
- * Backfill job descriptions for Consider-sourced jobs (e.g. cn-a16z-portfolio).
+ * Backfill job descriptions for Consider-sourced jobs (all `source_type = consider` rows).
  *
  * The Consider search API returns no descriptions — only title, salary, location,
  * and an applyUrl pointing to the real ATS. This module follows that URL to the
@@ -21,10 +21,10 @@ import { backfillJobDescription, getConsiderJobsNeedingDescription } from "../db
 import { logger } from "../utils/logger.ts";
 import { normalizeWorkplaceType } from "../utils/normalize.ts";
 
-// 200 jobs/run × 24 runs/day = 4,800/day → 15k a16z jobs fully described in ~3 days.
-// 200 × 200ms delay = 40s added to cron — acceptable given the 900s budget.
-const BATCH_SIZE = 200;
-const REQUEST_DELAY_MS = 200;
+// 500 jobs/run × 24 runs/day = 12,000/day → ~55k Consider jobs fully described in ~5 days.
+// 500 × 150ms delay = 75s added to cron — within the 900s budget given ~15 boards total.
+const BATCH_SIZE = 500;
+const REQUEST_DELAY_MS = 150;
 
 const HEADERS = {
   "User-Agent": "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)",

@@ -28,6 +28,7 @@ import type {
   SourceRow,
 } from "../types.ts";
 import { CRUNCHBASE_SOURCE_ID, CRUNCHBASE_SOURCE_LEGACY_ID } from "./sourceIds.ts";
+import { normalizeLocationForGeocode } from "../utils/placesGeocode.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // companies
@@ -1623,11 +1624,211 @@ export async function listJobsForMap(
                 ROUND(j.location_lat, 1),
                 ROUND(j.location_lng, 1)
        ${orderClause}
-       LIMIT ${limit}`
+       LIMIT ${Math.min(limit * 3, 500)}`
     )
     .bind(...bindings)
     .all<MapCompanyRow>();
-  return results ?? [];
+  let rows = results ?? [];
+  rows = await expandMapRowsWithSecondaryLocations(
+    db,
+    since,
+    bbox,
+    rows,
+    q,
+    employment_type,
+    seniority_level
+  );
+  if (center) {
+    const cLat = center.lat;
+    const cLng = center.lng;
+    rows.sort((a, b) => {
+      const distA =
+        (a.chip_lat - cLat) * (a.chip_lat - cLat) +
+        (a.chip_lng - cLng) * (a.chip_lng - cLng);
+      const distB =
+        (b.chip_lat - cLat) * (b.chip_lat - cLat) +
+        (b.chip_lng - cLng) * (b.chip_lng - cLng);
+      return distA - distB;
+    });
+  } else {
+    rows.sort((a, b) => b.job_count - a.job_count);
+  }
+  return rows.slice(0, limit);
+}
+
+/**
+ * Primary coords plus any (company, location) pairs found in company_location_geocodes
+ * for strings in `locations` JSON — used by GET /jobs/:id and map expansion.
+ */
+export async function resolveJobLocationPoints(
+  db: D1Database,
+  companyId: string,
+  locationsJson: string | null,
+  primaryLat: number | null,
+  primaryLng: number | null
+): Promise<Array<{ lat: number; lng: number }>> {
+  const out: Array<{ lat: number; lng: number }> = [];
+  const seen = new Set<string>();
+  const add = (lat: number, lng: number) => {
+    const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ lat, lng });
+  };
+
+  if (primaryLat != null && primaryLng != null) {
+    add(primaryLat, primaryLng);
+  }
+
+  let locs: string[] = [];
+  if (locationsJson) {
+    try {
+      locs = JSON.parse(locationsJson) as string[];
+    } catch {
+      /* ignore */
+    }
+  }
+  if (locs.length <= 1) return out;
+
+  const pairs = locs
+    .map((loc) => ({
+      company_id: companyId,
+      location_key: normalizeLocationForGeocode(loc),
+    }))
+    .filter((p) => p.location_key.trim().length > 0);
+
+  const coords = await batchGetCompanyLocationCoords(db, pairs);
+  for (const p of pairs) {
+    const hit = coords.get(`${p.company_id}|${p.location_key}`);
+    if (hit) add(hit.lat, hit.lng);
+  }
+
+  return out;
+}
+
+/** Extra map chips for multi-location jobs whose secondary cities are in the geocode cache. */
+async function expandMapRowsWithSecondaryLocations(
+  db: D1Database,
+  since: number,
+  bbox: MapBbox | undefined,
+  rows: MapCompanyRow[],
+  q?: string,
+  employment_type?: string,
+  seniority_level?: string
+): Promise<MapCompanyRow[]> {
+  if (!bbox) return rows;
+
+  const bindings: unknown[] = [since];
+  let qClause = "";
+  if (q && q.trim()) {
+    qClause = `AND j.title LIKE ?`;
+    bindings.push(`%${q.trim()}%`);
+  }
+  let typeClause = "";
+  const etMap = employmentTypeCondition(employment_type);
+  if (etMap) {
+    typeClause = `AND ${etMap.sql}`;
+    bindings.push(...etMap.bindings);
+  }
+  let seniorityClause = "";
+  if (seniority_level) {
+    const levels = seniority_level.split(",").map((s) => s.trim()).filter(Boolean);
+    if (levels.length === 1) {
+      seniorityClause = `AND j.seniority_level = ?`;
+      bindings.push(levels[0]);
+    } else if (levels.length > 1) {
+      seniorityClause = `AND j.seniority_level IN (${levels.map(() => "?").join(", ")})`;
+      bindings.push(...levels);
+    }
+  }
+
+  const bboxClause = `AND j.location_lat BETWEEN ${bbox.minLat} AND ${bbox.maxLat}
+         AND j.location_lng BETWEEN ${bbox.minLng} AND ${bbox.maxLng}`;
+
+  const { results: multiJobs } = await db
+    .prepare(
+      `SELECT j.company_id,
+              j.locations,
+              j.location_lat,
+              j.location_lng,
+              c.name        AS company_name,
+              c.logo_url    AS company_logo_url,
+              c.slug        AS company_slug,
+              c.hq_lat      AS company_hq_lat,
+              c.hq_lng      AS company_hq_lng,
+              c.hq_city     AS company_hq_city,
+              c.hq_country  AS company_hq_country,
+              c.hq_address  AS company_hq_address
+       FROM jobs j
+       JOIN companies c ON c.id = j.company_id
+       WHERE COALESCE(j.posted_at, j.first_seen_at) >= ?
+         AND (j.workplace_type IS NULL OR j.workplace_type != 'remote')
+         AND c.hq_lat IS NOT NULL
+         AND j.location_lat IS NOT NULL
+         AND j.location_lng IS NOT NULL
+         AND json_array_length(COALESCE(j.locations, '[]')) > 1
+         ${bboxClause}
+         ${qClause}
+         ${typeClause}
+         ${seniorityClause}`
+    )
+    .bind(...bindings)
+    .all<{
+      company_id: string;
+      locations: string | null;
+      location_lat: number | null;
+      location_lng: number | null;
+      company_name: string;
+      company_logo_url: string | null;
+      company_slug: string;
+      company_hq_lat: number;
+      company_hq_lng: number;
+      company_hq_city: string | null;
+      company_hq_country: string | null;
+      company_hq_address: string | null;
+    }>();
+
+  if (!multiJobs?.length) return rows;
+
+  const existingKeys = new Set(
+    rows.map(
+      (r) =>
+        `${r.company_id}|${r.chip_lat.toFixed(3)}|${r.chip_lng.toFixed(3)}`
+    )
+  );
+
+  const extra: MapCompanyRow[] = [];
+
+  for (const job of multiJobs) {
+    const points = await resolveJobLocationPoints(
+      db,
+      job.company_id,
+      job.locations,
+      job.location_lat,
+      job.location_lng
+    );
+    for (const pt of points) {
+      const key = `${job.company_id}|${pt.lat.toFixed(3)}|${pt.lng.toFixed(3)}`;
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+      extra.push({
+        company_id: job.company_id,
+        company_name: job.company_name,
+        company_logo_url: job.company_logo_url,
+        company_slug: job.company_slug,
+        chip_lat: pt.lat,
+        chip_lng: pt.lng,
+        company_hq_lat: job.company_hq_lat,
+        company_hq_lng: job.company_hq_lng,
+        company_hq_city: job.company_hq_city,
+        company_hq_country: job.company_hq_country,
+        company_hq_address: job.company_hq_address,
+        job_count: 1,
+      });
+    }
+  }
+
+  return extra.length ? [...rows, ...extra] : rows;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1986,13 +2187,14 @@ export async function getConsiderJobsNeedingDescription(
       SELECT j.id, j.apply_url, j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
              j.locations, j.workplace_type
       FROM jobs j
-      WHERE j.source_id = 'cn-a16z-portfolio'
-        AND j.description_raw IS NULL
+      INNER JOIN sources s ON j.source_id = s.id AND s.source_type = 'consider'
+      WHERE j.description_raw IS NULL
         AND NOT EXISTS (
           SELECT 1 FROM jobs j2
+          INNER JOIN sources s2 ON j2.source_id = s2.id
           WHERE j2.company_id = j.company_id
-            AND j2.source_id != 'cn-a16z-portfolio'
             AND j2.description_raw IS NOT NULL
+            AND s2.source_type != 'consider'
         )
       ORDER BY j.first_seen_at DESC
       LIMIT ?

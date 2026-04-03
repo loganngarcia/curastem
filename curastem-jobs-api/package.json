@@ -8,16 +8,19 @@
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 execute curastem-jobs --local --file=schema.sql",
     "db:migrate:remote": "wrangler d1 execute curastem-jobs --remote --file=schema.sql",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test:desc-address": "npx tsx scripts/test-desc-address-extraction.ts",
+    "analyze:locations": "npx tsx scripts/analyze-location-normalization.ts",
+    "verify:a16z": "npx tsx scripts/verify-seed-sources-job-count.ts --only cn-a16z-portfolio --timeout-ms 180000 --concurrency 1"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241224.0",
-    "typescript": "^5.7.2",
-    "wrangler": "^4.71.0"
+    "@cloudflare/workers-types": "^4.20260403.1",
+    "typescript": "~5.9.3",
+    "wrangler": "^4.80.0"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.0.6",
-    "@google/genai": "^1.0.0",
+    "@google/genai": "^1.48.0",
     "fast-xml-parser": "^5.5.5"
   }
 }

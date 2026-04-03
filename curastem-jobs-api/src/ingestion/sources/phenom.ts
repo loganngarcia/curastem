@@ -7,7 +7,8 @@
  * Phenom People career sites (`careers.{company}.com/...`).
  *
  * Job discovery: locale `sitemap_index.xml` → chunk sitemaps → `<loc>` URLs matching
- * `/job/{requisitionId}/{slug}` (e.g. US Bank) or `/jobs/{id}/{code}/{slug}` (e.g. Intuitive).
+ * `/job/{requisitionId}/{slug}` (e.g. US Bank), `/jobs/{id}/{code}/{slug}` (e.g. Intuitive), or
+ * `/jobs/{numericId}-{slug}` (e.g. Qcells — single segment under `/jobs/`).
  * Job payload: server-rendered `phApp.ddo.jobDetail.data.job`
  * on each job page (title, locations, HTML description, Workday apply URL, posted date).
  *
@@ -53,6 +54,9 @@ function parsePhenomBaseUrl(input: string): string {
   if (jobMatch) return `${u.origin}${jobMatch[1]}/`;
   // /.../jobs/numericId/jobCode/slug (Intuitive and similar tenants)
   jobMatch = path.match(/^(.*)\/jobs\/[^/]+\/[^/]+\/[^/]+$/);
+  if (jobMatch) return `${u.origin}${jobMatch[1]}/`;
+  // /.../jobs/{id}-{slug} (Qcells and similar — one segment: digits then hyphenated slug)
+  jobMatch = path.match(/^(.*)\/jobs\/\d+-[^/]+$/);
   if (jobMatch) return `${u.origin}${jobMatch[1]}/`;
   return `${u.origin}${path}/`;
 }
@@ -114,6 +118,8 @@ function externalIdFromJobUrl(jobUrl: string): string | null {
     if (m1) return m1[1];
     const m2 = u.pathname.match(/\/jobs\/([^/]+)\/([^/]+)\/[^/]+\/?$/);
     if (m2) return `${m2[1]}_${m2[2]}`;
+    const m3 = u.pathname.match(/\/jobs\/(\d+)-[^/]+\/?$/);
+    if (m3) return m3[1];
     return null;
   } catch {
     return null;
@@ -126,6 +132,7 @@ function addJobUrlsFromLocXml(xml: string, jobUrls: Set<string>): void {
     const loc = m[1].trim().split("?")[0];
     if (/\/job\/[^/]+\/[^/?]+$/.test(loc)) jobUrls.add(loc);
     if (/\/jobs\/[^/]+\/[^/]+\/[^/?]+$/.test(loc)) jobUrls.add(loc);
+    if (/\/jobs\/\d+-[^/?]+$/.test(loc)) jobUrls.add(loc);
   }
 }
 
@@ -156,7 +163,11 @@ async function fetchSitemapJobUrls(baseUrl: string): Promise<string[]> {
   for (const smUrl of sitemapLocs) {
     if (jobUrls.size >= MAX_SITEMAP_JOBS) break;
     const baseLoc = smUrl.split("?")[0];
-    if (/\/job\/[^/]+\/[^/?]+$/.test(baseLoc) || /\/jobs\/[^/]+\/[^/]+\/[^/?]+$/.test(baseLoc)) {
+    if (
+      /\/job\/[^/]+\/[^/?]+$/.test(baseLoc) ||
+      /\/jobs\/[^/]+\/[^/]+\/[^/?]+$/.test(baseLoc) ||
+      /\/jobs\/\d+-[^/?]+$/.test(baseLoc)
+    ) {
       continue;
     }
     const sm = await fetch(smUrl, {

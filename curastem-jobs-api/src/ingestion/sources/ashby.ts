@@ -14,6 +14,11 @@
  *   GET https://api.ashbyhq.com/posting-api/job-board/{handle}
  *   Optional: ?includeCompensation=true
  *
+ * Fallback when REST returns an empty `jobs` array: same public GraphQL the hosted board SPA
+ * uses — `POST https://app.ashbyhq.com/api/non-user-graphql?op=JobBoardWithTeams` with
+ * `jobBoardWithTeams(organizationHostedJobsPageName: …)`. If both are empty, the tenant has
+ * not exposed listings to unauthenticated APIs (Ashby admin / job visibility), not a client bug.
+ *
  * Note: The older endpoint (jobs.ashbyhq.com/api/non-authenticated-open-application/...)
  * was deprecated and now returns 404. All seeds must use the new base_url format.
  *
@@ -77,6 +82,119 @@ interface AshbyJobBoardResponse {
   };
 }
 
+/** GraphQL `jobBoardWithTeams.jobPostings[]` brief (public non-user schema). */
+interface AshbyGqlJobBrief {
+  id: string;
+  title: string;
+  locationName: string;
+  employmentType?: string;
+  workplaceType?: string | null;
+  publishedAt?: string | null;
+}
+
+const ASHBY_GRAPHQL_BASE = "https://app.ashbyhq.com/api/non-user-graphql";
+
+const JOB_BOARD_WITH_TEAMS_GQL = `
+query JobBoardWithTeams($organizationHostedJobsPageName: String!) {
+  jobBoardWithTeams(organizationHostedJobsPageName: $organizationHostedJobsPageName) {
+    jobPostings {
+      id
+      title
+      locationName
+      employmentType
+      workplaceType
+      publishedAt
+    }
+  }
+}`;
+
+const FETCH_HEADERS: Record<string, string> = {
+  "User-Agent": "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)",
+  Accept: "application/json",
+};
+
+/** Hosted jobs page slug from posting-api URL, else company_handle (handles %20 in path). */
+function hostedJobsPageNameFromSource(source: SourceRow): string {
+  const fromUrl = source.base_url.match(/\/job-board\/([^?]+)/i)?.[1];
+  if (fromUrl) {
+    try {
+      return decodeURIComponent(fromUrl);
+    } catch {
+      return fromUrl;
+    }
+  }
+  return source.company_handle;
+}
+
+async function fetchAshbyHostedOrgNameGraphql(slug: string): Promise<string | null> {
+  const query = `query { organizationFromHostedJobsPageName(organizationHostedJobsPageName: ${JSON.stringify(slug)}) { name } }`;
+  const res = await fetch(`${ASHBY_GRAPHQL_BASE}?op=OrganizationFromHostedJobsPageName`, {
+    method: "POST",
+    headers: { ...FETCH_HEADERS, "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  if (!res.ok) return null;
+  const j = (await res.json()) as {
+    data?: { organizationFromHostedJobsPageName?: { name?: string } | null };
+  };
+  return j.data?.organizationFromHostedJobsPageName?.name ?? null;
+}
+
+/**
+ * Public GraphQL list — same data the jobs.ashbyhq.com SPA loads. Used when REST `jobs` is empty.
+ */
+async function fetchJobsViaAshbyGraphql(
+  source: SourceRow,
+  slug: string,
+): Promise<NormalizedJob[]> {
+  const res = await fetch(`${ASHBY_GRAPHQL_BASE}?op=JobBoardWithTeams`, {
+    method: "POST",
+    headers: { ...FETCH_HEADERS, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      operationName: "JobBoardWithTeams",
+      query: JOB_BOARD_WITH_TEAMS_GQL,
+      variables: { organizationHostedJobsPageName: slug },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Ashby GraphQL error ${res.status} for ${source.company_handle}`);
+  }
+  const json = (await res.json()) as {
+    data?: { jobBoardWithTeams?: { jobPostings?: AshbyGqlJobBrief[] } };
+    errors?: Array<{ message?: string }>;
+  };
+  if (json.errors?.length) {
+    throw new Error(`Ashby GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
+  }
+  const briefs = json.data?.jobBoardWithTeams?.jobPostings ?? [];
+  const fallbackName = source.name.replace(/\s*\(Ashby\)\s*/i, "").trim();
+  const orgName = (await fetchAshbyHostedOrgNameGraphql(slug)) ?? fallbackName;
+  const encodedSlug = encodeURIComponent(slug);
+
+  return briefs.map((job) => {
+    const locationStr = job.locationName ?? "";
+    const applyUrl = `https://jobs.ashbyhq.com/${encodedSlug}/${job.id}`;
+    return {
+      external_id: job.id,
+      title: job.title.trim(),
+      location: normalizeLocation(locationStr),
+      employment_type: normalizeEmploymentType(normalizeAshbyEmploymentType(job.employmentType)),
+      workplace_type: normalizeWorkplaceType(job.workplaceType ?? null, locationStr),
+      apply_url: applyUrl,
+      source_url: applyUrl,
+      description_raw: null,
+      salary_min: null,
+      salary_max: null,
+      salary_currency: null,
+      salary_period: null,
+      posted_at: parseEpochSeconds(job.publishedAt ?? undefined),
+      company_name: orgName,
+      company_logo_url: null,
+      company_website_url: null,
+    };
+  });
+}
+
 const EMPLOYMENT_TYPE_MAP: Record<string, string> = {
   fulltime: "full_time",
   "full-time": "full_time",
@@ -120,23 +238,29 @@ export const ashbyFetcher: JobSource = {
   sourceType: "ashby",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
+    const slug = hostedJobsPageNameFromSource(source);
     const res = await fetch(source.base_url, {
-      headers: {
-        "User-Agent": "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)",
-        Accept: "application/json",
-      },
+      headers: FETCH_HEADERS,
     });
 
     if (!res.ok) {
+      if (res.status === 404) {
+        return fetchJobsViaAshbyGraphql(source, slug);
+      }
       throw new Error(`Ashby API error ${res.status} for ${source.company_handle}`);
     }
 
     const data = (await res.json()) as AshbyJobBoardResponse;
+    const restJobs = data.jobs ?? [];
+    if (restJobs.length === 0) {
+      return fetchJobsViaAshbyGraphql(source, slug);
+    }
+
     const jobs: NormalizedJob[] = [];
     const companyName = data.organization?.name
       ?? source.name.replace(/\s*\(Ashby\)\s*/i, "").trim();
 
-    for (const job of data.jobs ?? []) {
+    for (const job of restJobs) {
       try {
         const locationStr = buildLocationString(job);
         // Prefer the explicit workplaceType field (v2 API), then fall back to isRemote

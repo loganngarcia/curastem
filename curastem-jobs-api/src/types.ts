@@ -236,6 +236,12 @@ export type SourceType =
    */
   | "consider"
   /**
+   * Getro-powered VC job boards (Next.js on cdn.getro.com). `base_url` is the site origin
+   * (e.g. `https://jobs.generalcatalyst.com`). Discovery: `sitemap.xml` → job URLs;
+   * detail: `/_next/data/{buildId}/companies/.../jobs/....json`. See getro.ts.
+   */
+  | "getro"
+  /**
    * Jobright.ai native postings (Next.js `/_next/data/.../jobs/info/{id}.json`).
    * `base_url` must include `jr_ingest_ids` (comma-separated job ids). See jobright.ts.
    */
@@ -269,6 +275,10 @@ export type SourceType =
    * Brillio WordPress careers site — HTML listing at `careers.brillio.com/job-listing/` (see brillio.ts).
    */
   | "brillio"
+  /**
+   * GlobalLogic WordPress careers — HTML listing at `globallogic.com/career-search-page/` (see globallogic.ts).
+   */
+  | "globallogic"
   /**
    * Phenom People career sites — locale `sitemap_index.xml` for job URLs; each job page embeds
    * `phApp.ddo.jobDetail.data.job` (HTML description, apply URL). `base_url` is the locale root or a job URL under it (see phenom.ts).
@@ -342,7 +352,13 @@ export type SourceType =
    * IBM careers — POST `www-api.ibm.com/search/api/v2` with appId `careers` / scope `careers2`
    * (same as the public careers search UI). `base_url` is the API endpoint. See ibm_careers.ts.
    */
-  | "ibm_careers";
+  | "ibm_careers"
+  /**
+   * Recruiterflow career sites — `window.jobsList` on `…/jobs` plus per-job
+   * `application/ld+json` JobPosting. `base_url` is `https://recruiterflow.com/{slug}/jobs`
+   * (or a job URL under it). See recruiterflow.ts.
+   */
+  | "recruiterflow";
 
 export type EmploymentType =
   | "full_time"
@@ -524,6 +540,12 @@ export interface PublicJob {
   location_lat: number | null;
   /** Geocoded longitude of the primary job location. */
   location_lng: number | null;
+
+  /**
+   * Distinct geocoded points for this job (primary coords + per-location cache hits).
+   * Present on GET /jobs/:id when multiple physical locations resolve — used by the map UI.
+   */
+  location_points?: Array<{ lat: number; lng: number }>;
 
   /**
    * Skill and technology keywords extracted from the job description.

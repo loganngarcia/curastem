@@ -11,11 +11,10 @@
  *
  * API format: https://apply.workable.com/api/v1/widget/accounts/{handle}
  *
- * ⚠️ Description note: The public v1 widget endpoint does NOT return full job
- * descriptions. That requires the employer-authenticated v3 API. Jobs ingested
- * here will have `description_raw: null`. When the job detail is first fetched
- * via GET /jobs/:id, the AI enrichment step will gracefully skip extraction and
- * fall back to generating a summary from title and company name only.
+ * The v1 widget list omits full job descriptions. After listing, we call the public
+ * v2 job endpoint per posting (same host, unauthenticated) for HTML `description`,
+ * `requirements`, and `benefits`:
+ *   GET https://apply.workable.com/api/v2/accounts/{handle}/jobs/{shortcode}
  *
  * Workable is strong in SaaS companies, agencies, and mid-market businesses
  * globally, with a meaningful presence in Europe, MENA, and Latin America.
@@ -29,17 +28,20 @@ import {
   parseEpochSeconds,
 } from "../../utils/normalize.ts";
 
+const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
+const DETAIL_CONCURRENCY = 8;
+
 interface WorkableJob {
-  shortcode: string;    // Workable's unique job identifier (e.g. "CCBE25DC0C")
+  shortcode: string; // Workable's unique job identifier (e.g. "CCBE25DC0C")
   title: string;
   city: string | null;
   state: string | null;
   country: string | null;
-  location_str: string | null;   // pre-formatted location string (may not exist)
-  employment_type: string | null;  // "Full-time" | "Part-time" etc.
-  telecommuting: boolean | null;   // true = remote
-  published_on: string | null;   // "YYYY-MM-DD"
-  url: string;                   // canonical application URL
+  location_str: string | null; // pre-formatted location string (may not exist)
+  employment_type: string | null; // "Full-time" | "Part-time" etc.
+  telecommuting: boolean | null; // true = remote
+  published_on: string | null; // "YYYY-MM-DD"
+  url: string; // canonical application URL
   locations: Array<{ country: string; city: string; region: string }> | null;
 }
 
@@ -49,6 +51,12 @@ interface WorkableResponse {
     name: string;
     url: string;
   };
+}
+
+interface WorkableV2Job {
+  description?: string | null;
+  requirements?: string | null;
+  benefits?: string | null;
 }
 
 /**
@@ -66,13 +74,52 @@ function buildLocation(job: WorkableJob): string | null {
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
+/** `.../api/v1/widget/accounts/{slug}` → slug */
+function extractWidgetAccountSlug(baseUrl: string): string | null {
+  const m = baseUrl.trim().match(/\/widget\/accounts\/([^/?]+)/i);
+  return m ? m[1] : null;
+}
+
+function mergeV2Description(d: WorkableV2Job): string | null {
+  const parts = [d.description, d.requirements, d.benefits].filter((x) => x && String(x).trim());
+  if (parts.length === 0) return null;
+  return parts.join("\n\n");
+}
+
+async function fetchV2JobHtml(accountSlug: string, shortcode: string): Promise<string | null> {
+  const url = `https://apply.workable.com/api/v2/accounts/${accountSlug}/jobs/${shortcode}`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) return null;
+  const d = (await res.json()) as WorkableV2Job;
+  return mergeV2Description(d);
+}
+
+async function parallelMap<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 export const workableFetcher: JobSource = {
   sourceType: "workable",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
     const res = await fetch(source.base_url, {
       headers: {
-        "User-Agent": "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)",
+        "User-Agent": USER_AGENT,
         Accept: "application/json",
       },
     });
@@ -88,7 +135,6 @@ export const workableFetcher: JobSource = {
       try {
         const locationStr = buildLocation(job);
 
-        // Infer workplace type: telecommuting=true → remote, otherwise derive from location
         const workplaceType = job.telecommuting
           ? "remote"
           : normalizeWorkplaceType(null, locationStr);
@@ -101,7 +147,6 @@ export const workableFetcher: JobSource = {
           workplace_type: workplaceType,
           apply_url: job.url,
           source_url: job.url,
-          // Public v1 widget does not expose description — AI extraction will skip gracefully
           description_raw: null,
           salary_min: null,
           salary_max: null,
@@ -112,6 +157,17 @@ export const workableFetcher: JobSource = {
         });
       } catch {
         continue;
+      }
+    }
+
+    const slug = extractWidgetAccountSlug(source.base_url);
+    if (slug && jobs.length > 0) {
+      const descriptions = await parallelMap(jobs, DETAIL_CONCURRENCY, async (row) =>
+        fetchV2JobHtml(slug, row.external_id)
+      );
+      for (let i = 0; i < jobs.length; i++) {
+        const desc = descriptions[i];
+        if (desc) jobs[i] = { ...jobs[i], description_raw: desc };
       }
     }
 

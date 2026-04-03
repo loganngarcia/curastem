@@ -10524,6 +10524,8 @@ interface HomepageJob {
     /** Geocoded coordinates of the primary job location. Present for most jobs. */
     location_lat?: number | null
     location_lng?: number | null
+    /** Distinct points from GET /jobs/:id when multiple locations resolve — map + commute. */
+    location_points?: Array<{ lat: number; lng: number }> | null
 }
 
 interface JobDescriptionDetail {
@@ -10579,6 +10581,10 @@ type JobDetailCacheEntry = {
     detailJobCity: string | null
     detailJobState: string | null
     detailJobCountry: string | null
+    detailSeniorityLevel: string | null
+    detailLocations: string[] | null
+    detailSalary: { display: string } | null
+    detailLocationPoints: Array<{ lat: number; lng: number }> | null
     /** Full company object from the detail API response — fills gaps when opened from a chat snippet */
     company: HomepageJob["company"] | null
 }
@@ -10628,7 +10634,17 @@ function writeJobDetailCache(
             detailExperienceYearsMin: payload.detailExperienceYearsMin ?? null,
             detailJobAddress: payload.detailJobAddress ?? null,
             detailJobCity: payload.detailJobCity ?? null,
+            detailJobState: payload.detailJobState ?? null,
             detailJobCountry: payload.detailJobCountry ?? null,
+            detailSeniorityLevel: payload.detailSeniorityLevel ?? null,
+            detailLocations: Array.isArray(payload.detailLocations)
+                ? payload.detailLocations
+                : null,
+            detailSalary: payload.detailSalary ?? null,
+            detailLocationPoints: Array.isArray(payload.detailLocationPoints)
+                ? payload.detailLocationPoints
+                : null,
+            company: payload.company ?? null,
         }
         const ids = Object.keys(root)
         if (ids.length > JOB_DETAIL_CACHE_MAX_JOBS) {
@@ -10687,6 +10703,10 @@ type JobDetailHydrationState = {
     detailJobCity: string | null
     detailJobState: string | null
     detailJobCountry: string | null
+    detailSeniorityLevel: string | null
+    detailLocations: string[] | null
+    detailSalary: { display: string } | null
+    detailLocationPoints: Array<{ lat: number; lng: number }> | null
 }
 
 function jobDetailFetchPendingState(): JobDetailHydrationState {
@@ -10702,6 +10722,10 @@ function jobDetailFetchPendingState(): JobDetailHydrationState {
         detailJobCity: null,
         detailJobState: null,
         detailJobCountry: null,
+        detailSeniorityLevel: null,
+        detailLocations: null,
+        detailSalary: null,
+        detailLocationPoints: null,
     }
 }
 
@@ -10720,6 +10744,12 @@ function jobDetailStateFromCacheEntry(
         detailJobCity: c.detailJobCity ?? null,
         detailJobState: c.detailJobState ?? null,
         detailJobCountry: c.detailJobCountry ?? null,
+        detailSeniorityLevel: c.detailSeniorityLevel ?? null,
+        detailLocations: Array.isArray(c.detailLocations) ? c.detailLocations : null,
+        detailSalary: c.detailSalary ?? null,
+        detailLocationPoints: Array.isArray(c.detailLocationPoints)
+            ? c.detailLocationPoints
+            : null,
     }
 }
 
@@ -10737,6 +10767,10 @@ function jobDetailDeferredState(): JobDetailHydrationState {
         detailJobCity: null,
         detailJobState: null,
         detailJobCountry: null,
+        detailSeniorityLevel: null,
+        detailLocations: null,
+        detailSalary: null,
+        detailLocationPoints: null,
     }
 }
 
@@ -11994,6 +12028,8 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         jobId: string,
         entry: Omit<JobDetailCacheEntry, "t" | "u">
     ) => void
+    /** Merge API fields into parent `HomepageJob` so header meta updates after lazy load. */
+    onJobFieldsMerge?: (jobId: string, fields: Partial<HomepageJob>) => void
 }) {
     // Compute the correct detail state synchronously on every render so that
     // when `job.id` changes (prop update, no remount) we never show stale or
@@ -12036,6 +12072,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         detailJobCity,
         detailJobState,
         detailJobCountry,
+        detailSeniorityLevel,
+        detailLocations,
+        detailSalary,
+        detailLocationPoints,
     } = detail
 
     React.useEffect(() => {
@@ -12070,6 +12110,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                         job_city?: string | null
                         job_state?: string | null
                         job_country?: string | null
+                        location_lat?: number | null
+                        location_lng?: number | null
+                        location_points?: Array<{ lat: number; lng: number }> | null
                         company?: {
                             name?: string | null
                             description?: string | null
@@ -12109,6 +12152,22 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                     const jobCity = d?.job_city ?? null
                     const jobState = d?.job_state ?? null
                     const jobCountry = d?.job_country ?? null
+                    const seniorityVal = d?.seniority_level ?? null
+                    const locsVal = Array.isArray(d?.locations)
+                        ? d!.locations!
+                        : null
+                    const salaryVal = d?.salary?.display ? d!.salary! : null
+                    const latVal =
+                        typeof d?.location_lat === "number"
+                            ? d.location_lat
+                            : null
+                    const lngVal =
+                        typeof d?.location_lng === "number"
+                            ? d.location_lng
+                            : null
+                    const pointsVal = Array.isArray(d?.location_points)
+                        ? d!.location_points!
+                        : null
                     // AI enrichment is considered done once at least one AI field is populated.
                     const aiDone = !!(descVal || sumVal || kwVal.length > 0)
                     setDetail({
@@ -12123,6 +12182,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                         detailJobCity: jobCity,
                         detailJobState: jobState,
                         detailJobCountry: jobCountry,
+                        detailSeniorityLevel: seniorityVal,
+                        detailLocations: locsVal,
+                        detailSalary: salaryVal,
+                        detailLocationPoints: pointsVal,
                     })
                     if (d) {
                         const entry = {
@@ -12137,11 +12200,29 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             detailJobCity: jobCity,
                             detailJobState: jobState,
                             detailJobCountry: jobCountry,
+                            detailSeniorityLevel: seniorityVal,
+                            detailLocations: locsVal,
+                            detailSalary: salaryVal,
+                            detailLocationPoints: pointsVal,
                             company:
                                 (d.company as HomepageJob["company"]) ?? null,
                         }
                         writeJobDetailCache(job.id, jobsApiUrl, entry)
                         onDetailFetched?.(job.id, entry)
+                        const merged: Partial<HomepageJob> = {}
+                        if (seniorityVal != null)
+                            merged.seniority_level = seniorityVal
+                        if (locsVal && locsVal.length > 0)
+                            merged.locations = locsVal
+                        if (salaryVal) merged.salary = salaryVal
+                        if (latVal != null) merged.location_lat = latVal
+                        if (lngVal != null) merged.location_lng = lngVal
+                        if (pointsVal && pointsVal.length > 0)
+                            merged.location_points = pointsVal
+                        if (sumVal) merged.job_summary = sumVal
+                        if (visaVal) merged.visa_sponsorship = visaVal
+                        if (Object.keys(merged).length > 0)
+                            onJobFieldsMerge?.(job.id, merged)
                         // Populate company social links locally — no callback needed.
                         // When opened from a chat snippet the prop has nulls for everything;
                         // the detail response has the full company object.
@@ -12245,15 +12326,100 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         return map[s] ?? null
     }
     const isRemote = job.workplace_type === "remote"
+    /** Prefer detail API (after GET /jobs/:id) over list-card stubs. */
+    const effectiveLocations =
+        detailLocations && detailLocations.length > 0
+            ? detailLocations
+            : job.locations
+
+    /** One location line: US → "City, ST"; otherwise "City, Country" or title-cased free text. */
+    const formatLocationPart = (raw: string): string => {
+        const t = raw.trim().replace(/\s+/g, " ")
+        if (!t) return ""
+        const comma = t.lastIndexOf(",")
+        if (comma === -1) {
+            return t
+                .split(/[\s/-]+/)
+                .filter(Boolean)
+                .map((w) => {
+                    const wl = w.toLowerCase()
+                    if (wl === "st" || wl === "st.") return "St."
+                    if (/^[a-z]{2}$/i.test(w) && w.length === 2)
+                        return w.toUpperCase()
+                    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+                })
+                .join(" ")
+        }
+        const city = t.slice(0, comma).trim()
+        const region = t.slice(comma + 1).trim()
+        if (!region) {
+            return formatLocationPart(city)
+        }
+        const cityFmt = city
+            .split(/[\s/-]+/)
+            .filter(Boolean)
+            .map((w) => {
+                const wl = w.toLowerCase()
+                if (wl === "st" || wl === "st.") return "St."
+                if (/^[a-z]{2}$/i.test(w) && w.length === 2)
+                    return w.toUpperCase()
+                return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+            })
+            .join(" ")
+        // US state / territory abbreviation
+        if (/^[A-Za-z]{2}$/.test(region)) {
+            return `${cityFmt}, ${region.toUpperCase()}`
+        }
+        // Short country / metro codes (e.g. UK)
+        if (region.length <= 3 && /^[A-Za-z.]+$/i.test(region)) {
+            return `${cityFmt}, ${region.toUpperCase()}`
+        }
+        const regionFmt = region
+            .split(/[\s/-]+/)
+            .filter(Boolean)
+            .map((w) => {
+                const wl = w.toLowerCase()
+                if (wl === "st" || wl === "st.") return "St."
+                return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+            })
+            .join(" ")
+        return `${cityFmt}, ${regionFmt}`
+    }
+
+    /** Multi-site roles: "Hollywood or Burbank" / "LA, SF, or NYC" style (Oxford comma for 3+). */
+    const joinLocationsOr = (parts: string[]): string => {
+        const p = parts.map((s) => s.trim()).filter(Boolean)
+        if (p.length === 0) return ""
+        if (p.length === 1) return p[0]!
+        if (p.length === 2) return `${p[0]} or ${p[1]}`
+        return `${p.slice(0, -1).join(", ")}, or ${p[p.length - 1]}`
+    }
+
     // For remote jobs the workplace pill already says "Remote" — skip the location to avoid duplicates.
-    // US jobs: "City, ST" — international: "City, Country" — fall back to locations[0] from source.
     const locationDisplay = isRemote
         ? null
-        : detailJobCity && detailJobState
-          ? `${detailJobCity}, ${detailJobState}`
-          : detailJobCity && detailJobCountry
-            ? `${detailJobCity}, ${detailJobCountry}`
-            : detailJobCity || job.locations?.[0] || null
+        : (() => {
+              const locs = (effectiveLocations ?? []).map((s) => s.trim()).filter(Boolean)
+              if (locs.length > 1) {
+                  return joinLocationsOr(locs.map((s) => formatLocationPart(s)))
+              }
+              if (locs.length === 1) {
+                  return formatLocationPart(locs[0]!)
+              }
+              if (detailJobCity && detailJobState) {
+                  return formatLocationPart(
+                      `${detailJobCity}, ${detailJobState}`
+                  )
+              }
+              if (detailJobCity && detailJobCountry) {
+                  return formatLocationPart(
+                      `${detailJobCity}, ${detailJobCountry}`
+                  )
+              }
+              if (detailJobCity) return formatLocationPart(detailJobCity)
+              return null
+          })()
+
     const metaItems = [
         jobTimeAgo(job.posted_at),
         locationDisplay,
@@ -12265,8 +12431,8 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                   .replace(/_/g, "-")
                   .replace(/\b\w/g, (c) => c.toUpperCase())
             : null,
-        fmtSeniority(job.seniority_level),
-        job.salary?.display,
+        (detailSalary ?? job.salary)?.display,
+        fmtSeniority(detailSeniorityLevel ?? job.seniority_level),
         detailVisaSponsorship === "yes" ? "Sponsors visa" : null,
     ].filter(Boolean)
 
@@ -13550,6 +13716,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     jobSwipeDeck,
     mobileToolGestureAxis = null,
     onJobDetailFetched,
+    onJobFieldsMerge,
 }: {
     job: HomepageJob
     jobsApiUrl: string
@@ -13566,6 +13733,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         jobId: string,
         entry: Omit<JobDetailCacheEntry, "t" | "u">
     ) => void
+    onJobFieldsMerge?: (jobId: string, fields: Partial<HomepageJob>) => void
 }) {
     const [isShareHovered, setIsShareHovered] = React.useState(false)
     const [isCloseHovered, setIsCloseHovered] = React.useState(false)
@@ -13812,6 +13980,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                                         onCreateResume={onCreateResume}
                                         fetchEnabled
                                         onDetailFetched={onJobDetailFetched}
+                                        onJobFieldsMerge={onJobFieldsMerge}
                                     />
                                 </div>
                                 {/* Next slot */}
@@ -13850,6 +14019,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                             resumeAnimPhase={resumeAnimPhase}
                             onCreateResume={onCreateResume}
                             onDetailFetched={onJobDetailFetched}
+                            onJobFieldsMerge={onJobFieldsMerge}
                         />
                     </div>
                 )}
@@ -13989,6 +14159,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     feedWidth = 428,
     defaultSearch = "",
     searchFocusRef,
+    coordMergeJob = null,
 }: {
     jobsApiUrl: string
     googleMapsApiKey: string
@@ -14010,6 +14181,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     defaultSearch?: string
     /** Forwarded ref so parent can focus the search input (e.g. after closing job detail). */
     searchFocusRef?: React.RefObject<(() => void) | null>
+    /** When job detail is open over the map, use this copy for coords (GET /jobs/:id enrichment). */
+    coordMergeJob?: HomepageJob | null
 }) {
     const isStatic = useIsStaticRenderer()
     const mapContainerRef = React.useRef<HTMLDivElement>(null)
@@ -14924,14 +15097,41 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         > = {}
 
         for (const job of selectedJobs) {
-            // Use per-job coords when available (retail stores), fall back to HQ
-            const jobLat =
-                job.location_lat ?? job.company?.headquarters?.lat ?? null
-            const jobLng =
-                job.location_lng ?? job.company?.headquarters?.lng ?? null
-            if (jobLat == null || jobLng == null) continue
+            const j =
+                coordMergeJob && coordMergeJob.id === job.id
+                    ? coordMergeJob
+                    : job
+            const pts: Array<{ lat: number; lng: number }> = []
+            if (j.location_points && j.location_points.length > 0) {
+                for (const p of j.location_points) {
+                    if (
+                        typeof p.lat === "number" &&
+                        typeof p.lng === "number"
+                    )
+                        pts.push({ lat: p.lat, lng: p.lng })
+                }
+            }
+            if (pts.length === 0) {
+                const jobLat =
+                    j.location_lat ?? j.company?.headquarters?.lat ?? null
+                const jobLng =
+                    j.location_lng ?? j.company?.headquarters?.lng ?? null
+                if (jobLat != null && jobLng != null)
+                    pts.push({ lat: jobLat, lng: jobLng })
+            }
+            if (pts.length === 0) continue
 
-            const km = haversineKm(userLoc.lat, userLoc.lng, jobLat, jobLng)
+            // Nearest site — multi-location roles may list several offices.
+            let km = Infinity
+            for (const p of pts) {
+                const d = haversineKm(
+                    userLoc.lat,
+                    userLoc.lng,
+                    p.lat,
+                    p.lng
+                )
+                if (d < km) km = d
+            }
             if (km > FIFTY_MILES_KM) continue
 
             // Walking: only show if under 2.5 km straight-line (~30 min at 5 km/h)
@@ -14945,7 +15145,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         if (Object.keys(updates).length > 0) {
             setTravelTimes((prev) => ({ ...prev, ...updates }))
         }
-    }, [selectedJobs, userLoc, isStatic])
+    }, [selectedJobs, userLoc, isStatic, coordMergeJob])
 
     const handleCurrentLocation = React.useCallback(() => {
         haptic.light()
@@ -26154,6 +26354,22 @@ Do not include markdown formatting or explanations.`
         [homepageJobsForDeck, messages]
     )
 
+    /** Merge GET /jobs/:id fields into the open job + deck copies so header/map stay fresh. */
+    const mergeJobFieldsFromDetail = React.useCallback(
+        (jobId: string, fields: Partial<HomepageJob>) => {
+            setSelectedJob((prev) =>
+                prev?.id === jobId ? { ...prev, ...fields } : prev
+            )
+            setJobDeckExtras((prev) =>
+                prev.map((j) => (j.id === jobId ? { ...j, ...fields } : j))
+            )
+            setHomepageJobsForDeck((prev) =>
+                prev.map((j) => (j.id === jobId ? { ...j, ...fields } : j))
+            )
+        },
+        []
+    )
+
     React.useEffect(() => {
         if (!isJobOpen || jobCycleDeck.length < 2) return
         const onKey = (e: KeyboardEvent) => {
@@ -26217,6 +26433,7 @@ Do not include markdown formatting or explanations.`
                     seniority_level: d.seniority_level ?? null,
                     location_lat: d.location_lat ?? null,
                     location_lng: d.location_lng ?? null,
+                    location_points: d.location_points ?? null,
                     visa_sponsorship: d.visa_sponsorship ?? null,
                 })
             })
@@ -34682,6 +34899,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 payload: { jobId, entry },
                             })
                         }}
+                        onJobFieldsMerge={mergeJobFieldsFromDetail}
                     />
                     {mobileOverlayInput}
                 </div>
@@ -34760,6 +34978,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             searchFocusRef={
                                 isMobileLayout ? undefined : mapSearchFocusRef
                             }
+                            coordMergeJob={
+                                isJobOpen && selectedJob ? selectedJob : null
+                            }
                         />
                         {/* Desktop only — slides in from the right over the map, same animation as the tool panel */}
                         <AnimatePresence>
@@ -34831,6 +35052,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                     payload: { jobId, entry },
                                                 })
                                             }}
+                                            onJobFieldsMerge={
+                                                mergeJobFieldsFromDetail
+                                            }
                                         />
                                     </div>
                                 </motion.div>
@@ -40241,6 +40465,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     payload: { jobId, entry },
                                 })
                             }}
+                            onJobFieldsMerge={mergeJobFieldsFromDetail}
                         />
                     </div>
                 )}

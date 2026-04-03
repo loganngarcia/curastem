@@ -182,37 +182,28 @@ async function handleRequest(
   }
 
   // POST /admin/trigger — manually fire ingestion (requires a valid API key).
-  // ?source=<id>  Run a single source synchronously and return its result.
+  // ?source=<id>  Run a single source and return its result.
   // ?source=<id>&limit=N&offset=M  Process fetch().slice(M, M+N) for huge sources (e.g. IBM).
   // (no param)    Queue a full ingestion run in the background via waitUntil.
   if (path === "/admin/trigger" && method === "POST") {
     const sourceId = url.searchParams.get("source");
     if (sourceId) {
-      // Single-source mode: run synchronously so the result is in the response.
-      // Embeddings are skipped to fit within the 30s Worker request budget.
-      try {
-        await seedSources(env.JOBS_DB);
-        await migrateRenameCrunchbaseSource(env.JOBS_DB);
-        await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
-        await ensureCompanyExaColumns(env.JOBS_DB);
-        await ensureNewJobColumns(env.JOBS_DB);
-        await seedCompanyWebsites(env.JOBS_DB);
-        await applyCompanyMetadataCorrections(env.JOBS_DB, env.LOGO_DEV_TOKEN);
-        const limitParam = url.searchParams.get("limit");
-        const limit = limitParam ? parseInt(limitParam, 10) : undefined;
-        const offsetParam = url.searchParams.get("offset");
-        const parsedOff = offsetParam ? parseInt(offsetParam, 10) : NaN;
-        const jobOffset = Number.isFinite(parsedOff) && parsedOff > 0 ? parsedOff : undefined;
-        const metaJobUrl = url.searchParams.get("meta_job_url") ?? undefined;
-        const result = await processSourceById(env, sourceId, limit, metaJobUrl, jobOffset);
-        return jsonOk({ status: "completed", result });
-      } catch (triggerErr) {
-        logger.error("admin_trigger_source_failed", { source_id: sourceId, error: String(triggerErr) });
-        return new Response(JSON.stringify({ error: String(triggerErr) }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
+      // Single-source mode: skip the heavy setup sequence (seedSources takes ~60s
+      // of D1 round-trips and is already run by the hourly cron).  Run the source
+      // fetch in the background via waitUntil so the response returns before the
+      // 30s HTTP timeout fires, then poll D1 for last_fetched_at to confirm.
+      const limitParam = url.searchParams.get("limit");
+      const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+      const offsetParam = url.searchParams.get("offset");
+      const parsedOff = offsetParam ? parseInt(offsetParam, 10) : NaN;
+      const jobOffset = Number.isFinite(parsedOff) && parsedOff > 0 ? parsedOff : undefined;
+      const metaJobUrl = url.searchParams.get("meta_job_url") ?? undefined;
+      ctx.waitUntil(
+        processSourceById(env, sourceId, limit, metaJobUrl, jobOffset).catch((err) => {
+          logger.error("admin_trigger_source_failed", { source_id: sourceId, error: String(err) });
+        })
+      );
+      return jsonOk({ status: "triggered", source_id: sourceId, message: "Source ingestion started in background — poll last_fetched_at in D1 to confirm completion." });
     }
     // Full-run mode: background via waitUntil (best-effort, may be cut off for
     // large deployments — prefer the cron for full runs).
@@ -450,36 +441,44 @@ async function handleRequest(
   }
 
   // POST /admin/job-geocode — backfill location_lat/lng for whitelisted retail companies
-  // using Places API. Pass ?company_slug=cvs-health to target a single company,
-  // or omit for all whitelisted companies. ?limit= controls max jobs per call (default 200).
+  // Geocode unresolved job locations for a specific company slug.
+  // Routing mirrors the inline ingestion logic in runner.ts Phase 4b:
+  //   retail slug or retail title → Photon (free, city-level)
+  //   professional company        → Places API ($0.032/req)
+  // Requires ?company_slug=<slug>. ?limit= controls max jobs (default 50).
   if (path === "/admin/job-geocode" && method === "POST") {
-    if (!env.GOOGLE_MAPS_API_KEY) {
-      return new Response(JSON.stringify({ error: "GOOGLE_MAPS_API_KEY not set" }), {
-        status: 503, headers: { "Content-Type": "application/json" },
+    const slugParam = url.searchParams.get("company_slug");
+    if (!slugParam) {
+      return new Response(JSON.stringify({ error: "company_slug query param required" }), {
+        status: 400, headers: { "Content-Type": "application/json" },
       });
     }
     try {
-      const { PER_JOB_GEOCODE_COMPANY_SLUGS } = await import("./enrichment/placesGeocodeCompanies.ts");
+      const { RETAIL_GEOCODE_SLUGS } = await import("./utils/retailGeocode.ts");
       const { listJobsNeedingPlacesGeocode, updateJobsWithCoords } = await import("./db/queries.ts");
       const { placesGeocode } = await import("./utils/placesGeocode.ts");
+      const { geocode } = await import("./utils/geocode.ts");
 
-      const slugParam = url.searchParams.get("company_slug");
-      const slugs = slugParam
-        ? [slugParam]
-        : [...PER_JOB_GEOCODE_COMPANY_SLUGS];
       const limitParam = url.searchParams.get("limit");
-      // Default 50: each Places call ~200ms → 50 calls ≈ 10s, well within 30s request budget
       const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
+      const isRetail = RETAIL_GEOCODE_SLUGS.has(slugParam);
 
-      const jobs = await listJobsNeedingPlacesGeocode(env.JOBS_DB, slugs, limit);
+      const jobs = await listJobsNeedingPlacesGeocode(env.JOBS_DB, [slugParam], limit);
       const seen = new Map<string, { lat: number; lng: number } | null>();
       let jobsUpdated = 0;
 
       for (const job of jobs) {
         const cacheKey = `${job.company_name}|${job.location_primary}`;
         if (!seen.has(cacheKey)) {
-          const result = await placesGeocode(`${job.company_name} ${job.location_primary}`, env.GOOGLE_MAPS_API_KEY);
-          seen.set(cacheKey, result ? { lat: result.lat, lng: result.lng } : null);
+          if (isRetail || !env.GOOGLE_MAPS_API_KEY) {
+            // Retail → free city-level Photon
+            const result = await geocode(job.location_primary, env.RATE_LIMIT_KV);
+            seen.set(cacheKey, result ? { lat: result.lat, lng: result.lng } : null);
+          } else {
+            // Professional → Places API for precise office/facility coords
+            const result = await placesGeocode(`${job.company_name} ${job.location_primary}`, env.GOOGLE_MAPS_API_KEY, env.RATE_LIMIT_KV);
+            seen.set(cacheKey, result ? { lat: result.lat, lng: result.lng } : null);
+          }
           await new Promise((r) => setTimeout(r, 50));
         }
         const coords = seen.get(cacheKey);
@@ -488,20 +487,12 @@ async function handleRequest(
         }
       }
 
-      const remaining = await env.JOBS_DB.prepare(
-        `SELECT COUNT(*) AS c FROM jobs j
-         JOIN companies c ON c.id = j.company_id
-         WHERE c.slug IN (${slugs.map(() => "?").join(", ")})
-           AND j.location_lat IS NULL
-           AND j.locations IS NOT NULL
-           AND json_extract(j.locations, '$[0]') IS NOT NULL`
-      ).bind(...slugs).first<{ c: number }>();
-
       return jsonOk({
         status: "completed",
+        company_slug: slugParam,
+        tier: isRetail ? "photon" : "places_api",
         unique_locations_queried: seen.size,
         jobs_updated: jobsUpdated,
-        remaining: remaining?.c ?? 0,
       });
     } catch (err) {
       logger.error("admin_job_geocode_failed", { error: String(err) });

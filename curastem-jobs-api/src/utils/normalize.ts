@@ -110,6 +110,81 @@ export function detectEmploymentTypeFromText(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Legal minimum age vs. years of professional experience
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Retail and hourly postings often say "must be 18 years of age or older".
+// Heuristics and the extraction model must not treat that as "18 years of
+// experience" or infer senior IC levels from it.
+
+/** Phrases that refer to legal age — strip these before counting "N years" tenure. */
+const LEGAL_AGE_PHRASE_STRIP_RES: RegExp[] = [
+  /\b(?:at least|must be|minimum(?:\s+age)?)\s+\d{1,2}\s+years?\s+of\s+age\b/gi,
+  /\b\d{1,2}\s+years?\s+of\s+age\b/gi,
+  /\b\d{1,2}\s+years?\s+or\s+older\b/gi,
+  /\b\d{1,2}\s+years?\s+or\s+over\b/gi,
+  /\b\d{1,2}\s+years?\s+old\b/gi,
+  /\bage\s+of\s+\d{1,2}\b/gi,
+];
+
+export function stripAgeRequirementPhrasesForExperienceParsing(text: string): string {
+  let s = text;
+  for (const re of LEGAL_AGE_PHRASE_STRIP_RES) {
+    s = s.replace(re, " ");
+  }
+  return s;
+}
+
+/** True when `years` matches a legal-age line in the description (not tenure). */
+export function experienceYearsMinIsLikelyLegalAgeNotTenure(
+  description: string,
+  years: number
+): boolean {
+  if (years < 14 || years > 25) return false;
+  const d = description.toLowerCase();
+  const n = String(years);
+  const paired = [
+    new RegExp(`\\b${n}\\s+years?\\s+of\\s+age\\b`, "i"),
+    new RegExp(`\\b${n}\\s+years?\\s+or\\s+older\\b`, "i"),
+    new RegExp(`\\b${n}\\s+years?\\s+or\\s+over\\b`, "i"),
+    new RegExp(`\\b${n}\\s+years?\\s+old\\b`, "i"),
+    new RegExp(`\\b(?:at least|must be|minimum)\\s+${n}\\s+years?\\s+of\\s+age\\b`, "i"),
+    new RegExp(`\\bage\\s+of\\s+${n}\\b`, "i"),
+  ];
+  return paired.some((re) => re.test(d));
+}
+
+export function sanitizeExperienceYearsMinFromDescription(
+  description: string,
+  minYears: number | null
+): number | null {
+  if (minYears === null) return null;
+  if (experienceYearsMinIsLikelyLegalAgeNotTenure(description, minYears)) return null;
+  return minYears;
+}
+
+const LEGAL_AGE_BOILERPLATE_RE =
+  /\b(?:\d{1,2}\s+years?\s+of\s+age|(?:at least|must be|minimum)\s+\d{1,2}\s+years?\s+of\s+age|\d{1,2}\s+years?\s+or\s+older|\d{1,2}\s+years?\s+or\s+over|\d{1,2}\s+years?\s+old|age\s+of\s+\d{1,2})\b/i;
+
+/**
+ * Drop senior|staff from the model when the body only adds legal-age boilerplate
+ * and the title does not already signal a senior IC / leadership band.
+ */
+export function sanitizeSeniorityLevelFromAgeNoise(
+  title: string,
+  description: string,
+  seniority: SeniorityLevel | null
+): SeniorityLevel | null {
+  if (seniority !== "senior" && seniority !== "staff") return seniority;
+  if (!LEGAL_AGE_BOILERPLATE_RE.test(description)) return seniority;
+  const t = title.toLowerCase();
+  if (/\b(senior|sr\.?|staff|principal|lead|director|manager|vp\b|executive)\b/.test(t)) {
+    return seniority;
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Heuristic seniority detection from title keywords + years-of-experience
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -179,11 +254,13 @@ export function detectSeniorityFromText(
   // Patterns: "3 years", "3+ years", "3-8 years", "3–8 years", "3-8+ years", "3 yrs"
   // No need to require "experience" after — job descriptions don't say "X years"
   // unless they mean required experience.
+  // Strip legal-age lines first so "18 years of age" is not read as 18 years' tenure.
+  const dForYears = stripAgeRequirementPhrasesForExperienceParsing(d);
   const yrsRx = /(\d+)\s*(?:[-–]\s*\d+\s*)?\+?\s*(?:years?|yrs?)\b/gi;
 
   let minYears = Infinity;
   let m: RegExpExecArray | null;
-  while ((m = yrsRx.exec(d)) !== null) {
+  while ((m = yrsRx.exec(dForYears)) !== null) {
     const v = parseInt(m[1], 10);
     if (!isNaN(v) && v < minYears) minYears = v;
   }
@@ -428,6 +505,12 @@ const US_STATE_ABBREVS: Record<string, string> = {
   wisconsin: "WI", wyoming: "WY", "district of columbia": "DC",
 };
 
+/** USPS state / DC codes — disambiguate from Canadian provinces (ON, AB, …). */
+const US_STATE_ABBREV_SET = new Set(Object.values(US_STATE_ABBREVS));
+
+/** Lowercase full US state names (keys of US_STATE_ABBREVS) — preserve "Minnesota, USA" vs strip "San Francisco, USA". */
+const US_STATE_FULL_NAME_SET = new Set(Object.keys(US_STATE_ABBREVS));
+
 // Strings that are not meaningful geocodable locations.
 // Jobs with these values will have null lat/lng (by design).
 const NON_GEOCODABLE = new Set([
@@ -444,9 +527,7 @@ const NON_GEOCODABLE = new Set([
   "us california",
   "prisons - nationwide",
   "ky",
-  "georgia",
   "south america",
-  "arizona",
   "aranjuez, md",
   "vernon",
   "united states & canada",
@@ -513,7 +594,6 @@ const NON_GEOCODABLE = new Set([
   "zuid nederland, netherlands",
   "west and mountain timezones",
   "west coast, united states (hybrid",
-  "washington",
   "vorarlberg, austria",
   "vestland, norway",
   "vestfold, vestfold",
@@ -556,7 +636,6 @@ const NON_GEOCODABLE = new Set([
   "mekong delta",
   "meir 34",
   "maryland",
-  "madison",
   "md",
   "landquart, greece",
   "lahr",
@@ -588,7 +667,8 @@ const NON_GEOCODABLE = new Set([
   // Remote / flexible
   "remote", "fully remote", "100% remote", "work from home",
   // Vague / multi-location
-  "multiple locations", "various locations", "all locations",
+  "multiple locations", "multiple cities", "various locations", "all locations",
+  "4 locations",
   "location negotiable after selection", "location negotiable",
   "location", "tbd", "na", "n/a",
   "us & canada", "southeast, u.s.", "raleigh-durham",
@@ -598,7 +678,7 @@ const NON_GEOCODABLE = new Set([
   "europe", "emea", "eu", "apac", "latam",
   "india", "canada", "germany", "france", "italy", "brazil",
   "south korea", "japan", "china", "australia", "taiwan",
-  "singapore", "netherlands", "the netherlands", "israel",
+  "netherlands", "the netherlands", "israel",
   "mexico", "ireland", "spain", "romania", "switzerland",
   "belgium", "austria", "poland", "portugal", "czech republic",
   "hungary", "sweden", "norway", "finland", "denmark",
@@ -607,8 +687,7 @@ const NON_GEOCODABLE = new Set([
   "kenya", "ghana", "colombia", "chile", "peru", "argentina",
   "saudi arabia", "united arab emirates", "uae",
   "worldwide", "global", "international", "allemagne",
-  // Bare US state names (non-geocodable as a point)
-  "pennsylvania", "iowa", "california", "texas", "florida",
+  // Bare US state names — handled by normalizeLocation → "State, USA" (see step 2b)
   "new york state", "washington state",
   // Bare Australian state/territory names
   "queensland", "new south wales", "victoria", "south australia",
@@ -707,6 +786,61 @@ const BARE_CITY_MAP: Record<string, string> = {
   "fort polk, la": "Fort Johnson, LA",
   "braga": "Braga, Portugal",
   "bellevue": "Bellevue, WA",
+  // Bare global cities — canonical intl form is City, Full English country name (D1 samples)
+  "london": "London, United Kingdom",
+  "toronto": "Toronto, Canada",
+  "amsterdam": "Amsterdam, Netherlands",
+  "tokyo": "Tokyo, Japan",
+  "nagoya": "Nagoya, Japan",
+  "minato": "Minato, Japan",
+  "taipei": "Taipei, Taiwan",
+  "zhubei": "Zhubei, Taiwan",
+  "stockholm": "Stockholm, Sweden",
+  "krakow": "Krakow, Poland",
+  "hanoi": "Hanoi, Vietnam",
+  "bangkok": "Bangkok, Thailand",
+  "lysaker": "Lysaker, Norway",
+  "north sydney": "North Sydney, Australia",
+  "armenia": "Armenia",
+  "singapore": "Singapore",
+  "seattle": "Seattle, WA",
+  "miami": "Miami, FL",
+  "whittier": "Whittier, CA",
+  "milan": "Milan, Italy",
+  "petaling jaya": "Petaling Jaya, Malaysia",
+  "roubaix": "Roubaix, France",
+  "vilvoorde": "Vilvoorde, Belgium",
+  "leonberg": "Leonberg, Germany",
+  "magdeburg": "Magdeburg, Germany",
+  "crawley": "Crawley, United Kingdom",
+  "querétaro": "Querétaro, Mexico",
+  "queretaro": "Querétaro, Mexico",
+  "monterrey": "Monterrey, Mexico",
+  "guadalajara": "Guadalajara, Mexico",
+  "tlaquepaque": "Tlaquepaque, Mexico",
+  "pasig": "Pasig, Philippines",
+  "berlin": "Berlin, Germany",
+  "washington": "Washington, DC",
+  "rensselaer": "Rensselaer, NY",
+  "marne la vallee cedex 4": "Marne-la-Vallée, France",
+  "madison": "Madison, WI",
+  "austin": "Austin, TX",
+  "dublin": "Dublin, Ireland",
+  "paris": "Paris, France",
+  "barcelona": "Barcelona, Spain",
+  "mumbai": "Mumbai, India",
+  "hyderabad": "Hyderabad, India",
+  "chennai": "Chennai, India",
+  "pune": "Pune, India",
+  "gurgaon": "Gurgaon, India",
+  "noida": "Noida, India",
+  "bengaluru": "Bengaluru, India",
+  "santiago": "Santiago, Chile",
+  "charlotte": "Charlotte, NC",
+  "cupertino": "Cupertino, CA",
+  "northridge": "Northridge, CA",
+  "christchurch": "Christchurch, New Zealand",
+  "riyadh": "Riyadh, Saudi Arabia",
   "bay pines, fl": "St. Petersburg, FL",
   "westport, mo": "Kansas City, MO",
   "schofield barracks, hi": "Wahiawa, HI",
@@ -781,7 +915,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "keesler afb, ms": "Biloxi, MS",
   "kaiserslautern": "Kaiserslautern, Germany",
   "kadena air base okinawa": "Okinawa, Japan",
-  "glenrothes, fife": "Glenrothes, UK",
+  "glenrothes, fife": "Glenrothes, United Kingdom",
   "chesapeake county, va": "Chesapeake, VA",
   "cherry point, nc": "Havelock, NC",
   "bolzano, south tyrol": "Bolzano, Italy",
@@ -905,7 +1039,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "buchholz in der nordheide, nds": "Buchholz in der Nordheide, Germany",
   "bremen, hb": "Bremen, Germany",
   "boulogne-billancourt, idf": "Boulogne-Billancourt, France",
-  "birmingham, west midlands": "Birmingham, UK",
+  "birmingham, west midlands": "Birmingham, United Kingdom",
   "benagaluru": "Bengaluru, India",
   "basavanapura, ka": "Bengaluru, India",
   "yokota air base": "Yokota Air Base, Japan",
@@ -1201,7 +1335,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "oostende, vlaanderen": "Ostend, Belgium",
   "olbia": "Olbia, Italy",
   "novate milanese, milan": "Novate Milanese, Italy",
-  "newtownabbey, county antrim": "Newtownabbey, UK",
+  "newtownabbey, county antrim": "Newtownabbey, United Kingdom",
   "new taipei city": "New Taipei City, Taiwan",
   "neuenburg am rhein, baden-württemberg": "Neuenburg am Rhein, Germany",
   "naval weapons station, yorktown": "Yorktown, VA",
@@ -1219,7 +1353,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "marki, masovian voivodeship": "Marki, Poland",
   "markham, on": "Markham, Canada",
   "marbella, malaga": "Marbella, Spain",
-  "manchester": "Manchester, UK",
+  "manchester": "Manchester, United Kingdom",
   "makati city, ncr": "Makati City, Philippines",
   "makati city": "Makati City, Philippines",
   "merano": "Merano, Italy",
@@ -1246,7 +1380,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "isernhagen, nds": "Isernhagen, Germany",
   "in - bengaluru": "Bengaluru, India",
   "hybrid - new york, ny": "New York, NY",
-  "hull, east riding of yorkshire": "Hull, UK",
+  "hull, east riding of yorkshire": "Hull, United Kingdom",
   "heidelberg, bw": "Heidelberg, Germany",
   "guatemala, guatemala": "Guatemala City, Guatemala",
   "guadalajara, jalisco": "Guadalajara, Mexico",
@@ -1335,7 +1469,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "wuppertal, nrw": "Wuppertal, Germany",
   "wuhan, hubei": "Wuhan, China",
   "wrocław, lower silesian voivodeship": "Wrocław, Poland",
-  "wood green, london": "London, UK",
+  "wood green, london": "London, United Kingdom",
   "wolfsberg, kärnten": "Wolfsberg, Austria",
   "wolfratshausen, bayern": "Wolfratshausen, Germany",
   "winston salem, nc": "Winston-Salem, NC",
@@ -1344,7 +1478,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "white lake charter township, mi": "White Lake, MI",
   "wexford, wexford": "Wexford, Ireland",
   "west los angeles, ca": "Los Angeles, CA",
-  "west bromwich, west midlands": "West Bromwich, UK",
+  "west bromwich, west midlands": "West Bromwich, United Kingdom",
   "weilheim in oberbayern, bayern": "Weilheim in Oberbayern, Germany",
   "waiblingen, baden-württemberg": "Waiblingen, Germany",
   "waiblingen, bw": "Waiblingen, Germany",
@@ -1379,7 +1513,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "são joão, aveiro": "São João, Portugal",
   "surat, gujarat": "Surat, India",
   "stryków, łódź voivodeship": "Stryków, Poland",
-  "stratford, east london": "London, UK",
+  "stratford, east london": "London, United Kingdom",
   "stord, vestland": "Stord, Norway",
   "st peters, mo": "St. Peters, MO",
   "st charles, mo": "St. Charles, MO",
@@ -1389,7 +1523,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "sona, verona": "Sona, Italy",
   "sokołów, masovian voivodeship": "Sokołów, Poland",
   "sheraton al matar, cairo governorate": "Cairo, Egypt",
-  "sheffield, south yorkshire": "Sheffield, UK",
+  "sheffield, south yorkshire": "Sheffield, United Kingdom",
   "shah alam, selangor": "Shah Alam, Malaysia",
   "sevilla, sevilla": "Seville, Spain",
   "settimo torinese, turin": "Settimo Torinese, Italy",
@@ -1407,11 +1541,11 @@ const BARE_CITY_MAP: Record<string, string> = {
   "san clemente naval reserve island, ca": "San Clemente, CA",
   "salzburg, sankt johann im pongau": "Salzburg, Austria",
   "salvador, ba": "Salvador, Brazil",
-  "salisbury, wiltshire": "Salisbury, UK",
+  "salisbury, wiltshire": "Salisbury, United Kingdom",
   "saint thomas, virgin islands": "Saint Thomas, USVI",
   "saguenay, qc": "Saguenay, Canada",
   "rīga, latvia": "Riga, Latvia",
-  "rushden, northamptonshire": "Rushden, UK",
+  "rushden, northamptonshire": "Rushden, United Kingdom",
   "rosdorf, niedersachsen": "Rosdorf, Germany",
   "roma sud": "Rome, Italy",
   "rodgau, he": "Rodgau, Germany",
@@ -1427,7 +1561,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "rome maximo laurentino": "Rome, Italy",
   "rodez, france": "Rodez, France",
   "querétaro, mx": "Querétaro, Mexico",
-  "queen's square, corby": "Corby, UK",
+  "queen's square, corby": "Corby, United Kingdom",
   "praha 1, hlavní město praha": "Prague, Czech Republic",
   "poitiers, nouvelle-aquitaine": "Poitiers, France",
   "pointe-claire, qc": "Pointe-Claire, Canada",
@@ -1443,7 +1577,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "palma de mallorca, islas baleares": "Palma de Mallorca, Spain",
   "paget, qld": "Paget, Australia",
   "providence, ri": "Providence, RI",
-  "oxford, oxfordshire": "Oxford, UK",
+  "oxford, oxfordshire": "Oxford, United Kingdom",
   "ovar, aveiro": "Ovar, Portugal",
   "oulu, north ostrobothnia": "Oulu, Finland",
   "ottersberg, nds": "Ottersberg, Germany",
@@ -1481,7 +1615,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "mont belieu, tx": "Mont Belvieu, TX",
   "modugno, puglia": "Modugno, Italy",
   "misterbianco": "Misterbianco, Italy",
-  "milton keynes, buckinghamshire": "Milton Keynes, UK",
+  "milton keynes, buckinghamshire": "Milton Keynes, United Kingdom",
   "mikulov na moravě, jihomoravský kraj": "Mikulov, Czech Republic",
   "miesau": "Miesau, Germany",
   "midrand, gp": "Midrand, South Africa",
@@ -1499,7 +1633,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "ludwigsburg, baden-württemberg": "Ludwigsburg, Germany",
   "longueuil": "Longueuil, Canada",
   "lonato del garda, brescia": "Lonato del Garda, Italy",
-  "llanelli, carmarthenshire": "Llanelli, UK",
+  "llanelli, carmarthenshire": "Llanelli, United Kingdom",
   "lippstadt, nrw": "Lippstadt, Germany",
   "lindau, by": "Lindau, Germany",
   "limbiate": "Limbiate, Italy",
@@ -1554,7 +1688,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "håpet, troms": "Tromsø, Norway",
   "hybrid, san francisco": "San Francisco, CA",
   "huelva, huelva": "Huelva, Spain",
-  "hounslow, middlesex": "Hounslow, UK",
+  "hounslow, middlesex": "Hounslow, United Kingdom",
   "hoogkerk, groningen": "Groningen, Netherlands",
   "hoofddorp, nh": "Hoofddorp, Netherlands",
   "holzkirchen (oberbayern), bayern": "Holzkirchen, Germany",
@@ -1587,7 +1721,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "grassobbio": "Grassobbio, Italy",
   "goyang-si, gyeonggi-do": "Goyang, South Korea",
   "goslar, nds": "Goslar, Germany",
-  "glasgow, lanarkshire": "Glasgow, UK",
+  "glasgow, lanarkshire": "Glasgow, United Kingdom",
   "gjøvik, innlandet": "Gjøvik, Norway",
   "gent, vlaanderen": "Ghent, Belgium",
   "gelsenkirchen, nrw": "Gelsenkirchen, Germany",
@@ -1622,10 +1756,10 @@ const BARE_CITY_MAP: Record<string, string> = {
   "debrecen": "Debrecen, Hungary",
   "dachau, bayern": "Dachau, Germany",
   "dover, de": "Dover, DE",
-  "cwmbran, blaenau gwent": "Cwmbran, UK",
+  "cwmbran, blaenau gwent": "Cwmbran, United Kingdom",
   "culver city": "Culver City, CA",
   "crailsheim, baden-württemberg": "Crailsheim, Germany",
-  "coventry, west midlands": "Coventry, UK",
+  "coventry, west midlands": "Coventry, United Kingdom",
   "comuna jucu, cj": "Jucu, Romania",
   "colon, queretaro": "Colon, Mexico",
   "colmar": "Colmar, France",
@@ -1633,14 +1767,14 @@ const BARE_CITY_MAP: Record<string, string> = {
   "città sant'angelo, pescara": "Città Sant'Angelo, Italy",
   "chișinău, chisinau": "Chișinău, Moldova",
   "cherry hill township, nj": "Cherry Hill, NJ",
-  "cheltenham, gloucestershire": "Cheltenham, UK",
-  "chelmsford, essex": "Chelmsford, UK",
+  "cheltenham, gloucestershire": "Cheltenham, United Kingdom",
+  "chelmsford, essex": "Chelmsford, United Kingdom",
   "cernusco sul naviglio, lombardia": "Cernusco sul Naviglio, Italy",
   "catania, catania": "Catania, Italy",
   "castellon, comunidad valenciana": "Castellon, Spain",
   "casablanca, morocco": "Casablanca, Morocco",
   "casablanca, casablanca-settat": "Casablanca, Morocco",
-  "carlise, uk": "Carlisle, UK",
+  "carlise, uk": "Carlisle, United Kingdom",
   "campus sacramento": "Sacramento, CA",
   "campina grande do sul, pr": "Campina Grande do Sul, Brazil",
   "camp courtney okinawa": "Okinawa, Japan",
@@ -1649,7 +1783,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "bukit jalil, kuala lumpur": "Bukit Jalil, Malaysia",
   "brugge, vlaanderen": "Brugge, Belgium",
   "brossard, qc": "Brossard, Canada",
-  "bristol, avon": "Bristol, UK",
+  "bristol, avon": "Bristol, United Kingdom",
   "bratislava, bratislava region": "Bratislava, Slovakia",
   "borås, västra götaland county": "Borås, Sweden",
   "bonn, nrw": "Bonn, Germany",
@@ -1658,7 +1792,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "beveren-kruibeke-zwijndrecht, oost-vlaanderen": "Beveren, Belgium",
   "bergen op zoom, nb": "Bergen op Zoom, Netherlands",
   "bergamo": "Bergamo, Italy",
-  "belfast, county antrim": "Belfast, UK",
+  "belfast, county antrim": "Belfast, United Kingdom",
   "bayan lepas, bayan lepas": "Bayan Lepas, Malaysia",
   "batu kawan, pulau pinang": "Batu Kawan, Malaysia",
   "basel, bs": "Basel, Switzerland",
@@ -1723,7 +1857,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "yokohama-shi, kanagawa": "Yokohama, Japan",
   "yokohama-shi tsuzuki-ku, kanagawa": "Yokohama, Japan",
   "yerevan, armenia": "Yerevan, Armenia",
-  "yeovil, somerset": "Yeovil, UK",
+  "yeovil, somerset": "Yeovil, United Kingdom",
   "yeonsu-gu, incheon": "Incheon, South Korea",
   "yakeshi, inner mongolia": "Yakeshi, China",
   "youngstown, oh": "Youngstown, OH",
@@ -1738,17 +1872,17 @@ const BARE_CITY_MAP: Record<string, string> = {
   "wittenberg, sa": "Wittenberg, Germany",
   "witten, nrw": "Witten, Germany",
   "winsen an der aller, nds": "Winsen, Germany",
-  "winchester, hampshire": "Winchester, UK",
+  "winchester, hampshire": "Winchester, United Kingdom",
   "willershausen, niedersachsen": "Willershausen, Germany",
   "wilkes-barre township, pa": "Wilkes-Barre, PA",
   "wildau, bb": "Wildau, Germany",
   "wierzbice, lower silesian voivodeship": "Wierzbice, Poland",
   "wiener neudorf, niederösterreich": "Wiener Neudorf, Austria",
-  "weymouth, dorset": "Weymouth, UK",
+  "weymouth, dorset": "Weymouth, United Kingdom",
   "west vancouver, bc": "West Vancouver, Canada",
   "wenzhou, zhejiang": "Wenzhou, China",
   "wendlingen, bw": "Wendlingen, Germany",
-  "wembley, middlesex": "Wembley, UK",
+  "wembley, middlesex": "Wembley, United Kingdom",
   "wels, oberösterreich": "Wels, Austria",
   "weipa town, qld": "Weipa, Australia",
   "weinheim, bw": "Weinheim, Germany",
@@ -1853,7 +1987,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "söderhamn, gävleborgs län": "Söderhamn, Sweden",
   "são josé do rio preto, sp": "São José do Rio Preto, Brazil",
   "szczecin, west pomeranian voivodeship": "Szczecin, Poland",
-  "swansea, swansea": "Swansea, UK",
+  "swansea, swansea": "Swansea, United Kingdom",
   "surrey, bc": "Surrey, Canada",
   "sunny isles, fl": "Sunny Isles Beach, FL",
   "sumida city, tokyo": "Sumida, Japan",
@@ -1870,12 +2004,12 @@ const BARE_CITY_MAP: Record<string, string> = {
   "stathelle, telemark": "Stathelle, Norway",
   "stargard, województwo zachodniopomorskie": "Stargard, Poland",
   "st. veit, kärnten": "St. Veit an der Glan, Austria",
-  "st neots, uk": "St. Neots, UK",
+  "st neots, uk": "St. Neots, United Kingdom",
   "st geneviève des bois, ile de france": "Sainte-Geneviève-des-Bois, France",
   "spreitenbach, ag": "Spreitenbach, Switzerland",
   "split, splitsko-dalmatinska županija": "Split, Croatia",
   "speyer, rp": "Speyer, Germany",
-  "southampton, hampshire": "Southampton, UK",
+  "southampton, hampshire": "Southampton, United Kingdom",
   "sosnowiec, silesian voivodeship": "Sosnowiec, Poland",
   "sopron": "Sopron, Hungary",
   "solna, stockholms län": "Solna, Sweden",
@@ -1984,7 +2118,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "remotely in germany": "Remote",
   "reims": "Reims, France",
   "redwitz, bayern": "Redwitz an der Rodach, Germany",
-  "redditch, worcestershire": "Redditch, UK",
+  "redditch, worcestershire": "Redditch, United Kingdom",
   "rathdrum, ww": "Rathdrum, Ireland",
   "rastatt, bw": "Rastatt, Germany",
   "raipur, chattisgarh": "Raipur, India",
@@ -2013,7 +2147,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "potomac mills, va": "Woodbridge, VA",
   "post fallsi, id": "Post Falls, ID",
   "porvoo, uusimaa": "Porvoo, Finland",
-  "portsmouth, hampshire": "Portsmouth, UK",
+  "portsmouth, hampshire": "Portsmouth, United Kingdom",
   "portogruaro": "Portogruaro, Italy",
   "pori, satakunta": "Pori, Finland",
   "pope afb, nc": "Fayetteville, NC",
@@ -2021,7 +2155,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "pompei": "Pompeii, Italy",
   "pomerode, santa catarina": "Pomerode, Brazil",
   "pohang": "Pohang, South Korea",
-  "plymouth, devon": "Plymouth, UK",
+  "plymouth, devon": "Plymouth, United Kingdom",
   "ploiesti, ploiesti": "Ploiești, Romania",
   "plochingen, bw": "Plochingen, Germany",
   "plauen, sn": "Plauen, Germany",
@@ -2031,7 +2165,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "piteå, norrbotten county": "Piteå, Sweden",
   "phnom penh, cambodia": "Phnom Penh, Cambodia",
   "pforzheim, baden-württemberg": "Pforzheim, Germany",
-  "peterborough, cambridgeshire": "Peterborough, UK",
+  "peterborough, cambridgeshire": "Peterborough, United Kingdom",
   "petaling jaya, 10": "Petaling Jaya, Malaysia",
   "peschiera borromeo": "Peschiera Borromeo, Italy",
   "pescara": "Pescara, Italy",
@@ -2073,7 +2207,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "okmuglee, ok": "Okmulgee, OK",
   "ogaki, gifu": "Ogaki, Japan",
   "offenbach am main, he": "Offenbach am Main, Germany",
-  "off old market square, nottinghamshire": "Nottingham, UK",
+  "off old market square, nottinghamshire": "Nottingham, United Kingdom",
   "ofallon, il": "O'Fallon, IL",
   "oeiras, porto salvo": "Oeiras, Portugal",
   "odense, odense": "Odense, Denmark",
@@ -2090,9 +2224,9 @@ const BARE_CITY_MAP: Record<string, string> = {
   "novara, novara": "Novara, Italy",
   "novara": "Novara, Italy",
   "notodden, telemark": "Notodden, Norway",
-  "norwich, norfolk": "Norwich, UK",
+  "norwich, norfolk": "Norwich, United Kingdom",
   "northeim, nds": "Northeim, Germany",
-  "northampton, northamptonshire": "Northampton, UK",
+  "northampton, northamptonshire": "Northampton, United Kingdom",
   "norrtälje, stockholm county": "Norrtälje, Sweden",
   "norrköping, östergötland county": "Norrköping, Sweden",
   "nordhorn, nds": "Nordhorn, Germany",
@@ -2107,8 +2241,8 @@ const BARE_CITY_MAP: Record<string, string> = {
   "nienburg": "Nienburg, Germany",
   "nicosia, cyprus": "Nicosia, Cyprus",
   "newmarket, on": "Newmarket, Canada",
-  "newcastle metro, tyne and wear": "Newcastle upon Tyne, UK",
-  "newbury, west berkshire": "Newbury, UK",
+  "newcastle metro, tyne and wear": "Newcastle upon Tyne, United Kingdom",
+  "newbury, west berkshire": "Newbury, United Kingdom",
   "newbridge, kildare": "Newbridge, Ireland",
   "new taipei city, tw": "New Taipei City, Taiwan",
   "new south wales, wyong": "Wyong, Australia",
@@ -2176,7 +2310,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "mississauga, ontario": "Mississauga, Canada",
   "minden, nrw": "Minden, Germany",
   "millcreek township, pa": "Millcreek, PA",
-  "middlesbrough, cleveland": "Middlesbrough, UK",
+  "middlesbrough, cleveland": "Middlesbrough, United Kingdom",
   "mexicali, baja california": "Mexicali, Mexico",
   "mex, vaud": "Mex, Switzerland",
   "metz": "Metz, France",
@@ -2185,7 +2319,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "merseburg, sa": "Merseburg, Germany",
   "merano, trentino-alto adige": "Merano, Italy",
   "meppel, dr": "Meppel, Netherlands",
-  "melton district, uk": "Melton, UK",
+  "melton district, uk": "Melton, United Kingdom",
   "melilla, melilla": "Melilla, Spain",
   "mclean, va": "McLean, VA",
   "mckinney, tx": "McKinney, TX",
@@ -2193,20 +2327,20 @@ const BARE_CITY_MAP: Record<string, string> = {
   "matosinhos, porto": "Matosinhos, Portugal",
   "marsden park, nsw": "Marsden Park, Australia",
   "marne, sh": "Marne, Germany",
-  "marlow, bkm": "Marlow, UK",
+  "marlow, bkm": "Marlow, United Kingdom",
   "marghera": "Marghera, Italy",
   "marcianise, caserta": "Marcianise, Italy",
   "marcianise": "Marcianise, Italy",
   "mansoura, dakahlia governorate": "Mansoura, Egypt",
   "mandaluyong, metro manila": "Mandaluyong, Philippines",
   "mandal, agder": "Mandal, Norway",
-  "manchester, manchester": "Manchester, UK",
+  "manchester, manchester": "Manchester, United Kingdom",
   "malmö, skåne county": "Malmö, Sweden",
   "malaga, wa": "Malaga, Australia",
   "malaga, andalucía": "Malaga, Spain",
   "makati, metro manila": "Makati, Philippines",
   "makati city, ph": "Makati, Philippines",
-  "maidenhead, post-ber": "Maidenhead, UK",
+  "maidenhead, post-ber": "Maidenhead, United Kingdom",
   "madiosn, wi": "Madison, WI",
   "macgregor, qld": "MacGregor, Australia",
   "maasmechelen, vlaanderen": "Maasmechelen, Belgium",
@@ -2223,13 +2357,13 @@ const BARE_CITY_MAP: Record<string, string> = {
   "ludhiana, punjab": "Ludhiana, India",
   "loviisa, uusimaa": "Loviisa, Finland",
   "longford, longford": "Longford, Ireland",
-  "london - 1": "London, UK",
+  "london - 1": "London, United Kingdom",
   "lonato del garda": "Lonato del Garda, Italy",
-  "livingston, west lothian": "Livingston, UK",
-  "liverpool, merseyside": "Liverpool, UK",
+  "livingston, west lothian": "Livingston, United Kingdom",
+  "liverpool, merseyside": "Liverpool, United Kingdom",
   "lingen (ems), nds": "Lingen, Germany",
   "lindenhust, ny": "Lindenhurst, NY",
-  "lincoln, lincolnshire": "Lincoln, UK",
+  "lincoln, lincolnshire": "Lincoln, United Kingdom",
   "limoges, nouvelle-aquitaine": "Limoges, France",
   "limerick, lk": "Limerick, Ireland",
   "limburg, he": "Limburg, Germany",
@@ -2245,7 +2379,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "letterkenny army depot, pa": "Chambersburg, PA",
   "lentate sul seveso": "Lentate sul Seveso, Italy",
   "lens": "Lens, France",
-  "leicester, leicestershire": "Leicester, UK",
+  "leicester, leicestershire": "Leicester, United Kingdom",
   "leibnitz, steiermark": "Leibnitz, Austria",
   "leer (ostfriesland), nds": "Leer, Germany",
   "lecce_cavallino": "Lecce, Italy",
@@ -2300,10 +2434,10 @@ const BARE_CITY_MAP: Record<string, string> = {
   "kjeller, akershus": "Kjeller, Norway",
   "kittilä, lapland": "Kittilä, Finland",
   "kirkkonummi, uusimaa": "Kirkkonummi, Finland",
-  "kingston-upon-thames, surrey": "Kingston upon Thames, UK",
+  "kingston-upon-thames, surrey": "Kingston upon Thames, United Kingdom",
   "kings bay naval base, ga": "Kings Bay, GA",
   "kielce, świętokrzyskie voivodeship": "Kielce, Poland",
-  "kent, kent": "Kent, UK",
+  "kent, kent": "Kent, United Kingdom",
   "kempten (allgäu), by": "Kempten, Germany",
   "kemi, lapland": "Kemi, Finland",
   "kelsterbach, he": "Kelsterbach, Germany",
@@ -2344,11 +2478,11 @@ const BARE_CITY_MAP: Record<string, string> = {
   "iwata, shizuoka": "Iwata, Japan",
   "ivanić-grad, zagreb county": "Ivanić-Grad, Croatia",
   "istanbul": "Istanbul, Turkey",
-  "islip, northamptonshire": "Islip, UK",
+  "islip, northamptonshire": "Islip, United Kingdom",
   "ishinomaki, miyagi": "Ishinomaki, Japan",
   "iserlohn, nrw": "Iserlohn, Germany",
-  "ipswich, suffolk": "Ipswich, UK",
-  "inverness, inverness-shire": "Inverness, UK",
+  "ipswich, suffolk": "Ipswich, United Kingdom",
+  "inverness, inverness-shire": "Inverness, United Kingdom",
   "innsbruck, innsbruck": "Innsbruck, Austria",
   "innere stadt, kärnten": "Innere Stadt, Austria",
   "ingolstadt, bayern": "Ingolstadt, Germany",
@@ -2373,7 +2507,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "hultsfred, kalmar county": "Hultsfred, Sweden",
   "huixquilucan de degollado, méx.": "Huixquilucan de Degollado, Mexico",
   "hudiksvall, gävleborgs län": "Hudiksvall, Sweden",
-  "huddersfield, west yorkshire": "Huddersfield, UK",
+  "huddersfield, west yorkshire": "Huddersfield, United Kingdom",
   "huarte, navarra": "Huarte, Spain",
   "huangshi, hubei": "Huangshi, China",
   "huang pu qu, shang hai shi": "Shanghai, China",
@@ -2386,7 +2520,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "hiezu, tottori": "Hiezu, Japan",
   "hibbing `, mn": "Hibbing, MN",
   "hermosillo, son.": "Hermosillo, Mexico",
-  "hereford, herefordshire": "Hereford, UK",
+  "hereford, herefordshire": "Hereford, United Kingdom",
   "herber springs, ar": "Heber Springs, AR",
   "hephizibah, ga": "Hephzibah, GA",
   "heidelberg, baden-württemberg": "Heidelberg, Germany",
@@ -2395,11 +2529,11 @@ const BARE_CITY_MAP: Record<string, string> = {
   "hayathnagar_khalsa, ts": "Hayathnagar, India",
   "hasselt, vlaanderen": "Hasselt, Belgium",
   "hartberg, steiermark": "Hartberg, Austria",
-  "harrogate, north yorkshire": "Harrogate, UK",
-  "harlow, essex": "Harlow, UK",
+  "harrogate, north yorkshire": "Harrogate, United Kingdom",
+  "harlow, essex": "Harlow, United Kingdom",
   "harbin, heilongjiang": "Harbin, China",
   "hangzhou, zj": "Hangzhou, China",
-  "hammersmith, london": "London, UK",
+  "hammersmith, london": "London, United Kingdom",
   "hammerfest, finnmark": "Hammerfest, Norway",
   "hamilton, waikato region": "Hamilton, New Zealand",
   "hamilton, on": "Hamilton, Canada",
@@ -2410,7 +2544,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "hallbergmoos, bayern": "Hallbergmoos, Germany",
   "halden, østfold": "Halden, Norway",
   "hagen, nrw": "Hagen, Germany",
-  "hertfordshire, uk": "Hertfordshire, UK",
+  "hertfordshire, uk": "Hertfordshire, United Kingdom",
   "hcm": "Ho Chi Minh City, Vietnam",
   "hasselt": "Hasselt, Belgium",
   "göppingen, bw": "Göppingen, Germany",
@@ -2420,7 +2554,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "győr": "Győr, Hungary",
   "guntersvliie, al": "Guntersville, AL",
   "guimarães, braga": "Guimarães, Portugal",
-  "guildford, surrey": "Guildford, UK",
+  "guildford, surrey": "Guildford, United Kingdom",
   "guelph, on": "Guelph, Canada",
   "guadajalara, jalisco": "Guadalajara, Mexico",
   "grâce-hollogne, wallonia": "Grâce-Hollogne, Belgium",
@@ -2432,8 +2566,8 @@ const BARE_CITY_MAP: Record<string, string> = {
   "grieskirchen, oberösterreich": "Grieskirchen, Austria",
   "grenoble, auvergne-rhône-alpes": "Grenoble, France",
   "grenoble": "Grenoble, France",
-  "greenock, renfrewshire": "Greenock, UK",
-  "gravesend, kent": "Gravesend, UK",
+  "greenock, renfrewshire": "Greenock, United Kingdom",
+  "gravesend, kent": "Gravesend, United Kingdom",
   "gravellona toce, piemonte": "Gravellona Toce, Italy",
   "grand jct., co": "Grand Junction, CO",
   "grafing bei münchen, by": "Grafing bei München, Germany",
@@ -2485,16 +2619,16 @@ const BARE_CITY_MAP: Record<string, string> = {
   "ehingen (donau), bw": "Ehingen, Germany",
   "egg harbor twp, nj": "Egg Harbor Township, NJ",
   "egelsbach, he": "Egelsbach, Germany",
-  "edinburgh, midlothian": "Edinburgh, UK",
+  "edinburgh, midlothian": "Edinburgh, United Kingdom",
   "ebikon, lu": "Ebikon, Switzerland",
-  "eastham, london": "London, UK",
-  "ealing, london": "London, UK",
+  "eastham, london": "London, United Kingdom",
+  "ealing, london": "London, United Kingdom",
   "epagny metz-tessy, france": "Epagny Metz-Tessy, France",
   "dębica, podkarpackie voivodeship": "Dębica, Poland",
   "düsseldorf - reisholz, nrw": "Düsseldorf, Germany",
   "düsseldorf - rath, nrw": "Düsseldorf, Germany",
   "dülmen, nrw": "Dülmen, Germany",
-  "dundee, angus": "Dundee, UK",
+  "dundee, angus": "Dundee, United Kingdom",
   "dulles town center, va": "Dulles, VA",
   "duisburg, nrw": "Duisburg, Germany",
   "dubrovnik, dubrovačko-neretvanska županija": "Dubrovnik, Croatia",
@@ -2513,7 +2647,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "diessenhofen, tg": "Diessenhofen, Switzerland",
   "dieppe, nb": "Dieppe, Canada",
   "dhaka, bangladesh": "Dhaka, Bangladesh",
-  "devon, devon": "Devon, UK",
+  "devon, devon": "Devon, United Kingdom",
   "detmold, nrw": "Detmold, Germany",
   "dessel, flanders": "Dessel, Belgium",
   "dessau-roßlau, sa": "Dessau-Roßlau, Germany",
@@ -2533,7 +2667,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "cremona, cremona": "Cremona, Italy",
   "cremona": "Cremona, Italy",
   "craiova, dj": "Craiova, Romania",
-  "craigavon, county armagh": "Craigavon, UK",
+  "craigavon, county armagh": "Craigavon, United Kingdom",
   "court house, nj": "Cape May Court House, NJ",
   "cottbus, bb": "Cottbus, Germany",
   "cordovilla, pamplona": "Cordovilla, Spain",
@@ -2546,13 +2680,13 @@ const BARE_CITY_MAP: Record<string, string> = {
   "cocody abidjan, côte d'ivoire": "Abidjan, Ivory Coast",
   "coats nc 27521, nc": "Coats, NC",
   "co. dublin, leinster": "Dublin, Ireland",
-  "clydebank, dunbartonshire": "Clydebank, UK",
-  "clwyd, wrexham": "Wrexham, UK",
+  "clydebank, dunbartonshire": "Clydebank, United Kingdom",
+  "clwyd, wrexham": "Wrexham, United Kingdom",
   "cluj-napoca, cluj": "Cluj-Napoca, Romania",
   "clonmel, tipperary": "Clonmel, Ireland",
   "clermont-ferrand": "Clermont-Ferrand, France",
   "city of dasmariñas, cavite": "Dasmariñas, Philippines",
-  "cirencester, gloucestershire": "Cirencester, UK",
+  "cirencester, gloucestershire": "Cirencester, United Kingdom",
   "cincinnati": "Cincinnati, OH",
   "cieszyn, silesian voivodeship": "Cieszyn, Poland",
   "christi corpus, tx": "Corpus Christi, TX",
@@ -2561,12 +2695,12 @@ const BARE_CITY_MAP: Record<string, string> = {
   "chicago - us": "Chicago, IL",
   "chiba, chiba": "Chiba, Japan",
   "chiba": "Chiba, Japan",
-  "chester, flintshire": "Chester, UK",
-  "chester, cheshire": "Chester, UK",
-  "chelsea, london": "London, UK",
+  "chester, flintshire": "Chester, United Kingdom",
+  "chester, cheshire": "Chester, United Kingdom",
+  "chelsea, london": "London, United Kingdom",
   "cheju, jeju-do": "Jeju, South Korea",
   "chatswood, nsw": "Chatswood, Australia",
-  "charlton, london": "London, UK",
+  "charlton, london": "London, United Kingdom",
   "century city, ca": "Los Angeles, CA",
   "celle, nds": "Celle, Germany",
   "celaya, guenajuato": "Celaya, Mexico",
@@ -2597,7 +2731,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "camp parks, ca": "Dublin, CA",
   "camp dodge military reservation, ia": "Johnston, IA",
   "cambridge, ma usa": "Cambridge, MA",
-  "cambridge, cambridgeshire": "Cambridge, UK",
+  "cambridge, cambridgeshire": "Cambridge, United Kingdom",
   "callao, callao": "Callao, Peru",
   "calgary, alberta": "Calgary, Canada",
   "calgary": "Calgary, Canada",
@@ -2610,9 +2744,9 @@ const BARE_CITY_MAP: Record<string, string> = {
   "clementon, nj": "Clementon, NJ",
   "böblingen, baden-württemberg": "Böblingen, Germany",
   "bydgoszcz, kuyavian-pomeranian voivodeship": "Bydgoszcz, Poland",
-  "bury, lancashire": "Bury, UK",
-  "bury st. edmunds, suffolk": "Bury St Edmunds, UK",
-  "burton-on-trent, staffordshire": "Burton-on-Trent, UK",
+  "bury, lancashire": "Bury, United Kingdom",
+  "bury st. edmunds, suffolk": "Bury St Edmunds, United Kingdom",
+  "burton-on-trent, staffordshire": "Burton-on-Trent, United Kingdom",
   "burnaby, bc": "Burnaby, Canada",
   "burlington, on": "Burlington, Canada",
   "bucurești": "Bucharest, Romania",
@@ -2638,9 +2772,9 @@ const BARE_CITY_MAP: Record<string, string> = {
   "brasilia": "Brasilia, Brazil",
   "brantford, on": "Brantford, Canada",
   "brampton, on": "Brampton, Canada",
-  "bournemouth, dorset": "Bournemouth, UK",
+  "bournemouth, dorset": "Bournemouth, United Kingdom",
   "boulder, co.": "Boulder, CO",
-  "boscombe, dorset": "Boscombe, UK",
+  "boscombe, dorset": "Boscombe, United Kingdom",
   "born, limburg": "Born, Netherlands",
   "borlänge, dalarna county": "Borlänge, Sweden",
   "borlänge": "Borlänge, Sweden",
@@ -2661,18 +2795,18 @@ const BARE_CITY_MAP: Record<string, string> = {
   "bengaluru (prev. bangalore), karnataka": "Bengaluru, India",
   "bekasi, id": "Bekasi, Indonesia",
   "beirut, beirut governorate": "Beirut, Lebanon",
-  "bedford, bedfordshire": "Bedford, UK",
+  "bedford, bedfordshire": "Bedford, United Kingdom",
   "bayreuth, by": "Bayreuth, Germany",
   "bayonne": "Bayonne, France",
   "bautzen, sn": "Bautzen, Germany",
-  "bath, somerset": "Bath, UK",
+  "bath, somerset": "Bath, United Kingdom",
   "batam, id": "Batam, Indonesia",
   "barrie, on": "Barrie, Canada",
-  "barnstaple, devon": "Barnstaple, UK",
+  "barnstaple, devon": "Barnstaple, United Kingdom",
   "barneveld, ge": "Barneveld, Netherlands",
   "barberino di mugello": "Barberino di Mugello, Italy",
   "bandar sunway, petaling jaya": "Petaling Jaya, Malaysia",
-  "banbury, oxfordshire": "Banbury, UK",
+  "banbury, oxfordshire": "Banbury, United Kingdom",
   "ballerup, hvidovre": "Ballerup, Denmark",
   "balanga city, central luzon": "Balanga, Philippines",
   "baku, az": "Baku, Azerbaijan",
@@ -2687,7 +2821,7 @@ const BARE_CITY_MAP: Record<string, string> = {
   "bintulu, sarawak": "Bintulu, Malaysia",
   "betim, minas gerais": "Betim, Brazil",
   "bari blu": "Bari, Italy",
-  "ayr, ayrshire": "Ayr, UK",
+  "ayr, ayrshire": "Ayr, United Kingdom",
   "avignon": "Avignon, France",
   "aveiro, ovar": "Aveiro, Portugal",
   "avalon, alpharetta": "Alpharetta, GA",
@@ -2754,21 +2888,83 @@ const BARE_CITY_MAP: Record<string, string> = {
 
 };
 
-// Country suffix patterns to strip or canonicalize.
-// Applied after splitting on separators, before the state/city logic.
-// Order matters — more specific patterns first.
-const COUNTRY_SUFFIX_REPLACEMENTS: Array<[RegExp, string]> = [
-  // US suffixes → nothing (city/state is enough)
+/** Canadian province/territory codes — "City, PR, Canada" → "City, Canada" (canonical intl). */
+const CA_PROVINCE_CODES = new Set([
+  "ON", "BC", "AB", "QC", "MB", "SK", "NS", "NB", "NL", "PE", "NT", "YT", "NU",
+]);
+
+/** "Canada, ON" (country before province) — city token is literally "Canada"; map to province + Canada. */
+const CA_PROVINCE_CODE_TO_ENGLISH: Record<string, string> = {
+  ON: "Ontario",
+  BC: "British Columbia",
+  AB: "Alberta",
+  QC: "Quebec",
+  MB: "Manitoba",
+  SK: "Saskatchewan",
+  NS: "Nova Scotia",
+  NB: "New Brunswick",
+  NL: "Newfoundland and Labrador",
+  PE: "Prince Edward Island",
+  NT: "Northwest Territories",
+  YT: "Yukon",
+  NU: "Nunavut",
+};
+
+/** German Bundesland ISO codes (2-letter) — must resolve before US 2-letter fallback (e.g. RP ≠ Rhode Island). */
+const DE_BUNDESLAND_CODE_SET = new Set([
+  "BW", "BY", "BE", "BB", "HB", "HH", "HE", "MV", "NI", "NW", "RP", "SL", "SN", "ST", "SH", "TH",
+]);
+
+/** England / Wales ceremonial counties — "City, Oxfordshire" → United Kingdom */
+const UK_ENG_COUNTIES = new Set([
+  "oxfordshire", "bedfordshire", "buckinghamshire", "cambridgeshire", "cheshire", "cornwall", "cumbria",
+  "derbyshire", "devon", "dorset", "durham", "county durham", "east sussex", "east riding of yorkshire",
+  "essex", "gloucestershire", "greater london", "greater manchester", "hampshire", "herefordshire",
+  "hertfordshire", "kent", "lancashire", "leicestershire", "lincolnshire", "merseyside", "norfolk",
+  "northamptonshire", "northumberland", "nottinghamshire", "shropshire", "somerset", "south yorkshire",
+  "staffordshire", "suffolk", "surrey", "tyne and wear", "warwickshire", "west midlands", "west sussex",
+  "west yorkshire", "wiltshire", "worcestershire", "yorkshire", "north yorkshire", "bristol",
+  "isle of wight", "rutland",
+]);
+
+/** Canadian province full names (Workday / ATS) → City, Canada */
+const CA_PROVINCE_FULL_NAMES = new Set([
+  "ontario",
+  "quebec",
+  "british columbia",
+  "alberta",
+  "manitoba",
+  "saskatchewan",
+  "nova scotia",
+  "new brunswick",
+  "newfoundland and labrador",
+  "newfoundland",
+  "prince edward island",
+  "northwest territories",
+  "yukon",
+  "nunavut",
+]);
+
+/** US trailing noise — always strip. Canonical US form is City, ST (no trailing United States / US). */
+const US_TRAILING_SUFFIX_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/,\s*united states of america\s*$/i, ""],
   [/,\s*united states\s*$/i, ""],
-  [/,\s*usa?\s*$/i, ""],
-  // UK suffixes → ", UK"
-  [/,\s*(united kingdom|great britain|england|scotland|wales|northern ireland)\s*$/i, ", UK"],
-  [/,\s*gb\s*$/i, ", UK"],
-  // Country names that are redundant after city
+  // "Saugerties, NY, US" / "Miami, FL, US" / "Los Angeles, CA, USA"
+  [/^(.+),\s*([A-Z]{2})\s*,\s*US\s*$/i, "$1, $2"],
+  [/^(.+),\s*([A-Z]{2})\s*,\s*USA\s*$/i, "$1, $2"],
+];
+
+/** UK / Ireland region labels → full English country name (never bare "UK"). */
+const UK_IE_TRAILING_SUFFIX_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/,\s*(united kingdom|great britain|england|scotland|wales|northern ireland)\s*$/i, ", United Kingdom"],
+  [/,\s*gb\s*$/i, ", United Kingdom"],
+];
+
+// Country suffixes to strip only when there are ≥2 commas ("City, Region, Country").
+// Avoid stripping "Berlin, Germany" or "Dublin, Ireland" — canonical intl is City, Country.
+const INTL_TRAILING_COUNTRY_STRIPS: Array<[RegExp, string]> = [
   [/,\s*germany\s*$/i, ""],
   [/,\s*france\s*$/i, ""],
-  [/,\s*ireland\s*$/i, ""],
-  [/,\s*canada\s*$/i, ""],
   [/,\s*australia\s*$/i, ""],
   [/,\s*japan\s*$/i, ""],
   [/,\s*south korea\s*$/i, ""],
@@ -2812,9 +3008,6 @@ const COUNTRY_SUFFIX_REPLACEMENTS: Array<[RegExp, string]> = [
   [/,\s*greece\s*$/i, ""],
   [/,\s*ukraine\s*$/i, ""],
   [/,\s*south africa\s*$/i, ""],
-  // ISO-2 country codes at the end — only strip when there are at least 2 commas already
-  // (e.g. "New York, NY, US" → strip ", US") but NOT "Evanston, IL" → keep ", IL"
-  // This entry is applied separately below with a guard.
 ];
 
 // Metadata suffixes/prefixes to strip.
@@ -2824,9 +3017,11 @@ const METADATA_SUFFIX_RE = /(?:(?:,|\s[-–]|\s)\s*|\s+)\b(hq|headquarters|offic
 // Standalone "City Office" or "City HQ" with no separator (e.g. "New York Office", "Berlin Office")
 const METADATA_BARE_RE = /^(.+?)\s+\b(office|offices|hq|headquarters|hub|campus)\b\s*(-\s*\w+)?$/i;
 
-// Street address patterns — extract city+state from the tail.
-const STREET_ADDRESS_RE = /^\d+\s+\S.*?,\s+(.+?,\s+[A-Z]{2})\s*\d{5}(-\d{4})?$/;
-const STREET_ADDRESS_RE2 = /^\d+\s+.+?,\s+(?:suite|ste|floor|fl|unit|apt|#)\s*\S+,\s+(.+?,\s+[A-Z]{2})/i;
+// Street address patterns — group 1 = street portion, group 2 = city+state.
+// "2032 Oakwood Lane, Duarte, CA 91010" → ["2032 Oakwood Lane", "Duarte, CA"]
+const STREET_ADDRESS_RE  = /^(\d+\s+\S.*?),\s+(.+?,\s+[A-Z]{2})\s*\d{5}(-\d{4})?$/;
+// "1234 Main St, Suite 200, Dallas, TX"  → ["1234 Main St, Suite 200", "Dallas, TX"]
+const STREET_ADDRESS_RE2 = /^(\d+\s+.+?,\s+(?:suite|ste|floor|fl|unit|apt|#)\s*\S+),\s+(.+?,\s+[A-Z]{2})/i;
 
 // REF ID suffixes from Australian ATS sources: "Queensland, REF15267T" → "Queensland"
 const REF_ID_RE = /,\s*REF[A-Z0-9]+\s*$/i;
@@ -2890,7 +3085,7 @@ const ISO2_TO_COUNTRY: Record<string, string> = {
   bd: "Bangladesh",
   ph: "Philippines",
   th: "Thailand",
-  id: "Indonesia",
+  // id: Indonesia — handled in 2-letter branch (conflicts with US Idaho)
   my: "Malaysia",
   cl: "Chile",
   pe: "Peru",
@@ -2929,6 +3124,14 @@ const GRONINGEN_CITIES = new Set([
   "delfzijl", "eemshaven", "groningen", "winschoten",
 ]);
 
+// Idaho cities — ", ID" conflicts with ISO Indonesia; these US cities stay Idaho
+const IDAHO_CITIES = new Set([
+  "ammon", "blackfoot", "boise", "burley", "caldwell", "coeur d'alene", "coeur dalene", "eagle",
+  "hayden", "idaho falls", "jerome", "kuna", "lewiston", "meridian", "moscow", "mountain home",
+  "nampa", "pocatello", "post falls", "rexburg", "sandpoint", "twin falls", "chubbuck", "rathdrum",
+  "star", "middleton", "fruitland", "hailey", "bellevue",
+]);
+
 // ATS job-code / internal-ref patterns to null out entirely
 // Matches "Bosch Corporation_...", "Bosch Coporation_..." (ATS internal job codes)
 const ATS_JUNK_RE = /^bosch\s+co[a-z]*[_,]/i;
@@ -2948,6 +3151,36 @@ const CITY_ALIASES: Record<string, string> = {
   "ho chi minh": "Ho Chi Minh City",
 };
 
+/** Title-case words for no-comma "Tavares FL" / "Pune IN" parsing. */
+function titleCaseLocationWords(s: string): string {
+  return s
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => {
+      if (!w.length) return w;
+      if (w.includes("-")) {
+        return w
+          .split("-")
+          .map((p) => (p.length ? p[0].toUpperCase() + p.slice(1) : p))
+          .join("-");
+      }
+      return w[0].toUpperCase() + w.slice(1);
+    })
+    .join(" ");
+}
+
+/** ALL-CAPS city tokens when paired with a 2-letter US state (MEDFORD, NJ). */
+function displayCityForOutput(cityRaw: string): string {
+  const alias = CITY_ALIASES[cityRaw.toLowerCase()];
+  if (alias) return alias;
+  const cs = cityRaw.trim();
+  if (cs.length <= 3) return cityRaw;
+  if (cs !== cs.toUpperCase()) return cityRaw;
+  if (/['’]/.test(cs)) return cityRaw;
+  if (!/^[A-Z][A-Z\s'-]+$/u.test(cs)) return cityRaw;
+  return titleCaseLocationWords(cs);
+}
+
 /**
  * Normalize a raw location string to a consistent "City, ST" / "City, Country" / "Remote" format.
  *
@@ -2956,7 +3189,7 @@ const CITY_ALIASES: Record<string, string> = {
  *   2. If that segment mentions "remote" and not "hybrid" → "Remote"
  *   3. Non-geocodable bare strings (regions, country-only, etc.) → null
  *   4. Strip trailing parenthetical modifiers and office/HQ labels
- *   5. Strip redundant country suffixes (", United States", ", UK", etc.) — up to two passes
+ *   5. Strip redundant country suffixes (", United States", ", United Kingdom", etc.) — up to two passes
  *      for chained "City, Region, Country" patterns
  *   6. Bare city name → canonical form via BARE_CITY_MAP
  *   7. "City, Full State Name" → abbreviate state
@@ -2980,18 +3213,55 @@ export function normalizeLocation(
   if (!first) return null;
   const firstLower = first.toLowerCase();
 
+  // 1b. "… - City, ST" (cross-street / site prefix before metro — dialysis, retail)
+  const dashMetro = first.match(/\s[-–]\s*(.+,\s*[A-Z]{2})\s*$/);
+  if (dashMetro) return normalizeLocation(dashMetro[1].trim(), companySlug);
+
+  // 1c. No comma: "Tavares FL" / "Slave Lake AB" / "Pune IN" (ATS omits comma)
+  if (!first.includes(",")) {
+    const spaceSt = first.match(/^(.+?)\s+([A-Z]{2})\s*$/);
+    if (spaceSt) {
+      const st = spaceSt[2].toUpperCase();
+      const cityPart = spaceSt[1].trim();
+      const cityLower = cityPart.toLowerCase();
+      // "IN" = Indiana (US) or India — resolve before US_STATE_ABBREV_SET (Indiana wins for US cities)
+      if (st === "IN") {
+        if (INDIANA_CITIES.has(cityLower)) return `${titleCaseLocationWords(cityPart)}, IN`;
+        return `${titleCaseLocationWords(cityPart)}, India`;
+      }
+      if (US_STATE_ABBREV_SET.has(st)) return `${titleCaseLocationWords(cityPart)}, ${st}`;
+      if (CA_PROVINCE_CODES.has(st)) return `${titleCaseLocationWords(cityPart)}, Canada`;
+    }
+  }
+
   // 2. Remote detection on the first segment
   if (/\bremote\b/.test(firstLower) && !/\bhybrid\b/.test(firstLower)) return "Remote";
+
+  // 2b. Bare US state / territory full name → "State, USA" (region-level geocoding).
+  // Skip: "new york" (usually NYC), "washington" (BARE → DC), "georgia" (same English name as the country Georgia — not "Georgia, USA").
+  if (!first.includes(",")) {
+    if (firstLower === "district of columbia") {
+      return "Washington, DC";
+    }
+    if (firstLower !== "new york" && firstLower !== "washington" && firstLower !== "georgia") {
+      if (US_STATE_ABBREVS[firstLower]) {
+        return `${titleCaseLocationWords(firstLower)}, USA`;
+      }
+    }
+  }
 
   // 3. Non-geocodable bare strings
   if (NON_GEOCODABLE.has(firstLower)) return null;
 
   // 3b. ATS junk patterns (Bosch Corporation internal codes, SA/SH German codes, etc.)
   if (ATS_JUNK_RE.test(first)) return null;
+  if (firstLower.includes("development.") && firstLower.includes("multiple cities")) return null;
 
-  // 4a. Full street address → extract city+state from tail
-  const addrMatch = first.match(STREET_ADDRESS_RE) ?? first.match(STREET_ADDRESS_RE2);
-  if (addrMatch) return normalizeLocation(addrMatch[1], companySlug);
+  // 4a. Full street address → extract city+state from tail (group 2; group 1 = street).
+  // RE2 must run first: it handles "street, suite, city, ST" and is more specific.
+  // RE1 would greedily pull the suite into the city group if tried first.
+  const addrMatch = first.match(STREET_ADDRESS_RE2) ?? first.match(STREET_ADDRESS_RE);
+  if (addrMatch) return normalizeLocation(addrMatch[2], companySlug);
 
   if (/^\d+\s+[A-Za-z]/.test(first)) {
     const parts = first.split(/,\s*/);
@@ -3010,7 +3280,7 @@ export function normalizeLocation(
   // 4c. Strip leading non-alpha garbage and leading HQ/headquarters prefixes
   //     Also strip "City-HQ" dash-attached suffix
   let stripped = first
-    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/^[^\p{L}\p{N}]+/u, "")
     .replace(/^(?:hq|headquarters)\s*[-–:]\s*/i, "")
     .replace(/-HQ\s*$/i, "")            // "San Francisco-HQ" → "San Francisco"
     .replace(/-HQ-\w+\s*$/i, "")        // "Benagaluru-HQ-..." → "Bengaluru"
@@ -3026,6 +3296,7 @@ export function normalizeLocation(
   stripped = stripped
     .replace(/\s*\([^)]*\)\s*$/, "")
     .replace(METADATA_SUFFIX_RE, "")
+    .replace(/\s*[-–]\s*Job\s+Posting\s*$/i, "")
     .trim();
 
   // 4f. Strip ATS REF IDs: "Queensland, REF15267T" → "Queensland"
@@ -3041,19 +3312,50 @@ export function normalizeLocation(
     }
   }
 
+  // 4h. Trailing US ZIP on "City, ST 12345" / "City, CA 91306"
+  stripped = stripped.replace(/,\s*([A-Z]{2})\s+\d{5}(-\d{4})?\s*$/i, ", $1").trim();
+
   // Re-check NON_GEOCODABLE after stripping (catches "LOCATION", bare "HQ", etc.)
   if (NON_GEOCODABLE.has(stripped.toLowerCase())) return null;
   if (!stripped) return null;
 
-  // 5. Strip redundant country suffixes — two passes for chained "City, Region, Country"
+  // 5. Country / region suffixes — US is always City, ST; intl is City, full English country.
   let cleaned = stripped;
-  for (let i = 0; i < 2; i++) {
-    for (const [pattern, replacement] of COUNTRY_SUFFIX_REPLACEMENTS) {
-      const next = cleaned.replace(pattern, replacement).trim().replace(/,\s*$/, "").trim();
-      if (next !== cleaned) { cleaned = next; break; }
+  for (const [pattern, replacement] of US_TRAILING_SUFFIX_REPLACEMENTS) {
+    cleaned = cleaned.replace(pattern, replacement).trim().replace(/,\s*$/, "").trim();
+  }
+  // Strip trailing ", US" / ", USA" unless it's a bare US state name (Amazon "US, MN" → "Minnesota, USA").
+  // Do NOT strip "San Francisco, USA" → "San Francisco" (handled by non-membership in US_STATE_FULL_NAME_SET).
+  {
+    const m = cleaned.match(/^(.+),\s*USA?\s*$/i);
+    if (m) {
+      const head = m[1].trim().toLowerCase();
+      if (US_STATE_FULL_NAME_SET.has(head)) {
+        cleaned = `${m[1].trim()}, USA`;
+      } else {
+        cleaned = m[1].trim();
+      }
     }
   }
-  // Strip trailing ISO-2 only when at least 2 commas remain (City, ST, XX → City, ST)
+  for (const [pattern, replacement] of UK_IE_TRAILING_SUFFIX_REPLACEMENTS) {
+    cleaned = cleaned.replace(pattern, replacement).trim().replace(/,\s*$/, "").trim();
+  }
+  // Strip "City, Region, Country" trailing country only when ≥2 commas (not "Berlin, Germany").
+  for (let i = 0; i < 2; i++) {
+    const commaCount = (cleaned.match(/,/g) ?? []).length;
+    if (commaCount < 2) break;
+    let changed = false;
+    for (const [pattern, replacement] of INTL_TRAILING_COUNTRY_STRIPS) {
+      const next = cleaned.replace(pattern, replacement).trim().replace(/,\s*$/, "").trim();
+      if (next !== cleaned) {
+        cleaned = next;
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
+  }
+  // Trailing ISO-2 country code on 3+ part strings only (e.g. "City, ST, DE" → drop DE)
   if ((cleaned.match(/,/g) ?? []).length >= 2) {
     cleaned = cleaned.replace(/,\s*[A-Za-z]{2}\s*$/, "").trim().replace(/,\s*$/, "").trim();
   }
@@ -3067,22 +3369,65 @@ export function normalizeLocation(
   const parts = cleaned.split(/,\s*/);
   if (parts.length >= 2) {
     const cityRaw = parts[0].trim();
-    const qualifier = parts[1].trim();
+    let qualifier = parts[1].trim();
+    // "Trier, RP 54290" / "Miami, FL 33131" — ZIP glued to state/region code
+    const qlZip = qualifier.match(/^([A-Z]{2})\s+\d{5}(-\d{4})?$/i);
+    if (qlZip) qualifier = qlZip[1];
 
-    // Bare city in BARE_CITY_MAP (e.g. "London, England" → city="London")
-    if (BARE_CITY_MAP[cityRaw.toLowerCase()]) return BARE_CITY_MAP[cityRaw.toLowerCase()];
+    // "Toronto, ON, Canada" / "Lloydminster, AB, Canada" → City, Canada (canonical intl)
+    if (parts.length === 3) {
+      const region = parts[1].trim().toUpperCase();
+      const countryPart = parts[2].trim().toLowerCase();
+      if (countryPart === "canada" && CA_PROVINCE_CODES.has(region)) {
+        const c0 = CITY_ALIASES[cityRaw.toLowerCase()] ?? cityRaw;
+        return `${c0}, Canada`;
+      }
+    }
+
+    // Bare city in BARE_CITY_MAP — skip when the qualifier is a US state (e.g. "Manchester, NH" stays US).
+    const qTrim = qualifier.trim();
+    const qualifierIsUsStateAbbrev =
+      qTrim.length === 2 && US_STATE_ABBREV_SET.has(qTrim.toUpperCase());
+    // "Washington, USA" / "Washington, US" — Washington state (e.g. Amazon), not DC (BARE "washington" → DC).
+    if (cityRaw.toLowerCase() === "washington" && /^(USA|United States|US)$/i.test(qTrim)) {
+      return "Washington, USA";
+    }
+    // "San Jose, Costa Rica" — not San Jose, CA (US BARE); pre-pipeline emits this after country-first flip.
+    if (cityRaw.toLowerCase() === "san jose" && /^costa rica$/i.test(qTrim)) {
+      return "San Jose, Costa Rica";
+    }
+    if (!qualifierIsUsStateAbbrev && BARE_CITY_MAP[cityRaw.toLowerCase()]) {
+      return BARE_CITY_MAP[cityRaw.toLowerCase()];
+    }
 
     // City alias (e.g. "München, BY" → "Munich, BY")
     const canonicalCity = CITY_ALIASES[cityRaw.toLowerCase()] ?? cityRaw;
     const cityLower = cityRaw.toLowerCase();
 
+    // Catalan / Spanish region labels (ATS)
+    const qEarly = qualifier.toLowerCase();
+    if (qEarly === "cataluña" || qEarly === "cataluna" || qEarly === "catalonia") {
+      return `${canonicalCity}, Spain`;
+    }
+
     // US full state name → abbreviation
     const usAbbrev = US_STATE_ABBREVS[qualifier.toLowerCase()];
-    if (usAbbrev) return `${canonicalCity}, ${usAbbrev}`;
+    if (usAbbrev) {
+      return `${displayCityForOutput(cityRaw)}, ${usAbbrev}`;
+    }
 
     if (qualifier.length === 2) {
       const code = qualifier.toUpperCase();
       const codeLower = qualifier.toLowerCase();
+
+      // Canadian provinces (2-letter) — no overlap with US state abbreviations
+      if (CA_PROVINCE_CODES.has(code)) {
+        if (cityLower === "canada") {
+          const prov = CA_PROVINCE_CODE_TO_ENGLISH[code];
+          if (prov) return `${prov}, Canada`;
+        }
+        return `${canonicalCity}, Canada`;
+      }
 
       // Ambiguous codes: resolve by city membership
       if (codeLower === "in") {
@@ -3100,13 +3445,28 @@ export function normalizeLocation(
         if (GRONINGEN_CITIES.has(cityLower)) return `${canonicalCity}, Netherlands`;
         return `${canonicalCity}, Greece`;
       }
+      if (codeLower === "id") {
+        // ID = Idaho (US) or Indonesia (ISO-2)
+        if (IDAHO_CITIES.has(cityLower)) return `${canonicalCity}, ID`;
+        return `${canonicalCity}, Indonesia`;
+      }
+      if (codeLower === "sg") {
+        // Singapore city-state — avoid "Singapore, Singapore"
+        if (cityLower === "singapore") return "Singapore";
+        return `${canonicalCity}, Singapore`;
+      }
+
+      // German Bundesland 2-letter codes (RP, BY, …) — before ISO / US fallback
+      if (DE_BUNDESLAND_CODE_SET.has(code)) {
+        return `${canonicalCity}, Germany`;
+      }
 
       // Unambiguous ISO-2 country codes → expand to full country name
       const country = ISO2_TO_COUNTRY[codeLower];
       if (country) return `${canonicalCity}, ${country}`;
 
-      // Remaining 2-char codes are US states or unknown — keep uppercase
-      return `${canonicalCity}, ${code}`;
+      // Remaining 2-char codes are US states — title-case ALL-CAPS cities (MEDFORD, NJ)
+      return `${displayCityForOutput(cityRaw)}, ${code}`;
     }
 
     // ── Rule-based region/state → country normalization ──────────────────────
@@ -3114,11 +3474,19 @@ export function normalizeLocation(
     const qualUpper = qualifier.toUpperCase();
     const qualLower = qualifier.toLowerCase();
 
+    if (CA_PROVINCE_FULL_NAMES.has(qualLower)) return `${canonicalCity}, Canada`;
+
+    // ISO English country name (ATS uses "Czechia" — prefer full form)
+    if (qualLower === "czechia") return `${canonicalCity}, Czech Republic`;
+
+    // UK ceremonial counties (Workday / ATS)
+    if (UK_ENG_COUNTIES.has(qualLower)) return `${canonicalCity}, United Kingdom`;
+
+    // Chile regions (ATS)
+    if (qualLower === "santiago metropolitan region") return `${canonicalCity}, Chile`;
+
     // German Bundesland codes → Germany
-    const DE_BUNDESLAENDER = new Set([
-      "BW","BY","BE","BB","HB","HH","HE","MV","NI","NW","RP","SL","SN","ST","SH","TH",
-    ]);
-    if (DE_BUNDESLAENDER.has(qualUpper)) return `${canonicalCity}, Germany`;
+    if (DE_BUNDESLAND_CODE_SET.has(qualUpper)) return `${canonicalCity}, Germany`;
 
     // German Bundesland full names → Germany
     const DE_STATES_FULL: Record<string, true> = {
@@ -3215,6 +3583,11 @@ export function normalizeLocation(
       "essonne","val-d'oise","val-d’oise",
     ]);
     if (FR_REGIONS.has(qualLower)) return `${canonicalCity}, France`;
+
+    // Israeli district labels (ATS: "Ness Ziona, Center District")
+    if (qualLower === "center district" || qualLower === "central district") {
+      return `${canonicalCity}, Israel`;
+    }
 
     // Redundant city-city qualifier (e.g. "Oslo, Oslo" / "Braga, Braga") → look up by city alone
     if (qualLower === cityLower || qualLower === canonicalCity.toLowerCase()) {
@@ -3398,4 +3771,153 @@ export function seniorityFromExperienceYears(years: number): SeniorityLevel {
   if (years >= 5) return "senior";
   if (years >= 2) return "mid";
   return "entry";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Title-embedded street address extraction
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Many franchise ATSes (Dominos, Jimmy John's, etc.) embed the store's street
+ * address directly in the job title, e.g.:
+ *   "Dishwasher (01272) - 3275 Henry St"
+ *   "General Manager(07682) -491 N Lake Havasu Ave #100"
+ *   "Assistant Manager (06686) - FT Hours - 116 E Edgewood Dr"
+ *
+ * When the structured `locations` field already contains city+state, combining
+ * these gives a full geocodable address — no Places API call needed (Nominatim
+ * handles it for free).
+ *
+ * Returns the raw street portion only (no city/state); caller must append those
+ * from the job's normalized location string.
+ */
+
+// Store-number parenthetical followed (optionally via dashes) by a street number
+const TITLE_STORE_ADDR_RE =
+  /\(\d{2,6}\)\s*[-–]?\s*(?:[A-Za-z][\w\s]*?[-–]\s*)?(\d+\s+(?:[NSEW]{1,2}\s+)?[A-Za-z][\w\s.,#\-/]*(?:St\.?|Ave\.?|Dr\.?|Blvd\.?|Rd\.?|Ln\.?|Way|Ct\.?|Pl\.?|Hwy\.?|Pkwy\.?|Loop|Cir\.?|Ter\.?|Trl\.?|Run|Pike|Row|Sq\.?|Plaza|Place|Street|Avenue|Drive|Boulevard|Road|Lane|Court|Highway|Parkway|Circle|Terrace|Trail)(?:\s+(?:#|Ste\.?|Suite|Unit|Apt\.?)\s*[\w-]+)?)/i;
+
+export function extractTitleStreetAddress(title: string): string | null {
+  const m = title.match(TITLE_STORE_ADDR_RE);
+  if (!m) return null;
+  return m[1].trim().replace(/\s+/g, " ");
+}
+
+/**
+ * When an ATS provides a full street address in the location field
+ * (e.g. "2032 Oakwood Lane, Duarte, CA 91010"), returns the street portion
+ * so it can be stored as `job_address` instead of being silently discarded.
+ *
+ * Returns null when the raw location is just a city/region string.
+ *
+ * "2032 Oakwood Lane, Duarte, CA 91010" → "2032 Oakwood Lane"
+ * "1820 McCarthy Blvd, Suite 100, Milpitas, CA" → "1820 McCarthy Blvd, Suite 100"
+ * "Dallas, TX" → null
+ */
+export function extractLocationStreetAddress(locationRaw: string | null | undefined): string | null {
+  if (!locationRaw) return null;
+  // Try the same parse path as normalizeLocation — work on the first segment
+  const first = locationRaw.trim().split(/[;|]/)[0].trim();
+
+  // RE2 first — same reason as in normalizeLocation (suite bleed prevention)
+  const addrMatch = first.match(STREET_ADDRESS_RE2) ?? first.match(STREET_ADDRESS_RE);
+  if (addrMatch?.[1]) return addrMatch[1].trim();
+
+  // Fallback: "number street, ..., city, ST" split by comma
+  if (/^\d+\s+[A-Za-z]/.test(first)) {
+    const parts = first.split(/,\s*/);
+    if (parts.length >= 3 && /^[A-Z]{2}(\s+\d{5})?$/.test(parts[parts.length - 1].trim())) {
+      // Street is everything except the last two comma-parts (city, state)
+      return parts.slice(0, -2).join(", ").trim();
+    }
+  }
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Full US address embedded in HTML job descriptions (Carvana, Foundever, etc.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Decode entities + strip tags so regex runs on visible text (same idea as
+ * extractSalaryFromText — descriptions are often HTML-escaped in storage).
+ */
+function prepareDescriptionPlainTextForAddressScan(raw: string): string {
+  let t = raw.replace(/\r\n|\r/g, "\n").replace(/[ \t]+/g, " ");
+  t = t
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/&mdash;|&#8212;/g, "—")
+    .replace(/&ndash;|&#8211;/g, "–")
+    .replace(/&#36;/g, "$")
+    .replace(/&nbsp;|&#160;/gi, " ");
+  t = t.replace(/<[^>]+>/g, " ");
+  return t.replace(/\s+/g, " ").trim();
+}
+
+/** "123 Main, Suite 1, Dallas, TX 75201" — suite between street line and city. */
+const DESC_ADDR_SUITE_BETWEEN_RE =
+  /\b(\d{1,6}\s+[\w\s.,#\-/]{1,100}?,\s*(?:Suite|Ste\.?|Unit|#)\s*[\w-]+,\s*[^,\n]{1,60},\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)\b/i;
+
+/**
+ * Standard "123 Main St, City, ST 12345" embedded in prose (not start-anchored;
+ * STREET_ADDRESS_RE is for single-line location fields only).
+ */
+// Trailing suite on the street line is handled by DESC_ADDR_SUITE_BETWEEN_RE instead
+// (nested optional groups here broke the regexp parser with `)?),`).
+// Capture group must include city, ST, and ZIP — geocodeAddress needs the full string.
+const DESC_ADDR_EMBEDDED_RE =
+  /\b(\d{1,6}\s+(?:[NSEW]{1,2}\s+)?[A-Za-z0-9][\w\s.,#\-/]{1,90}(?:St\.?|Ave\.?|Dr\.?|Blvd\.?|Rd\.?|Ln\.?|Way|Ct\.?|Pl\.?|Hwy\.?|Pkwy\.?|Loop|Cir\.?|Street|Avenue|Drive|Boulevard|Road|Lane|Court|Highway|Parkway|Circle|Terrace|Trail),\s*[^,\n]{1,60},\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)\b/i;
+
+const DESC_ADDR_LABEL_HEAD_RES: RegExp[] = [
+  /\b(?:Working\s+Location|Work\s+Location)\s*:\s*/gi,
+  /\b(?:Store\s+Address|Site\s+Address|Job\s+Location|Office\s+Address|Physical\s+Address)\s*:\s*/gi,
+  /\b(?:is\s+)?located\s+at\s*:?\s*/gi,
+];
+
+function normalizeExtractedDescriptionAddress(s: string): string {
+  let t = s.replace(/\s+/g, " ").trim();
+  // Venue suffix after ZIP in copy: " ... MA 01702 (ADESA Boston)"
+  t = t.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  return t;
+}
+
+function findEmbeddedUsAddressInPlain(plain: string): string | null {
+  const m1 = plain.match(DESC_ADDR_SUITE_BETWEEN_RE);
+  if (m1?.[1]) return normalizeExtractedDescriptionAddress(m1[1]);
+  const m2 = plain.match(DESC_ADDR_EMBEDDED_RE);
+  if (m2?.[1]) return normalizeExtractedDescriptionAddress(m2[1]);
+  return null;
+}
+
+/**
+ * Finds a single US mailing-style address inside an HTML job description and
+ * returns the full string suitable for `geocodeAddress` (street, city,
+ * ST ZIP). Used when title / location / AI `job_address` did not yield a street
+ * line (e.g. Carvana "Working Location:", Foundever call-center copy).
+ *
+ * Intentionally conservative: first successful match wins; label-led snippets
+ * are scanned first so "Working Location:" wins over stray addresses in
+ * boilerplate when both appear.
+ */
+export function extractFullUsAddressFromDescription(
+  html: string | null | undefined,
+): string | null {
+  if (!html) return null;
+  const plain = prepareDescriptionPlainTextForAddressScan(html);
+  if (plain.length < 15) return null;
+
+  const head = plain.slice(0, 8000);
+  for (const re of DESC_ADDR_LABEL_HEAD_RES) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(head)) !== null) {
+      const tail = head.slice(m.index + m[0].length, m.index + m[0].length + 550);
+      const hit = findEmbeddedUsAddressInPlain(tail);
+      if (hit) return hit;
+    }
+  }
+  return findEmbeddedUsAddressInPlain(plain);
 }

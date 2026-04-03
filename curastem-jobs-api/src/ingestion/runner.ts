@@ -49,12 +49,16 @@ import { runCompanyEnrichment, runExaEnrichment } from "../enrichment/company.ts
 import { runCompanyPlacesGeocode } from "../enrichment/placesGeocodeCompanies.ts";
 import { runCompanyWebsiteProbeBatch } from "../enrichment/websiteProbe.ts";
 import { getFetcher, getSourcePriority } from "./registry.ts";
-import { geocode } from "../utils/geocode.ts";
+import { geocode, geocodeAddress } from "../utils/geocode.ts";
 import { placesGeocode, hasGeocodeableCity, normalizeLocationForGeocode } from "../utils/placesGeocode.ts";
+import { RETAIL_GEOCODE_SLUGS, RETAIL_TITLE_RE } from "../utils/retailGeocode.ts";
 import type { Env, IngestionResult, SourceRow } from "../types.ts";
 import {
   buildDedupKey,
   buildJobId,
+  extractFullUsAddressFromDescription,
+  extractLocationStreetAddress,
+  extractTitleStreetAddress,
   locationsJsonToEmbedString,
   locationsRawToEmbedString,
   primaryNormalizedLocation,
@@ -78,6 +82,8 @@ import { logger } from "../utils/logger.ts";
  * incrementally over multiple cron cycles rather than all at once.
  */
 const SOURCE_FETCH_TIMEOUT_MS = 90_000;
+/** Getro: sitemap + up to 1k `/_next/data` JSON fetches per run — needs headroom vs 90s default. */
+const GETRO_FETCH_TIMEOUT_MS = 180_000;
 
 /**
  * Process a single ingestion source.
@@ -120,10 +126,12 @@ async function processSource(
 
   let rawJobs: Awaited<ReturnType<typeof fetcher.fetch>>;
   try {
+    const fetchTimeoutMs =
+      source.source_type === "getro" ? GETRO_FETCH_TIMEOUT_MS : SOURCE_FETCH_TIMEOUT_MS;
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(
-        () => reject(new Error(`fetch timed out after ${SOURCE_FETCH_TIMEOUT_MS}ms`)),
-        SOURCE_FETCH_TIMEOUT_MS
+        () => reject(new Error(`fetch timed out after ${fetchTimeoutMs}ms`)),
+        fetchTimeoutMs
       )
     );
     rawJobs = await Promise.race([fetcher.fetch(source, env), timeoutPromise]);
@@ -260,18 +268,81 @@ async function processSource(
   }
 
   // ── Phase 4b: Inline geocode unique primary locations ──────────────────────
-  // Strategy (unified for all companies):
+  // Strategy:
+  //   0. If job has a full street address (extracted from title or AI-enriched body)
+  //      + city + state → Nominatim address geocode (free, precise).
+  //      Franchise ATSes like Dominos embed the store address in the title
+  //      ("Dishwasher (01272) - 3275 Henry St") while `locations` has the city.
+  //      Combining them gives exact store coords at zero cost.
   //   1. Check company_location_geocodes D1 table — free, instant, persistent cache.
-  //   2. Cache miss + GOOGLE_MAPS_API_KEY → Places API "{Company} {City, ST}"
-  //      → saves result to D1 cache so the same (company, city) is never billed twice.
-  //   3. No API key or Places API failure → fall back to Photon/Nominatim (free,
-  //      city-level accuracy — better than nothing).
+  //   2. Cache miss, professional company → Places API "{Company} {City, ST}" ($0.032/req).
+  //      Retail/franchise companies route directly to step 3 (city-level is sufficient).
+  //   3. Photon/Nominatim fallback — free, city-level accuracy.
   // Cap at 50 Places API calls per source run to stay within Worker CPU budget.
   const INLINE_GEOCODE_CAP = 50;
 
-  // Build unique (companyId, normalizedLocation) pairs for this run
+  // Step 0: Precise address geocoding for jobs that have a full street address.
+  //
+  // Uses Geocoding API ($0.005/req) with Nominatim fallback (free).
+  // Deduplicates by full address first so multiple jobs at the same store
+  // (e.g. "Dishwasher" + "Delivery Driver" both at "3275 Henry St, Watertown, WI")
+  // share one API call — subsequent lookups hit KV cache at zero cost.
+  //
+  // keyed by jobId → {lat, lng} so it can be applied at upsert time.
+  const jobAddressCoords = new Map<string, { lat: number; lng: number }>();
+
+  // Collect (jobId, fullAddress) pairs
+  const addrJobs: Array<{ jobId: string; fullAddress: string }> = [];
+  for (const m of nonDupMetas) {
+    // Priority: AI-enriched job_address → title-embedded → ATS location field →
+    // full address in HTML description (Carvana "Working Location:", Foundever, etc.)
+    const streetAddr =
+      (m.normalized as { job_address?: string | null }).job_address?.trim() ||
+      extractTitleStreetAddress(m.normalized.title ?? "") ||
+      extractLocationStreetAddress(m.normalized.location);
+
+    const slug = aliasCache.get(slugify(m.normalized.company_name)) ?? slugify(m.normalized.company_name);
+    const rawLoc = primaryNormalizedLocation(m.normalized.location, slug);
+    if (!rawLoc || /^\d|\bremote\b/i.test(rawLoc)) continue;
+    const locKey = normalizeLocationForGeocode(rawLoc);
+    if (!locKey || !hasGeocodeableCity(locKey)) continue;
+
+    if (!streetAddr) {
+      const descFull = extractFullUsAddressFromDescription(m.normalized.description_raw);
+      if (descFull) {
+        addrJobs.push({ jobId: m.jobId, fullAddress: descFull });
+      }
+      continue;
+    }
+
+    addrJobs.push({ jobId: m.jobId, fullAddress: `${streetAddr}, ${locKey}` });
+  }
+
+  // Geocode each unique address once; all jobs at the same address share the result
+  const addrCache = new Map<string, { lat: number; lng: number } | null>();
+  for (const { fullAddress } of addrJobs) {
+    if (addrCache.has(fullAddress)) continue;
+    try {
+      const result = await geocodeAddress(fullAddress, env.GOOGLE_MAPS_API_KEY, env.RATE_LIMIT_KV);
+      addrCache.set(fullAddress, result ? { lat: result.lat, lng: result.lng } : null);
+      if (result?.usedNominatim) await new Promise((r) => setTimeout(r, 1100));
+    } catch {
+      addrCache.set(fullAddress, null);
+    }
+  }
+
+  for (const { jobId, fullAddress } of addrJobs) {
+    const coords = addrCache.get(fullAddress);
+    if (coords) jobAddressCoords.set(jobId, coords);
+  }
+
+  // Build unique (companyId, normalizedLocation) pairs for this run.
+  // Also track whether any job at each pair matches the retail profile so we
+  // can route cheaply to Photon instead of burning a Places API credit.
   const pairsToCheck: Array<{ company_id: string; location_key: string; company_name: string }> = [];
   const seenPairKeys = new Set<string>();
+  // pairKey → true if any job at that (company, location) is a retail role
+  const pairIsRetail = new Map<string, boolean>();
   for (const m of nonDupMetas) {
     const slug =
       aliasCache.get(slugify(m.normalized.company_name)) ?? slugify(m.normalized.company_name);
@@ -282,6 +353,11 @@ async function processSource(
     if (!seenPairKeys.has(pairKey)) {
       seenPairKeys.add(pairKey);
       pairsToCheck.push({ company_id: m.companyId, location_key: locationKey, company_name: m.normalized.company_name });
+    }
+    // Mark pair as retail if company is blacklisted OR job title signals a retail role
+    if (!pairIsRetail.get(pairKey)) {
+      const isRetail = RETAIL_GEOCODE_SLUGS.has(slug) || RETAIL_TITLE_RE.test(m.normalized.title ?? "");
+      if (isRetail) pairIsRetail.set(pairKey, true);
     }
   }
 
@@ -298,14 +374,24 @@ async function processSource(
     if (cached) locationToCoords.set(location_key, { lat: cached.lat, lng: cached.lng });
   }
 
-  // Call Places API for cache misses (capped to avoid Worker timeout)
-  const misses = pairsToCheck.filter(
+  // Split cache misses into two tiers:
+  //   professionalMisses → Google Maps Places API (precise building coords)
+  //   retailMisses       → Photon/Nominatim (free city-level, sufficient for franchise listings)
+  //
+  // Routing logic (in priority order):
+  //   1. Company slug in RETAIL_GEOCODE_SLUGS → Photon
+  //   2. Any job at this (company, location) matches RETAIL_TITLE_RE → Photon
+  //   3. Otherwise → Places API (capped at INLINE_GEOCODE_CAP per source run)
+  const allMisses = pairsToCheck.filter(
     (p) => !cachedCoords.has(`${p.company_id}|${p.location_key}`) && hasGeocodeableCity(p.location_key)
-  ).slice(0, INLINE_GEOCODE_CAP);
+  );
+  const professionalMisses = allMisses
+    .filter((p) => !pairIsRetail.get(`${p.company_id}|${p.location_key}`))
+    .slice(0, INLINE_GEOCODE_CAP);
 
   let placesApiCalls = 0;
   if (env.GOOGLE_MAPS_API_KEY) {
-    for (const { company_id, location_key, company_name } of misses) {
+    for (const { company_id, location_key, company_name } of professionalMisses) {
       if (locationToCoords.has(location_key)) continue; // already resolved by earlier pair
       try {
         const result = await placesGeocode(
@@ -331,7 +417,17 @@ async function processSource(
     }
   }
 
-  // Fallback: Photon/Nominatim for anything still unresolved (free, city-level)
+  // Photon/Nominatim for: retail pairs (by design) + professional failures + no-API-key fallback.
+  // Build a reverse lookup so Photon results can also be persisted to D1 —
+  // this ensures the batch D1 cache (batchGetCompanyLocationCoords) serves
+  // these on the next cron run instead of always falling through to KV.
+  const locationKeyToCompanyPairs = new Map<string, Array<{ company_id: string }>>();
+  for (const p of pairsToCheck) {
+    const arr = locationKeyToCompanyPairs.get(p.location_key) ?? [];
+    arr.push({ company_id: p.company_id });
+    locationKeyToCompanyPairs.set(p.location_key, arr);
+  }
+
   const stillUnresolved = [...new Set(
     pairsToCheck
       .map((p) => p.location_key)
@@ -342,6 +438,17 @@ async function processSource(
       const result = await geocode(loc, env.RATE_LIMIT_KV);
       if (result) {
         locationToCoords.set(loc, { lat: result.lat, lng: result.lng });
+        // Persist to D1 so the next cron batch cache lookup skips Photon entirely
+        const pairs = locationKeyToCompanyPairs.get(loc) ?? [];
+        for (const { company_id } of pairs) {
+          await upsertCompanyLocationGeocode(db, {
+            company_id,
+            location_key: loc,
+            lat: result.lat,
+            lng: result.lng,
+            address: null,
+          });
+        }
         if (result.usedNominatim) await new Promise((r) => setTimeout(r, 1100));
       }
     } catch (err) {
@@ -360,7 +467,10 @@ async function processSource(
     const normLoc = primaryNormalizedLocation(normalized.location, company_slug);
     // Look up by normalized (geocoder-friendly) location key, not the raw ATS string
     const locationKey = normLoc ? normalizeLocationForGeocode(normLoc) : null;
-    const coords = locationKey ? locationToCoords.get(locationKey) : null;
+    const cityCoords  = locationKey ? locationToCoords.get(locationKey) : null;
+    // Per-job address coords (from title extraction or AI enrichment) take precedence
+    // over city-level city coords — they give exact store/office coordinates for free.
+    const coords = jobAddressCoords.get(jobId) ?? cityCoords;
     return {
       id:           jobId,
       company_id:   companyId,
@@ -469,17 +579,21 @@ async function processSource(
  * How many jobs to embed per cron run during the backfill pass.
  *
  * Workers Paid hard cap: 1,000 subrequests per invocation (cron included).
- * Budget breakdown per run:
- *   ~50  source fetches (one per ATS)
- *   200  embedding Gemini fetches      ← this constant
- *   200  geocode Photon/Nominatim fetches
- *   ~50  Exa / Brandfetch / Workday / Consider backfill fetches
- *   ─────────────────────────────────────────────────────────
- *   ~500 total — well under the 1,000 ceiling
+ * Subrequests are outbound fetch() calls; D1 queries are internal and free.
  *
- * Speed: requests run 5 concurrent → 200 / 5 = 40 batches × ~250ms = ~10s wall clock.
+ * Worst-case budget per run (5 Getro + 7 Consider sources in initial batch):
+ *   500  Getro detail fetches     (5 boards × 100 GETRO_JOBS_PER_RUN + overhead)
+ *   182  Consider search-jobs     (7 boards × ~26 fetches each)
+ *   100  embedding Gemini fetches ← this constant
+ *   100  geocode Photon fetches
+ *   ~50  Workday/Consider description backfills
+ *   ~30  Exa / Brandfetch enrichment fetches
+ *   ─────────────────────────────────────────────────────────
+ *   ~962 total — under the 1,000 ceiling with ~38 headroom
+ *
+ * Speed: requests run 5 concurrent → 100 / 5 = 20 batches × ~250ms = ~5s wall clock.
  */
-const EMBEDDING_BACKFILL_BATCH = 200;
+const EMBEDDING_BACKFILL_BATCH = 100;
 const EMBEDDING_CONCURRENCY    = 5;
 
 /**
@@ -562,10 +676,10 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
   return { succeeded: vectors.length, failed, total: jobs.length };
 }
 
-// Photon ~100ms each → 200 × 100ms = 20s. Nominatim (rare) adds 1.1s/call.
-// Kept at 200 to preserve subrequest budget for embeddings and source fetches.
-// At 200/run × 24/day = 4,800 geocodes/day.
-const GEOCODE_BACKFILL_BATCH = 200;
+// Photon ~100ms each → 100 × 100ms = 10s. Nominatim (rare) adds 1.1s/call.
+// Reduced from 200 to preserve subrequest budget (see EMBEDDING_BACKFILL_BATCH comment).
+// At 100/run × 24/day = 2,400 geocodes/day — still clears a 50k backlog in ~21 days.
+const GEOCODE_BACKFILL_BATCH = 100;
 
 async function backfillGeocode(env: Env): Promise<void> {
   const locations = await getLocationsNeedingGeocode(env.JOBS_DB, GEOCODE_BACKFILL_BATCH);

@@ -57,5 +57,12 @@
   // Hourly ingestion cron — runs every hour at :00
   "triggers": {
     "crons": ["0 * * * *"]
+  },
+
+  // Raise per-request CPU time to 30s (max on Paid plan).
+  // Most time is spent waiting on I/O, so this rarely fires, but allows
+  // CPU-heavy operations (regex backfill, JSON parsing) to complete safely.
+  "limits": {
+    "cpu_ms": 30000
   }
 }

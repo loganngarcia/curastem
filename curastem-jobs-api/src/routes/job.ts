@@ -17,7 +17,7 @@
  * still returns the job with null AI fields rather than erroring.
  */
 
-import { getJobById, updateJobAiFields, updateCompanyEnrichment, updateJobDescriptionRaw, getSourceById, type FullJobRow } from "../db/queries.ts";
+import { getJobById, resolveJobLocationPoints, updateJobAiFields, updateCompanyEnrichment, updateJobDescriptionRaw, getSourceById, type FullJobRow } from "../db/queries.ts";
 import { buildPublicSalary, extractJobFields } from "../enrichment/ai.ts";
 import { extractKeywords } from "../enrichment/keywords.ts";
 import { fetchSmartRecruitersDescription } from "../ingestion/sources/smartrecruiters.ts";
@@ -271,5 +271,16 @@ export async function handleGetJob(
     }
   }
 
-  return jsonOk(rowToFullPublicJob(row));
+  const base = rowToFullPublicJob(row);
+  const location_points = await resolveJobLocationPoints(
+    env.JOBS_DB,
+    row.company_id,
+    row.locations,
+    row.location_lat,
+    row.location_lng
+  );
+  return jsonOk({
+    ...base,
+    ...(location_points.length > 1 ? { location_points } : {}),
+  });
 }

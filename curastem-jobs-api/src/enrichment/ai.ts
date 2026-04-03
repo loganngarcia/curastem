@@ -19,7 +19,12 @@
  */
 
 import type { JobDescriptionExtracted, PublicSalary, SalaryPeriod } from "../types.ts";
-import { htmlToText, normalizeLocation } from "../utils/normalize.ts";
+import {
+  htmlToText,
+  normalizeLocation,
+  sanitizeExperienceYearsMinFromDescription,
+  sanitizeSeniorityLevelFromAgeNoise,
+} from "../utils/normalize.ts";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -434,9 +439,14 @@ export async function extractJobFields(
   const employmentType = EMPLOYMENT_TYPES.includes(parsed.employment_type as never)
     ? (parsed.employment_type as import("../types.ts").EmploymentType)
     : null;
-  const seniorityLevel = SENIORITY_LEVELS.includes(parsed.seniority_level as never)
+  const seniorityLevelParsed = SENIORITY_LEVELS.includes(parsed.seniority_level as never)
     ? (parsed.seniority_level as import("../types.ts").SeniorityLevel)
     : null;
+  const seniorityLevel = sanitizeSeniorityLevelFromAgeNoise(
+    jobTitle,
+    descriptionText,
+    seniorityLevelParsed
+  );
   const descriptionLanguage = isValidLangCode(parsed.description_language)
     ? parsed.description_language
     : null;
@@ -455,9 +465,14 @@ export async function extractJobFields(
     ? (parsed.salary_period as import("../types.ts").SalaryPeriod)
     : null;
 
-  const experienceYearsMin = typeof parsed.experience_years_min === "number" && parsed.experience_years_min > 0
-    ? Math.floor(parsed.experience_years_min)
-    : null;
+  const experienceYearsMinRaw =
+    typeof parsed.experience_years_min === "number" && parsed.experience_years_min > 0
+      ? Math.floor(parsed.experience_years_min)
+      : null;
+  const experienceYearsMin = sanitizeExperienceYearsMinFromDescription(
+    descriptionText,
+    experienceYearsMinRaw
+  );
 
   const locationsRaw = ensureStringArray(parsed.locations);
   // Run through the same geo normalizer as ingest so ISO-2 suffixes in model output become full names

@@ -37,6 +37,7 @@ import { ripplingFetcher } from "./sources/rippling.ts";
 import { catsoneFetcher } from "./sources/catsone.ts";
 import { oracleCeFetcher } from "./sources/oracle_ce.ts";
 import { brillioFetcher } from "./sources/brillio.ts";
+import { globallogicFetcher } from "./sources/globallogic.ts";
 import { phenomFetcher } from "./sources/phenom.ts";
 import { paradoxFetcher } from "./sources/paradox.ts";
 import { jobviteFetcher } from "./sources/jobvite.ts";
@@ -49,6 +50,8 @@ import { activateCareersFetcher } from "./sources/activate_careers.ts";
 import { avatureFetcher } from "./sources/avature.ts";
 import { servicenowSeoFetcher } from "./sources/servicenow_seo.ts";
 import { ibmCareersFetcher } from "./sources/ibm_careers.ts";
+import { recruiterflowFetcher } from "./sources/recruiterflow.ts";
+import { getroFetcher } from "./sources/getro.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -76,6 +79,7 @@ const REGISTRY: Record<SourceType, JobSource> = {
   catsone: catsoneFetcher,
   oracle_ce: oracleCeFetcher,
   brillio: brillioFetcher,
+  globallogic: globallogicFetcher,
   phenom: phenomFetcher,
   paradox: paradoxFetcher,
   jobvite: jobviteFetcher,
@@ -88,6 +92,8 @@ const REGISTRY: Record<SourceType, JobSource> = {
   avature: avatureFetcher,
   servicenow_seo: servicenowSeoFetcher,
   ibm_careers: ibmCareersFetcher,
+  recruiterflow: recruiterflowFetcher,
+  getro: getroFetcher,
 };
 
 /**
@@ -134,6 +140,8 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   saashr: 100,
   // VC portfolio boards (Consider) — structured API but syndicated listings
   consider: 68,
+  // Getro VC boards — full descriptions in Next.js data JSON; syndicated like Consider
+  getro: 68,
   // Jobright-native listings (structured Next.js payload; id list is manually curated)
   jobright: 58,
   // Framer search index (static JSON; same content as the live marketing site)
@@ -150,6 +158,7 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   oracle_ce: 86,
   // WordPress HTML listing — structured parse, no third-party ATS
   brillio: 72,
+  globallogic: 72,
   // Phenom SSR — sitemap discovery + embedded `phApp.ddo` job payload (apply often redirects to Workday)
   phenom: 77,
   // Paradox SSR — listing pagination + JSON-LD JobPosting (same trust as Phenom)
@@ -173,6 +182,7 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   servicenow_seo: 78,
   // IBM unified search API (official JSON; same listings as careers.ibm.com JobDetail)
   ibm_careers: 88,
+  recruiterflow: 78,
 };
 
 export function getSourcePriority(sourceType: string): number {

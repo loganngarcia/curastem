@@ -54,7 +54,6 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-vercel",   name: "Vercel (Greenhouse)",    source_type: "greenhouse", company_handle: "vercel",    base_url: "https://boards-api.greenhouse.io/v1/boards/vercel/jobs" },
   { id: "gh-instacart",  name: "Instacart (Greenhouse)",  source_type: "greenhouse", company_handle: "instacart",  base_url: "https://boards-api.greenhouse.io/v1/boards/instacart/jobs" },
   { id: "gh-gusto",      name: "Gusto (Greenhouse)",      source_type: "greenhouse", company_handle: "gusto",      base_url: "https://boards-api.greenhouse.io/v1/boards/gusto/jobs" },
-  { id: "gh-grammarly",  name: "Grammarly (Greenhouse)",  source_type: "greenhouse", company_handle: "grammarly",  base_url: "https://boards-api.greenhouse.io/v1/boards/grammarly/jobs" },
   { id: "gh-pinterest",  name: "Pinterest (Greenhouse)",  source_type: "greenhouse", company_handle: "pinterest",  base_url: "https://boards-api.greenhouse.io/v1/boards/pinterest/jobs" },
   { id: "gh-dropbox",    name: "Dropbox (Greenhouse)",    source_type: "greenhouse", company_handle: "dropbox",    base_url: "https://boards-api.greenhouse.io/v1/boards/dropbox/jobs" },
   { id: "gh-brex",       name: "Brex (Greenhouse)",       source_type: "greenhouse", company_handle: "brex",       base_url: "https://boards-api.greenhouse.io/v1/boards/brex/jobs" },
@@ -139,12 +138,16 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ph-gianteagle", name: "Giant Eagle (Phenom)", source_type: "phenom", company_handle: "giant-eagle", base_url: "https://jobs.gianteagle.com/us/en/" },
   { id: "ph-wawa", name: "Wawa (Phenom)", source_type: "phenom", company_handle: "wawa", base_url: "https://careers.wawa.com/us/en/" },
   { id: "ph-whataburger", name: "Whataburger (Phenom)", source_type: "phenom", company_handle: "whataburger", base_url: "https://careers.whataburger.com/us/en/" },
+  // Qcells — `/jobs/{id}-{slug}`; sitemap + `phApp.ddo.jobDetail` HTML description (see phenom.ts)
+  { id: "ph-qcells", name: "Qcells (Phenom)", source_type: "phenom", company_handle: "qcells", base_url: "https://careers.qcells.com/jobs/17569935-associate-business-analyst" },
   // Retail — Radancy TalentBrew (search-jobs + per-job HTML; see talentbrew.ts)
   { id: "tb-7eleven", name: "7-Eleven (TalentBrew)", source_type: "talentbrew", company_handle: "7-eleven", base_url: "https://careers.7-eleven.com/search-jobs" },
   { id: "tb-aldi", name: "ALDI USA (TalentBrew)", source_type: "talentbrew", company_handle: "aldi-us", base_url: "https://careers.aldi.us/search-jobs" },
   { id: "tb-ikea", name: "IKEA USA (TalentBrew)", source_type: "talentbrew", company_handle: "ikea-us", base_url: "https://jobs.ikea.com/en/search-jobs" },
   // Retail — Oracle Fusion CE REST + detail (see oracle_ce.ts)
   { id: "oc-autozone", name: "AutoZone (Oracle CE)", source_type: "oracle_ce", company_handle: "autozone", base_url: "https://careers.autozone.com/hcmUI/CandidateExperience/en/sites/CX_1" },
+  // Coherent Corp. (Hanwha) — hcwp FA; e.g. …/sites/CX_1/job/2011364
+  { id: "oc-coherent-hcwp", name: "Coherent (Oracle CE)", source_type: "oracle_ce", company_handle: "coherent", base_url: "https://hcwp.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1" },
   { id: "oc-staples", name: "Staples (Oracle CE)", source_type: "oracle_ce", company_handle: "staples", base_url: "https://fa-exhh-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/StaplesInc" },
   { id: "jibe-rei", name: "REI Co-op (iCIMS Jibe)", source_type: "jibe", company_handle: "rei", base_url: "https://www.rei.jobs" },
   { id: "jibe-dollargeneral", name: "Dollar General (iCIMS Jibe)", source_type: "jibe", company_handle: "dollar-general", base_url: "https://careers.dollargeneral.com" },
@@ -158,6 +161,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ph-united", name: "United Airlines (Phenom)", source_type: "phenom", company_handle: "unitedairlines", base_url: "https://careers.united.com/us/en/" },
   // Delta — Avature `SearchJobs/feed/` (recent postings; sufficient for ongoing ingest without backfill)
   { id: "av-delta", name: "Delta Air Lines (Avature RSS)", source_type: "avature", company_handle: "delta", base_url: "https://delta.avature.net/careers/SearchJobs/feed/" },
+  // Epic Systems (healthcare EHR) — careers.epic.com → epic.avature.net; not Epic Games (gh-epicgames)
+  { id: "av-epic", name: "Epic Systems (Avature RSS)", source_type: "avature", company_handle: "epic", base_url: "https://epic.avature.net/careers/SearchJobs/feed/" },
   // Best Buy — ServiceNow SEO sitemap API (see jobs.bestbuy.com robots.txt); per-job SSR meta
   { id: "sn-bestbuy", name: "Best Buy (ServiceNow SEO)", source_type: "servicenow_seo", company_handle: "bestbuy", base_url: "https://bestbuy.service-now.com/api/93622/seo/sitemap" },
   { id: "gh-lyft",    name: "Lyft (Greenhouse)",    source_type: "greenhouse", company_handle: "lyft",         base_url: "https://boards-api.greenhouse.io/v1/boards/lyft/jobs" },
@@ -265,6 +270,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-medrio",           name: "Medrio (Greenhouse)",            source_type: "greenhouse", company_handle: "medrio",           base_url: "https://boards-api.greenhouse.io/v1/boards/medrio/jobs" },
   { id: "gh-armada",           name: "Armada (Greenhouse)",            source_type: "greenhouse", company_handle: "armada",           base_url: "https://boards-api.greenhouse.io/v1/boards/armada/jobs" },
   { id: "gh-arenaai",          name: "Arena AI (Greenhouse)",          source_type: "greenhouse", company_handle: "arenaai",          base_url: "https://boards-api.greenhouse.io/v1/boards/arenaai/jobs" },
+  { id: "gh-astranis",         name: "Astranis (Greenhouse)",           source_type: "greenhouse", company_handle: "astranis",         base_url: "https://boards-api.greenhouse.io/v1/boards/astranis/jobs" },
   { id: "gh-contextualai",     name: "Contextual AI (Greenhouse)",     source_type: "greenhouse", company_handle: "contextualai",     base_url: "https://boards-api.greenhouse.io/v1/boards/contextualai/jobs" },
   { id: "gh-loop",             name: "Loop (Greenhouse)",              source_type: "greenhouse", company_handle: "loop",             base_url: "https://boards-api.greenhouse.io/v1/boards/loop/jobs" },
   { id: "gh-tollbit",          name: "Tollbit (Greenhouse)",           source_type: "greenhouse", company_handle: "tollbit",          base_url: "https://boards-api.greenhouse.io/v1/boards/tollbit/jobs" },
@@ -320,6 +326,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ab-handshake", name: "Handshake (Ashby)", source_type: "ashby", company_handle: "handshake", base_url: "https://api.ashbyhq.com/posting-api/job-board/handshake?includeCompensation=true" },
   { id: "ab-kraken", name: "Kraken (Ashby)", source_type: "ashby", company_handle: "kraken.com", base_url: "https://api.ashbyhq.com/posting-api/job-board/kraken.com?includeCompensation=true" },
   { id: "ab-frontcareers", name: "Front (Ashby)", source_type: "ashby", company_handle: "frontcareers", base_url: "https://api.ashbyhq.com/posting-api/job-board/frontcareers?includeCompensation=true" },
+  // 30 Minutes to President's Club — public board: jobs.ashbyhq.com/30mpc
+  { id: "ab-30mpc", name: "30 Minutes to President's Club (Ashby)", source_type: "ashby", company_handle: "30mpc", base_url: "https://api.ashbyhq.com/posting-api/job-board/30mpc?includeCompensation=true" },
   // Niantic Spatial (post-Niantic Inc. org) — public board: jobs.ashbyhq.com/niantic-spatial
   { id: "ab-niantic-spatial", name: "Niantic Spatial (Ashby)", source_type: "ashby", company_handle: "niantic-spatial", base_url: "https://api.ashbyhq.com/posting-api/job-board/niantic-spatial?includeCompensation=true" },
   { id: "ab-jasper-ai", name: "Jasper AI (Ashby)", source_type: "ashby", company_handle: "Jasper AI", base_url: "https://api.ashbyhq.com/posting-api/job-board/Jasper%20AI?includeCompensation=true" },
@@ -342,6 +350,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ab-homebase",     name: "Homebase (Ashby)",         source_type: "ashby", company_handle: "homebase",     base_url: "https://api.ashbyhq.com/posting-api/job-board/homebase?includeCompensation=true" },
   { id: "ab-hinge-health", name: "Hinge Health (Ashby)",     source_type: "ashby", company_handle: "hinge-health", base_url: "https://api.ashbyhq.com/posting-api/job-board/hinge-health?includeCompensation=true" },
   { id: "ab-instructure",  name: "Instructure (Ashby)",      source_type: "ashby", company_handle: "instructure",  base_url: "https://api.ashbyhq.com/posting-api/job-board/instructure?includeCompensation=true" },
+  { id: "ab-ironclad",     name: "Ironclad (Ashby)",           source_type: "ashby", company_handle: "ironcladhq",   base_url: "https://api.ashbyhq.com/posting-api/job-board/ironcladhq?includeCompensation=true" },
   { id: "ab-manusai",      name: "Manus AI (Ashby)",         source_type: "ashby", company_handle: "manusai",      base_url: "https://api.ashbyhq.com/posting-api/job-board/manusai?includeCompensation=true" },
   { id: "ab-snowflake",    name: "Snowflake (Ashby)",        source_type: "ashby", company_handle: "snowflake",    base_url: "https://api.ashbyhq.com/posting-api/job-board/snowflake?includeCompensation=true" },
   { id: "ab-hippocratic-ai", name: "Hippocratic AI (Ashby)", source_type: "ashby", company_handle: "Hippocratic AI", base_url: "https://api.ashbyhq.com/posting-api/job-board/Hippocratic%20AI?includeCompensation=true" },
@@ -379,6 +388,9 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ab-adaptivesecurity", name: "Adaptive Security (Ashby)",    source_type: "ashby", company_handle: "adaptivesecurity", base_url: "https://api.ashbyhq.com/posting-api/job-board/adaptivesecurity?includeCompensation=true" },
   { id: "ab-aegis-ai",         name: "Aegis AI (Ashby)",               source_type: "ashby", company_handle: "aegis-ai",         base_url: "https://api.ashbyhq.com/posting-api/job-board/aegis-ai?includeCompensation=true" },
   { id: "ab-cinder",           name: "Cinder (Ashby)",                 source_type: "ashby", company_handle: "cinder",           base_url: "https://api.ashbyhq.com/posting-api/job-board/cinder?includeCompensation=true" },
+  { id: "ab-creatify",         name: "Creatify (Ashby)",               source_type: "ashby", company_handle: "creatify",         base_url: "https://api.ashbyhq.com/posting-api/job-board/creatify?includeCompensation=true" },
+  { id: "ab-slope",            name: "Slope (Ashby)",                  source_type: "ashby", company_handle: "slope",            base_url: "https://api.ashbyhq.com/posting-api/job-board/slope?includeCompensation=true" },
+  { id: "ab-zettabyte-space",  name: "Zettabyte (Ashby)",              source_type: "ashby", company_handle: "zettabyte-space",  base_url: "https://api.ashbyhq.com/posting-api/job-board/zettabyte-space?includeCompensation=true" },
   { id: "ab-taktile",          name: "Taktile (Ashby)",                source_type: "ashby", company_handle: "taktile",          base_url: "https://api.ashbyhq.com/posting-api/job-board/taktile?includeCompensation=true" },
   { id: "ab-david-ai",         name: "David AI (Ashby)",               source_type: "ashby", company_handle: "david-ai",         base_url: "https://api.ashbyhq.com/posting-api/job-board/david-ai?includeCompensation=true" },
   { id: "ab-delphi",           name: "Delphi (Ashby)",                 source_type: "ashby", company_handle: "delphi",           base_url: "https://api.ashbyhq.com/posting-api/job-board/delphi?includeCompensation=true" },
@@ -599,6 +611,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "lv-hottopic",    name: "Hot Topic",        source_type: "lever", company_handle: "hottopic",         base_url: "https://api.lever.co/v0/postings/hottopic" },
   { id: "lv-metlife",     name: "MetLife",          source_type: "lever", company_handle: "metlife",          base_url: "https://api.lever.co/v0/postings/metlife" },
   { id: "lv-princesspolly", name: "Princess Polly", source_type: "lever", company_handle: "princesspolly",   base_url: "https://api.lever.co/v0/postings/princesspolly" },
+  { id: "lv-penumbrainc", name: "Penumbra (Lever)", source_type: "lever", company_handle: "penumbrainc", base_url: "https://api.lever.co/v0/postings/penumbrainc" },
 
   // ─── Workable ─────────────────────────────────────────────────────────
   // Public widget API: https://apply.workable.com/api/v1/widget/accounts/{handle}
@@ -612,6 +625,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wb-huggingface", name: "Hugging Face (Workable)",   source_type: "workable", company_handle: "huggingface",     base_url: "https://apply.workable.com/api/v1/widget/accounts/huggingface" },
   { id: "wb-curology",    name: "Curology (Workable)",       source_type: "workable", company_handle: "curology",        base_url: "https://apply.workable.com/api/v1/widget/accounts/curology" },
   { id: "wb-bask-health", name: "Bask Health (Workable)",   source_type: "workable", company_handle: "bask-health-1",   base_url: "https://apply.workable.com/api/v1/widget/accounts/bask-health-1" },
+  { id: "wb-authorium", name: "Authorium (Workable)", source_type: "workable", company_handle: "authorium", base_url: "https://apply.workable.com/api/v1/widget/accounts/authorium" },
 
   // ─── Jobright (native) ────────────────────────────────────────────────
   // Next.js data route per job id; buildId scraped from homepage. Append ids to
@@ -624,6 +638,8 @@ export const SEED_SOURCES: SeedSource[] = [
 
   // ─── EasyApply (HTML + JSON-LD) ─────────────────────────────────────────
   { id: "ea-snaplii", name: "Snaplii (EasyApply)", source_type: "easyapply", company_handle: "snaplii", base_url: "https://snaplii.easyapply.co/" },
+  // Recruiterflow — embedded `window.jobsList` + JSON-LD JobPosting per role
+  { id: "rf-recruitingfromscratch", name: "Recruiting From Scratch (Recruiterflow)", source_type: "recruiterflow", company_handle: "recruitingfromscratch", base_url: "https://recruiterflow.com/recruitingfromscratch/jobs" },
 
   // ─── Rippling (Next.js __NEXT_DATA__) ─────────────────────────────────
   // Board root: listing + pagination; per-job page has full description HTML.
@@ -634,6 +650,9 @@ export const SEED_SOURCES: SeedSource[] = [
 
   // ─── Brillio (WordPress listing HTML — see brillio.ts) ───────────────────
   { id: "br-brillio", name: "Brillio (Careers)", source_type: "brillio", company_handle: "brillio", base_url: "https://careers.brillio.com/job-listing/" },
+
+  // ─── GlobalLogic (WordPress career search HTML — see globallogic.ts) ─────
+  { id: "gl-globallogic", name: "GlobalLogic (Careers)", source_type: "globallogic", company_handle: "globallogic", base_url: "https://www.globallogic.com/career-search-page/" },
 
   // ─── Phenom (sitemap + phApp.ddo job payload) ───────────────────────────
   // Locale root; single-job URLs are normalized. Same employer may also use Workday (`wd-usbank`).
@@ -750,6 +769,14 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wd-cisco",       name: "Cisco",            source_type: "workday", company_handle: "cisco",          base_url: "https://cisco.wd5.myworkdayjobs.com/wday/cxs/cisco/Cisco_Careers/jobs" },
   { id: "wd-flexera",     name: "Flexera",          source_type: "workday", company_handle: "flexerasoftware", base_url: "https://flexerasoftware.wd1.myworkdayjobs.com/wday/cxs/flexerasoftware/FlexeraSoftware/jobs" },
   { id: "wd-intel",       name: "Intel",            source_type: "workday", company_handle: "intel",          base_url: "https://intel.wd1.myworkdayjobs.com/wday/cxs/intel/External/jobs" },
+  // Logitech — e.g. …/en-US/Logitech/job/…/Sales-Operations-Intern_145576-1
+  { id: "wd-logitech",    name: "Logitech (Workday)",       source_type: "workday", company_handle: "logitech",       base_url: "https://logitech.wd5.myworkdayjobs.com/wday/cxs/logitech/Logitech/jobs" },
+  // KLA — career site path uses /Search/job/… (site id Search)
+  { id: "wd-kla",         name: "KLA (Workday)",            source_type: "workday", company_handle: "kla",            base_url: "https://kla.wd1.myworkdayjobs.com/wday/cxs/kla/Search/jobs" },
+  // Aptiv — e.g. …/APTIV_CAREERS/job/…
+  { id: "wd-aptiv",       name: "Aptiv (Workday)",          source_type: "workday", company_handle: "aptiv",          base_url: "https://aptiv.wd5.myworkdayjobs.com/wday/cxs/aptiv/APTIV_CAREERS/jobs" },
+  // TD SYNNEX HYVE — e.g. …/hyvecareers/job/Fremont-CA/BI-Analyst_R46672
+  { id: "wd-synnex-hyve", name: "TD SYNNEX HYVE (Workday)", source_type: "workday", company_handle: "synnex-hyve",    base_url: "https://synnex.wd5.myworkdayjobs.com/wday/cxs/synnex/hyvecareers/jobs" },
   { id: "wd-micron",      name: "Micron Technology",source_type: "workday", company_handle: "micron",         base_url: "https://micron.wd1.myworkdayjobs.com/wday/cxs/micron/External/jobs" },
   { id: "wd-dell",        name: "Dell Technologies",source_type: "workday", company_handle: "dell",           base_url: "https://dell.wd1.myworkdayjobs.com/wday/cxs/dell/External/jobs" },
   { id: "wd-salesforce",  name: "Salesforce",       source_type: "workday", company_handle: "salesforce",     base_url: "https://salesforce.wd12.myworkdayjobs.com/wday/cxs/salesforce/External_Career_Site/jobs" },
@@ -1207,6 +1234,21 @@ export const SEED_SOURCES: SeedSource[] = [
   // Full a16z portfolio via Consider (~15k jobs). Do not add per-company consider sources
   // for the same board — equal source priority would insert duplicate job rows.
   { id: "cn-a16z-portfolio", name: "a16z portfolio (Consider)", source_type: "consider", company_handle: "a16z-portfolio", base_url: "https://jobs.a16z.com/companies" }, // fetch_interval_hours=12 — see FETCH_INTERVALS below
+  // Other VC portfolio boards (Consider — same fetcher as a16z; portfoliojobs.a16z.com is the same board as jobs.a16z.com)
+  { id: "cn-sequoia-portfolio", name: "Sequoia Capital portfolio (Consider)", source_type: "consider", company_handle: "sequoia-portfolio", base_url: "https://jobs.sequoiacap.com/companies" },
+  { id: "cn-greylock-portfolio", name: "Greylock portfolio (Consider)", source_type: "consider", company_handle: "greylock-portfolio", base_url: "https://jobs.greylock.com/companies" },
+  { id: "cn-kleiner-portfolio", name: "Kleiner Perkins portfolio (Consider)", source_type: "consider", company_handle: "kleiner-portfolio", base_url: "https://jobs.kleinerperkins.com/companies" },
+  { id: "cn-contrary-portfolio", name: "Contrary portfolio (Consider)", source_type: "consider", company_handle: "contrary-portfolio", base_url: "https://jobs.contrary.com/companies" },
+  { id: "cn-battery-portfolio", name: "Battery Ventures portfolio (Consider)", source_type: "consider", company_handle: "battery-portfolio", base_url: "https://jobs.battery.com/companies" },
+  { id: "cn-nea-portfolio", name: "NEA portfolio (Consider)", source_type: "consider", company_handle: "nea-portfolio", base_url: "https://careers.nea.com/companies" },
+  { id: "cn-lsvp-portfolio", name: "Lightspeed portfolio (Consider)", source_type: "consider", company_handle: "lsvp-portfolio", base_url: "https://jobs.lsvp.com/companies" },
+  { id: "cn-bvp-portfolio", name: "Bessemer Venture Partners portfolio (Consider)", source_type: "consider", company_handle: "bvp-portfolio", base_url: "https://jobs.bvp.com/companies" },
+  // VC portfolio boards (Getro — Next.js `/_next/data/.../companies/.../jobs/....json`; see getro.ts)
+  { id: "getro-generalcatalyst", name: "General Catalyst portfolio (Getro)", source_type: "getro", company_handle: "generalcatalyst-portfolio", base_url: "https://jobs.generalcatalyst.com" },
+  { id: "getro-khosla", name: "Khosla Ventures portfolio (Getro)", source_type: "getro", company_handle: "khosla-portfolio", base_url: "https://jobs.khoslaventures.com" },
+  { id: "getro-bitkraft", name: "BITKRAFT portfolio (Getro)", source_type: "getro", company_handle: "bitkraft-portfolio", base_url: "https://careers.bitkraft.vc" },
+  { id: "getro-accel", name: "Accel portfolio (Getro)", source_type: "getro", company_handle: "accel-portfolio", base_url: "https://jobs.accel.com" },
+  { id: "getro-antler", name: "Antler portfolio (Getro)", source_type: "getro", company_handle: "antler-portfolio", base_url: "https://careers.antler.co" },
 
   // SAP SuccessFactors career site — `sitemap.xml` is a Google Jobs RSS with `g:location`, `g:id`, `g:employer`.
   { id: "rss-foundever",   name: "Foundever (RSS)",                 source_type: "rss", company_handle: "foundever",    base_url: "https://jobs.foundever.com/sitemap.xml" },
@@ -1240,6 +1282,7 @@ export const SEED_SOURCES: SeedSource[] = [
   // Charles Schwab & PG&E — public listings are Radancy TalentBrew (not Workday CXS). See talentbrew.ts.
   { id: "tb-schwab", name: "Charles Schwab (TalentBrew)", source_type: "talentbrew", company_handle: "charles-schwab", base_url: "https://www.schwabjobs.com/search-jobs" },
   { id: "tb-pge", name: "PG&E (TalentBrew)", source_type: "talentbrew", company_handle: "pge", base_url: "https://jobs.pge.com/search-jobs" },
+  { id: "tb-netapp", name: "NetApp (TalentBrew)", source_type: "talentbrew", company_handle: "netapp", base_url: "https://careers.netapp.com/search-jobs" },
   // Ashby-hosted pages where posting-api/{handle} is not publicly reachable from Workers; rely on XHR capture in browser.ts.
   { id: "br-evenup", name: "EvenUp (Browser)", source_type: "browser", company_handle: "evenup", base_url: "https://jobs.ashbyhq.com/evenup" },
   // Careers HTML — may embed Ashby/Greenhouse; no stable public JSON URL found.
@@ -1594,6 +1637,20 @@ const COMPANY_ALIASES: Array<{ alias: string; canonical: string }> = [
 const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   // 48h for initial backfill (first run ingests ~15k jobs); change to 1 after ~4 days (on March 24, 2026)
   { id: "cn-a16z-portfolio", hours: 48 },
+  { id: "cn-sequoia-portfolio", hours: 48 },
+  { id: "cn-greylock-portfolio", hours: 48 },
+  { id: "cn-kleiner-portfolio", hours: 48 },
+  { id: "cn-contrary-portfolio", hours: 48 },
+  { id: "cn-battery-portfolio", hours: 48 },
+  { id: "cn-nea-portfolio", hours: 48 },
+  { id: "cn-lsvp-portfolio", hours: 48 },
+  { id: "cn-bvp-portfolio", hours: 48 },
+  // Getro — batched sitemap + per-job JSON; cursor in KV advances full corpus over many runs
+  { id: "getro-generalcatalyst", hours: 1 },
+  { id: "getro-khosla", hours: 1 },
+  { id: "getro-bitkraft", hours: 1 },
+  { id: "getro-accel", hours: 1 },
+  { id: "getro-antler", hours: 1 },
   // ~21k retail locations — long first run; ease off hourly cron load
   { id: "br-starbucks", hours: 48 },
   // ~2.6k roles + detail fetches — ease first-run cron load
@@ -1602,6 +1659,7 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   // TalentBrew — hundreds of per-job HTML fetches per employer
   { id: "tb-schwab", hours: 12 },
   { id: "tb-pge", hours: 12 },
+  { id: "tb-netapp", hours: 12 },
   { id: "oc-macys", hours: 48 },
   { id: "oc-albertsons", hours: 48 },
   { id: "oc-kroger", hours: 48 },
@@ -1620,10 +1678,15 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "jibe-pepsico", hours: 12 },
   { id: "ph-united", hours: 12 },
   { id: "av-delta", hours: 12 },
+  { id: "av-epic", hours: 12 },
   { id: "sn-bestbuy", hours: 24 },
   { id: "wd-dsg", hours: 48 },
   { id: "wd-meijer", hours: 48 },
   { id: "wd-nordstrom", hours: 48 },
+  { id: "wd-logitech", hours: 12 },
+  { id: "wd-kla", hours: 48 },
+  { id: "wd-aptiv", hours: 12 },
+  { id: "ab-ironclad", hours: 12 },
   { id: "ph-lowes", hours: 12 },
   { id: "ph-panera", hours: 12 },
   { id: "ph-oreilly", hours: 12 },
@@ -1634,11 +1697,22 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "ph-gianteagle", hours: 12 },
   { id: "ph-wawa", hours: 12 },
   { id: "ph-whataburger", hours: 12 },
+  { id: "ph-qcells", hours: 12 },
   { id: "tb-7eleven", hours: 12 },
   { id: "tb-aldi", hours: 12 },
   { id: "tb-ikea", hours: 12 },
   { id: "oc-autozone", hours: 48 },
+  { id: "oc-coherent-hcwp", hours: 48 },
   { id: "oc-staples", hours: 48 },
+  { id: "gh-astranis", hours: 12 },
+  { id: "ab-creatify", hours: 12 },
+  { id: "ab-slope", hours: 12 },
+  { id: "ab-zettabyte-space", hours: 12 },
+  { id: "lv-penumbrainc", hours: 12 },
+  { id: "wb-authorium", hours: 12 },
+  { id: "wd-synnex-hyve", hours: 24 },
+  // ~300 roles + per-job HTML — ease hourly cron load
+  { id: "rf-recruitingfromscratch", hours: 24 },
 ];
 
 /**
@@ -1716,6 +1790,21 @@ const DISABLED_SOURCE_IDS = [
  * Applied after DISABLED_SOURCE_IDS so old D1 rows that were turned off are re-enabled on migrate.
  */
 const ENABLED_REPLACEMENT_SOURCE_IDS = [
+  // VC portfolio — must stay on; re-enables if manually disabled in D1
+  "cn-a16z-portfolio",
+  "cn-sequoia-portfolio",
+  "cn-greylock-portfolio",
+  "cn-kleiner-portfolio",
+  "cn-contrary-portfolio",
+  "cn-battery-portfolio",
+  "cn-nea-portfolio",
+  "cn-lsvp-portfolio",
+  "cn-bvp-portfolio",
+  "getro-generalcatalyst",
+  "getro-khosla",
+  "getro-bitkraft",
+  "getro-accel",
+  "getro-antler",
   "ef-microsoft",
   "mc-meta",
   "jibe-pepsico",
@@ -1760,72 +1849,46 @@ export async function seedSources(db: D1Database): Promise<void> {
     await db.batch(stmts.slice(i, i + 100));
   }
 
-  for (const { id, hours } of FETCH_INTERVALS) {
-    await db.prepare("UPDATE sources SET fetch_interval_hours = ? WHERE id = ?").bind(hours, id).run();
+  // Batch all interval + enabled/disabled updates — D1 batch() makes one round-trip
+  // instead of ~150 individual calls, which frees up subrequest budget for ingestion.
+  const intervalStmt = db.prepare("UPDATE sources SET fetch_interval_hours = ? WHERE id = ?");
+  for (let i = 0; i < FETCH_INTERVALS.length; i += 100) {
+    await db.batch(
+      FETCH_INTERVALS.slice(i, i + 100).map(({ id, hours }) => intervalStmt.bind(hours, id))
+    );
   }
 
-  for (const id of DISABLED_SOURCE_IDS) {
-    await db.prepare("UPDATE sources SET enabled = 0 WHERE id = ?").bind(id).run();
+  const disableStmt = db.prepare("UPDATE sources SET enabled = 0 WHERE id = ?");
+  for (let i = 0; i < DISABLED_SOURCE_IDS.length; i += 100) {
+    await db.batch(
+      DISABLED_SOURCE_IDS.slice(i, i + 100).map((id) => disableStmt.bind(id))
+    );
   }
 
-  // Workday CXS URLs verified 2026-03 (cookie preflight + POST …/jobs returns jobPostings; JSON-LD on job pages).
-  // company_handle left unchanged — used for logging and existing company linkage.
-  await db
-    .prepare(
-      `UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-bofa'`
-    )
-    .bind("https://ghr.wd1.myworkdayjobs.com/wday/cxs/ghr/lateral-us/jobs")
-    .run();
-  await db
-    .prepare(
-      `UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-fedex'`
-    )
-    .bind(
-      "https://fedex.wd1.myworkdayjobs.com/wday/cxs/fedex/FXE-LAC_External_Career_Site/jobs",
-    )
-    .run();
-  await db
-    .prepare(
-      `UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-morganstanley'`
-    )
-    .bind("https://ms.wd5.myworkdayjobs.com/wday/cxs/ms/External/jobs")
-    .run();
-
-  // IBM: switch from browser to public search API (www-api.ibm.com/search/api/v2)
-  await db
-    .prepare(
-      `UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'br-ibm'`
-    )
-    .bind("IBM", "ibm_careers", "https://www-api.ibm.com/search/api/v2")
-    .run();
-
-  // Starbucks: replace legacy browser placeholder with Eightfold PCS API (see eightfold.ts)
-  await db
-    .prepare(
-      `UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'br-starbucks'`
-    )
-    .bind(
-      "Starbucks (Eightfold)",
-      "eightfold",
-      "https://starbucks.eightfold.ai/careers?domain=starbucks.com"
-    )
-    .run();
-
-  // Apple: legacy API row may still point at dead POST URL — switch to HTML search
-  await db
-    .prepare(
-      `UPDATE sources SET name = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'apl-global'`
-    )
-    .bind("Apple", "https://jobs.apple.com/en-us/search?location=united-states-USA")
-    .run();
-
-  // KinderCare: Phenom at kcecareers.com (legacy rows may still say Workable).
-  await db
-    .prepare(
-      `UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wb-kindercare'`
-    )
-    .bind("KinderCare (Phenom)", "phenom", "https://www.kcecareers.com/us/en/")
-    .run();
+  // Source-type / URL migrations — batched into one round-trip.
+  await db.batch([
+    // Workday CXS URLs verified 2026-03.
+    db.prepare(`UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-bofa'`)
+      .bind("https://ghr.wd1.myworkdayjobs.com/wday/cxs/ghr/lateral-us/jobs"),
+    db.prepare(`UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-fedex'`)
+      .bind("https://fedex.wd1.myworkdayjobs.com/wday/cxs/fedex/FXE-LAC_External_Career_Site/jobs"),
+    db.prepare(`UPDATE sources SET base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wd-morganstanley'`)
+      .bind("https://ms.wd5.myworkdayjobs.com/wday/cxs/ms/External/jobs"),
+    // IBM: switch from browser to public search API.
+    db.prepare(`UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'br-ibm'`)
+      .bind("IBM", "ibm_careers", "https://www-api.ibm.com/search/api/v2"),
+    // Starbucks: replace legacy browser placeholder with Eightfold PCS API.
+    db.prepare(`UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'br-starbucks'`)
+      .bind("Starbucks (Eightfold)", "eightfold", "https://starbucks.eightfold.ai/careers?domain=starbucks.com"),
+    // Apple: switch to HTML search.
+    db.prepare(`UPDATE sources SET name = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'apl-global'`)
+      .bind("Apple", "https://jobs.apple.com/en-us/search?location=united-states-USA"),
+    // KinderCare: Phenom at kcecareers.com.
+    db.prepare(`UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wb-kindercare'`)
+      .bind("KinderCare (Phenom)", "phenom", "https://www.kcecareers.com/us/en/"),
+    // Meta: browser source superseded by metacareers.
+    db.prepare("UPDATE sources SET enabled = 0 WHERE id = 'br-meta'"),
+  ]);
 
   // Drop removed sector-board source rows (delete jobs first — FK to sources).
   const removedSectorBoardIds = [
@@ -1835,18 +1898,20 @@ export async function seedSources(db: D1Database): Promise<void> {
     "rss-he-admin",
     "rss-he-it",
   ];
-  for (const id of removedSectorBoardIds) {
-    await db.prepare("DELETE FROM jobs WHERE source_id = ?").bind(id).run();
-    await db.prepare("DELETE FROM sources WHERE id = ?").bind(id).run();
-  }
+  const removedLegacySourceIds = ["gh-grammarly", "ab-superhuman"];
+  const allRemovedIds = [...removedSectorBoardIds, ...removedLegacySourceIds];
+  await db.batch([
+    ...allRemovedIds.map((id) => db.prepare("DELETE FROM jobs WHERE source_id = ?").bind(id)),
+    ...allRemovedIds.map((id) => db.prepare("DELETE FROM sources WHERE id = ?").bind(id)),
+  ]);
 
   // Re-enable canonical ATS rows (replacements for ids in DISABLED_SOURCE_IDS).
-  for (const id of ENABLED_REPLACEMENT_SOURCE_IDS) {
-    await db.prepare("UPDATE sources SET enabled = 1, last_error = NULL WHERE id = ?").bind(id).run();
+  const enableStmt = db.prepare("UPDATE sources SET enabled = 1, last_error = NULL WHERE id = ?");
+  for (let i = 0; i < ENABLED_REPLACEMENT_SOURCE_IDS.length; i += 100) {
+    await db.batch(
+      ENABLED_REPLACEMENT_SOURCE_IDS.slice(i, i + 100).map((id) => enableStmt.bind(id))
+    );
   }
-
-  // Meta: browser source superseded by metacareers (sitemap + JSON-LD)
-  await db.prepare("UPDATE sources SET enabled = 0 WHERE id = 'br-meta'").run();
 
   // Seed company aliases (INSERT OR IGNORE — safe to re-run)
   const aliasStmt = db.prepare(

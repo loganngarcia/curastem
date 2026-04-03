@@ -1,50 +1,97 @@
 #!/usr/bin/env python3
 """
-backfill.py — Force-ingest Workday sources into production D1 from your local machine.
+backfill.py — Force-ingest sources and geocode jobs in production D1 from your local machine.
 
 No 90-second Worker timeout here: fetches everything locally, then writes
 directly into D1 via wrangler. After each source, last_fetched_at is set so
 the cron skips it for the configured interval — freeing up cron cycles for
 other sources.
 
-Usage:
+Ingestion usage:
     python3 backfill.py                          # all sources
     python3 backfill.py wd-petco wd-nordstrom    # specific source IDs
     python3 backfill.py --limit 200              # cap jobs per source (faster test)
+    python3 backfill.py --type workday           # only sources of a given type
+
+Geocoding usage (separate mode, runs after ingestion):
+    python3 backfill.py --geocode                            # all ungeocoded jobs, Photon only (free)
+    python3 backfill.py --geocode --maps-key=AIza...         # Photon for retail + Places API for corporate
+
+Geocoding two-tier routing:
+    Retail companies / retail job titles → Photon (free OSM, city-level)
+    Professional companies               → Google Maps Places API (precise building coords)
+    Places API cap: 8 125 calls ≈ $260; anything beyond falls back to Photon automatically.
 """
 
 import sys, os, json, re, uuid, hashlib, subprocess, time, tempfile
-import urllib.request, urllib.error, http.cookiejar
+import urllib.request, urllib.error, urllib.parse, http.cookiejar
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+from datetime import datetime, timezone
 
-# ── Sources ──────────────────────────────────────────────────────────────────
-# (source_id, company_handle, display_name, cxs_url)
+# Force line-buffered output so progress is visible when stdout is redirected.
+sys.stdout.reconfigure(line_buffering=True)
+
+# ── Source Definitions ────────────────────────────────────────────────────────
+# Each entry: (source_id, company_handle, display_name, url)
+
 WORKDAY_SOURCES = [
-    ("wd-petco",        "petco",             "Petco",               "https://petco.wd1.myworkdayjobs.com/wday/cxs/petco/External/jobs"),
-    ("wd-nordstrom",    "nordstrom",         "Nordstrom",           "https://nordstrom.wd501.myworkdayjobs.com/wday/cxs/nordstrom/nordstrom_careers/jobs"),
-    ("wd-bofa",         "bank-of-america",   "Bank of America",     "https://ghr.wd1.myworkdayjobs.com/wday/cxs/ghr/lateral-us/jobs"),
+    ("wd-petco",        "petco",              "Petco",                "https://petco.wd1.myworkdayjobs.com/wday/cxs/petco/External/jobs"),
+    ("wd-nordstrom",    "nordstrom",          "Nordstrom",            "https://nordstrom.wd501.myworkdayjobs.com/wday/cxs/nordstrom/nordstrom_careers/jobs"),
+    ("wd-bofa",         "bank-of-america",    "Bank of America",      "https://ghr.wd1.myworkdayjobs.com/wday/cxs/ghr/lateral-us/jobs"),
     ("wd-dsg",          "dicks-sporting-goods","Dick's Sporting Goods","https://dickssportinggoods.wd1.myworkdayjobs.com/wday/cxs/dickssportinggoods/DSG/jobs"),
-    ("wd-meijer",       "meijer",            "Meijer",              "https://meijer.wd5.myworkdayjobs.com/wday/cxs/meijer/Meijer_Stores_Hourly/jobs"),
-    ("wd-morganstanley","morgan-stanley",    "Morgan Stanley",      "https://ms.wd5.myworkdayjobs.com/wday/cxs/ms/External/jobs"),
-    ("wd-fedex",        "fedex",             "FedEx",               "https://fedex.wd1.myworkdayjobs.com/wday/cxs/fedex/FXE-LAC_External_Career_Site/jobs"),
+    ("wd-meijer",       "meijer",             "Meijer",               "https://meijer.wd5.myworkdayjobs.com/wday/cxs/meijer/Meijer_Stores_Hourly/jobs"),
+    ("wd-morganstanley","morgan-stanley",     "Morgan Stanley",       "https://ms.wd5.myworkdayjobs.com/wday/cxs/ms/External/jobs"),
+    ("wd-fedex",        "fedex",              "FedEx",                "https://fedex.wd1.myworkdayjobs.com/wday/cxs/fedex/FXE-LAC_External_Career_Site/jobs"),
 ]
 
+ORACLE_CE_SOURCES = [
+    ("oc-kroger",    "kroger",              "Kroger",                "https://eluq.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001"),
+    ("oc-macys",     "macys",              "Macy's",               "https://ebwh.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001"),
+    ("oc-albertsons","albertsons",          "Albertsons Companies",  "https://eofd.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001"),
+    ("oc-autozone",  "autozone",            "AutoZone",              "https://careers.autozone.com/hcmUI/CandidateExperience/en/sites/CX_1"),
+    ("oc-staples",   "staples",             "Staples",               "https://fa-exhh-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/StaplesInc"),
+]
+
+JIBE_SOURCES = [
+    ("jibe-heb",           "heb",                   "H-E-B",                   "https://careers.heb.com"),
+    ("jibe-dollargeneral", "dollar-general",         "Dollar General",          "https://careers.dollargeneral.com"),
+    ("jibe-jcpenney",      "jcpenney",               "JCPenney",                "https://jobs.jcp.com"),
+    ("jibe-pepsico",       "pepsico",                "PepsiCo",                 "https://www.pepsicojobs.com"),
+    ("jibe-rei",           "rei",                    "REI Co-op",               "https://www.rei.jobs"),
+    ("jibe-sheetz",        "sheetz",                 "Sheetz",                  "https://jobs.sheetz.com"),
+    ("jibe-sprouts",       "sprouts-farmers-market", "Sprouts Farmers Market",  "https://jobs.sprouts.com"),
+    ("jibe-ulta",          "ulta-beauty",            "Ulta Beauty",             "https://careers.ulta.com"),
+]
+
+EIGHTFOLD_SOURCES = [
+    ("br-starbucks", "starbucks", "Starbucks", "https://starbucks.eightfold.ai/careers?domain=starbucks.com"),
+    ("ef-microsoft", "microsoft", "Microsoft", "https://apply.careers.microsoft.com/careers?domain=microsoft.com"),
+]
+
+ALL_SOURCES = {
+    "workday":   [(s[0], s[1], s[2], s[3], "workday")   for s in WORKDAY_SOURCES],
+    "oracle_ce": [(s[0], s[1], s[2], s[3], "oracle_ce") for s in ORACLE_CE_SOURCES],
+    "jibe":      [(s[0], s[1], s[2], s[3], "jibe")      for s in JIBE_SOURCES],
+    "eightfold": [(s[0], s[1], s[2], s[3], "eightfold") for s in EIGHTFOLD_SOURCES],
+}
+
 # ── Constants ─────────────────────────────────────────────────────────────────
-PAGE_SIZE = 20
-# No Worker timeout here — fetch everything on first run
-MAX_TOTAL_JOBS = 5000
-MAX_DETAIL_JOBS = 1000   # still cap detail fetches per source to stay reasonable
-DETAIL_CONCURRENCY = 24  # more than the Worker since no rate limiting concern
+
+WORKDAY_PAGE_SIZE = 20
+MAX_TOTAL_JOBS   = 5000   # no Worker timeout here — fetch everything
+MAX_DETAIL_JOBS  = 1000   # cap detail fetches per source (Eightfold/Workday)
+DETAIL_CONCURRENCY = 24
 
 BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+CURASTEM_UA = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)"
 
 D1_DB = "curastem-jobs"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Shared helpers ────────────────────────────────────────────────────────────
 
 def slugify(name: str) -> str:
     s = name.lower().strip()
@@ -69,19 +116,51 @@ def build_job_id(source_id: str, external_id: str) -> str:
     return str(h % 10_000_000_000).zfill(10)
 
 def sql_str(v) -> str:
-    """Format a Python value as a SQL literal (NULL, integer, or escaped string)."""
     if v is None:
         return "NULL"
     if isinstance(v, (int, float)):
         return str(v)
     return "'" + str(v).replace("'", "''") + "'"
 
+def normalize_employment_type(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    r = raw.lower()
+    if any(x in r for x in ("full", "regular")):
+        return "full_time"
+    if "part" in r:
+        return "part_time"
+    if any(x in r for x in ("contract", "temp", "freelance")):
+        return "contractor"
+    if "intern" in r:
+        return "internship"
+    return None
+
+def normalize_workplace_type(wp_hint: Optional[str], loc: Optional[str]) -> Optional[str]:
+    for text in [wp_hint or "", loc or ""]:
+        t = text.lower()
+        if "remote" in t:
+            return "remote"
+        if "hybrid" in t:
+            return "hybrid"
+    return None
+
+def parse_iso_date(raw: Optional[str]) -> Optional[int]:
+    """Convert ISO date/datetime string to Unix timestamp."""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).rstrip("Z").split("T")[0])
+        return int(dt.replace(tzinfo=timezone.utc).timestamp())
+    except Exception:
+        return None
+
+# ── D1 helpers ────────────────────────────────────────────────────────────────
+
 def _wrangler_cwd() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 def _parse_wrangler_json(raw: str):
-    """Extract the JSON array from wrangler d1 execute output (strips banner text)."""
-    # wrangler prints its banner to stdout; the JSON starts at the first '['.
     idx = raw.find("[")
     if idx == -1:
         return None
@@ -91,7 +170,6 @@ def _parse_wrangler_json(raw: str):
         return None
 
 def run_d1(sql: str, label: str = "") -> bool:
-    """Execute SQL against the remote D1 database via wrangler."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", delete=False, encoding="utf-8") as f:
         f.write(sql)
         fname = f.name
@@ -102,7 +180,6 @@ def run_d1(sql: str, label: str = "") -> bool:
         )
         if result.returncode != 0:
             out = result.stdout + result.stderr
-            # Show last 300 chars of combined output for debugging
             print(f"  ✗ D1 error ({label}): {out[-300:]}")
             return False
         return True
@@ -110,7 +187,6 @@ def run_d1(sql: str, label: str = "") -> bool:
         os.unlink(fname)
 
 def d1_query(sql: str) -> list:
-    """Run a SELECT via wrangler d1 execute and return the results list."""
     result = subprocess.run(
         ["npx", "wrangler", "d1", "execute", D1_DB, "--remote", f"--command={sql}"],
         capture_output=True, text=True, cwd=_wrangler_cwd()
@@ -125,16 +201,117 @@ def d1_query(sql: str) -> list:
     except Exception:
         return []
 
-# ── Workday API ───────────────────────────────────────────────────────────────
+def get_or_create_company_id(name: str, slug: str) -> Optional[str]:
+    rows = d1_query(f"SELECT id FROM companies WHERE slug = {sql_str(slug)} LIMIT 1")
+    if rows:
+        return rows[0]["id"]
+    new_id = str(uuid.uuid4())
+    now = int(time.time())
+    run_d1(
+        f"INSERT OR IGNORE INTO companies (id, name, slug, created_at, updated_at) "
+        f"VALUES ({sql_str(new_id)}, {sql_str(name)}, {sql_str(slug)}, {now}, {now});",
+        label=f"create company {slug}"
+    )
+    rows = d1_query(f"SELECT id FROM companies WHERE slug = {sql_str(slug)} LIMIT 1")
+    return rows[0]["id"] if rows else (new_id if True else None)
 
-def get_session_cookie(cxs_url: str) -> str:
-    from urllib.parse import urlparse
-    parsed = urlparse(cxs_url)
+def insert_jobs_batch(jobs_sql: list[str]) -> bool:
+    if not jobs_sql:
+        return True
+    return run_d1("\n".join(jobs_sql), label=f"insert {len(jobs_sql)} jobs")
+
+def upsert_jobs(source_id: str, company_id: str, company_slug: str,
+                source_type: str, stubs: list[dict], batch_size: int = 120) -> dict:
+    """
+    Upsert a list of normalized job dicts into D1.
+
+    Each stub must have: external_id, title, apply_url.
+    Optional: location, description, posted_at (int), employment_type, workplace_type.
+    Workday stubs may alternatively have: posted_on (string), time_type (string).
+    """
+    now = int(time.time())
+    inserted = 0
+    skipped = 0
+    total = len(stubs)
+
+    for start in range(0, total, batch_size):
+        chunk = stubs[start:start + batch_size]
+        statements = []
+        for stub in chunk:
+            ext_id = str(stub.get("external_id") or "").strip()
+            title = str(stub.get("title") or "").strip()
+            if not ext_id or not title:
+                skipped += 1
+                continue
+
+            job_id = build_job_id(source_id, ext_id)
+            loc_raw = stub.get("location")
+            locations_json = json.dumps([loc_raw]) if loc_raw else None
+            dedup_key = build_dedup_key(title, company_slug)
+            description = stub.get("description")
+
+            # Accept pre-normalized posted_at or parse Workday's relative string
+            posted_at = stub.get("posted_at")
+            if posted_at is None:
+                posted_at = _parse_workday_posted_on(stub.get("posted_on"))
+
+            # Accept pre-normalized types or infer from Workday fields
+            employment_type = stub.get("employment_type")
+            if employment_type is None:
+                employment_type = normalize_employment_type(stub.get("time_type"))
+
+            workplace_type = stub.get("workplace_type")
+            if workplace_type is None:
+                workplace_type = normalize_workplace_type(None, loc_raw)
+
+            apply_url = stub.get("apply_url") or ""
+
+            statements.append(
+                f"INSERT INTO jobs "
+                f"(id, company_id, source_id, external_id, title, locations, "
+                f"employment_type, workplace_type, apply_url, source_url, source_name, "
+                f"description_raw, posted_at, first_seen_at, dedup_key, created_at, updated_at) "
+                f"SELECT "
+                f"{sql_str(job_id)}, {sql_str(company_id)}, {sql_str(source_id)}, "
+                f"{sql_str(ext_id)}, {sql_str(title)}, {sql_str(locations_json)}, "
+                f"{sql_str(employment_type)}, {sql_str(workplace_type)}, "
+                f"{sql_str(apply_url)}, {sql_str(apply_url)}, {sql_str(source_type)}, "
+                f"{sql_str(description)}, {sql_str(posted_at)}, {now}, "
+                f"{sql_str(dedup_key)}, {now}, {now} "
+                f"WHERE NOT EXISTS ("
+                f"SELECT 1 FROM jobs WHERE source_id = {sql_str(source_id)} AND external_id = {sql_str(ext_id)});"
+            )
+
+        if insert_jobs_batch(statements):
+            inserted += len(statements)
+        else:
+            skipped += len(statements)
+
+        print(f"  → {min(start + batch_size, total)}/{total} jobs written...")
+
+    return {"inserted": inserted, "skipped": skipped}
+
+# ── Workday ───────────────────────────────────────────────────────────────────
+
+def _parse_workday_posted_on(raw: Optional[str]) -> Optional[int]:
+    if not raw:
+        return None
+    lower = raw.lower().strip()
+    now = int(time.time())
+    if lower == "posted today":
+        return now
+    if lower == "posted yesterday":
+        return now - 86400
+    m = re.search(r"posted\s+(\d+)\+?\s+days?\s+ago", lower)
+    if m:
+        return now - int(m.group(1)) * 86400
+    return None
+
+def _get_workday_cookie(cxs_url: str) -> str:
+    parsed = urllib.parse.urlparse(cxs_url)
     host = f"{parsed.scheme}://{parsed.netloc}"
-    # Extract board name: /wday/cxs/{company}/{board}/jobs → board
     parts = parsed.path.strip("/").split("/")
     board = parts[-2] if len(parts) >= 2 else ""
-
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
     opener.addheaders = [
@@ -148,10 +325,10 @@ def get_session_cookie(cxs_url: str) -> str:
         pass
     return "; ".join(f"{c.name}={c.value}" for c in cj)
 
-def fetch_list_page(cxs_url: str, offset: int, cookies: str) -> dict:
+def _workday_list_page(cxs_url: str, offset: int, cookies: str) -> dict:
     req = urllib.request.Request(
         cxs_url,
-        data=json.dumps({"limit": PAGE_SIZE, "offset": offset,
+        data=json.dumps({"limit": WORKDAY_PAGE_SIZE, "offset": offset,
                          "appliedFacets": {}, "searchText": ""}).encode(),
         headers={
             "Content-Type": "application/json",
@@ -166,23 +343,19 @@ def fetch_list_page(cxs_url: str, offset: int, cookies: str) -> dict:
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.loads(r.read())
 
-def fetch_description(url: str, cookies: str) -> Optional[str]:
+def _workday_description(url: str, cookies: str) -> Optional[str]:
     try:
         req = urllib.request.Request(url, headers={
-            "User-Agent": BROWSER_UA,
-            "Accept": "text/html",
-            "Cookie": cookies,
+            "User-Agent": BROWSER_UA, "Accept": "text/html", "Cookie": cookies,
         })
         with urllib.request.urlopen(req, timeout=12) as r:
             html = r.read().decode("utf-8", errors="replace")
         for m in re.findall(
-            r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
-            html, re.I
+            r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>', html, re.I
         ):
             try:
                 d = json.loads(m)
-                items = d if isinstance(d, list) else [d]
-                for item in items:
+                for item in (d if isinstance(d, list) else [d]):
                     if isinstance(item, dict) and item.get("@type") == "JobPosting":
                         desc = item.get("description", "")
                         if desc:
@@ -193,40 +366,24 @@ def fetch_description(url: str, cookies: str) -> Optional[str]:
         pass
     return None
 
-def parse_posted_on(raw: Optional[str]) -> Optional[int]:
-    if not raw:
-        return None
-    lower = raw.lower().strip()
-    now = int(time.time())
-    if lower == "posted today":
-        return now
-    if lower == "posted yesterday":
-        return now - 86400
-    m = re.search(r"posted\s+(\d+)\+?\s+days?\s+ago", lower)
-    if m:
-        return now - int(m.group(1)) * 86400
-    return None
-
 def fetch_workday_source(source_id: str, company_handle: str, display_name: str,
                           cxs_url: str, max_jobs: int = MAX_TOTAL_JOBS,
                           max_desc: int = MAX_DETAIL_JOBS) -> list[dict]:
     """Two-phase Workday fetch: collect stubs, then enrich descriptions."""
-    from urllib.parse import urlparse
-    parsed = urlparse(cxs_url)
+    parsed = urllib.parse.urlparse(cxs_url)
     host = f"{parsed.scheme}://{parsed.netloc}"
     parts = parsed.path.strip("/").split("/")
     board = parts[-2] if len(parts) >= 2 else ""
 
     print(f"  → Cookie preflight...")
-    cookies = get_session_cookie(cxs_url)
+    cookies = _get_workday_cookie(cxs_url)
 
-    # Phase 1: collect stubs
     stubs = []
     offset = 0
     total = float("inf")
     while offset < total and len(stubs) < max_jobs:
         try:
-            data = fetch_list_page(cxs_url, offset, cookies)
+            data = _workday_list_page(cxs_url, offset, cookies)
         except Exception as e:
             print(f"  ✗ List page {offset}: {e}")
             break
@@ -255,7 +412,7 @@ def fetch_workday_source(source_id: str, company_handle: str, display_name: str,
                 "posted_on": p.get("postedOn"),
                 "apply_url": apply_url,
             })
-        if len(batch) < PAGE_SIZE:
+        if len(batch) < WORKDAY_PAGE_SIZE:
             break
         offset += len(batch)
         if len(stubs) % 200 == 0:
@@ -263,17 +420,15 @@ def fetch_workday_source(source_id: str, company_handle: str, display_name: str,
 
     print(f"  → {len(stubs)} stubs collected. Fetching descriptions (up to {max_desc})...")
 
-    # Phase 2: descriptions at higher concurrency
     to_enrich = stubs[:max_desc]
     descriptions = [None] * len(to_enrich)
 
     def _fetch(i_url):
         i, url = i_url
-        return i, fetch_description(url, cookies)
+        return i, _workday_description(url, cookies)
 
     with ThreadPoolExecutor(max_workers=DETAIL_CONCURRENCY) as pool:
-        futures = {pool.submit(_fetch, (i, s["apply_url"])): i
-                   for i, s in enumerate(to_enrich)}
+        futures = {pool.submit(_fetch, (i, s["apply_url"])): i for i, s in enumerate(to_enrich)}
         done = 0
         for f in as_completed(futures):
             try:
@@ -285,148 +440,837 @@ def fetch_workday_source(source_id: str, company_handle: str, display_name: str,
             if done % 100 == 0:
                 print(f"  → {done}/{len(to_enrich)} descriptions fetched...")
 
-    # Merge descriptions
     for i, stub in enumerate(stubs):
         stub["description"] = descriptions[i] if i < len(to_enrich) else None
 
     return stubs
 
-# ── D1 insert ─────────────────────────────────────────────────────────────────
+# ── Oracle CE ─────────────────────────────────────────────────────────────────
 
-def get_or_create_company_id(name: str, slug: str) -> Optional[str]:
-    rows = d1_query(f"SELECT id FROM companies WHERE slug = {sql_str(slug)} LIMIT 1")
-    if rows:
-        return rows[0]["id"]
-    new_id = str(uuid.uuid4())
-    now = int(time.time())
-    # Use INSERT OR IGNORE — if slug already exists (race or prior run), we just re-query.
-    ok = run_d1(
-        f"INSERT OR IGNORE INTO companies (id, name, slug, created_at, updated_at) "
-        f"VALUES ({sql_str(new_id)}, {sql_str(name)}, {sql_str(slug)}, {now}, {now});",
-        label=f"create company {slug}"
-    )
-    rows = d1_query(f"SELECT id FROM companies WHERE slug = {sql_str(slug)} LIMIT 1")
-    return rows[0]["id"] if rows else (new_id if ok else None)
+def fetch_oracle_ce_source(source_id: str, company_handle: str, display_name: str,
+                            base_url: str, max_jobs: int = MAX_TOTAL_JOBS) -> list[dict]:
+    """
+    Paginate Oracle Fusion HCM recruitingCEJobRequisitions REST endpoint.
+    ShortDescriptionStr from the list response is sufficient — skipping detail
+    calls keeps this fast even for Kroger's 18k+ postings.
+    """
+    parsed = urllib.parse.urlparse(base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    m = re.search(r"/CandidateExperience/([a-z]{2})/sites/([^/?]+)", parsed.path, re.I)
+    if not m:
+        raise ValueError(f"Oracle CE: invalid base_url {base_url}")
+    locale, site_number = m.group(1).lower(), m.group(2)
+    rest_base = f"{origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
 
-def insert_jobs_batch(jobs_sql: list[str]) -> bool:
-    if not jobs_sql:
-        return True
-    sql = "\n".join(jobs_sql)
-    return run_d1(sql, label=f"insert {len(jobs_sql)} jobs")
+    jobs: list[dict] = []
+    offset = 0
+    total = float("inf")
+    page = 0
+    PAGE = 100
 
-def upsert_jobs(source_id: str, company_id: str, company_slug: str,
-                source_name: str, stubs: list[dict], batch_size: int = 40) -> dict:
-    now = int(time.time())
-    inserted = 0
-    skipped = 0
-    total = len(stubs)
+    while offset < total and len(jobs) < max_jobs and page < 1000:
+        page += 1
+        params = f"siteNumber={site_number},facetsList=jobs,limit={PAGE}"
+        if offset > 0:
+            params += f",offset={offset}"
+        finder = urllib.parse.quote(f"findReqs;{params}", safe="")
+        url = f"{rest_base}?onlyData=true&expand=requisitionList.secondaryLocations&finder={finder}"
 
-    for start in range(0, total, batch_size):
-        chunk = stubs[start:start + batch_size]
-        statements = []
-        for stub in chunk:
-            ext_id = str(stub.get("external_id") or "").strip()
-            title = str(stub.get("title") or "").strip()
-            if not ext_id or not title:
-                skipped += 1
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/json",
+            "User-Agent": CURASTEM_UA,
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                data = json.loads(r.read())
+        except Exception as e:
+            print(f"  ✗ Oracle CE page {page} offset {offset}: {e}")
+            break
+
+        item = (data.get("items") or [{}])[0]
+        if isinstance(item.get("TotalJobsCount"), int):
+            total = item["TotalJobsCount"]
+
+        batch = item.get("requisitionList") or []
+        if not batch:
+            break
+
+        for row in batch:
+            req_id = str(row.get("Id", "")).strip()
+            title = (row.get("Title") or "").strip()
+            if not req_id or not title:
+                continue
+            loc = row.get("PrimaryLocation")
+            wp_code = row.get("WorkplaceTypeCode") or row.get("WorkplaceType")
+            apply_url = f"{origin}/hcmUI/CandidateExperience/{locale}/sites/{site_number}/job/{req_id}"
+            jobs.append({
+                "external_id": req_id,
+                "title": title,
+                "location": loc,
+                "description": row.get("ShortDescriptionStr"),
+                "apply_url": apply_url,
+                "posted_at": parse_iso_date(row.get("PostedDate")),
+                "employment_type": normalize_employment_type(row.get("JobSchedule")),
+                "workplace_type": normalize_workplace_type(wp_code, loc),
+            })
+
+        if len(jobs) % 1000 == 0 and len(jobs) > 0:
+            print(f"  → Collected {len(jobs)}/{int(total)} jobs...")
+
+        offset += len(batch)
+        if len(batch) < PAGE:
+            break
+
+    return jobs[:max_jobs]
+
+# ── Jibe (iCIMS) ──────────────────────────────────────────────────────────────
+
+def _jibe_apply_url(d: dict, base_url: str, req_id: str) -> str:
+    raw = (d.get("apply_url") or "").strip()
+    if raw.startswith("http"):
+        return raw
+    parsed = urllib.parse.urlparse(base_url)
+    host = parsed.hostname or ""
+    if host in ("careers.ulta.com", "ulta.jibeapply.com"):
+        return f"https://careers.ulta.com/careers/jobs/{req_id}"
+    if host in ("jobs.sprouts.com", "sprouts.jibeapply.com"):
+        return f"https://jobs.sprouts.com/jobs/{req_id}"
+    if host in ("www.pepsicojobs.com", "pepsicojobs.com"):
+        return f"https://www.pepsicojobs.com/main/jobs/{req_id}"
+    return f"{base_url.rstrip('/')}/jobs/{req_id}"
+
+def fetch_jibe_source(source_id: str, company_handle: str, display_name: str,
+                       base_url: str, max_jobs: int = MAX_TOTAL_JOBS) -> list[dict]:
+    """
+    Paginate iCIMS Jibe /api/jobs endpoint. Descriptions are inline in the list
+    response (data.description / data.job_description) — no separate detail calls needed.
+    """
+    jobs: list[dict] = []
+    page = 1
+    total = float("inf")
+    PAGE = 100
+
+    while len(jobs) < max_jobs:
+        url = f"{base_url.rstrip('/')}/api/jobs?page={page}&limit={PAGE}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": BROWSER_UA,
+            "Accept": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                data = json.loads(r.read())
+        except Exception as e:
+            print(f"  ✗ Jibe page {page}: {e}")
+            break
+
+        if isinstance(data.get("totalCount"), int):
+            total = data["totalCount"]
+
+        rows = data.get("jobs") or []
+        if not rows:
+            break
+
+        for row in rows:
+            d = row.get("data") or {}
+            req_id = str(d.get("req_id") or d.get("slug") or "").strip()
+            title = (d.get("title") or "").strip()
+            if not req_id or not title:
                 continue
 
-            job_id = build_job_id(source_id, ext_id)
-            loc_raw = stub.get("location")
-            locations_json = json.dumps([loc_raw]) if loc_raw else None
-            dedup_key = build_dedup_key(title, company_slug)
-            description = stub.get("description")
-            posted_at = parse_posted_on(stub.get("posted_on"))
+            city = (d.get("city") or "").strip()
+            state = (d.get("state") or "").strip()
+            if city and state:
+                location = f"{city}, {state}"
+            else:
+                location = (
+                    d.get("location_name") or d.get("full_location") or
+                    d.get("short_location") or city or None
+                )
 
-            # Normalize employment type
-            time_type = (stub.get("time_type") or "").lower()
-            employment_type = None
-            if "full" in time_type:
-                employment_type = "full_time"
-            elif "part" in time_type:
-                employment_type = "part_time"
-
-            # Normalize workplace type
-            workplace_type = None
-            if loc_raw:
-                loc_lower = loc_raw.lower()
-                if "remote" in loc_lower:
-                    workplace_type = "remote"
-
-            apply_url = stub.get("apply_url") or ""
-
-            statements.append(
-                # INSERT OR IGNORE: skip if this (source_id, external_id) already exists.
-                # FK constraint note: SQLite's OR IGNORE doesn't suppress FK violations,
-                # but both company_id and source_id are verified valid before this batch.
-                f"INSERT INTO jobs "
-                f"(id, company_id, source_id, external_id, title, locations, "
-                f"employment_type, workplace_type, apply_url, source_url, source_name, "
-                f"description_raw, posted_at, first_seen_at, dedup_key, created_at, updated_at) "
-                f"SELECT "
-                f"{sql_str(job_id)}, {sql_str(company_id)}, {sql_str(source_id)}, "
-                f"{sql_str(ext_id)}, {sql_str(title)}, {sql_str(locations_json)}, "
-                f"{sql_str(employment_type)}, {sql_str(workplace_type)}, "
-                f"{sql_str(apply_url)}, {sql_str(apply_url)}, {sql_str(source_name)}, "
-                f"{sql_str(description)}, {sql_str(posted_at)}, {now}, "
-                f"{sql_str(dedup_key)}, {now}, {now} "
-                f"WHERE NOT EXISTS ("
-                f"SELECT 1 FROM jobs WHERE source_id = {sql_str(source_id)} AND external_id = {sql_str(ext_id)});"
+            desc_raw = next(
+                (c for c in [d.get("description"), d.get("job_description"), d.get("html_description")]
+                 if isinstance(c, str) and c.strip()), None
             )
 
-        if insert_jobs_batch(statements):
-            inserted += len(statements)
-        else:
-            skipped += len(statements)
+            jobs.append({
+                "external_id": req_id,
+                "title": title,
+                "location": location,
+                "description": desc_raw,
+                "apply_url": _jibe_apply_url(d, base_url, req_id),
+                "posted_at": parse_iso_date(d.get("posted_date")),
+                "employment_type": normalize_employment_type(d.get("employment_type")),
+                "workplace_type": normalize_workplace_type(None, location),
+            })
 
-        print(f"  → {min(start + batch_size, total)}/{total} jobs written...")
+        if len(jobs) % 500 == 0 and len(jobs) > 0:
+            print(f"  → Collected {len(jobs)}/{int(total)} jobs...")
 
-    return {"inserted": inserted, "skipped": skipped}
+        if len(rows) < PAGE:
+            break
+        page += 1
+
+    return jobs[:max_jobs]
+
+# ── Eightfold ────────────────────────────────────────────────────────────────
+
+def fetch_eightfold_source(source_id: str, company_handle: str, display_name: str,
+                            base_url: str, max_jobs: int = MAX_TOTAL_JOBS,
+                            max_desc: int = MAX_DETAIL_JOBS) -> list[dict]:
+    """
+    Two-phase Eightfold PCS fetch: collect stubs from search (10/page), then
+    enrich with jobDescription + publicUrl from position_details in parallel.
+    """
+    parsed = urllib.parse.urlparse(base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    domain = urllib.parse.parse_qs(parsed.query).get("domain", [""])[0]
+
+    stubs: list[dict] = []
+    offset = 0
+    total = float("inf")
+
+    while offset < total and len(stubs) < max_jobs:
+        url = f"{origin}/api/pcsx/search?domain={domain}&query=&location=&start={offset}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": CURASTEM_UA,
+            "Accept": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                resp = json.loads(r.read())
+        except Exception as e:
+            print(f"  ✗ Eightfold offset {offset}: {e}")
+            break
+
+        data = resp.get("data") or {}
+        if isinstance(data.get("count"), int):
+            total = data["count"]
+
+        positions = data.get("positions") or []
+        if not positions:
+            break
+
+        for pos in positions:
+            pos_id = pos.get("id")
+            title = (pos.get("name") or "").strip()
+            if not pos_id or not title:
+                continue
+            locs = pos.get("standardizedLocations") or pos.get("locations") or []
+            location = locs[0] if locs else None
+            wp = pos.get("workLocationOption") or pos.get("locationFlexibility")
+            stubs.append({
+                "id": pos_id,
+                "external_id": str(pos_id),
+                "title": title,
+                "location": location,
+                "posted_at": pos.get("postedTs"),
+                "workplace_type": normalize_workplace_type(wp, location),
+                "apply_url": f"{origin}{pos.get('positionUrl', '')}" if pos.get("positionUrl", "").startswith("/") else (pos.get("positionUrl") or f"{origin}/careers?domain={domain}"),
+            })
+
+        if len(stubs) % 200 == 0 and len(stubs) > 0:
+            print(f"  → Collected {len(stubs)}/{int(total)} stubs...")
+
+        offset += len(positions)
+        if len(positions) < 10:  # Eightfold page size is fixed at 10
+            break
+
+    print(f"  → {len(stubs)} stubs. Fetching descriptions (up to {max_desc})...")
+
+    to_enrich = stubs[:max_desc]
+    detail_cache: dict[int, dict] = {}  # pos_id → {description, apply_url}
+
+    def _fetch_detail(stub: dict):
+        pos_id = stub["id"]
+        url = f"{origin}/api/pcsx/position_details?position_id={pos_id}&domain={domain}&hl=en"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": CURASTEM_UA, "Accept": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=12) as r:
+                resp = json.loads(r.read())
+            d = resp.get("data") or {}
+            return pos_id, d.get("jobDescription"), d.get("publicUrl") or d.get("positionUrl")
+        except Exception:
+            return pos_id, None, None
+
+    with ThreadPoolExecutor(max_workers=DETAIL_CONCURRENCY) as pool:
+        futures = {pool.submit(_fetch_detail, s): s["id"] for s in to_enrich}
+        done = 0
+        for f in as_completed(futures):
+            try:
+                pos_id, desc, pub_url = f.result()
+                detail_cache[pos_id] = {"description": desc, "apply_url": pub_url}
+            except Exception:
+                pass
+            done += 1
+            if done % 100 == 0:
+                print(f"  → {done}/{len(to_enrich)} descriptions fetched...")
+
+    jobs = []
+    for stub in stubs:
+        pos_id = stub["id"]
+        detail = detail_cache.get(pos_id, {})
+        apply_url = detail.get("apply_url") or stub["apply_url"]
+        jobs.append({
+            "external_id": stub["external_id"],
+            "title": stub["title"],
+            "location": stub["location"],
+            "description": detail.get("description"),
+            "apply_url": apply_url,
+            "posted_at": stub["posted_at"],
+            "employment_type": None,
+            "workplace_type": stub["workplace_type"],
+        })
+
+    return jobs
+
+# ── Dispatch ──────────────────────────────────────────────────────────────────
+
+def fetch_source(source_id: str, company_handle: str, display_name: str,
+                 url: str, source_type: str,
+                 max_jobs: int, max_desc: int) -> list[dict]:
+    if source_type == "workday":
+        return fetch_workday_source(source_id, company_handle, display_name, url, max_jobs, max_desc)
+    if source_type == "oracle_ce":
+        return fetch_oracle_ce_source(source_id, company_handle, display_name, url, max_jobs)
+    if source_type == "jibe":
+        return fetch_jibe_source(source_id, company_handle, display_name, url, max_jobs)
+    if source_type == "eightfold":
+        return fetch_eightfold_source(source_id, company_handle, display_name, url, max_jobs, max_desc)
+    raise ValueError(f"Unknown source_type: {source_type}")
+
+# ── Geocoding ─────────────────────────────────────────────────────────────────
+#
+# Usage:  python3 backfill.py --geocode [--maps-key=AIza...]
+#
+# Routing rules (mirrors retailGeocode.ts exactly):
+#   1. Company slug in RETAIL_SLUGS → Photon (free, city-level)
+#   2. Sample job title matches RETAIL_TITLE_RE → Photon
+#   3. Everything else → Google Maps Places API with fallback to Photon
+#
+# Places API cost: $0.032/req.  Cap = 8 125 calls ≈ $260.
+# Photon: unlimited, no key required.
+
+RETAIL_SLUGS: set[str] = {
+    # Coffee / fast food
+    "starbucks", "mcdonalds", "mcdonald", "dominos-pizza", "dominos",
+    "dunkin", "dunkin-donuts", "subway", "chick-fil-a", "taco-bell",
+    "burger-king", "wendys", "chipotle", "panera-bread", "papa-johns",
+    "pizza-hut", "kfc", "sonic", "popeyes", "jack-in-the-box", "arbys",
+    "dairy-queen", "whataburger", "five-guys", "shake-shack", "wingstop",
+    "raising-canes", "culvers", "firehouse-subs", "jersey-mikes",
+    "jimmy-johns", "buffalo-wild-wings", "red-robin", "dennys", "waffle-house",
+    "cracker-barrel", "ihop", "olive-garden", "applebees", "chilis",
+    "tgi-fridays", "outback-steakhouse",
+    # Grocery / convenience
+    "kroger", "albertsons", "sprouts-farmers-market", "heb", "meijer",
+    "aldi", "aldi-usa", "whole-foods", "publix", "safeway", "giant-eagle",
+    "wawa", "sheetz", "7-eleven", "caseys", "circle-k", "rutters",
+    # Big box / department
+    "walmart", "target", "costco", "home-depot", "lowes", "jcpenney",
+    "kohls", "macys", "nordstrom",
+    "tjx-companies", "tj-maxx", "tjx", "marshalls",  # tjx-companies = actual DB slug
+    "ross", "ross-dress-for-less", "burlington", "sears", "jcrew",
+    "staples", "primark",
+    # Drug / dollar
+    "cvs-health", "cvs-pharmacy", "walgreens", "rite-aid",
+    "dollar-general", "dollar-tree", "family-dollar",
+    "dollar-tree-family-dollar", "five-below",
+    # Specialty retail
+    "ulta-beauty", "bath-and-body-works", "victoria-secret",
+    "american-eagle", "gap", "old-navy", "banana-republic",
+    "hm-group", "h-and-m",   # hm-group = actual DB slug for H&M Group
+    "zara", "uniqlo", "forever-21", "express", "hollister",
+    "abercrombie-fitch", "hot-topic", "foot-locker", "michaels", "alo-yoga",
+    # Auto / gas
+    "autozone", "oreilly-auto-parts", "advance-auto-parts",
+    "napa-auto-parts", "jiffy-lube", "firestone", "goodyear",
+    "valvoline", "pepboys", "pep-boys", "midas", "safelite",
+    # Pet / outdoor / sporting
+    "petco", "petsmart", "rei", "bass-pro-shops", "cabelas",
+    "dicks-sporting-goods", "academy-sports",
+    # Logistics
+    "fedex", "ups", "usps", "amazon",
+    # Home improvement / hardware
+    "ace-hardware", "menards", "fastenal",
+    # Healthcare — high-volume distributed clinics
+    "davita",
+    # Staffing / security services
+    "pulse", "securitas",
+    # Mixed retail brands
+    "nike", "vf-corp-tnfvanstimberland", "comcast", "labcorp",
+    # Government / military
+    "national-park-service", "army-national-guard-units",
+    "transportation-security-administration",
+    "bureau-of-prisonsfederal-prison-system", "us-army-reserve-command",
+    # Distribution / food / manufacturing at scale
+    "sysco", "pepsico", "rtx-raytheon",
+    # Automotive retail
+    "carvana",
+}
+
+_TITLE_ADDR_RE = re.compile(
+    r'\(\d{2,6}\)\s*[-\u2013]?\s*(?:[A-Za-z][\w\s]*?[-\u2013]\s*)?'
+    r'(\d+\s+(?:[NSEW]{1,2}\s+)?[A-Za-z][\w\s.,#\-/]*'
+    r'(?:St\.?|Ave\.?|Dr\.?|Blvd\.?|Rd\.?|Ln\.?|Way|Ct\.?|Pl\.?|Hwy\.?|Pkwy\.?'
+    r'|Loop|Cir\.?|Ter\.?|Trl\.?|Run|Pike|Row|Sq\.?|Plaza|Place|Street|Avenue'
+    r'|Drive|Boulevard|Road|Lane|Court|Highway|Parkway|Circle|Terrace|Trail)'
+    r'(?:\s+(?:#|Ste\.?|Suite|Unit|Apt\.?)\s*[\w-]+)?)',
+    re.I,
+)
+
+def _extract_title_street_address(title: str) -> Optional[str]:
+    """Extract store street address from franchise-style job titles.
+
+    Matches patterns like:
+      "Dishwasher (01272) - 3275 Henry St"
+      "General Manager(07682) -491 N Lake Havasu Ave #100"
+    Returns the street portion only; caller combines with city+state from locations.
+    """
+    m = _TITLE_ADDR_RE.search(title)
+    return m.group(1).strip() if m else None
+
+_RETAIL_TITLE_RE = re.compile(
+    r'\b(?:delivery\s+driver|barista|cashier'
+    r'|store\s+(?:manager|associate|clerk|supervisor)'
+    r'|crew\s+(?:member|worker|trainer)'
+    r'|shift\s+(?:supervisor|leader|manager)'
+    r'|team\s+member|sales\s+associate|retail\s+associate'
+    r'|grocery\s+(?:clerk|associate)|restaurant\s+(?:manager|supervisor)'
+    r'|assistant\s+(?:store\s+)?manager|guest\s+advocate|food\s+service'
+    r'|cake\s+decorator|stocker|stock\s+(?:clerk|associate)'
+    r'|warehouse\s+associate|package\s+handler|delivery\s+associate'
+    r'|pharmacy\s+(?:tech|technician)|courtesy\s+clerk|fuel\s+attendant'
+    r'|line\s+cook|dishwasher|drive.thru|meat\s+(?:cutter|clerk)'
+    r'|floral\s+(?:designer|associate)|lube\s+tech(?:nician)?'
+    r'|tire\s+tech(?:nician)?|optical\s+(?:sales\s+)?associate|optician'
+    r'|deli\s+(?:clerk|associate)|produce\s+(?:clerk|associate)'
+    r'|bakery\s+(?:clerk|associate)|service\s+deli|key\s+holder'
+    r'|beauty\s+advisor|automotive\s+(?:technician|advisor|sales)'
+    r'|kennel\s+(?:attendant|tech)|pet\s+care\s+(?:specialist|associate)'
+    r')\b',
+    re.I,
+)
+
+def _normalize_location_for_geocode(loc: str) -> str:
+    """Port of normalizeLocationForGeocode from placesGeocode.ts."""
+    t = loc.strip()
+    # "TX-Houston" → "Houston, TX"
+    m = re.match(r'^([A-Z]{2})-(.+)$', t)
+    if m:
+        return f"{m.group(2)}, {m.group(1)}"
+    # "US-TX-Houston" → "Houston, TX, US"
+    m = re.match(r'^([A-Z]{2,3})-([A-Z]{2})-(.+)$', t)
+    if m:
+        return f"{m.group(3)}, {m.group(2)}, {m.group(1)}"
+    return t
+
+def _photon_geocode(location_key: str) -> Optional[tuple[float, float]]:
+    """Free OSM city-level geocoding via Photon (komoot)."""
+    url = "https://photon.komoot.io/api/?" + urllib.parse.urlencode({"q": location_key, "limit": "1"})
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "CurastemJobs/1.0 geocoder"})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            data = json.loads(r.read())
+        features = data.get("features", [])
+        if not features:
+            return None
+        coords = features[0].get("geometry", {}).get("coordinates")
+        if coords and len(coords) == 2:
+            lng, lat = coords  # GeoJSON is [lng, lat]
+            return (float(lat), float(lng))
+    except Exception as e:
+        print(f"    [photon] error for {location_key!r}: {e}", flush=True)
+    return None
+
+def _nominatim_geocode(address: str) -> Optional[tuple[float, float]]:
+    """Free Nominatim geocoding — good accuracy for full US street addresses."""
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
+        {"q": address, "format": "json", "limit": "1"}
+    )
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "CurastemJobs/1.0 (https://curastem.org; address geocoding)"}
+        )
+        with urllib.request.urlopen(req, timeout=12) as r:
+            data = json.loads(r.read())
+        if data and isinstance(data, list):
+            lat = float(data[0].get("lat", "nan"))
+            lng = float(data[0].get("lon", "nan"))
+            if not (lat != lat or lng != lng):  # nan check
+                return (lat, lng)
+    except Exception as e:
+        print(f"    [nominatim] error for {address!r}: {e}", flush=True)
+    return None
+
+def _geocoding_api(address: str, api_key: str) -> Optional[tuple[float, float]]:
+    """Google Geocoding API — $0.005/req. Use for full street addresses."""
+    url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(
+        {"address": address, "key": api_key}
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "CurastemJobs/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            data = json.loads(r.read())
+        if data.get("status") == "OK" and data.get("results"):
+            loc = data["results"][0]["geometry"]["location"]
+            return (float(loc["lat"]), float(loc["lng"]))
+    except Exception as e:
+        print(f"    [geocoding_api] error for {address!r}: {e}", flush=True)
+    return None
+
+def _geocode_address(address: str, maps_key: Optional[str]) -> Optional[tuple[float, float]]:
+    """Geocode a full street address. Geocoding API primary, Nominatim fallback."""
+    if maps_key:
+        result = _geocoding_api(address, maps_key)
+        if result:
+            return result
+    # Nominatim fallback — free, accurate for established US addresses
+    result = _nominatim_geocode(address)
+    time.sleep(0.12)  # respect Nominatim's 1 req/sec policy
+    return result
+
+def _places_geocode(query: str, api_key: str) -> Optional[tuple[float, float]]:
+    """Google Maps Places API (New) Text Search — precise building/office coords."""
+    url = "https://places.googleapis.com/v1/places:searchText"
+    payload = json.dumps({"textQuery": query, "maxResultCount": 1}).encode()
+    try:
+        req = urllib.request.Request(
+            url, data=payload, method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": api_key,
+                "X-Goog-FieldMask": "places.location",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=12) as r:
+            resp = json.loads(r.read())
+        place = (resp.get("places") or [{}])[0]
+        loc = place.get("location", {})
+        lat = loc.get("latitude")
+        lng = loc.get("longitude")
+        if lat is not None and lng is not None:
+            return (float(lat), float(lng))
+    except Exception as e:
+        print(f"    [places] error for {query!r}: {e}", flush=True)
+    return None
+
+def run_geocode_backfill(maps_key: Optional[str] = None, dry_run: bool = False):
+    """
+    Geocode all jobs that have a location string but no lat/lng.
+
+    Two-tier routing:
+      - Retail slug or retail job title → Photon (free, city-level)
+      - Professional company           → Places API with Photon fallback
+
+    D1 is updated by (company_slug, locations_json) so one query covers all
+    jobs at a given company in a given city in a single UPDATE.
+    """
+    PLACES_CAP = 8_125  # ~$260 hard cap
+
+    photon_cache: dict[str, Optional[tuple[float, float]]] = {}
+    places_cache: dict[str, Optional[tuple[float, float]]] = {}
+
+    total_updated = 0
+    total_photon  = 0
+    total_places  = 0
+    total_failed  = 0
+    places_calls  = 0
+    page          = 0
+    PAGE_SIZE     = 300
+
+    print(f"\n── Geocode backfill (Places cap={PLACES_CAP} calls ≈ ${PLACES_CAP * 0.032:.0f}) ──")
+    if not maps_key:
+        print("  No --maps-key provided — all locations will use Photon (city-level).\n")
+
+    # ── Pass 0: Address-level geocoding (precise) ─────────────────────────────
+    # Two cases handled here:
+    #   a) Jobs with location_lat IS NULL: never geocoded at all.
+    #   b) Jobs with job_address set (AI-enriched) but only city-level coords:
+    #      upgrade from city-center to exact building coordinates.
+    # Paginated to handle any volume.
+    print("  Pass 0: extracting title-embedded and AI-enriched addresses...")
+    addr_pass_rows = []
+    p0_offset = 0
+    P0_PAGE = 2000
+    while True:
+        page_rows = d1_query(
+            f"""
+            SELECT j.id, j.title, j.locations, j.job_address, j.job_city, j.job_state,
+                   j.location_lat
+            FROM jobs j
+            WHERE j.title IS NOT NULL
+              AND j.locations IS NOT NULL
+              AND j.locations NOT IN ('null', '[]', '')
+              AND (
+                j.location_lat IS NULL
+                OR j.job_address IS NOT NULL  -- upgrade city-level to address-level
+              )
+            LIMIT {P0_PAGE} OFFSET {p0_offset}
+            """
+        )
+        if not page_rows:
+            break
+        addr_pass_rows.extend(page_rows)
+        if len(page_rows) < P0_PAGE:
+            break
+        p0_offset += P0_PAGE
+    print(f"    {len(addr_pass_rows)} candidate rows found.")
+    # Step 1: collect (job_id, full_address) pairs — dedup address before any API call
+    addr_job_pairs: list[tuple[str, str]] = []  # (job_id, full_address)
+    for row in (addr_pass_rows or []):
+        title     = row.get("title") or ""
+        locs_json = row.get("locations") or "[]"
+        job_id    = row.get("id")
+        job_addr  = row.get("job_address") or ""
+        if not job_id:
+            continue
+
+        street = job_addr.strip() or _extract_title_street_address(title) or ""
+        if not street:
+            continue
+
+        try:
+            locs = json.loads(locs_json)
+            raw_loc = locs[0] if locs else None
+        except Exception:
+            continue
+        if not raw_loc or not isinstance(raw_loc, str):
+            continue
+
+        loc_key = _normalize_location_for_geocode(raw_loc.strip())
+        if not loc_key or re.match(r'^\d', loc_key) or re.search(r'\bremote\b', loc_key, re.I):
+            continue
+
+        addr_job_pairs.append((job_id, f"{street}, {loc_key}"))
+
+    # Step 2: geocode each UNIQUE address once — all jobs at the same address share the result.
+    # e.g. "Delivery Driver" + "Dishwasher" both at "3275 Henry St, Watertown, WI" → 1 API call.
+    unique_addresses = list(dict.fromkeys(addr for _, addr in addr_job_pairs))
+    addr_cache: dict[str, Optional[tuple[float, float]]] = {}
+    geocoding_api_calls = 0
+
+    for full_address in unique_addresses:
+        result = _geocode_address(full_address, maps_key)
+        addr_cache[full_address] = result
+        if result and maps_key:
+            geocoding_api_calls += 1
+
+    # Step 3: build UPDATE statements — one per job, but coords come from deduped cache
+    addr_geocoded = 0
+    addr_updates: list[str] = []
+    for job_id, full_address in addr_job_pairs:
+        result = addr_cache.get(full_address)
+        if result:
+            lat, lng = result
+            addr_updates.append(
+                f"UPDATE jobs SET location_lat = {lat}, location_lng = {lng} "
+                f"WHERE id = {sql_str(job_id)} AND location_lat IS NULL;"
+            )
+            addr_geocoded += 1
+
+    if addr_updates and not dry_run:
+        BATCH = 80
+        for i in range(0, len(addr_updates), BATCH):
+            run_d1("\n".join(addr_updates[i:i + BATCH]), label=f"geocode addr batch {i // BATCH}")
+    geocoding_cost = geocoding_api_calls * 0.005
+    print(
+        f"  Pass 0 done: {addr_geocoded} jobs geocoded from {len(unique_addresses)} unique addresses "
+        f"({len(addr_job_pairs) - len(unique_addresses)} deduped) "
+        + (f"| Geocoding API: {geocoding_api_calls} calls (${geocoding_cost:.2f})" if maps_key else "| Nominatim only (free)")
+        + "\n"
+    )
+
+    # ── Pass 1: City-level geocoding (Photon for retail, Places for professional) ─
+    while True:
+        rows = d1_query(
+            f"""
+            SELECT c.slug, c.name, j.locations, COUNT(*) AS cnt,
+                   MAX(j.title) AS sample_title
+            FROM jobs j
+            JOIN companies c ON j.company_id = c.id
+            WHERE j.location_lat IS NULL
+              AND j.locations IS NOT NULL
+              AND j.locations NOT IN ('null', '[]', '')
+            GROUP BY c.slug, c.name, j.locations
+            ORDER BY cnt DESC
+            LIMIT {PAGE_SIZE} OFFSET {page * PAGE_SIZE}
+            """
+        )
+        if not rows:
+            break
+
+        updates: list[str] = []
+
+        for row in rows:
+            slug         = row.get("slug") or ""
+            company_name = row.get("name") or slug
+            locs_json    = row.get("locations") or "[]"
+            sample_title = row.get("sample_title") or ""
+
+            # Parse the stored JSON location array
+            try:
+                locs = json.loads(locs_json)
+                raw_loc = locs[0] if locs else None
+            except Exception:
+                continue
+            if not raw_loc or not isinstance(raw_loc, str):
+                continue
+
+            # Skip pure-remote postings (no meaningful lat/lng)
+            if re.search(r'\bremote\b', raw_loc, re.I) and not re.search(r'\bhybrid\b', raw_loc, re.I):
+                continue
+
+            location_key = _normalize_location_for_geocode(raw_loc.strip())
+            if not location_key or len(location_key) < 3:
+                continue
+
+            # Routing decision
+            use_retail = (slug in RETAIL_SLUGS) or bool(_RETAIL_TITLE_RE.search(sample_title))
+
+            lat_lng: Optional[tuple[float, float]] = None
+
+            if use_retail or not maps_key:
+                # Photon — free, city-level, no API key needed
+                if location_key not in photon_cache:
+                    photon_cache[location_key] = _photon_geocode(location_key)
+                    time.sleep(0.06)  # 60 ms between Photon calls (polite)
+                lat_lng = photon_cache[location_key]
+                if lat_lng:
+                    total_photon += 1
+            else:
+                # Places API — precise coords for professional/corporate jobs
+                places_query = f"{company_name} {location_key}"
+                cache_key    = places_query.lower()
+
+                if places_calls >= PLACES_CAP:
+                    # Budget exhausted — fall back to Photon for remainder
+                    if location_key not in photon_cache:
+                        photon_cache[location_key] = _photon_geocode(location_key)
+                        time.sleep(0.06)
+                    lat_lng = photon_cache[location_key]
+                    if lat_lng:
+                        total_photon += 1
+                elif cache_key in places_cache:
+                    lat_lng = places_cache[cache_key]
+                    if lat_lng:
+                        total_places += 1
+                else:
+                    result = _places_geocode(places_query, maps_key)
+                    places_calls += 1
+                    places_cache[cache_key] = result
+                    if result:
+                        lat_lng = result
+                        total_places += 1
+                    else:
+                        # Places API miss — Photon fallback
+                        if location_key not in photon_cache:
+                            photon_cache[location_key] = _photon_geocode(location_key)
+                            time.sleep(0.06)
+                        lat_lng = photon_cache[location_key]
+                        if lat_lng:
+                            total_photon += 1
+                    time.sleep(0.06)
+
+            if lat_lng:
+                lat, lng = lat_lng
+                # Update ALL jobs at this (company, location) in one statement
+                updates.append(
+                    f"UPDATE jobs SET location_lat = {lat}, location_lng = {lng} "
+                    f"WHERE company_id = (SELECT id FROM companies WHERE slug = {sql_str(slug)} LIMIT 1) "
+                    f"AND locations = {sql_str(locs_json)} "
+                    f"AND location_lat IS NULL;"
+                )
+                total_updated += row.get("cnt") or 1
+            else:
+                total_failed += 1
+
+        if updates and not dry_run:
+            # Execute in sub-batches to stay within D1 statement limits
+            BATCH = 80
+            for i in range(0, len(updates), BATCH):
+                run_d1("\n".join(updates[i:i + BATCH]), label=f"geocode page {page} batch {i // BATCH}")
+
+        tier_label = (
+            f"photon={total_photon}"
+            + (f" | places={total_places} (${places_calls * 0.032:.2f})" if maps_key else "")
+            + f" | failed={total_failed}"
+        )
+        print(
+            f"  Page {page}: {len(rows)} locations → {len(updates)} updates | {tier_label}",
+            flush=True,
+        )
+
+        if len(rows) < PAGE_SIZE:
+            break
+        page += 1
+
+    print(f"\n── Geocode complete ──────────────────────────────────────")
+    print(f"  Jobs updated  : {total_updated:,}")
+    print(f"  Photon (free) : {total_photon:,}")
+    if maps_key:
+        print(f"  Places API    : {total_places:,}  (cost ≈ ${places_calls * 0.032:.2f})")
+    print(f"  Failed/skipped: {total_failed:,}")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    limit_arg = next((int(a.split("=")[1]) for a in sys.argv[1:] if a.startswith("--limit=")), None)
+    positional = [a for a in sys.argv[1:] if not a.startswith("--")]
+    limit_arg   = next((int(a.split("=")[1]) for a in sys.argv[1:] if a.startswith("--limit=")), None)
+    type_filter = next((a.split("=")[1] for a in sys.argv[1:] if a.startswith("--type=")), None)
+    geocode_mode = "--geocode" in sys.argv[1:]
+    maps_key     = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--maps-key=")), None)
     max_jobs = limit_arg or MAX_TOTAL_JOBS
     max_desc = min(limit_arg or MAX_DETAIL_JOBS, MAX_DETAIL_JOBS)
 
-    # Filter sources if IDs given
-    sources = [s for s in WORKDAY_SOURCES if not args or s[0] in args]
-    if not sources:
-        print(f"No matching sources. Available: {[s[0] for s in WORKDAY_SOURCES]}")
-        sys.exit(1)
+    if geocode_mode:
+        run_geocode_backfill(maps_key=maps_key)
+        return
 
-    print(f"Backfilling {len(sources)} source(s): {[s[0] for s in sources]}")
+    # Build flat list of all sources to consider
+    all_flat = [s for sources in ALL_SOURCES.values() for s in sources]
+
+    if type_filter:
+        candidates = ALL_SOURCES.get(type_filter, [])
+        if not candidates:
+            print(f"Unknown type '{type_filter}'. Available: {list(ALL_SOURCES)}")
+            sys.exit(1)
+    elif positional:
+        candidates = [s for s in all_flat if s[0] in positional]
+        if not candidates:
+            print(f"No matching sources. Available: {[s[0] for s in all_flat]}")
+            sys.exit(1)
+    else:
+        candidates = all_flat
+
+    print(f"Backfilling {len(candidates)} source(s): {[s[0] for s in candidates]}")
     print(f"  Max jobs/source: {max_jobs}, Max descriptions: {max_desc}\n")
 
     total_stats = {"inserted": 0, "skipped": 0, "errors": 0}
 
-    for source_id, company_handle, display_name, cxs_url in sources:
-        print(f"━━━ {display_name} ({source_id}) ━━━")
+    for source_id, company_handle, display_name, url, source_type in candidates:
+        print(f"━━━ {display_name} ({source_id} / {source_type}) ━━━")
         t0 = time.time()
-
         try:
-            stubs = fetch_workday_source(
-                source_id, company_handle, display_name, cxs_url, max_jobs, max_desc
-            )
+            stubs = fetch_source(source_id, company_handle, display_name, url,
+                                 source_type, max_jobs, max_desc)
             if not stubs:
-                print(f"  ✗ No jobs fetched — skipping.")
+                print(f"  ✗ No jobs returned — skipping.\n")
                 total_stats["errors"] += 1
                 continue
 
             print(f"  → Looking up/creating company {company_handle!r}...")
             company_id = get_or_create_company_id(display_name, company_handle)
             if not company_id:
-                print(f"  ✗ Could not resolve company ID for {company_handle!r} — skipping.")
+                print(f"  ✗ Could not resolve company ID for {company_handle!r} — skipping.\n")
                 total_stats["errors"] += 1
                 continue
             print(f"  → company_id={company_id}")
 
             print(f"  → Upserting {len(stubs)} jobs into D1...")
-            stats = upsert_jobs(source_id, company_id, company_handle, "workday", stubs)
+            stats = upsert_jobs(source_id, company_id, company_handle, source_type, stubs)
 
-            # Mark source as freshly fetched so cron skips it for 48 h
             now = int(time.time())
             run_d1(
                 f"UPDATE sources SET last_fetched_at = {now}, "
@@ -437,7 +1281,7 @@ def main():
 
             elapsed = time.time() - t0
             total_stats["inserted"] += stats["inserted"]
-            total_stats["skipped"] += stats["skipped"]
+            total_stats["skipped"]  += stats["skipped"]
             print(f"  ✓ {stats['inserted']} inserted, {stats['skipped']} skipped — {elapsed:.0f}s\n")
 
         except Exception as e:
@@ -446,8 +1290,8 @@ def main():
 
     print(f"━━━ Done ━━━")
     print(f"Total inserted: {total_stats['inserted']}, skipped: {total_stats['skipped']}, errors: {total_stats['errors']}")
-    print("\nSources marked as fetched — cron will skip them for 48 h.")
-    print("AI enrichment (summaries, embeddings) will run on the next cron cycle.")
+    print("\nSources marked as fetched — cron will skip them for their configured interval.")
+    print("AI enrichment (summaries, embeddings) runs on the next cron cycle.")
 
 if __name__ == "__main__":
     main()

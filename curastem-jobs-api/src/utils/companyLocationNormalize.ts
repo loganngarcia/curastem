@@ -39,6 +39,9 @@ const US_ST_TO_REGION: Record<string, string> = {
 
 const US_STATE_ABBREV_SET = new Set(Object.keys(US_ST_TO_REGION));
 
+/** Lowercase full US state names — skip stripping "California, US" so normalize can emit "California, USA". */
+const US_STATE_FULL_NAME_SET = new Set(Object.keys(US_STATE_NAME_TO_ABBREV));
+
 /** Canada: `CA, ON` (country, province) — ISO province → name, no invented city. */
 const CA_PROVINCE_NAME: Record<string, string> = {
   ON: "Ontario", BC: "British Columbia", AB: "Alberta", QC: "Quebec", MB: "Manitoba", SK: "Saskatchewan",
@@ -64,9 +67,17 @@ const REGION_LABEL_TO_CANONICAL: Record<string, string> = {
   "bay area, ca": "San Francisco, CA",
   "new york city area": "New York, NY",
   "washington d.c. metro area": "Washington, DC",
-  "greater london": "London, UK",
-  "greater manchester": "Manchester, UK",
+  "greater london": "London, United Kingdom",
+  "greater manchester": "Manchester, United Kingdom",
   "greater los angeles area": "Los Angeles, CA",
+  "hyderabad area": "Hyderabad, India",
+  "chennai area": "Chennai, India",
+  "pune area": "Pune, India",
+  "bengaluru area": "Bengaluru, India",
+  "mumbai area": "Mumbai, India",
+  "guadalajara area": "Guadalajara, Mexico",
+  "bogotá d.c. area": "Bogotá, Colombia",
+  "bogota d.c. area": "Bogotá, Colombia",
 };
 
 /** MGM Las Vegas properties → strip to metro for geocoding. */
@@ -86,11 +97,52 @@ const MGM_PROPERTY_CITIES: Record<string, string> = {
   "vdara": "Las Vegas, NV",
 };
 
+/**
+ * "USA - Maryland - Baltimore", "USA - NY - Flushing - 123 Main" → City, ST (drops trailing address tokens).
+ * Runs before the generic "USA - place - org" rule so we never emit "Maryland, USA".
+ */
+function parseUsaStateCityChain(t: string): string | null {
+  const u = t.trim();
+  if (!/^USA\s*-/i.test(u)) return null;
+  const rest = u.replace(/^USA\s*-\s*/i, "").trim();
+  const parts = rest.split(/\s*-\s*/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  while (parts.length > 2 && /^\d/.test(parts[parts.length - 1])) {
+    parts.pop();
+  }
+  if (parts.length < 2) return null;
+  const p0 = parts[0];
+  if (/^washington\s+dc$/i.test(p0)) return "Washington, DC";
+  if (/^deer\s+park$/i.test(p0) && /biosystems/i.test(parts.slice(1).join(" "))) {
+    return "Deer Park, NY";
+  }
+  let st: string | null = null;
+  if (/^[A-Z]{2}$/i.test(p0)) st = p0.toUpperCase();
+  else st = US_STATE_NAME_TO_ABBREV[p0.toLowerCase()] ?? null;
+  if (st && US_STATE_ABBREV_SET.has(st)) {
+    const cityRaw = parts.slice(1).join(" ");
+    const cityOnly = cityRaw.split(",")[0].trim();
+    // Research Triangle Park — ATS uses "RTP" as city token
+    if (/^rtp$/i.test(cityOnly)) return "Durham, NC";
+    return `${titleCaseCity(cityOnly)}, ${st}`;
+  }
+  return null;
+}
+
 function titleCaseCity(s: string): string {
   return s
     .toLowerCase()
     .split(/\s+/)
-    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : w))
+    .map((w) => {
+      if (!w.length) return w;
+      if (w.includes("-")) {
+        return w
+          .split("-")
+          .map((p) => (p.length ? p[0].toUpperCase() + p.slice(1) : p))
+          .join("-");
+      }
+      return w[0].toUpperCase() + w.slice(1);
+    })
     .join(" ");
 }
 
@@ -198,6 +250,38 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
   let t = s;
   const slug = companySlug?.toLowerCase() ?? "";
 
+  // ATS: "All Cities, TX" / "All Cities, British Columbia" — placeholder city; keep region only
+  if (/^All Cities,\s*/i.test(t.trim())) {
+    const rest = t.replace(/^All Cities,\s*/i, "").trim();
+    if (/^[A-Z]{2}$/i.test(rest)) {
+      const code = rest.toUpperCase();
+      const usRegion = US_ST_TO_REGION[code];
+      if (usRegion) return usRegion;
+      const caName = CA_PROVINCE_NAME[code];
+      if (caName) return `${caName}, Canada`;
+    }
+    if (/^British Columbia$/i.test(rest)) return "British Columbia, Canada";
+    if (/^Ontario$/i.test(rest)) return "Ontario, Canada";
+    if (/^Alberta$/i.test(rest)) return "Alberta, Canada";
+    if (/^Quebec$/i.test(rest)) return "Quebec, Canada";
+    t = rest;
+  }
+
+  // USPS-style "Ft." (Fort Worth, Fort Wayne) — comma often missing after Ft.
+  t = t.replace(/\bFt\./gi, "Fort ");
+
+  // "San Francisco, US" — strip trailing US token so bare city maps in normalize.
+  // Keep "California, US" / "Texas, US" (bare state + country) for normalize → "State, USA".
+  // "Illinois, US Offsite" → "Illinois, USA" (ATS hybrid label)
+  t = t.replace(/,\s*US\s+Offsite$/i, ", USA").trim();
+  {
+    const m = t.match(/^(.+),\s*US\s*$/i);
+    if (m) {
+      const head = m[1].trim().toLowerCase();
+      if (!US_STATE_FULL_NAME_SET.has(head)) t = m[1].trim();
+    }
+  }
+
   // ── Company-specific (run before destructive global rules) ────────────────
   if (slug === "mgm-resorts" || slug.startsWith("mgm-")) {
     const pm = t.match(/^property\s*-\s*(.+)$/i);
@@ -213,6 +297,45 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
   // Boeing / legacy: IND - Bangalore
   if (/^ind\s*-\s*bangalore$/i.test(t.trim())) return "Bengaluru, India";
 
+  // ATS: "India, Pune" (country listed before city)
+  const indiaCommaFirst = t.match(/^India,\s*(.+)$/i);
+  if (indiaCommaFirst) {
+    return `${titleCaseCity(indiaCommaFirst[1].trim())}, India`;
+  }
+
+  const mexCommaFirst = t.match(/^Mexico,\s*(.+)$/i);
+  if (mexCommaFirst) {
+    return `${titleCaseCity(mexCommaFirst[1].trim())}, Mexico`;
+  }
+
+  const crCommaFirst = t.match(/^Costa Rica,\s*(.+)$/i);
+  if (crCommaFirst) {
+    return `${titleCaseCity(crCommaFirst[1].trim())}, Costa Rica`;
+  }
+
+  // Workday / Oracle: "United States, San Mateo" (country before city — infer state when obvious)
+  const usCommaFirst = t.match(/^United States,\s*(.+)$/i);
+  if (usCommaFirst) {
+    const rest = usCommaFirst[1].trim();
+    if (/^san mateo$/i.test(rest)) return "San Mateo, CA";
+    return `${titleCaseCity(rest)}, USA`;
+  }
+
+  // GE / ATS: "USA, Hartford" (no state in source — HQ is CT)
+  if (/^USA,\s*Hartford\s*$/i.test(t.trim())) return "Hartford, CT";
+
+  // Site code style: IND.Pune (country dot city)
+  if (/^IND\.Pune$/i.test(t.trim())) return "Pune, India";
+
+  // UK neighbourhood blob — Wimbledon is unambiguous vs "Georgia" country
+  if (/^wimbledon,\s*south london$/i.test(t.trim())) return "Wimbledon, United Kingdom";
+
+  // Georgian ATS noise (script + "Georgia" country) — keep capital for geocoding
+  if (/^tbilisi\b/i.test(t.trim())) return "Tbilisi, Georgia";
+
+  // Polish mojibake from bad UTF-8 in ATS exports
+  if (/^lód\?,\s*lodzkie$/i.test(t.trim())) return "Łódź, Poland";
+
   // Ecolab / India: IND - State - City - Site
   if (/^IND\s*-\s*[^-]+\s*-\s*Bangalore\b/i.test(t)) return "Bengaluru, India";
   if (/^IND\s*-\s*Maharashtra\s*-\s*Pune\b/i.test(t)) return "Pune, India";
@@ -223,6 +346,10 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
   // Broadcom-style: USA-CA San Jose Innovation Drive
   const usaSp = t.match(/^USA-([A-Z]{2})\s+([A-Za-z]+)\b/i);
   if (usaSp) return `${titleCaseCity(usaSp[2])}, ${usaSp[1].toUpperCase()}`;
+
+  // "USA - Maryland - Baltimore", "USA - NY - Flushing - …" → City, ST (not "Maryland, USA")
+  const usaChain = parseUsaStateCityChain(t);
+  if (usaChain) return usaChain;
 
   // Workday / Danaher / Leica: "USA - Washington DC - Multiple-OpCo", "USA - Deer Park - Leica Biosystems"
   const usaPlaceOrg = t.match(/^USA\s*-\s*(.+?)\s*-\s*(.+)$/i);
@@ -254,6 +381,24 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
   // UK - London (Expedia, etc.)
   const ukDash = t.match(/^UK\s*-\s*(.+)$/i);
   if (ukDash) return `${titleCaseCity(ukDash[1].trim())}, United Kingdom`;
+
+  // VF Corp hierarchy: "USCA > USA > North Carolina > Charlotte 586 - VAN"
+  const vfHier = t.match(/USCA\s*>\s*USA\s*>\s*(.+?)\s*>\s*([A-Za-z][A-Za-z\s]+?)\s+\d+\s*-/i);
+  if (vfHier) {
+    const stateName = vfHier[1].trim().toLowerCase();
+    const cityFull = vfHier[2].trim();
+    const st = US_STATE_NAME_TO_ABBREV[stateName];
+    if (st) return `${titleCaseCity(cityFull)}, ${st}`;
+  }
+
+  // Boeing: "KOR - Seoul"
+  if (/^KOR\s*-\s*Seoul\b/i.test(t.trim())) return "Seoul, South Korea";
+
+  // Comcast retail: "FL - Palm Beach Gardens, 5300 … - Retail XFR…"
+  const stCityComma = t.match(/^([A-Z]{2})\s*-\s*([^,]+),\s*.+/i);
+  if (stCityComma && US_STATE_ABBREV_SET.has(stCityComma[1].toUpperCase())) {
+    return `${titleCaseCity(stCityComma[2].trim())}, ${stCityComma[1].toUpperCase()}`;
+  }
 
   // LinkedIn regional marketing names (D1: SF Bay Area, Greater Seattle, …)
   const regionKey = t.trim().toLowerCase();
@@ -304,7 +449,7 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
   // US, Virtual → Remote
   if (/^US,\s*Virtual$/i.test(t)) return "Remote";
 
-  // Pulse / UK: London, Greater London → London, UK
+  // Pulse / UK: London, Greater London → London, United Kingdom
   if (/^(.+),\s*Greater London$/i.test(t)) {
     const city = t.replace(/,\s*Greater London$/i, "").trim();
     return `${titleCaseCity(city)}, United Kingdom`;
@@ -462,9 +607,6 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
 
   // Region strings where a real placename appears in the label
   if (/^dubai emirate$/i.test(t.trim())) return "Dubai, United Arab Emirates";
-  if (/^bogotá d\.c\. area$/i.test(t.trim()) || /^bogota d\.c\. area$/i.test(t.trim())) {
-    return "Bogotá, Colombia";
-  }
 
   // Micron / fabs: Hiroshima - Fab 15 (city in string)
   const fab = t.match(/^(.+?)\s*-\s*Fab\s*\d+/i);
@@ -478,6 +620,8 @@ export function applyLocationPrePipeline(s: string, companySlug: string | null |
 
   // Hyderabad - Phoenix Aquila
   if (/^hyderabad\s*-\s*/i.test(t)) return "Hyderabad, India";
+  // Micron / TSMC site labels
+  if (/^hyderabad\s+knowledge\s+city$/i.test(t.trim())) return "Hyderabad, India";
 
   const decap = decapsShoutingPlace(t);
   if (decap) return decap;
