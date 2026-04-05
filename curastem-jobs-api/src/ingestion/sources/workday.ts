@@ -89,10 +89,11 @@ const DETAIL_FETCH_CONCURRENCY = 16;
 
 /**
  * Maximum job stubs collected from the list API (Phase 1).
- * Slow tenants can take ~1.3 s per list call; 30 pages × 20 = 600 stubs
- * costs at most ~39 s, leaving ample budget for Phase 2.
+ * Slow tenants run at ~1.3 s/page; 100 pages × 1.3 s = 130 s, safely inside the
+ * 150 s Workday timeout. This covers mid-size tenants (e.g. Salesforce ~1442) in one
+ * run; very large tenants (CVS 8k+) pick up the 2000 most-recent jobs per cron cycle.
  */
-const MAX_TOTAL_JOBS = 600;
+const MAX_TOTAL_JOBS = 2000;
 
 /**
  * Maximum per-job HTML detail fetches in Phase 2.
@@ -109,6 +110,14 @@ const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 // GET the job board HTML page to obtain a PLAY_SESSION cookie. Without it,
 // Workday's Cloudflare WAF returns 400 for requests from datacenter IPs.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Deterministic pseudo-UUID v4 derived from the tenant origin (no crypto dependency). */
+function pseudoUuid(seed: string): string {
+  let h = 5381;
+  for (let i = 0; i < seed.length; i++) h = ((h << 5) + h) ^ seed.charCodeAt(i);
+  const hex = (Math.abs(h) >>> 0).toString(16).padStart(8, "0");
+  return `${hex}-${hex.slice(0,4)}-4${hex.slice(1,4)}-a${hex.slice(2,5)}-${hex}${hex.slice(0,4)}`;
+}
 
 async function fetchSessionCookie(origin: string, tenant: string): Promise<string> {
   // Try /{tenant} first (shorter, works on all Workday instances); fall back
@@ -136,10 +145,18 @@ async function fetchSessionCookie(origin: string, tenant: string): Promise<strin
           const single = res.headers.get("set-cookie");
           return single ? [single] : [];
         })();
-  return lines
+  const cookies = lines
     .map((line) => line.trim().split(";")[0].trim())
     .filter(Boolean)
     .join("; ");
+
+  // Some WAF-protected tenants (amat, micron, northrop, rtx, salesforce, itw) block the CXS
+  // POST unless wd-browser-id is present. Inject a stable synthetic value when missing.
+  if (!cookies.includes("wd-browser-id")) {
+    const browserId = pseudoUuid(origin);
+    return cookies ? `${cookies}; wd-browser-id=${browserId}` : `wd-browser-id=${browserId}`;
+  }
+  return cookies;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,7 +301,20 @@ export const workdayFetcher: JobSource = {
         throw new Error(`Workday list API ${res.status} for ${source.company_handle}`);
       }
 
-      const data = (await res.json()) as WorkdayJobsResponse;
+      // Guard against truncated responses (SyntaxError: Unexpected end of JSON input).
+      let data: WorkdayJobsResponse;
+      try {
+        data = (await res.json()) as WorkdayJobsResponse;
+      } catch {
+        // Retry once — large tenants (Home Depot, Kohl's) occasionally return partial bodies.
+        const retry = await fetch(source.base_url, {
+          method: "POST",
+          headers: listHeaders,
+          body: JSON.stringify({ appliedFacets: {}, limit: PAGE_SIZE, offset, searchText: "" }),
+        });
+        if (!retry.ok) break;
+        try { data = (await retry.json()) as WorkdayJobsResponse; } catch { break; }
+      }
       const batch = data.jobPostings ?? [];
       if (batch.length === 0) break;
 

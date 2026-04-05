@@ -306,7 +306,7 @@ function useSaveRestoreOnToggle<T>(
  * Full documentation: agent-skills-api/README.md
  */
 const DEFAULT_SKILLS_API_URL =
-    "https://agent-skills-api.logangarcia102.workers.dev"
+    "https://skills.curastem.org"
 
 const SKILLS_CACHE_KEY = "curastem_skills_cache"
 
@@ -41009,7 +41009,7 @@ addPropertyControls(OmegleMentorshipUI, {
         title: "Skills API URL",
         description:
             "URL of the Agent Skills API (Cloudflare Worker). Returns a catalog of mentorship skills for the slash-command menu. See agent-skills-api/README.md.",
-        defaultValue: "https://agent-skills-api.logangarcia102.workers.dev",
+        defaultValue: "https://skills.curastem.org",
     },
     jobsApiUrl: {
         type: ControlType.String,

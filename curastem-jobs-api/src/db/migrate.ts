@@ -105,7 +105,9 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-shein",         name: "SHEIN (Greenhouse)",         source_type: "greenhouse", company_handle: "shein",         base_url: "https://boards-api.greenhouse.io/v1/boards/shein/jobs" },
   { id: "gh-oscar",      name: "Oscar Health (Greenhouse)", source_type: "greenhouse", company_handle: "oscar",    base_url: "https://boards-api.greenhouse.io/v1/boards/oscar/jobs" },
   { id: "gh-opendoor",   name: "Opendoor (Greenhouse)",     source_type: "greenhouse", company_handle: "opendoor", base_url: "https://boards-api.greenhouse.io/v1/boards/opendoor/jobs" },
-  { id: "gh-otter",      name: "Otter.ai (Greenhouse)",     source_type: "greenhouse", company_handle: "otter",    base_url: "https://boards-api.greenhouse.io/v1/boards/otter/jobs" },
+  // board "otter" = Otter POS (tryotter.com); board "otterai" = Otter.ai (otter.ai transcription)
+  { id: "gh-otter",      name: "Otter (Greenhouse)",        source_type: "greenhouse", company_handle: "otter",    base_url: "https://boards-api.greenhouse.io/v1/boards/otter/jobs" },
+  { id: "gh-otterai",   name: "Otter.ai (Greenhouse)",     source_type: "greenhouse", company_handle: "otterai",  base_url: "https://boards-api.greenhouse.io/v1/boards/otterai/jobs" },
   { id: "gh-cloudflare", name: "Cloudflare (Greenhouse)",  source_type: "greenhouse", company_handle: "cloudflare", base_url: "https://boards-api.greenhouse.io/v1/boards/cloudflare/jobs" },
   { id: "gh-datadog",    name: "Datadog (Greenhouse)",     source_type: "greenhouse", company_handle: "datadog",    base_url: "https://boards-api.greenhouse.io/v1/boards/datadog/jobs" },
   { id: "gh-deepmind",   name: "Google DeepMind (Greenhouse)", source_type: "greenhouse", company_handle: "deepmind", base_url: "https://boards-api.greenhouse.io/v1/boards/deepmind/jobs" },
@@ -121,8 +123,19 @@ export const SEED_SOURCES: SeedSource[] = [
   // iCIMS Jibe — public JSON at /api/jobs (see jibe.ts)
   { id: "jibe-sprouts", name: "Sprouts Farmers Market (iCIMS Jibe)", source_type: "jibe", company_handle: "sprouts-farmers-market", base_url: "https://jobs.sprouts.com" },
   { id: "jibe-ulta", name: "Ulta Beauty (iCIMS Jibe)", source_type: "jibe", company_handle: "ulta-beauty", base_url: "https://careers.ulta.com" },
-  // Oracle Activate — /Search/SearchResults + per-job HTML (apply via Taleo; see activate_careers.ts)
+  // Oracle Activate — /Search/SearchResults + per-job `div.Description` HTML; apply via Taleo or Paradox (see activate_careers.ts)
   { id: "act-ross", name: "Ross Dress for Less (Activate)", source_type: "activate_careers", company_handle: "ross-stores", base_url: "https://jobs.rossstores.com" },
+  // Darden Restaurants — same Activate stack per brand origin (not dardenrscjobs.recruiting.com — that site is Paradox SPA without public Search/SearchResults).
+  { id: "act-darden-olivegarden", name: "Olive Garden (Activate)", source_type: "activate_careers", company_handle: "olive-garden", base_url: "https://jobs.olivegarden.com" },
+  { id: "act-darden-yardhouse", name: "Yard House (Activate)", source_type: "activate_careers", company_handle: "yard-house", base_url: "https://careers.yardhouse.com" },
+  { id: "act-darden-longhorn", name: "LongHorn Steakhouse (Activate)", source_type: "activate_careers", company_handle: "longhorn-steakhouse", base_url: "https://jobs.longhornsteakhouse.com" },
+  { id: "act-darden-cheddars", name: "Cheddar's Scratch Kitchen (Activate)", source_type: "activate_careers", company_handle: "cheddars-scratch-kitchen", base_url: "https://careers.cheddars.com" },
+  { id: "act-darden-ruthschris", name: "Ruth's Chris Steak House (Activate)", source_type: "activate_careers", company_handle: "ruths-chris-steak-house", base_url: "https://careers.ruthschris.com" },
+  { id: "act-darden-capitalgrille", name: "The Capital Grille (Activate)", source_type: "activate_careers", company_handle: "the-capital-grille", base_url: "https://careers.thecapitalgrille.com" },
+  { id: "act-darden-chuys", name: "Chuy's (Activate)", source_type: "activate_careers", company_handle: "chuys", base_url: "https://careers.chuys.com" },
+  { id: "act-darden-seasons52", name: "Seasons 52 (Activate)", source_type: "activate_careers", company_handle: "seasons-52", base_url: "https://careers.seasons52.com" },
+  { id: "act-darden-eddiev", name: "Eddie V's Prime Seafood (Activate)", source_type: "activate_careers", company_handle: "eddie-vs-prime-seafood", base_url: "https://careers.eddiev.com" },
+  { id: "act-darden-bahamabreeze", name: "Bahama Breeze (Activate)", source_type: "activate_careers", company_handle: "bahama-breeze", base_url: "https://jobs.bahamabreeze.com" },
   // Retail — Workday CXS POST (see workday.ts); verified 200 with cookie preflight
   { id: "wd-dsg", name: "Dick's Sporting Goods (Workday)", source_type: "workday", company_handle: "dicks-sporting-goods", base_url: "https://dickssportinggoods.wd1.myworkdayjobs.com/wday/cxs/dickssportinggoods/DSG/jobs" },
   { id: "wd-meijer", name: "Meijer (Workday)", source_type: "workday", company_handle: "meijer", base_url: "https://meijer.wd5.myworkdayjobs.com/wday/cxs/meijer/Meijer_Stores_Hourly/jobs" },
@@ -244,6 +257,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-method",           name: "Method (Greenhouse)",            source_type: "greenhouse", company_handle: "method",           base_url: "https://boards-api.greenhouse.io/v1/boards/method/jobs" },
   { id: "gh-nerdy",            name: "Nerdy (Greenhouse)",             source_type: "greenhouse", company_handle: "nerdy",            base_url: "https://boards-api.greenhouse.io/v1/boards/nerdy/jobs" },
   { id: "gh-netlify",          name: "Netlify (Greenhouse)",           source_type: "greenhouse", company_handle: "netlify",          base_url: "https://boards-api.greenhouse.io/v1/boards/netlify/jobs" },
+  { id: "gh-nothing",          name: "Nothing (Greenhouse)",           source_type: "greenhouse", company_handle: "nothing",          base_url: "https://boards-api.greenhouse.io/v1/boards/nothing/jobs" },
   { id: "gh-sie",              name: "Sony Interactive Entertainment", source_type: "greenhouse", company_handle: "sonyinteractiveentertainmentglobal", base_url: "https://boards-api.greenhouse.io/v1/boards/sonyinteractiveentertainmentglobal/jobs" },
   { id: "gh-nexhealth",        name: "NexHealth (Greenhouse)",         source_type: "greenhouse", company_handle: "nexhealth",        base_url: "https://boards-api.greenhouse.io/v1/boards/nexhealth/jobs" },
   { id: "gh-usenourish",       name: "Nourish (Greenhouse)",           source_type: "greenhouse", company_handle: "usenourish",       base_url: "https://boards-api.greenhouse.io/v1/boards/usenourish/jobs" },
@@ -755,6 +769,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wd-rtx",         name: "RTX (Raytheon)",   source_type: "workday", company_handle: "globalhr",       base_url: "https://globalhr.wd5.myworkdayjobs.com/wday/cxs/globalhr/REC_RTX_Ext_Gateway/jobs" },
   { id: "wd-leidos",      name: "Leidos",           source_type: "workday", company_handle: "leidos",         base_url: "https://leidos.wd5.myworkdayjobs.com/wday/cxs/leidos/External/jobs" },
   { id: "wd-gm",          name: "General Motors",   source_type: "workday", company_handle: "generalmotors",  base_url: "https://generalmotors.wd5.myworkdayjobs.com/wday/cxs/generalmotors/Careers_GM/jobs" },
+  { id: "wd-tesla",       name: "Tesla",            source_type: "workday", company_handle: "tesla",          base_url: "https://tesla.wd1.myworkdayjobs.com/wday/cxs/tesla/Tesla_Motors/jobs" },
   { id: "wd-caterpillar", name: "Caterpillar",      source_type: "workday", company_handle: "cat",            base_url: "https://cat.wd5.myworkdayjobs.com/wday/cxs/cat/CaterpillarCareers/jobs" },
   { id: "wd-pfizer",      name: "Pfizer",           source_type: "workday", company_handle: "pfizer",         base_url: "https://pfizer.wd1.myworkdayjobs.com/wday/cxs/pfizer/PfizerCareers/jobs" },
   { id: "wd-jnj",         name: "Johnson & Johnson",source_type: "workday", company_handle: "jj",             base_url: "https://jj.wd5.myworkdayjobs.com/wday/cxs/jj/JJ/jobs" },
@@ -1283,17 +1298,29 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "tb-schwab", name: "Charles Schwab (TalentBrew)", source_type: "talentbrew", company_handle: "charles-schwab", base_url: "https://www.schwabjobs.com/search-jobs" },
   { id: "tb-pge", name: "PG&E (TalentBrew)", source_type: "talentbrew", company_handle: "pge", base_url: "https://jobs.pge.com/search-jobs" },
   { id: "tb-netapp", name: "NetApp (TalentBrew)", source_type: "talentbrew", company_handle: "netapp", base_url: "https://careers.netapp.com/search-jobs" },
+  // UnitedHealth Group — TalentBrew site with LD+JSON descriptions; detail pages also have ajd_header__location.
+  { id: "tb-uhg", name: "UnitedHealth Group (TalentBrew)", source_type: "talentbrew", company_handle: "unitedhealthgroup", base_url: "https://careers.unitedhealthgroup.com/search-jobs" },
+  // Kaiser Permanente — Radancy TalentBrew (`/search-jobs`, `/job/{city}/{slug}/{org}/{id}`); see talentbrew.ts.
+  { id: "tb-kaiser", name: "Kaiser Permanente (TalentBrew)", source_type: "talentbrew", company_handle: "kaiser-permanente", base_url: "https://www.kaiserpermanentejobs.org/search-jobs" },
+  // HCA Healthcare — custom careers site; sitemap lists regional `/search/jobs/in/…` pages with `/jobs/{id}-{slug}` links + JSON-LD. See hcaCareers.ts.
+  { id: "hc-hca", name: "HCA Healthcare", source_type: "hca_careers", company_handle: "hca", base_url: "https://careers.hcahealthcare.com/jobs/17513377-echo-technician" },
   // Ashby-hosted pages where posting-api/{handle} is not publicly reachable from Workers; rely on XHR capture in browser.ts.
   { id: "br-evenup", name: "EvenUp (Browser)", source_type: "browser", company_handle: "evenup", base_url: "https://jobs.ashbyhq.com/evenup" },
   // Careers HTML — may embed Ashby/Greenhouse; no stable public JSON URL found.
   { id: "br-productboard", name: "Productboard (Browser)", source_type: "browser", company_handle: "productboard", base_url: "https://www.productboard.com/careers/open-positions/" },
   { id: "br-grubmarket", name: "GrubMarket (Browser)", source_type: "browser", company_handle: "grubmarket", base_url: "https://www.grubmarket.com/jobs/openings" },
+  // Oracle.com corporate careers — hosted on eeho.fa.us2.oraclecloud.com, site "jobsearch" (~504 US jobs)
+  { id: "oc-oracle",      name: "Oracle (Oracle CE)", source_type: "oracle_ce", company_handle: "oracle", base_url: "https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/jobsearch" },
   // Supersedes br-jpmorgan — Oracle CE public REST (see oracle_ce.ts); site from Candidate Experience URL
   { id: "oc-jpmorgan",    name: "JPMorgan Chase (Oracle CE)", source_type: "oracle_ce", company_handle: "jpmorgan",   base_url: "https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
   { id: "oc-macys",       name: "Macy's (Oracle CE)", source_type: "oracle_ce", company_handle: "macys", base_url: "https://ebwh.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
   { id: "oc-albertsons", name: "Albertsons Companies (Oracle CE)", source_type: "oracle_ce", company_handle: "albertsons", base_url: "https://eofd.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
   // Kroger banner + corporate (Fred Meyer, Ralphs, etc.) — REST on fa host; public UI at krogerfamilycareers.com
   { id: "oc-kroger", name: "Kroger (Oracle CE)", source_type: "oracle_ce", company_handle: "kroger", base_url: "https://eluq.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001" },
+  // Marriott — public UI at careers.marriott.com; Oracle CE REST on ejwl FA host (replaces disabled br-marriott browser seed).
+  { id: "ce-marriott", name: "Marriott (Oracle CE)", source_type: "oracle_ce", company_handle: "marriott", base_url: "https://ejwl.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/MI_CS_1" },
+  // Aramark — WordPress JSON used by careers.aramark.com search SPA (`page-search.js`).
+  { id: "ar-aramark", name: "Aramark", source_type: "aramark_careers", company_handle: "aramark", base_url: "https://careers.aramark.com/wp-json/aramark/jobs" },
   { id: "wd-petco",      name: "Petco", source_type: "workday", company_handle: "petco", base_url: "https://petco.wd1.myworkdayjobs.com/wday/cxs/petco/External/jobs" },
   { id: "sr-raisingcanes", name: "Raising Cane's", source_type: "smartrecruiters", company_handle: "RaisingCanes", base_url: "https://api.smartrecruiters.com/v1/companies/RaisingCanes/postings" },
   { id: "br-bofa",        name: "Bank of America (Browser)", source_type: "browser", company_handle: "bankofamerica",   base_url: "https://careers.bankofamerica.com/en-us/job-search" },
@@ -1301,7 +1328,14 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "br-volvogroup",  name: "Volvo Group (Browser)",     source_type: "browser", company_handle: "volvogroup",      base_url: "https://jobs.volvogroup.com/" },
   { id: "br-microsoft",   name: "Microsoft (Browser)",       source_type: "browser", company_handle: "microsoft",       base_url: "https://apply.careers.microsoft.com/careers" },
   { id: "br-google",      name: "Google (Browser)",          source_type: "browser", company_handle: "google",          base_url: "https://careers.google.com/jobs/results" },
+  // Supersedes br-google — parses AF_initDataCallback ds:1 from HTML search pages (~4000 jobs)
+  { id: "gc-google",      name: "Google",                    source_type: "google",  company_handle: "google",          base_url: "https://careers.google.com/jobs/results/?q=&hl=en_US" },
   { id: "mc-meta", name: "Meta (Metacareers)", source_type: "metacareers", company_handle: "meta", base_url: "https://www.metacareers.com/jobsearch/sitemap.xml" },
+  // Netflix — custom Eightfold at explore.jobs.netflix.net; search API is auth-gated,
+  // so we use the public sitemap (apply.netflixhouse.com) + position_details API (~640 jobs)
+  { id: "nf-netflix", name: "Netflix", source_type: "netflix", company_handle: "netflix", base_url: "https://explore.jobs.netflix.net/careers?domain=netflix.com" },
+  // TikTok — proprietary api.lifeattiktok.com careers API (~3400 global, ~1384 US jobs)
+  { id: "tt-tiktok", name: "TikTok", source_type: "tiktok", company_handle: "tiktok", base_url: "https://lifeattiktok.com/search" },
   // IBM unified search API (same data as www.ibm.com/careers/search + careers.ibm.com JobDetail)
   { id: "br-ibm",         name: "IBM",                       source_type: "ibm_careers",     company_handle: "ibm",             base_url: "https://www-api.ibm.com/search/api/v2" },
   { id: "br-oracle",      name: "Oracle (Browser)",          source_type: "browser", company_handle: "oracle",          base_url: "https://careers.oracle.com/jobs" },
@@ -1663,10 +1697,22 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "oc-macys", hours: 48 },
   { id: "oc-albertsons", hours: 48 },
   { id: "oc-kroger", hours: 48 },
+  { id: "ce-marriott", hours: 48 },
+  { id: "ar-aramark", hours: 24 },
   { id: "wd-petco", hours: 48 },
   { id: "sr-raisingcanes", hours: 48 },
   // Activate — thousands of per-job HTML fetches
   { id: "act-ross", hours: 24 },
+  { id: "act-darden-olivegarden", hours: 48 },
+  { id: "act-darden-longhorn", hours: 48 },
+  { id: "act-darden-yardhouse", hours: 24 },
+  { id: "act-darden-cheddars", hours: 24 },
+  { id: "act-darden-ruthschris", hours: 24 },
+  { id: "act-darden-capitalgrille", hours: 24 },
+  { id: "act-darden-chuys", hours: 24 },
+  { id: "act-darden-seasons52", hours: 24 },
+  { id: "act-darden-eddiev", hours: 24 },
+  { id: "act-darden-bahamabreeze", hours: 24 },
   // Jibe — large boards; descriptions included in API (still sizable payloads)
   { id: "jibe-sprouts", hours: 12 },
   { id: "jibe-ulta", hours: 12 },
@@ -1824,6 +1870,8 @@ const ENABLED_REPLACEMENT_SOURCE_IDS = [
   "gh-augmentcomputing",
   "oc-jpmorgan",
   "oc-kroger",
+  "ce-marriott",
+  "ar-aramark",
   "sh-hrc",
 ];
 

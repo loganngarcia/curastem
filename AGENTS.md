@@ -10,7 +10,7 @@ High-level context for AI agents. Use this for orientation and principles; disco
 | --- | --- |
 | `curastem-jobs-api/` | Cloudflare Worker — ingests jobs from ATS sources, stores in D1, exposes REST API at api.curastem.org |
 | `curastem-jobs-mcp/` | MCP server over the jobs API — tools for search, job details, similar jobs, market overview |
-| `agent-skills-api/` | Cloudflare Worker — serves skill catalog from GitHub for the slash-command menu in web.tsx |
+| `agent-skills-api/` | Cloudflare Worker — serves skill catalog from GitHub for the slash-command menu in web.tsx (`skills.curastem.org`) |
 | `blog-writer-ui/` | Next.js app (Vercel) — internal blog authoring, publishes to Framer CMS |
 | `web.tsx` | Framer code component — AI mentorship chat (Vertex/Gemini Live) |
 | `skills/` | SKILL.md files consumed by agent-skills-api |

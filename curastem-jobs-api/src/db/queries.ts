@@ -367,6 +367,50 @@ export async function ensureNewJobColumns(db: D1Database): Promise<void> {
  *   3. Recently enriched but still missing logo or social links — retry after 24h
  *      (handles failures where Brandfetch/Clearbit returned nothing first time)
  */
+/**
+ * Companies with a Brandfetch wordmark logo (path matches /theme/.* /logo.*) that should
+ * be upgraded to a Logo.dev square icon. No staleness gate.
+ */
+export async function listCompaniesWithWordmarkLogo(
+  db: D1Database,
+  limit = 50
+): Promise<CompanyRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM companies
+       WHERE logo_url LIKE '%cdn.brandfetch.io%'
+         AND logo_url LIKE '%/theme/%/logo.%'
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<CompanyRow>();
+  return result.results ?? [];
+}
+
+/**
+ * Companies with no logo at all — no staleness gate so cleared logos are re-fetched
+ * immediately without waiting for the 24-hour description_enriched_at retry window.
+ * Only returns companies with at least one job (avoids empty shells).
+ */
+export async function listCompaniesNeedingLogo(
+  db: D1Database,
+  limit = 50
+): Promise<CompanyRow[]> {
+  // No job-existence gate: companies may have been created by upsertCompany during ingestion
+  // but their source hasn't completed yet. We still want to fill logos for them.
+  // Prioritize companies with website_url (domain-based lookup) over domain-less ones.
+  const result = await db
+    .prepare(
+      `SELECT * FROM companies
+       WHERE logo_url IS NULL OR logo_url = ''
+       ORDER BY CASE WHEN website_url IS NOT NULL THEN 0 ELSE 1 END, id
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<CompanyRow>();
+  return result.results ?? [];
+}
+
 export async function listUnenrichedCompanies(
   db: D1Database,
   staleBefore: number,
@@ -714,7 +758,10 @@ export async function upsertJob(
  */
 // Each SELECT uses 2 bound variables. D1 may enforce SQLite's 999-variable cap across a whole
 // db.batch(); keep chunk small enough that (chunk × 2) ≤ 999.
-const EXISTING_CHUNK = 400;
+// D1 may also limit batch() by statement count; 100 stmts × 2 params = 200 total — safe.
+// D1 enforces a hard limit of 100 statements per db.batch() call.
+// Use 50 for headroom — batchGetExistingJobs sends EXISTING_CHUNK stmts per call.
+const EXISTING_CHUNK = 50;
 
 export async function batchGetExistingJobs(
   db: D1Database,
@@ -756,7 +803,9 @@ export async function batchGetExistingJobs(
 // SQLite allows at most 999 bound parameters per statement.
 // IN() queries also bind one extra `source_id != ?` → cap at 998 keys per chunk.
 // IN (?) + one extra bind — D1 has been observed to fail near ~350 vars on some queries; stay small.
-const SQL_IN_CHUNK = 200;
+// D1 per-statement bound-parameter limit is empirically ≤ 90.
+// Dedup query adds 1 extra param (sourceId), so cap keys at 50 for comfortable headroom.
+const SQL_IN_CHUNK = 50;
 /** `DELETE FROM jobs WHERE id IN (...)` — each id is one bound variable; must stay ≤ 999. */
 const DELETE_ID_IN_CHUNK = 998;
 
@@ -863,7 +912,11 @@ export async function batchUpsertJobs(
   const updateIndices: number[] = [];
   const descChangedFlags: boolean[] = new Array(inputs.length).fill(false);
 
-  const INSERT_SQL = `INSERT INTO jobs (
+  // INSERT OR IGNORE: silently skip rows that would violate the (source_id, external_id)
+  // unique constraint — e.g. duplicate external_ids from the API, or jobs already ingested
+  // by a previous partially-completed Worker that was killed before last_fetched_at was set.
+  // The UPDATE path (below) handles true refreshes when existingMap is correctly populated.
+  const INSERT_SQL = `INSERT OR IGNORE INTO jobs (
     id, company_id, source_id, external_id, title, locations,
     employment_type, workplace_type, seniority_level, apply_url, source_url, source_name,
     description_raw, description_language,
@@ -1854,7 +1907,8 @@ export async function batchGetCompanyLocationCoords(
   const out = new Map<string, { lat: number; lng: number; address: string | null }>();
   if (pairs.length === 0) return out;
 
-  const GEOCODE_IN_CHUNK = 200;
+  // D1 per-statement limit ≤ 90 — use 50 for headroom (no extra param beyond the IN list).
+  const GEOCODE_IN_CHUNK = 50;
   const keys = pairs.map((p) => `${p.company_id}|${p.location_key}`);
 
   for (let i = 0; i < keys.length; i += GEOCODE_IN_CHUNK) {

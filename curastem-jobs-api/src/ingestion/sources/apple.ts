@@ -25,7 +25,8 @@ import {
 } from "../../utils/normalize.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
-const MAX_PAGES = 50;
+// Apple US listing has ~250 pages of 20 results; previously capped at 50 (1000 jobs).
+const MAX_PAGES = 250;
 
 const LINK_RE =
   /<a[^>]*class="[^"]*link-inline[^"]*t-intro[^"]*"[^>]*href="(\/en-us\/details\/[^"?]+)[^"]*"[^>]*>([^<]*)<\/a>/gi;

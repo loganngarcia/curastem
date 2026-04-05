@@ -13,5 +13,19 @@
   // Secrets (set via `wrangler secret put`):
   //   JOBS_API_BASE_URL — base URL of the curastem-jobs-api (https://api.curastem.org)
   //   JOBS_API_KEY      — service account API key to authenticate with the jobs API
-  "vars": {}
+  "vars": {},
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  }
 }

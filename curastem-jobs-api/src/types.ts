@@ -357,8 +357,37 @@ export type SourceType =
    * Recruiterflow career sites — `window.jobsList` on `…/jobs` plus per-job
    * `application/ld+json` JobPosting. `base_url` is `https://recruiterflow.com/{slug}/jobs`
    * (or a job URL under it). See recruiterflow.ts.
+  */
+  | "recruiterflow"
+  /**
+   * Google Careers — parses `AF_initDataCallback ds:1` from HTML search result pages.
+   * `base_url` must be a `careers.google.com/jobs/results/` search URL.
    */
-  | "recruiterflow";
+  | "google"
+  /**
+   * Netflix Careers — Eightfold custom deployment at explore.jobs.netflix.net.
+   * Fetches sitemap from apply.netflixhouse.com then uses position_details API.
+   * `base_url` must be `https://explore.jobs.netflix.net/careers?domain=netflix.com`.
+   */
+  | "netflix"
+  /**
+   * HCA Healthcare — `careers.hcahealthcare.com/sitemap.xml` regional `/search/jobs/in/…` pages
+   * list `href="/jobs/{requisitionId}-{slug}"`; each job page has `application/ld+json` JobPosting.
+   * `base_url` may be any URL on that host. See hcaCareers.ts.
+   */
+  | "hca_careers"
+  /**
+   * Aramark — WordPress `GET /wp-json/aramark/jobs` (JSON array; SPA loads from this endpoint).
+   * `base_url` is that endpoint URL. See aramark_careers.ts.
+   */
+  | "aramark_careers"
+  /**
+   * TikTok / Life at TikTok — proprietary careers API at api.lifeattiktok.com.
+   * POST /config/job/filters → POST /search/job/posts (offset-paginated, PAGE_SIZE=100).
+   * `base_url` = https://lifeattiktok.com/search  (no location_codes = all global jobs)
+   * Add ?location_codes=CT_94,CT_114 to restrict to specific city codes.
+   */
+  | "tiktok";
 
 export type EmploymentType =
   | "full_time"

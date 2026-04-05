@@ -84,6 +84,31 @@ import { logger } from "../utils/logger.ts";
 const SOURCE_FETCH_TIMEOUT_MS = 90_000;
 /** Getro: sitemap + up to 1k `/_next/data` JSON fetches per run — needs headroom vs 90s default. */
 const GETRO_FETCH_TIMEOUT_MS = 180_000;
+/**
+ * Workday: two-phase fetcher (list pagination + detail page GETs) on large enterprise tenants
+ * (Walmart, CVS, Boeing, etc.) can take 90-120s. Give it extra headroom without hitting
+ * the cron 900s wall — each source still finishes well under the SOURCE_BUDGET_MS cap.
+ */
+const WORKDAY_FETCH_TIMEOUT_MS = 150_000;
+/**
+ * Phenom + Activate Careers: large retail tenants (Lowe's 10k+, Ross, Panera) paginate
+ * many sitemap chunks and fetch individual job detail pages — same problem as Workday.
+ */
+const PHENOM_FETCH_TIMEOUT_MS = 150_000;
+/** Oracle Activate: list + thousands of parallel jobdetail GETs (Darden, Ross). */
+const ACTIVATE_CAREERS_FETCH_TIMEOUT_MS = 600_000;
+/**
+ * Eightfold: parallel list page fan-out + per-position detail fetches. Microsoft alone
+ * has ~2400 positions. With LIST_CONCURRENCY=20 the list phase takes ~5s, but detail
+ * fetches for 2000+ positions at DETAIL_CONCURRENCY=16 can take 60-90s on their own.
+ */
+const EIGHTFOLD_FETCH_TIMEOUT_MS = 300_000;
+/** HCA: ~430 regional search GETs + up to 500 parallel detail GETs — needs headroom vs 90s default. */
+const HCA_CAREERS_FETCH_TIMEOUT_MS = 300_000;
+/** Oracle CE (Marriott): list + ~11k parallel ById detail GETs for ExternalDescriptionStr HTML. */
+const ORACLE_CE_FETCH_TIMEOUT_MS = 300_000;
+/** Aramark: JSON list + ~5k parallel job-page GETs for JSON-LD descriptions. */
+const ARAMARK_CAREERS_FETCH_TIMEOUT_MS = 300_000;
 
 /**
  * Process a single ingestion source.
@@ -127,7 +152,22 @@ async function processSource(
   let rawJobs: Awaited<ReturnType<typeof fetcher.fetch>>;
   try {
     const fetchTimeoutMs =
-      source.source_type === "getro" ? GETRO_FETCH_TIMEOUT_MS : SOURCE_FETCH_TIMEOUT_MS;
+      source.source_type === "getro" ? GETRO_FETCH_TIMEOUT_MS :
+      source.source_type === "workday" ? WORKDAY_FETCH_TIMEOUT_MS :
+      source.source_type === "phenom" ? PHENOM_FETCH_TIMEOUT_MS :
+      source.source_type === "activate_careers" ? ACTIVATE_CAREERS_FETCH_TIMEOUT_MS :
+      source.source_type === "eightfold" ? EIGHTFOLD_FETCH_TIMEOUT_MS :
+      // Google: ~4000 jobs × PAGE_CONCURRENCY=4 pages at ~650ms each = ~650s if fully sequential;
+      // with concurrency and early-stop, real runs land around 90-180s. Give generous budget.
+      source.source_type === "google" ? 300_000 :
+      // Netflix: sitemap (1 req) + ~640 position_details at DETAIL_CONCURRENCY=6 ≈ 60-90s total.
+      source.source_type === "netflix" ? 180_000 :
+      // TikTok: ~3400 global jobs at 100/page = ~35 POST requests ≈ 30-60s.
+      source.source_type === "tiktok" ? 120_000 :
+      source.source_type === "hca_careers" ? HCA_CAREERS_FETCH_TIMEOUT_MS :
+      source.source_type === "oracle_ce" ? ORACLE_CE_FETCH_TIMEOUT_MS :
+      source.source_type === "aramark_careers" ? ARAMARK_CAREERS_FETCH_TIMEOUT_MS :
+      SOURCE_FETCH_TIMEOUT_MS;
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(
         () => reject(new Error(`fetch timed out after ${fetchTimeoutMs}ms`)),
@@ -233,7 +273,7 @@ async function processSource(
     dupSet = new Set(); // proceed without dedup rather than dropping all jobs
   }
 
-  const nonDupMetas = jobMetas.filter(({ dedupKey }) => {
+  let nonDupMetas = jobMetas.filter(({ dedupKey }) => {
     if (dupSet.has(dedupKey)) { result.deduplicated++; return false; }
     return true;
   });
@@ -278,8 +318,9 @@ async function processSource(
   //   2. Cache miss, professional company → Places API "{Company} {City, ST}" ($0.032/req).
   //      Retail/franchise companies route directly to step 3 (city-level is sufficient).
   //   3. Photon/Nominatim fallback — free, city-level accuracy.
-  // Cap at 50 Places API calls per source run to stay within Worker CPU budget.
-  const INLINE_GEOCODE_CAP = 50;
+  // 500 per source run — each result is cached in D1 forever so the billing is one-time.
+  // Cron runs are fast after the initial backfill because all known locations hit the D1 cache.
+  const INLINE_GEOCODE_CAP = 500;
 
   // Step 0: Precise address geocoding for jobs that have a full street address.
   //
@@ -361,8 +402,15 @@ async function processSource(
     }
   }
 
-  // Batch-lookup D1 cache first
-  const cachedCoords = await batchGetCompanyLocationCoords(db, pairsToCheck);
+  // Batch-lookup D1 cache first — wrap in try/catch so a D1 variable-limit error
+  // (sources with >90 unique locations) degrades to cache-miss, not a source crash.
+  let cachedCoords: Awaited<ReturnType<typeof batchGetCompanyLocationCoords>>;
+  try {
+    cachedCoords = await batchGetCompanyLocationCoords(db, pairsToCheck);
+  } catch (err) {
+    logger.warn("geocode_cache_lookup_failed", { source_id: source.id, error: String(err) });
+    cachedCoords = new Map();
+  }
 
   // locationToCoords: keyed by original raw location string (before normalization)
   // so we can look up coords when building upsert inputs below
@@ -461,7 +509,7 @@ async function processSource(
   }
 
   // ── Phase 5: Batch INSERT new + UPDATE existing — 2 D1 subrequests total ──
-  const upsertInputs = nonDupMetas.map(({ jobId, companyId, dedupKey, normalized }) => {
+  let upsertInputs = nonDupMetas.map(({ jobId, companyId, dedupKey, normalized }) => {
     const company_slug =
       aliasCache.get(slugify(normalized.company_name)) ?? slugify(normalized.company_name);
     const normLoc = primaryNormalizedLocation(normalized.location, company_slug);
@@ -486,8 +534,30 @@ async function processSource(
     };
   });
 
-  // D1 enforces SQLite's bound-parameter limit across an entire db.batch(); very large single
-  // batchUpsertJobs calls fail with "too many SQL variables" (~780+ jobs on IBM-scale boards).
+  // Guard: some ATS boards echo the same posting in multiple portfolio categories.
+  // Deduplicate by external_id before upserting — first occurrence wins.
+  const seenExternalIds = new Set<string>();
+  const dedupedIndices: number[] = [];
+  for (let i = 0; i < upsertInputs.length; i++) {
+    const eid = upsertInputs[i].external_id;
+    if (!seenExternalIds.has(eid)) {
+      seenExternalIds.add(eid);
+      dedupedIndices.push(i);
+    }
+  }
+  if (dedupedIndices.length < upsertInputs.length) {
+    logger.info("upsert_inputs_deduped", {
+      source_id: source.id,
+      before: upsertInputs.length,
+      after: dedupedIndices.length,
+    });
+    upsertInputs = dedupedIndices.map((i) => upsertInputs[i]);
+    nonDupMetas = dedupedIndices.map((i) => nonDupMetas[i]);
+  }
+
+  // D1 enforces a hard limit of 100 statements per db.batch() call.
+  // UPSERT_JOBS_PER_DB_BATCH controls how many jobs are passed to batchUpsertJobs at once;
+  // batchUpsertJobs itself further chunks into UPSERT_CHUNK=35 statements per db.batch().
   const UPSERT_JOBS_PER_DB_BATCH = 600;
 
   let upsertResults: Array<{ inserted: boolean; needsEmbedding: boolean }>;
@@ -838,6 +908,13 @@ export async function runIngestion(env: Env): Promise<void> {
 
   const sources = await listEnabledSources(env.JOBS_DB, MAX_SOURCES);
   logger.info("ingestion_sources_loaded", { count: sources.length });
+  if (env.RATE_LIMIT_KV) {
+    await env.RATE_LIMIT_KV.put(
+      "cron_stage",
+      `run_ingestion:${sources.length}_sources`,
+      { expirationTtl: 3600 }
+    );
+  }
 
   const results: IngestionResult[] = [];
 
@@ -856,13 +933,18 @@ export async function runIngestion(env: Env): Promise<void> {
     try {
       result = await processSource(env, source, false);
     } catch (err) {
-      // Unexpected error that escaped processSource's own error handling — log and continue
-      logger.error("ingestion_source_crashed", { source_id: source.id, error: String(err) });
+      // Unexpected error that escaped processSource's own error handling — log and continue.
+      // Always mark last_fetched_at so this source doesn't permanently block the queue.
+      const errStr = String(err);
+      logger.error("ingestion_source_crashed", { source_id: source.id, error: errStr });
+      try {
+        await updateSourceFetchResult(env.JOBS_DB, source.id, Math.floor(Date.now() / 1000), 0, errStr);
+      } catch { /* ignore — best effort */ }
       result = {
         source_id: source.id, source_name: source.name,
         fetched: 0, inserted: 0, updated: 0, skipped: 0,
         deduplicated: 0, failed: 0,
-        error: String(err), duration_ms: 0,
+        error: errStr, duration_ms: 0,
       };
     }
     logger.ingestionResult(result);

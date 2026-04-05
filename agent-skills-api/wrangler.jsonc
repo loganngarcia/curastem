@@ -2,5 +2,22 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "agent-skills-api",
   "main": "src/index.ts",
-  "compatibility_date": "2025-01-01"
+  "compatibility_date": "2025-01-01",
+
+  // Custom domain — served at skills.curastem.org (same zone as api / mcp / jobs-proxy)
+  "routes": [{ "pattern": "skills.curastem.org", "custom_domain": true }],
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  }
 }

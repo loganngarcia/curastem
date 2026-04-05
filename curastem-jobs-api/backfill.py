@@ -36,6 +36,8 @@ sys.stdout.reconfigure(line_buffering=True)
 # Each entry: (source_id, company_handle, display_name, url)
 
 WORKDAY_SOURCES = [
+    # Walmart store + field + many corporate roles — careers.walmart.com is Next.js; Workday CXS is the stable JSON feed.
+    ("wd-walmart",      "walmart",            "Walmart",              "https://walmart.wd5.myworkdayjobs.com/wday/cxs/walmart/WalmartExternal/jobs"),
     ("wd-petco",        "petco",              "Petco",                "https://petco.wd1.myworkdayjobs.com/wday/cxs/petco/External/jobs"),
     ("wd-nordstrom",    "nordstrom",          "Nordstrom",            "https://nordstrom.wd501.myworkdayjobs.com/wday/cxs/nordstrom/nordstrom_careers/jobs"),
     ("wd-bofa",         "bank-of-america",    "Bank of America",      "https://ghr.wd1.myworkdayjobs.com/wday/cxs/ghr/lateral-us/jobs"),
@@ -51,6 +53,27 @@ ORACLE_CE_SOURCES = [
     ("oc-albertsons","albertsons",          "Albertsons Companies",  "https://eofd.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001"),
     ("oc-autozone",  "autozone",            "AutoZone",              "https://careers.autozone.com/hcmUI/CandidateExperience/en/sites/CX_1"),
     ("oc-staples",   "staples",             "Staples",               "https://fa-exhh-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/StaplesInc"),
+    ("ce-marriott",  "marriott",            "Marriott",              "https://ejwl.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/MI_CS_1"),
+]
+
+ARAMARK_SOURCES = [
+    ("ar-aramark", "aramark", "Aramark", "https://careers.aramark.com/wp-json/aramark/jobs"),
+]
+
+# Oracle Activate — Darden restaurant portfolio + Ross (see activate_careers.ts).
+# Corporate RSC (dardenrscjobs.recruiting.com) is Paradox SPA-only; no public Search/SearchResults API.
+ACTIVATE_SOURCES = [
+    ("act-ross", "ross-stores", "Ross Dress for Less", "https://jobs.rossstores.com"),
+    ("act-darden-olivegarden", "olive-garden", "Olive Garden", "https://jobs.olivegarden.com"),
+    ("act-darden-yardhouse", "yard-house", "Yard House", "https://careers.yardhouse.com"),
+    ("act-darden-longhorn", "longhorn-steakhouse", "LongHorn Steakhouse", "https://jobs.longhornsteakhouse.com"),
+    ("act-darden-cheddars", "cheddars-scratch-kitchen", "Cheddar's Scratch Kitchen", "https://careers.cheddars.com"),
+    ("act-darden-ruthschris", "ruths-chris-steak-house", "Ruth's Chris Steak House", "https://careers.ruthschris.com"),
+    ("act-darden-capitalgrille", "the-capital-grille", "The Capital Grille", "https://careers.thecapitalgrille.com"),
+    ("act-darden-chuys", "chuys", "Chuy's", "https://careers.chuys.com"),
+    ("act-darden-seasons52", "seasons-52", "Seasons 52", "https://careers.seasons52.com"),
+    ("act-darden-eddiev", "eddie-vs-prime-seafood", "Eddie V's Prime Seafood", "https://careers.eddiev.com"),
+    ("act-darden-bahamabreeze", "bahama-breeze", "Bahama Breeze", "https://jobs.bahamabreeze.com"),
 ]
 
 JIBE_SOURCES = [
@@ -69,17 +92,27 @@ EIGHTFOLD_SOURCES = [
     ("ef-microsoft", "microsoft", "Microsoft", "https://apply.careers.microsoft.com/careers?domain=microsoft.com"),
 ]
 
+# Radancy TalentBrew sites — server-rendered HTML with ?p=N pagination.
+# Detail pages carry full LD+JSON structured data (title, description, location, datePosted).
+TALENTBREW_SOURCES = [
+    ("tb-uhg", "unitedhealthgroup", "UnitedHealth Group", "https://careers.unitedhealthgroup.com/search-jobs"),
+    ("tb-kaiser", "kaiser-permanente", "Kaiser Permanente", "https://www.kaiserpermanentejobs.org/search-jobs"),
+]
+
 ALL_SOURCES = {
-    "workday":   [(s[0], s[1], s[2], s[3], "workday")   for s in WORKDAY_SOURCES],
-    "oracle_ce": [(s[0], s[1], s[2], s[3], "oracle_ce") for s in ORACLE_CE_SOURCES],
-    "jibe":      [(s[0], s[1], s[2], s[3], "jibe")      for s in JIBE_SOURCES],
-    "eightfold": [(s[0], s[1], s[2], s[3], "eightfold") for s in EIGHTFOLD_SOURCES],
+    "workday":    [(s[0], s[1], s[2], s[3], "workday")    for s in WORKDAY_SOURCES],
+    "oracle_ce":  [(s[0], s[1], s[2], s[3], "oracle_ce")  for s in ORACLE_CE_SOURCES],
+    "jibe":       [(s[0], s[1], s[2], s[3], "jibe")       for s in JIBE_SOURCES],
+    "eightfold":  [(s[0], s[1], s[2], s[3], "eightfold")  for s in EIGHTFOLD_SOURCES],
+    "talentbrew": [(s[0], s[1], s[2], s[3], "talentbrew") for s in TALENTBREW_SOURCES],
+    "aramark_careers": [(s[0], s[1], s[2], s[3], "aramark_careers") for s in ARAMARK_SOURCES],
+    "activate_careers": [(s[0], s[1], s[2], s[3], "activate_careers") for s in ACTIVATE_SOURCES],
 }
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 WORKDAY_PAGE_SIZE = 20
-MAX_TOTAL_JOBS   = 5000   # no Worker timeout here — fetch everything
+MAX_TOTAL_JOBS   = 25000  # Activate Darden brands can exceed 5k listings per tenant
 MAX_DETAIL_JOBS  = 1000   # cap detail fetches per source (Eightfold/Workday)
 DETAIL_CONCURRENCY = 24
 
@@ -121,6 +154,30 @@ def sql_str(v) -> str:
     if isinstance(v, (int, float)):
         return str(v)
     return "'" + str(v).replace("'", "''") + "'"
+
+def _html_to_text(html: str) -> str:
+    """Mirror `htmlToText` in normalize.ts — plain text for description_raw / AI."""
+    if not html:
+        return ""
+    t = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
+    t = re.sub(r"</?(?:p|div|li|h[1-6]|ul|ol|section|article)[^>]*>", "\n", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", "", t)
+    t = (
+        t.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+    )
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+def _description_raw_from_maybe_html(raw: Optional[str]) -> Optional[str]:
+    if not raw or not str(raw).strip():
+        return None
+    t = _html_to_text(str(raw))
+    return t if t else None
 
 def normalize_employment_type(raw: Optional[str]) -> Optional[str]:
     if not raw:
@@ -265,6 +322,7 @@ def upsert_jobs(source_id: str, company_id: str, company_slug: str,
                 workplace_type = normalize_workplace_type(None, loc_raw)
 
             apply_url = stub.get("apply_url") or ""
+            source_url = stub.get("source_url") or apply_url
 
             statements.append(
                 f"INSERT INTO jobs "
@@ -275,7 +333,7 @@ def upsert_jobs(source_id: str, company_id: str, company_slug: str,
                 f"{sql_str(job_id)}, {sql_str(company_id)}, {sql_str(source_id)}, "
                 f"{sql_str(ext_id)}, {sql_str(title)}, {sql_str(locations_json)}, "
                 f"{sql_str(employment_type)}, {sql_str(workplace_type)}, "
-                f"{sql_str(apply_url)}, {sql_str(apply_url)}, {sql_str(source_type)}, "
+                f"{sql_str(apply_url)}, {sql_str(source_url)}, {sql_str(source_type)}, "
                 f"{sql_str(description)}, {sql_str(posted_at)}, {now}, "
                 f"{sql_str(dedup_key)}, {now}, {now} "
                 f"WHERE NOT EXISTS ("
@@ -447,12 +505,55 @@ def fetch_workday_source(source_id: str, company_handle: str, display_name: str,
 
 # ── Oracle CE ─────────────────────────────────────────────────────────────────
 
+def _oracle_ce_detail_html(origin: str, job_id: str) -> Optional[str]:
+    """Full posting HTML from recruitingCEJobRequisitionDetails finder ById;Id=…"""
+    finder = urllib.parse.quote(f"ById;Id={job_id}", safe="")
+    url = (
+        f"{origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
+        f"?onlyData=true&finder={finder}"
+    )
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/json",
+        "User-Agent": CURASTEM_UA,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            data = json.loads(r.read())
+    except Exception:
+        return None
+    row = (data.get("items") or [{}])[0]
+    html = (row.get("ExternalDescriptionStr") or row.get("ShortDescriptionStr") or "").strip()
+    return html or None
+
+
+def _aramark_ld_job_description(html: str) -> Optional[str]:
+    m = re.search(
+        r'<script[^>]*application/ld\+json[^>]*>([\s\S]*?)</script>',
+        html,
+        re.I,
+    )
+    if not m:
+        return None
+    try:
+        raw = json.loads(m.group(1).strip())
+        if isinstance(raw, list):
+            raw = next((x for x in raw if x.get("@type") == "JobPosting"), None)
+        if not raw or raw.get("@type") != "JobPosting":
+            return None
+        d = raw.get("description")
+        if isinstance(d, str) and d.strip():
+            return d.strip()
+    except Exception:
+        return None
+    return None
+
+
 def fetch_oracle_ce_source(source_id: str, company_handle: str, display_name: str,
                             base_url: str, max_jobs: int = MAX_TOTAL_JOBS) -> list[dict]:
     """
     Paginate Oracle Fusion HCM recruitingCEJobRequisitions REST endpoint.
-    ShortDescriptionStr from the list response is sufficient — skipping detail
-    calls keeps this fast even for Kroger's 18k+ postings.
+    For most tenants, list ShortDescriptionStr only. Marriott (company_handle marriott)
+    additionally calls recruitingCEJobRequisitionDetails per job for ExternalDescriptionStr HTML.
     """
     parsed = urllib.parse.urlparse(base_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -507,7 +608,7 @@ def fetch_oracle_ce_source(source_id: str, company_handle: str, display_name: st
                 "external_id": req_id,
                 "title": title,
                 "location": loc,
-                "description": row.get("ShortDescriptionStr"),
+                "description": _description_raw_from_maybe_html(row.get("ShortDescriptionStr")),
                 "apply_url": apply_url,
                 "posted_at": parse_iso_date(row.get("PostedDate")),
                 "employment_type": normalize_employment_type(row.get("JobSchedule")),
@@ -521,7 +622,245 @@ def fetch_oracle_ce_source(source_id: str, company_handle: str, display_name: st
         if len(batch) < PAGE:
             break
 
-    return jobs[:max_jobs]
+    jobs = jobs[:max_jobs]
+
+    if company_handle == "marriott" and jobs:
+        print(f"  → Oracle CE: fetching posting HTML for {len(jobs)} Marriott jobs (parallel)...")
+
+        def _enrich_marriott(job: dict) -> dict:
+            h = _oracle_ce_detail_html(origin, job["external_id"])
+            if h:
+                job["description"] = _description_raw_from_maybe_html(h)
+            return job
+
+        with ThreadPoolExecutor(max_workers=24) as pool:
+            jobs = list(pool.map(_enrich_marriott, jobs))
+
+    return jobs
+
+def fetch_aramark_careers_source(source_id: str, company_handle: str, display_name: str,
+                                api_url: str, max_jobs: int = MAX_TOTAL_JOBS) -> list[dict]:
+    """GET careers.aramark.com/wp-json/aramark/jobs — JSON array with req_id, title, location, etc."""
+    req = urllib.request.Request(api_url, headers={
+        "Accept": "application/json",
+        "User-Agent": CURASTEM_UA,
+    })
+    with urllib.request.urlopen(req, timeout=120) as r:
+        rows = json.loads(r.read())
+    if not isinstance(rows, list):
+        raise ValueError("Aramark: expected JSON array")
+
+    jobs: list[dict] = []
+    for row in rows:
+        if len(jobs) >= max_jobs:
+            break
+        req_id = str((row.get("req_id") or "")).strip()
+        title = (row.get("title") or "").strip()
+        if not req_id or not title:
+            continue
+        city = (row.get("city") or "").strip()
+        state = (row.get("state") or "").strip()
+        z = (row.get("zipcode") or "").strip()
+        if city and state:
+            loc = f"{city}, {state}" + (f" {z}" if z else "")
+        elif city:
+            loc = city
+        else:
+            loc = None
+
+        raw_type = (row.get("type") or "").lower()
+        emp = "full_time" if "salaried" in raw_type else None
+
+        posting = f"https://careers.aramark.com/job/?req_id={req_id}"
+
+        jobs.append({
+            "external_id": req_id,
+            "title": title,
+            "location": loc,
+            "description": None,
+            "apply_url": posting,
+            "posted_at": parse_iso_date(row.get("pub_date")),
+            "employment_type": emp,
+            "workplace_type": normalize_workplace_type(None, loc),
+        })
+
+    if jobs:
+        print(f"  → Aramark: fetching JobPosting JSON-LD for {len(jobs)} posting pages (parallel)...")
+
+        def _enrich_aramark(job: dict) -> dict:
+            url = f"https://careers.aramark.com/job/?req_id={job['external_id']}"
+            try:
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": CURASTEM_UA,
+                    "Accept": "text/html",
+                })
+                with urllib.request.urlopen(req, timeout=25) as r:
+                    html = r.read().decode("utf-8", errors="replace")
+                desc_html = _aramark_ld_job_description(html)
+                if desc_html:
+                    job["description"] = _description_raw_from_maybe_html(desc_html)
+            except Exception:
+                pass
+            return job
+
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            jobs = list(pool.map(_enrich_aramark, jobs))
+
+    return jobs
+
+# ── Oracle Activate (Ross, Darden brands) ───────────────────────────────────
+
+def _slugify_activate(title: str) -> str:
+    s = title.lower().strip()
+    s = re.sub(r"[^a-z0-9\s-]", "", s)
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s or "job"
+
+
+def _activate_strip_spans(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", str(raw))).strip()
+
+
+def _parse_activate_payload(raw_bytes: bytes) -> dict:
+    text = raw_bytes.decode("utf-8", errors="replace")
+    outer = json.loads(text)
+    if isinstance(outer, str):
+        outer = json.loads(outer)
+    return outer
+
+
+def _activate_extract_description(html: str) -> Optional[str]:
+    for marker in ('class="Description"', "class='Description'"):
+        si = html.find(marker)
+        if si == -1:
+            continue
+        open_idx = html.rfind("<div", 0, si)
+        if open_idx == -1:
+            continue
+        content_start = html.find(">", open_idx) + 1
+        depth = 1
+        pos = content_start
+        while pos < len(html):
+            m = re.search(r"<\/?div\b[^>]*>", html[pos:], re.I)
+            if not m:
+                break
+            tag = m.group(0)
+            if tag.startswith("</"):
+                depth -= 1
+            else:
+                depth += 1
+            if depth == 0:
+                return html[content_start : pos + m.start()].strip()
+            pos += m.start() + len(m.group(0))
+    return None
+
+
+def _activate_apply_url(html: str) -> Optional[str]:
+    m = re.search(r'href="(https://[^"]*taleo\.net/careersection/application\.jss[^"]*)"', html, re.I)
+    if m:
+        return m.group(1).replace("&amp;", "&")
+    m = re.search(r'href="(https://[^"]*paradox\.ai[^"]*Job\?[^"]*)"', html, re.I)
+    if m:
+        return m.group(1).replace("&amp;", "&")
+    return None
+
+
+def fetch_activate_careers_source(source_id: str, company_handle: str, display_name: str,
+                                 base_url: str, max_jobs: int = MAX_TOTAL_JOBS) -> list[dict]:
+    """Paginate /Search/SearchResults + parallel /search/jobdetails/{slug}/{id} (see activate_careers.ts)."""
+    parsed = urllib.parse.urlparse(base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    page_size = 100
+    max_pages = 250
+    jobs: list[dict] = []
+    start_idx = 0
+    total = float("inf")
+    page_n = 0
+
+    while start_idx < total and page_n < max_pages and len(jobs) < max_jobs:
+        page_n += 1
+        list_url = f"{origin}/Search/SearchResults?jtStartIndex={start_idx}&jtPageSize={page_size}"
+        try:
+            req = urllib.request.Request(list_url, headers={
+                "User-Agent": CURASTEM_UA,
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=45) as r:
+                payload = _parse_activate_payload(r.read())
+        except Exception as e:
+            print(f"  ✗ Activate SearchResults: {e}")
+            break
+
+        if isinstance(payload.get("TotalRecordCount"), int):
+            total = payload["TotalRecordCount"]
+
+        records = payload.get("Records") or []
+        if not records:
+            break
+
+        def _detail_stub(rec: dict) -> Optional[dict]:
+            jid = str((rec.get("ID") or "")).strip()
+            th = rec.get("Title") or ""
+            title = (
+                _activate_strip_spans(th)
+                or (rec.get("TrackingObject") or {}).get("TitleJson", "").strip()
+                or "Job"
+            )
+            if not jid:
+                return None
+            slug = _slugify_activate(title)
+            source_url = f"{origin}/search/jobdetails/{slug}/{jid}"
+            desc: Optional[str] = None
+            apply_u: Optional[str] = None
+            try:
+                req = urllib.request.Request(source_url, headers={
+                    "User-Agent": CURASTEM_UA,
+                    "Accept": "text/html",
+                })
+                with urllib.request.urlopen(req, timeout=25) as r:
+                    html = r.read().decode("utf-8", errors="replace")
+                dh = _activate_extract_description(html)
+                if dh:
+                    desc = _description_raw_from_maybe_html(dh)
+                apply_u = _activate_apply_url(html)
+            except Exception:
+                pass
+
+            loc_raw = _activate_strip_spans(rec.get("CityStateDataAbbrev")) or None
+            type_raw = (
+                _activate_strip_spans(rec.get("TypeName"))
+                or (rec.get("TrackingObject") or {}).get("TypeNameJson", "").strip()
+            )
+            return {
+                "external_id": jid,
+                "title": title,
+                "location": loc_raw,
+                "description": desc,
+                "apply_url": apply_u or source_url,
+                "source_url": source_url,
+                "posted_at": parse_iso_date(rec.get("PostedDateRaw")),
+                "employment_type": normalize_employment_type(type_raw) if type_raw else None,
+                "workplace_type": normalize_workplace_type(None, loc_raw),
+            }
+
+        with ThreadPoolExecutor(max_workers=14) as pool:
+            chunk = [x for x in pool.map(_detail_stub, records) if x]
+
+        for stub in chunk:
+            if len(jobs) >= max_jobs:
+                break
+            jobs.append(stub)
+
+        start_idx += len(records)
+        if len(records) < page_size:
+            break
+        if len(jobs) > 0 and len(jobs) % 500 == 0:
+            print(f"  → Activate collected {len(jobs)}/{int(total)} jobs...")
+
+    return jobs
 
 # ── Jibe (iCIMS) ──────────────────────────────────────────────────────────────
 
@@ -727,6 +1066,193 @@ def fetch_eightfold_source(source_id: str, company_handle: str, display_name: st
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
+# ── Radancy TalentBrew ────────────────────────────────────────────────────────
+
+def _tb_session():
+    """Return a curl_cffi session that passes UHG's bot checks."""
+    try:
+        from curl_cffi import requests as cf_requests
+        return cf_requests.Session(impersonate="chrome131")
+    except ImportError:
+        import requests as _req
+        s = _req.Session()
+        s.headers["User-Agent"] = BROWSER_UA
+        return s
+
+def _tb_extract_job_paths(html: str) -> list[str]:
+    """Return unique /job/... paths from a TalentBrew search-results page."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in re.finditer(r'href="((?:/[a-z]{2})?/job/[^"]+)"', html):
+        path = m.group(1).split("?")[0]
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
+
+def _tb_extract_ld_json(html: str) -> Optional[dict]:
+    """Parse the first application/ld+json block."""
+    m = re.search(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except Exception:
+        return None
+
+def _tb_detail_page(session, origin: str, path: str) -> Optional[dict]:
+    """Fetch one TalentBrew job detail page and return a stub dict."""
+    try:
+        r = session.get(f"{origin}{path}", headers={"User-Agent": BROWSER_UA, "Accept": "text/html"}, timeout=12)
+        if not r.ok:
+            return None
+        html = r.text
+
+        # Skip expired postings that lack a description
+        ld = _tb_extract_ld_json(html)
+        desc = (ld or {}).get("description") or ""
+        if not desc.strip():
+            return None
+
+        # External IDs from data attributes
+        m_ids = re.search(r'data-org-id="(\d+)"[^>]*data-job-id="(\d+)"', html)
+        if not m_ids:
+            m_ids = re.search(r'data-job-id="(\d+)"[^>]*data-org-id="(\d+)"', html)
+            if m_ids:
+                org_id, job_id = m_ids.group(2), m_ids.group(1)
+            else:
+                return None
+        else:
+            org_id, job_id = m_ids.group(1), m_ids.group(2)
+
+        # Title — prefer LD+JSON for accuracy
+        title = (ld or {}).get("title") or ""
+        if not title:
+            m_t = re.search(r'<h1[^>]*class="[^"]*ajd_header__job-title[^"]*"[^>]*>([^<]+)</h1>', html, re.IGNORECASE)
+            title = m_t.group(1).strip() if m_t else ""
+        if not title:
+            return None
+
+        # Location — AJD header style (UHG) or LD+JSON
+        loc = ""
+        m_loc = re.search(r'<p[^>]*class="[^"]*ajd_header__location[^"]*"[^>]*>\s*([^<]+?)\s*</p>', html, re.IGNORECASE)
+        if m_loc:
+            loc = m_loc.group(1).strip()
+        if not loc and ld:
+            loc_obj = ld.get("jobLocation") or {}
+            if isinstance(loc_obj, list):
+                loc_obj = loc_obj[0] if loc_obj else {}
+            addr = loc_obj.get("address") or {}
+            loc = ", ".join(filter(None, [addr.get("addressLocality"), addr.get("addressRegion")]))
+
+        # Apply URL — prefer LD+JSON canonical page URL so the job card links correctly
+        apply_url = (ld or {}).get("url") or f"{origin}{path}"
+
+        # Posted date
+        posted_at = parse_iso_date((ld or {}).get("datePosted"))
+
+        return {
+            "external_id": f"{org_id}-{job_id}",
+            "title": title,
+            "location": loc or None,
+            "description": desc,
+            "apply_url": apply_url,
+            "posted_at": posted_at,
+        }
+    except Exception:
+        return None
+
+def fetch_talentbrew_source(source_id: str, company_handle: str, display_name: str,
+                            search_url: str, max_jobs: int, max_desc: int) -> list[dict]:
+    """
+    Fetch jobs from a Radancy TalentBrew career site.
+
+    Paginates `search_url?p=N` to collect all job paths, then fetches detail
+    pages in parallel for full descriptions via LD+JSON.
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(search_url.strip())
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    search_path = parsed.path.rstrip("/")
+    if not search_path.endswith("/search-jobs"):
+        search_path = search_path or "/search-jobs"
+
+    session = _tb_session()
+    DETAIL_CONCURRENCY_TB = min(DETAIL_CONCURRENCY, 12)
+    # Sequential search pagination with polite delay — parallel fan-out triggers 403 on large tenants (UHG).
+    SEARCH_PAGE_DELAY_S = 0.15
+
+    # ── Collect job paths from all search pages ────────────────────────────────
+    def make_url(page: int) -> str:
+        return f"{origin}{search_path}" + (f"?p={page}" if page > 1 else "")
+
+    _HDR = {"User-Agent": BROWSER_UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9"}
+
+    def get_search_page(page: int):
+        r = session.get(make_url(page), headers=_HDR, timeout=22)
+        if r.status_code == 403:
+            print(f"  ⚠ search p.{page} HTTP 403 — sleeping 50s, retry once...")
+            time.sleep(50)
+            r = session.get(make_url(page), headers=_HDR, timeout=22)
+        return r
+
+    r0 = get_search_page(1)
+    if not r0.ok:
+        raise ValueError(f"TalentBrew search page returned {r0.status_code}")
+    html0 = r0.text
+
+    m_pages = re.search(r'data-total-pages="(\d+)"', html0)
+    total_pages = int(m_pages.group(1)) if m_pages else 1
+    print(f"  → {total_pages} search pages (sequential, {SEARCH_PAGE_DELAY_S}s between pages)")
+
+    all_paths: list[str] = _tb_extract_job_paths(html0)
+    print(f"  → page 1: {len(all_paths)} paths")
+
+    for page in range(2, total_pages + 1):
+        time.sleep(SEARCH_PAGE_DELAY_S)
+        try:
+            r = get_search_page(page)
+            if r.ok:
+                all_paths.extend(_tb_extract_job_paths(r.text))
+        except Exception:
+            pass
+        if page % 50 == 0:
+            print(f"  → scanned search pages 1–{page}… ({len(all_paths)} paths so far)")
+
+    # Deduplicate, shuffle for variety across runs, cap at max_jobs
+    import random as _random
+    seen_paths: set[str] = set()
+    unique_paths: list[str] = []
+    for p in all_paths:
+        if p not in seen_paths:
+            seen_paths.add(p)
+            unique_paths.append(p)
+    _random.shuffle(unique_paths)
+    unique_paths = unique_paths[:max_jobs]
+    print(f"  → {len(unique_paths)} unique job paths (cap={max_jobs})")
+
+    # ── Fetch detail pages for descriptions ───────────────────────────────────
+    detail_paths = unique_paths[:max_desc]
+    stubs: list[dict] = []
+    done = 0
+
+    def fetch_detail(path: str) -> Optional[dict]:
+        return _tb_detail_page(session, origin, path)
+
+    with ThreadPoolExecutor(max_workers=DETAIL_CONCURRENCY_TB) as pool:
+        futures = {pool.submit(fetch_detail, p): p for p in detail_paths}
+        for fut in as_completed(futures):
+            done += 1
+            result = fut.result()
+            if result:
+                stubs.append(result)
+            if done % 100 == 0:
+                print(f"  → detail pages: {done}/{len(detail_paths)} fetched, {len(stubs)} good")
+
+    print(f"  → detail pages done: {len(stubs)}/{len(detail_paths)} with descriptions")
+    return stubs
+
+
 def fetch_source(source_id: str, company_handle: str, display_name: str,
                  url: str, source_type: str,
                  max_jobs: int, max_desc: int) -> list[dict]:
@@ -738,6 +1264,12 @@ def fetch_source(source_id: str, company_handle: str, display_name: str,
         return fetch_jibe_source(source_id, company_handle, display_name, url, max_jobs)
     if source_type == "eightfold":
         return fetch_eightfold_source(source_id, company_handle, display_name, url, max_jobs, max_desc)
+    if source_type == "talentbrew":
+        return fetch_talentbrew_source(source_id, company_handle, display_name, url, max_jobs, max_desc)
+    if source_type == "aramark_careers":
+        return fetch_aramark_careers_source(source_id, company_handle, display_name, url, max_jobs)
+    if source_type == "activate_careers":
+        return fetch_activate_careers_source(source_id, company_handle, display_name, url, max_jobs)
     raise ValueError(f"Unknown source_type: {source_type}")
 
 # ── Geocoding ─────────────────────────────────────────────────────────────────
@@ -796,6 +1328,9 @@ RETAIL_SLUGS: set[str] = {
     "ace-hardware", "menards", "fastenal",
     # Healthcare — high-volume distributed clinics
     "davita",
+    "kaiser-permanente",
+    "hca",
+    "unitedhealthgroup",
     # Staffing / security services
     "pulse", "securitas",
     # Mixed retail brands
@@ -921,14 +1456,13 @@ def _geocoding_api(address: str, api_key: str) -> Optional[tuple[float, float]]:
     return None
 
 def _geocode_address(address: str, maps_key: Optional[str]) -> Optional[tuple[float, float]]:
-    """Geocode a full street address. Geocoding API primary, Nominatim fallback."""
+    """Geocode a full street address. Geocoding API primary, Nominatim fallback (only when no key)."""
     if maps_key:
-        result = _geocoding_api(address, maps_key)
-        if result:
-            return result
-    # Nominatim fallback — free, accurate for established US addresses
+        # Google Geocoding API is reliable enough — skip Nominatim to avoid rate-limit spam
+        return _geocoding_api(address, maps_key)
+    # No key: Nominatim only (free, requires polite rate limiting)
     result = _nominatim_geocode(address)
-    time.sleep(0.12)  # respect Nominatim's 1 req/sec policy
+    time.sleep(1.2)  # Nominatim ToS: max 1 req/sec
     return result
 
 def _places_geocode(query: str, api_key: str) -> Optional[tuple[float, float]]:
@@ -967,7 +1501,7 @@ def run_geocode_backfill(maps_key: Optional[str] = None, dry_run: bool = False):
     D1 is updated by (company_slug, locations_json) so one query covers all
     jobs at a given company in a given city in a single UPDATE.
     """
-    PLACES_CAP = 8_125  # ~$260 hard cap
+    PLACES_CAP = 3_000  # ~$96 hard cap — Photon handles most city-level strings for free
 
     photon_cache: dict[str, Optional[tuple[float, float]]] = {}
     places_cache: dict[str, Optional[tuple[float, float]]] = {}

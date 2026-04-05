@@ -44,11 +44,13 @@ function extractTotalPages(html: string): number {
   return 1;
 }
 
-/** Collect unique `/job/...` paths from a search-results HTML page. */
+/** Collect unique `/job/...` paths from a search-results HTML page.
+ * Also handles locale-prefixed paths like `/en/job/...` (IKEA, etc.). */
 function extractJobPaths(html: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  const re = /href="(\/job\/[^"]+)"/g;
+  // Match bare /job/... or locale-prefixed /xx/job/... paths
+  const re = /href="((?:\/[a-z]{2})?\/job\/[^"]+)"/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
     const p = m[1].split("?")[0];
@@ -79,10 +81,40 @@ function extractDivByClassMarker(html: string, classMarker: string): string | nu
   return null;
 }
 
+/** Parse the first `application/ld+json` block on a job detail page. */
+function extractLdJson(html: string): {
+  title?: string;
+  description?: string;
+  location?: string;
+  applyUrl?: string;
+  postedAt?: string;
+} | null {
+  const m = html.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/i);
+  if (!m) return null;
+  try {
+    const j = JSON.parse(m[1]);
+    const loc = Array.isArray(j.jobLocation) ? j.jobLocation[0] : j.jobLocation;
+    const addr = loc?.address ?? {};
+    const locStr = [addr.addressLocality, addr.addressRegion].filter(Boolean).join(", ");
+    return {
+      title: typeof j.title === "string" ? j.title : undefined,
+      description: typeof j.description === "string" ? j.description : undefined,
+      location: locStr || undefined,
+      applyUrl: typeof j.url === "string" ? j.url : undefined,
+      postedAt: typeof j.datePosted === "string" ? j.datePosted : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function extractDescription(html: string): string | null {
   const primary = extractDivByClassMarker(html, "job-description__description");
   if (primary) return primary;
-  return extractDivByClassMarker(html, "ats-description");
+  const secondary = extractDivByClassMarker(html, "ats-description");
+  if (secondary) return secondary;
+  // Fallback for sites like UnitedHealth Group where the description is only in LD+JSON.
+  return extractLdJson(html)?.description ?? null;
 }
 
 function decodeBasicEntities(s: string): string {
@@ -107,7 +139,11 @@ function extractLocation(html: string): string | null {
   const m = html.match(/<span class="job-location[^"]*"[^>]*>([^<]+)<\/span>/i);
   if (m) return m[1].replace(/^[^A-Za-z0-9]*/, "").trim();
   const m2 = html.match(/<span class="job-location[^"]*"[^>]*><b>[^<]*<\/b>([^<]+)<\/span>/i);
-  return m2 ? m2[1].trim() : null;
+  if (m2) return m2[1].trim();
+  // AJD-style header used by UnitedHealth Group and some Radancy tenants.
+  const m3 = html.match(/<p[^>]*class="[^"]*ajd_header__location[^"]*"[^>]*>\s*([^<]+?)\s*<\/p>/i);
+  if (m3) return m3[1].trim();
+  return null;
 }
 
 function extractApplyUrl(html: string, origin: string): string | null {
@@ -199,10 +235,11 @@ export const talentbrewFetcher: JobSource = {
       const html = await res.text();
       if (isExpiredOrError(html)) return null;
       const ids = extractOrgAndJobIds(html);
-      const title = extractTitle(html);
+      const ld = extractLdJson(html);
+      const title = extractTitle(html) ?? ld?.title ?? null;
       const desc = extractDescription(html);
-      const applyUrl = extractApplyUrl(html, origin);
-      const loc = extractLocation(html);
+      const applyUrl = extractApplyUrl(html, origin) ?? ld?.applyUrl ?? null;
+      const loc = extractLocation(html) ?? ld?.location ?? null;
       if (!title || !ids || !desc?.trim()) return null;
       return {
         external_id: `${ids.orgId}-${ids.jobId}`,
@@ -211,6 +248,7 @@ export const talentbrewFetcher: JobSource = {
         description_raw: desc,
         apply_url: applyUrl ?? jobUrl,
         source_url: jobUrl,
+        postedAt: ld?.postedAt ?? null,
       };
     });
 
@@ -231,7 +269,7 @@ export const talentbrewFetcher: JobSource = {
           salary_max: null,
           salary_currency: null,
           salary_period: null,
-          posted_at: null,
+          posted_at: d.postedAt ? new Date(d.postedAt).getTime() / 1000 : null,
           company_name: companyName,
           company_logo_url: null,
           company_website_url: null,

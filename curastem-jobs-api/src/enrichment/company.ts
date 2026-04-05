@@ -29,13 +29,15 @@ import {
 import { extractCompanyDescription } from "./ai.ts";
 import {
   listUnenrichedCompanies,
+  listCompaniesNeedingLogo,
+  listCompaniesWithWordmarkLogo,
   listCompaniesForExaEnrichment,
   listCompaniesForSocialEnrichment,
   updateCompanyEnrichment,
 } from "../db/queries.ts";
 import { geocode } from "../utils/geocode.ts";
 import { logger } from "../utils/logger.ts";
-import { LOGO_MAX_PX, isLowTrustLogoUrl, resolveLogoUrl } from "../utils/logoUrl.ts";
+import { LOGO_MAX_PX, isLowTrustLogoUrl, resolveLogoUrl, resolveLogoUrlByName } from "../utils/logoUrl.ts";
 import type { CompanyRow } from "../types.ts";
 
 const ENRICHMENT_STALE_SECONDS = 7 * 24 * 60 * 60; // full Brandfetch/AI re-enrich every 7 days
@@ -75,9 +77,17 @@ interface BrandfetchResult {
   glassdoor_url: string | null;
 }
 
+// Brandfetch logo type priority: icon/symbol (square) > logo (wordmark).
+// Square icons render better at small sizes in job listings.
+function logoTypePriority(type: string): number {
+  if (type === "icon" || type === "symbol") return 0;
+  if (type === "logo") return 1;
+  return 2;
+}
+
 function pickLogoUrl(logos: BrandfetchLogo[] | undefined): string | null {
   if (!logos || logos.length === 0) return null;
-  const sorted = [...logos].sort((a) => (a.type === "logo" ? -1 : 1));
+  const sorted = [...logos].sort((a, b) => logoTypePriority(a.type) - logoTypePriority(b.type));
   for (const logo of sorted) {
     const svgFormat = logo.formats?.find((f) => f.format === "svg");
     if (svgFormat?.src) return svgFormat.src;
@@ -338,19 +348,28 @@ async function enrichCompany(
 
     const logoIsPlaceholder = isLowTrustLogoUrl(company.logo_url);
 
-    // Brandfetch: fallback for logo/social links still missing or only low-res after Exa pass
+    // Logo: Logo.dev first (higher-quality square icons), Brandfetch as fallback for social links.
+    // Brandfetch is always called when social links are missing (regardless of logo state).
     const needsBrandfetch =
-      logoIsPlaceholder || !company.linkedin_url || !company.x_url || !company.glassdoor_url;
+      !company.linkedin_url || !company.x_url || !company.glassdoor_url ||
+      (logoIsPlaceholder && !logoDevToken); // also for logo when Logo.dev isn't configured
     let brandfetch: BrandfetchResult | null = null;
     if (brandfetchClientId && domain && needsBrandfetch) {
       brandfetch = await fetchBrandfetchData(domain, brandfetchClientId);
     }
 
-    // Logo: upgrade any placeholder (Google favicon / img.logo.dev) to Brandfetch SVG → Logo.dev → Google favicon
-    if (logoIsPlaceholder) {
-      fields.logo_url =
-        brandfetch?.logo_url ??
-        (domain ? await resolveLogoUrl(domain, logoDevToken) : null);
+    // Logo priority: Logo.dev → Brandfetch SVG → Google favicon
+    if (logoIsPlaceholder && domain) {
+      const resolved = await resolveLogoUrl(domain, logoDevToken);
+      if (!isLowTrustLogoUrl(resolved)) {
+        // Logo.dev returned a real logo
+        fields.logo_url = resolved;
+      } else {
+        // Logo.dev had nothing — use Brandfetch SVG if available, else the favicon
+        fields.logo_url = brandfetch?.logo_url ?? resolved;
+      }
+    } else if (logoIsPlaceholder) {
+      fields.logo_url = brandfetch?.logo_url ?? null;
     }
 
     if (!company.linkedin_url && brandfetch?.linkedin_url) fields.linkedin_url  = brandfetch.linkedin_url;
@@ -386,6 +405,124 @@ async function enrichCompany(
 }
 
 // ─── Public entry point ───────────────────────────────────────────────────────
+
+/**
+ * Logo-only pass — resolves Brandfetch → Logo.dev → Google favicon for every company
+ * with logo_url IS NULL. No staleness gate: this runs immediately after logos are cleared
+ * without waiting for the description_enriched_at retry window.
+ * Does NOT touch description_enriched_at so it won't re-trigger AI description generation.
+ */
+export async function runLogoOnlyEnrichment(
+  db: D1Database,
+  brandfetchClientId?: string,
+  logoDevToken?: string,
+  limit = 50
+): Promise<number> {
+  const companies = await listCompaniesNeedingLogo(db, limit);
+  if (companies.length === 0) return 0;
+
+  logger.info("logo_only_enrichment_started", { count: companies.length });
+  let updated = 0;
+
+  for (const company of companies) {
+    try {
+      const inferSuppressed = (company.website_infer_suppressed ?? 0) !== 0;
+      const slugFallbackDomain = inferSuppressed ? null : `${company.slug}.com`;
+      const domain = company.website_url
+        ? extractDomain(company.website_url)
+        : slugFallbackDomain;
+
+      let logo_url: string | null = null;
+
+      if (domain) {
+        // Logo.dev first (domain-based) — highest quality square icons.
+        const resolved = await resolveLogoUrl(domain, logoDevToken);
+        if (!isLowTrustLogoUrl(resolved)) {
+          logo_url = resolved;
+        } else if (brandfetchClientId) {
+          // Logo.dev had nothing useful — try Brandfetch SVG/icon
+          const bf = await fetchBrandfetchData(domain, brandfetchClientId);
+          logo_url = bf?.logo_url ?? resolved; // fall back to Google favicon
+        } else {
+          logo_url = resolved;
+        }
+      } else {
+        // No domain — search Logo.dev by company name (sk_ token only).
+        // Top result is used without domain validation; acceptable for well-known names.
+        logo_url = await resolveLogoUrlByName(company.name, logoDevToken);
+      }
+
+      // Only write if we actually resolved something (avoids stomping null → null)
+      if (logo_url) {
+        await updateCompanyEnrichment(db, company.id, { logo_url });
+        updated++;
+        logger.info("logo_only_enriched", { company_id: company.id, slug: company.slug, logo_url });
+      } else {
+        logger.warn("logo_only_no_domain", { company_id: company.id, slug: company.slug });
+      }
+    } catch (err) {
+      logger.error("logo_only_failed", { company_id: company.id, error: String(err) });
+    }
+  }
+
+  logger.info("logo_only_enrichment_completed", { found: companies.length, updated });
+  // Return updated (not companies.length) so callers can detect when no progress is made
+  // and stop looping over domain-less companies that will never resolve.
+  return updated;
+}
+
+/**
+ * Upgrade Brandfetch wordmark logos to Logo.dev square icons.
+ * Targets companies where logo_url matches the Brandfetch wordmark path pattern
+ * (/theme/<theme>/logo.*). Only upgrades when Logo.dev has a real icon (not a favicon).
+ * Does NOT touch description_enriched_at.
+ */
+export async function runWordmarkUpgrade(
+  db: D1Database,
+  logoDevToken?: string,
+  limit = 50
+): Promise<number> {
+  const companies = await listCompaniesWithWordmarkLogo(db, limit);
+  if (companies.length === 0) return 0;
+
+  logger.info("wordmark_upgrade_started", { count: companies.length });
+  let updated = 0;
+
+  for (const company of companies) {
+    try {
+      const inferSuppressed = (company.website_infer_suppressed ?? 0) !== 0;
+      const slugFallbackDomain = inferSuppressed ? null : `${company.slug}.com`;
+      const domain = company.website_url
+        ? extractDomain(company.website_url)
+        : slugFallbackDomain;
+
+      let logo_url: string | null = null;
+
+      if (domain) {
+        const resolved = await resolveLogoUrl(domain, logoDevToken);
+        if (!isLowTrustLogoUrl(resolved)) {
+          logo_url = resolved;
+        }
+      }
+
+      if (!logo_url) {
+        logo_url = await resolveLogoUrlByName(company.name, logoDevToken);
+      }
+
+      if (logo_url) {
+        await updateCompanyEnrichment(db, company.id, { logo_url });
+        updated++;
+        logger.info("wordmark_upgraded", { company_id: company.id, slug: company.slug, logo_url });
+      }
+      // If no Logo.dev icon found, leave the Brandfetch wordmark in place (it's better than nothing)
+    } catch (err) {
+      logger.error("wordmark_upgrade_failed", { company_id: company.id, error: String(err) });
+    }
+  }
+
+  logger.info("wordmark_upgrade_completed", { found: companies.length, updated });
+  return updated;
+}
 
 export async function runCompanyEnrichment(
   db: D1Database,

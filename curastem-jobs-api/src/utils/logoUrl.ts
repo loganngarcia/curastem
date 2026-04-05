@@ -19,10 +19,16 @@ interface LogoDevSearchHit {
   logo_url?: string;
 }
 
-/** True when the URL is a cheap CDN placeholder we may replace with a better logo later. */
+/** True when the URL is a placeholder or a Brandfetch wordmark we should upgrade to a Logo.dev icon. */
 export function isLowTrustLogoUrl(url: string | null | undefined): boolean {
   if (!url) return true;
-  return url.startsWith(GOOGLE_FAVICON) || url.startsWith(`${IMG_LOGO_DEV}/`);
+  if (url.startsWith(GOOGLE_FAVICON)) return true;
+  // Old Logo.dev URLs without format=png — replace with the new format.
+  if (url.startsWith(`${IMG_LOGO_DEV}/`) && !url.includes("format=png")) return true;
+  // Brandfetch wordmark path pattern — replace with Logo.dev square icon when possible.
+  // Icon paths use /w/{n}/h/{n}/icon.* or /symbol.*; wordmarks use /theme/.*/logo.*
+  if (url.includes("cdn.brandfetch.io") && /\/theme\/[^/]+\/logo\.[a-z]+/.test(url)) return true;
+  return false;
 }
 
 export function googleFaviconUrl(domain: string): string {
@@ -33,6 +39,7 @@ function logoDevDisplayUrl(domain: string, token: string): string {
   const q = new URLSearchParams({
     token,
     size: String(LOGO_MAX_PX),
+    format: "png",   // PNG renders the icon/symbol variant; avoids horizontal SVG wordmarks
   });
   return `${IMG_LOGO_DEV}/${encodeURIComponent(domain)}?${q}`;
 }
@@ -42,15 +49,20 @@ function logoDevProbeUrl(domain: string, token: string): string {
   const q = new URLSearchParams({
     token,
     size: String(LOGO_MAX_PX),
+    format: "png",
     fallback: "404",
   });
   return `${IMG_LOGO_DEV}/${encodeURIComponent(domain)}?${q}`;
 }
 
-function withLogoSize(logoUrl: string): string {
+function withLogoParams(logoUrl: string): string {
   try {
     const u = new URL(logoUrl);
     u.searchParams.set("size", String(LOGO_MAX_PX));
+    // Ensure format=png is present so isLowTrustLogoUrl treats this as a high-quality asset.
+    if (u.hostname === "img.logo.dev" || u.hostname.endsWith(".logo.dev")) {
+      u.searchParams.set("format", "png");
+    }
     return u.toString();
   } catch {
     return logoUrl;
@@ -72,7 +84,31 @@ async function resolveLogoUrlWithSecretKey(domain: string, secretKey: string): P
   const lower = domain.toLowerCase();
   const hit = hits.find((h) => h.domain?.toLowerCase() === lower);
   if (!hit?.logo_url) return null;
-  return withLogoSize(hit.logo_url);
+  return withLogoParams(hit.logo_url);
+}
+
+/**
+ * Search Logo.dev by company name when no domain is available.
+ * Only works with secret keys (`sk_`). Takes the top result — no domain validation,
+ * so only call this for well-known companies where the first hit is reliable.
+ * Returns null when no result or the token is not a secret key.
+ */
+export async function resolveLogoUrlByName(name: string, logoDevToken?: string): Promise<string | null> {
+  if (!logoDevToken?.startsWith("sk_")) return null;
+  try {
+    const res = await fetch(`${API_LOGO_DEV}/search?q=${encodeURIComponent(name)}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${logoDevToken}` },
+    });
+    if (!res.ok) return null;
+    const hits = (await res.json()) as LogoDevSearchHit[];
+    if (!Array.isArray(hits) || hits.length === 0) return null;
+    const hit = hits[0];
+    if (!hit?.logo_url) return null;
+    return withLogoParams(hit.logo_url);
+  } catch {
+    return null;
+  }
 }
 
 /** Publishable key: probe img CDN; fall back to Google favicon when no asset. */

@@ -48,7 +48,7 @@ import { authenticate, recordKeyUsage } from "./middleware/auth.ts";
 import { checkRateLimit } from "./middleware/rateLimit.ts";
 import { handleGetStats } from "./routes/stats.ts";
 import { runIngestion, processSourceById, backfillEmbeddings } from "./ingestion/runner.ts";
-import { runExaEnrichment, runCompanyEnrichment } from "./enrichment/company.ts";
+import { runExaEnrichment, runCompanyEnrichment, runLogoOnlyEnrichment, runWordmarkUpgrade } from "./enrichment/company.ts";
 import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns, ensureNewJobColumns, listJobsForMap, type MapBbox, type MapCenter } from "./db/queries.ts";
 import {
   applyCompanyMetadataCorrections,
@@ -88,9 +88,19 @@ async function handleRequest(
     });
   }
 
-  // Health check — unauthenticated, for uptime monitoring
+  // Health check — unauthenticated, for uptime monitoring.
+  // Includes cron diagnostics: last_invoked (did CF fire the handler?)
+  // and last_error (what crashed it, if anything).
   if (path === "/health" && method === "GET") {
-    return jsonOk({ status: "ok", version: "1.0.0" });
+    const [invokedRaw, lastError, stage] = await Promise.all([
+      env.RATE_LIMIT_KV.get("cron_last_invoked_at"),
+      env.RATE_LIMIT_KV.get("cron_last_error"),
+      env.RATE_LIMIT_KV.get("cron_stage"),
+    ]);
+    const lastInvoked = invokedRaw
+      ? new Date(parseInt(invokedRaw, 10) * 1000).toISOString()
+      : null;
+    return jsonOk({ status: "ok", version: "1.0.0", cron: { last_invoked: lastInvoked, stage, last_error: lastError } });
   }
 
   // GET /geo — unauthenticated, returns the caller's lat/lng from Cloudflare's edge geolocation.
@@ -181,6 +191,18 @@ async function handleRequest(
     return handleGetJob(request, env, ctx, jobMatch[1]);
   }
 
+  // POST /admin/trigger-sync — synchronous single-source trigger for on-device backfill.
+  // Awaits the result directly (no waitUntil) so the response carries real counts.
+  // Not suitable for production HTTP (> 30s sources will timeout); use from local wrangler dev.
+  if (path === "/admin/trigger-sync" && method === "POST") {
+    const sourceId = url.searchParams.get("source");
+    if (!sourceId) return Errors.badRequest("source param required");
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+    const result = await processSourceById(env, sourceId, limit);
+    return jsonOk(result);
+  }
+
   // POST /admin/trigger — manually fire ingestion (requires a valid API key).
   // ?source=<id>  Run a single source and return its result.
   // ?source=<id>&limit=N&offset=M  Process fetch().slice(M, M+N) for huge sources (e.g. IBM).
@@ -223,11 +245,11 @@ async function handleRequest(
   }
 
   // POST /admin/embed — synchronously embed up to ?limit= jobs (default 25).
-  // Each Gemini call takes ~300ms, so 25 jobs ≈ 7–10 seconds — fits the 30s budget.
-  // Call repeatedly to process the full backlog.
+  // Each Gemini call takes ~300ms; 100 jobs at concurrency 5 ≈ ~25–40s wall clock.
+  // Call repeatedly to process the full backlog (see scripts/backfill_embeddings_remote.sh).
   if (path === "/admin/embed" && method === "POST") {
     const limitParam = url.searchParams.get("limit");
-    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 50) : 25;
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 25;
     try {
       const result = await backfillEmbeddings(env, limit);
       return jsonOk({ status: "completed", ...result });
@@ -326,6 +348,43 @@ async function handleRequest(
       return jsonOk({ status: "completed", processed, remaining_google_favicons: remaining?.c ?? 0 });
     } catch (err) {
       logger.error("admin_enrich_logos_failed", { error: String(err) });
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500, headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /admin/enrich-logos-null — logo-only pass for companies with logo_url IS NULL.
+  // No staleness gate: runs immediately without waiting for the 24h retry window.
+  // Does NOT touch description_enriched_at. Safe to call repeatedly until remaining=0.
+  if (path === "/admin/enrich-logos-null" && method === "POST") {
+    const batchLimit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 50);
+    try {
+      const processed = await runLogoOnlyEnrichment(env.JOBS_DB, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN, batchLimit);
+      const remaining = await env.JOBS_DB
+        .prepare(`SELECT COUNT(*) as c FROM companies WHERE logo_url IS NULL OR logo_url = ''`)
+        .first<{ c: number }>();
+      return jsonOk({ status: "completed", processed, remaining_null_logos: remaining?.c ?? 0 });
+    } catch (err) {
+      logger.error("admin_enrich_logos_null_failed", { error: String(err) });
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500, headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /admin/upgrade-wordmarks — upgrade Brandfetch wordmark logos to Logo.dev square icons.
+  // Safe to call repeatedly; only updates when Logo.dev has a better icon.
+  if (path === "/admin/upgrade-wordmarks" && method === "POST") {
+    const batchLimit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 50);
+    try {
+      const upgraded = await runWordmarkUpgrade(env.JOBS_DB, env.LOGO_DEV_TOKEN, batchLimit);
+      const remaining = await env.JOBS_DB
+        .prepare(`SELECT COUNT(*) as c FROM companies WHERE logo_url LIKE '%cdn.brandfetch.io%' AND logo_url LIKE '%/theme/%/logo.%'`)
+        .first<{ c: number }>();
+      return jsonOk({ status: "completed", upgraded, remaining_wordmarks: remaining?.c ?? 0 });
+    } catch (err) {
+      logger.error("admin_upgrade_wordmarks_failed", { error: String(err) });
       return new Response(JSON.stringify({ error: String(err) }), {
         status: 500, headers: { "Content-Type": "application/json" },
       });
@@ -536,23 +595,41 @@ export default {
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       (async () => {
-        if (await shouldSkipCron(env.RATE_LIMIT_KV)) {
+        // Heartbeat written before any other logic — tells us if Cloudflare is
+        // invoking the scheduled handler at all (vs. pausing it after failures).
+        const invokedAt = Math.floor(Date.now() / 1000);
+        const kv = env.RATE_LIMIT_KV;
+        const stage = (s: string) => kv.put("cron_stage", s, { expirationTtl: 3600 });
+        await kv.put("cron_last_invoked_at", String(invokedAt), { expirationTtl: 7 * 24 * 3600 });
+        await stage("started");
+
+        if (await shouldSkipCron(kv)) {
           logger.info("scheduled_handler_skipped", { reason: "circuit_open" });
+          await stage("skipped_circuit");
           return;
         }
         try {
+          await stage("seed_sources");
           await seedSources(env.JOBS_DB);
+          await stage("migrations");
           await migrateRenameCrunchbaseSource(env.JOBS_DB);
           await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
           await ensureCompanyExaColumns(env.JOBS_DB);
           await ensureNewJobColumns(env.JOBS_DB);
+          await stage("seed_company_websites");
           await seedCompanyWebsites(env.JOBS_DB);
+          await stage("metadata_corrections");
           await applyCompanyMetadataCorrections(env.JOBS_DB, env.LOGO_DEV_TOKEN);
+          await stage("run_ingestion");
           await runIngestion(env);
-          await recordCronSuccess(env.RATE_LIMIT_KV);
+          await stage("done");
+          await recordCronSuccess(kv);
         } catch (err) {
-          logger.error("scheduled_handler_failed", { error: String(err) });
-          await recordCronFailure(env.RATE_LIMIT_KV);
+          const msg = String(err);
+          logger.error("scheduled_handler_failed", { error: msg });
+          // Persist the last crash reason so /health can surface it without Workers Logs.
+          await kv.put("cron_last_error", msg, { expirationTtl: 7 * 24 * 3600 });
+          await recordCronFailure(kv);
         }
       })()
     );

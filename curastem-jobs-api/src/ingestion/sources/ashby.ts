@@ -108,6 +108,21 @@ query JobBoardWithTeams($organizationHostedJobsPageName: String!) {
   }
 }`;
 
+// Some Ashby boards (e.g. Trigger.dev) use an older schema where `publishedAt`
+// is not available on jobBoardWithTeams. Fall back to a query without it.
+const JOB_BOARD_WITH_TEAMS_GQL_NO_DATE = `
+query JobBoardWithTeams($organizationHostedJobsPageName: String!) {
+  jobBoardWithTeams(organizationHostedJobsPageName: $organizationHostedJobsPageName) {
+    jobPostings {
+      id
+      title
+      locationName
+      employmentType
+      workplaceType
+    }
+  }
+}`;
+
 const FETCH_HEADERS: Record<string, string> = {
   "User-Agent": "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)",
   Accept: "application/json",
@@ -159,10 +174,24 @@ async function fetchJobsViaAshbyGraphql(
   if (!res.ok) {
     throw new Error(`Ashby GraphQL error ${res.status} for ${source.company_handle}`);
   }
-  const json = (await res.json()) as {
+  let json = (await res.json()) as {
     data?: { jobBoardWithTeams?: { jobPostings?: AshbyGqlJobBrief[] } };
     errors?: Array<{ message?: string }>;
   };
+  // Retry without `publishedAt` if the board uses an older schema that lacks this field.
+  if (json.errors?.some((e) => e.message?.includes("publishedAt"))) {
+    const retry = await fetch(`${ASHBY_GRAPHQL_BASE}?op=JobBoardWithTeams`, {
+      method: "POST",
+      headers: { ...FETCH_HEADERS, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationName: "JobBoardWithTeams",
+        query: JOB_BOARD_WITH_TEAMS_GQL_NO_DATE,
+        variables: { organizationHostedJobsPageName: slug },
+      }),
+    });
+    if (!retry.ok) throw new Error(`Ashby GraphQL retry error ${retry.status}`);
+    json = (await retry.json()) as typeof json;
+  }
   if (json.errors?.length) {
     throw new Error(`Ashby GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
   }

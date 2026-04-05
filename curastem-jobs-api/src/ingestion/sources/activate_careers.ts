@@ -1,9 +1,9 @@
 /**
- * Oracle Activate career sites (Ross, etc.). Search UI uses jTable and calls
- * `GET /Search/SearchResults?jtStartIndex=&jtPageSize=` — response body is JSON
- * serialized twice (string containing JSON). Rows have no description; full text
- * is in `/search/jobdetails/{title-slug}/{uuid}` inside `div.Description`.
- * Apply often links to classic Taleo (`*.taleo.net/careersection/application.jss`).
+ * Oracle Activate career sites (Ross, Darden restaurant brands, etc.). Search calls
+ * `GET /Search/SearchResults?jtStartIndex=&jtPageSize=` — response may be JSON or
+ * double-encoded JSON. Rows have no description; full text is in
+ * `/search/jobdetails/{title-slug}/{uuid}` inside `div.Description`.
+ * Apply may be Taleo (`*.taleo.net/.../application.jss`) or Paradox (`*.paradox.ai/.../Job?job_id=...`).
  *
  * `base_url` is the site origin, e.g. `https://jobs.rossstores.com`
  * (public search lives here; `rossstores.taleo.net` is apply-only).
@@ -11,6 +11,7 @@
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
 import {
+  htmlToText,
   normalizeEmploymentType,
   normalizeLocation,
   normalizeWorkplaceType,
@@ -21,8 +22,10 @@ import {
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 
 const LIST_PAGE_SIZE = 100;
-const MAX_LIST_PAGES = 200;
-const DETAIL_FETCH_CONCURRENCY = 6;
+const MAX_LIST_PAGES = 250;
+const DETAIL_FETCH_CONCURRENCY = 14;
+/** Darden + Ross-scale boards — bounded by list pages × page size (~25k max). */
+const MAX_DETAIL_JOBS = 25_000;
 
 interface ActivateRecord {
   ID?: string;
@@ -85,6 +88,17 @@ function extractTaleoApplyUrl(html: string): string | null {
   return m[1].replace(/&amp;/g, "&");
 }
 
+/** Darden brands use Paradox Olivia apply URLs on the job detail page. */
+function extractParadoxApplyUrl(html: string): string | null {
+  const m = html.match(/href="(https:\/\/[^"]*paradox\.ai[^"]*\/Job\?[^"]+)"/i);
+  if (!m) return null;
+  return m[1].replace(/&amp;/g, "&");
+}
+
+function extractApplyUrl(html: string): string | null {
+  return extractTaleoApplyUrl(html) ?? extractParadoxApplyUrl(html);
+}
+
 async function fetchJobDetail(origin: string, title: string, id: string): Promise<{ html: string | null; applyUrl: string | null }> {
   const slug = slugify(title) || "job";
   const url = `${origin}/search/jobdetails/${slug}/${id}`;
@@ -99,7 +113,7 @@ async function fetchJobDetail(origin: string, title: string, id: string): Promis
   const desc =
     extractDivInnerByClassMarker(html, 'class="Description"') ??
     extractDivInnerByClassMarker(html, "class='Description'");
-  const applyUrl = extractTaleoApplyUrl(html);
+  const applyUrl = extractApplyUrl(html);
   return { html: desc, applyUrl };
 }
 
@@ -130,7 +144,7 @@ export const activateCareersFetcher: JobSource = {
     let total = Infinity;
     let pages = 0;
 
-    while (start < total && pages < MAX_LIST_PAGES) {
+    while (start < total && pages < MAX_LIST_PAGES && jobs.length < MAX_DETAIL_JOBS) {
       pages += 1;
       const listUrl = `${origin}/Search/SearchResults?jtStartIndex=${start}&jtPageSize=${LIST_PAGE_SIZE}`;
       const listRes = await fetch(listUrl, {
@@ -188,8 +202,10 @@ export const activateCareersFetcher: JobSource = {
           const sourceUrl = `${origin}/search/jobdetails/${slug}/${id}`;
 
           const detail = details[i];
-          const descriptionRaw = detail?.html ?? null;
-          const taleoApply = detail?.applyUrl ?? null;
+          const htmlFrag = detail?.html ?? null;
+          const descriptionRaw =
+            htmlFrag && htmlFrag.trim().length > 0 ? htmlToText(htmlFrag) : null;
+          const applyOut = detail?.applyUrl ?? null;
 
           jobs.push({
             external_id: id,
@@ -197,7 +213,7 @@ export const activateCareersFetcher: JobSource = {
             location: locNorm,
             employment_type: employmentType,
             workplace_type: normalizeWorkplaceType(null, locRaw ?? ""),
-            apply_url: taleoApply ?? sourceUrl,
+            apply_url: applyOut ?? sourceUrl,
             source_url: sourceUrl,
             description_raw: descriptionRaw,
             salary_min: null,

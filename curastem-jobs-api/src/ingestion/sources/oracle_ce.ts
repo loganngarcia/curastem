@@ -8,8 +8,11 @@
  *
  * The hosted job search UI calls the same unauthenticated ADF REST collections the SPA uses:
  *   GET {origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions  — search / list
- *   GET {origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails — full posting (finder `ById`)
+ *   GET {origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails — full posting (finder `ById;Id={id}`)
  *
+ * Most tenants use list-only ingestion (ShortDescriptionStr). **Marriott** (`company_handle === "marriott"`)
+ * additionally batches `ById` detail calls for `ExternalDescriptionStr`, then **`htmlToText`** (same helper
+ * as AI enrichment) so `description_raw` is plain text, not markup.
  * There is no separate “apply URL” in the JSON: apply starts from the CE job page (same URL we store).
  *
  * Finder `findReqs` expects bind variables as a comma-separated list of `key=value` pairs
@@ -23,6 +26,7 @@
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
 import {
+  htmlToText,
   normalizeEmploymentType,
   normalizeLocation,
   normalizeWorkplaceType,
@@ -30,6 +34,13 @@ import {
 } from "../../utils/normalize.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
+
+/** Align with `enrichment/ai.ts` — store plain text in `description_raw`, not HTML. */
+function descriptionRawFromMaybeHtml(raw: string | null | undefined): string | null {
+  if (raw == null || !String(raw).trim()) return null;
+  const t = htmlToText(String(raw));
+  return t.length > 0 ? t : null;
+}
 
 /** Matches Oracle's `_encodeString` in the CE bundle (module 54502). */
 function encodeOracleString(s: string): string {
@@ -102,6 +113,14 @@ interface OracleSearchResponse {
   items?: OracleSearchItem[];
 }
 
+interface OracleDetailItem {
+  ExternalDescriptionStr?: string | null;
+  ShortDescriptionStr?: string | null;
+}
+
+interface OracleDetailResponse {
+  items?: OracleDetailItem[];
+}
 
 const PAGE_SIZE = 100;
 /**
@@ -110,6 +129,37 @@ const PAGE_SIZE = 100;
  */
 const MAX_PAGES = 1000;
 
+/** Marriott list rows often omit ShortDescriptionStr; detail API returns full HTML for AI enrichment. */
+const DETAIL_FETCH_CONCURRENCY = 28;
+
+async function parallelMap<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+/** Full posting HTML from `recruitingCEJobRequisitionDetails` finder `ById;Id={requisitionId}`. */
+async function fetchExternalDescriptionHtml(origin: string, jobId: string): Promise<string | null> {
+  const finder = encodeURIComponent(`ById;Id=${jobId}`);
+  const url = `${origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails?onlyData=true&finder=${finder}`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as OracleDetailResponse;
+  const row = data.items?.[0];
+  const html = (row?.ExternalDescriptionStr ?? row?.ShortDescriptionStr ?? "").trim();
+  return html.length > 0 ? html : null;
+}
+
 export const oracleCeFetcher: JobSource = {
   sourceType: "oracle_ce",
 
@@ -117,6 +167,9 @@ export const oracleCeFetcher: JobSource = {
     const { origin, locale, siteNumber } = parseCandidateExperienceUrl(source.base_url);
     const restBase = `${origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions`;
     const companyName = source.name.replace(/\s*\(Oracle CE\)\s*/i, "").trim();
+    /** Large tenants skip N detail HTTP calls; Marriott list payload omits descriptions — hydrate via REST. */
+    const fetchPostingHtml =
+      source.company_handle === "marriott" || source.id === "ce-marriott";
 
     const jobs: NormalizedJob[] = [];
     let offset = 0;
@@ -159,10 +212,8 @@ export const oracleCeFetcher: JobSource = {
       const batch = item.requisitionList ?? [];
       if (batch.length === 0) break;
 
-      // Detail fetches (recruitingCEJobRequisitionDetails) are intentionally skipped.
-      // For large tenants (Kroger 18k, Macy's 3k) they would take minutes and exceed
-      // the 90s Worker timeout. ShortDescriptionStr from the list is sufficient for
-      // search/display; AI enrichment fills in full descriptions later.
+      // Detail fetches are skipped for most tenants (Kroger-scale volume). Marriott enables
+      // `fetchPostingHtml` — parallel ById calls fill ExternalDescriptionStr HTML for lazy-load AI.
       for (const row of batch) {
         try {
           const loc = row.PrimaryLocation ?? null;
@@ -178,7 +229,7 @@ export const oracleCeFetcher: JobSource = {
             workplace_type: normalizeWorkplaceType(wpHint, loc),
             apply_url: applyUrl,
             source_url: applyUrl,
-            description_raw: row.ShortDescriptionStr ?? null,
+            description_raw: descriptionRawFromMaybeHtml(row.ShortDescriptionStr),
             salary_min: null,
             salary_max: null,
             salary_currency: null,
@@ -197,6 +248,15 @@ export const oracleCeFetcher: JobSource = {
       if (batch.length < PAGE_SIZE) break;
     }
 
-    return jobs;
+    if (!fetchPostingHtml || jobs.length === 0) {
+      return jobs;
+    }
+
+    return parallelMap(jobs, DETAIL_FETCH_CONCURRENCY, async (job) => {
+      const html = await fetchExternalDescriptionHtml(origin, job.external_id);
+      const text = descriptionRawFromMaybeHtml(html);
+      if (text) return { ...job, description_raw: text };
+      return job;
+    });
   },
 };

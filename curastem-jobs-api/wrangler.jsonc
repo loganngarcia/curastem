@@ -6,11 +6,14 @@
   "compatibility_flags": ["nodejs_compat"],
 
   // Cloudflare D1 database binding — stores jobs, companies, sources, api_keys
+  // `experimental_remote: true` lets local `wrangler dev` write to the remote production
+  // D1 (no --remote needed) so on-device backfill avoids the 60s HTTP proxy timeout.
   "d1_databases": [
     {
       "binding": "JOBS_DB",
       "database_name": "curastem-jobs",
-      "database_id": "d2461924-d1f9-47e6-a62b-6d795161433d"
+      "database_id": "d2461924-d1f9-47e6-a62b-6d795161433d",
+      "remote": true
     }
   ],
 
@@ -64,5 +67,21 @@
   // CPU-heavy operations (regex backfill, JSON parsing) to complete safely.
   "limits": {
     "cpu_ms": 30000
+  },
+
+  // Persist logs and traces to the Cloudflare dashboard (already enabled via UI).
+  // head_sampling_rate: 1 = capture every invocation (scheduled + fetch).
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
   }
 }

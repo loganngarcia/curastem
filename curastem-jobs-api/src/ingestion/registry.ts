@@ -52,6 +52,11 @@ import { servicenowSeoFetcher } from "./sources/servicenow_seo.ts";
 import { ibmCareersFetcher } from "./sources/ibm_careers.ts";
 import { recruiterflowFetcher } from "./sources/recruiterflow.ts";
 import { getroFetcher } from "./sources/getro.ts";
+import { googleFetcher } from "./sources/google.ts";
+import { netflixFetcher } from "./sources/netflix.ts";
+import { tiktokFetcher } from "./sources/tiktok.ts";
+import { hcaCareersFetcher } from "./sources/hcaCareers.ts";
+import { aramarkCareersFetcher } from "./sources/aramark_careers.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -94,6 +99,11 @@ const REGISTRY: Record<SourceType, JobSource> = {
   ibm_careers: ibmCareersFetcher,
   recruiterflow: recruiterflowFetcher,
   getro: getroFetcher,
+  google: googleFetcher,
+  netflix: netflixFetcher,
+  tiktok: tiktokFetcher,
+  hca_careers: hcaCareersFetcher,
+  aramark_careers: aramarkCareersFetcher,
 };
 
 /**
@@ -167,6 +177,8 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   jobvite: 100,
   // TalentBrew — employer Radancy-hosted HTML (listing + detail; apply often redirects to iCIMS/SF)
   talentbrew: 82,
+  // HCA — sitemap + regional search HTML + JSON-LD (same trust model as TalentBrew)
+  hca_careers: 82,
   // Eightfold PCS — employer-configured board; structured JSON from their public PCS API
   eightfold: 86,
   uber_sites: 90,
@@ -183,6 +195,14 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   // IBM unified search API (official JSON; same listings as careers.ibm.com JobDetail)
   ibm_careers: 88,
   recruiterflow: 78,
+  // Google Careers AF_initDataCallback HTML parse — direct from careers.google.com
+  google: 90,
+  // Netflix — Eightfold custom deployment; sitemap + position_details API (direct employer source)
+  netflix: 90,
+  // TikTok — proprietary lifeattiktok.com API; ~3400 global / 1384 US jobs
+  tiktok: 90,
+  // Aramark — employer WordPress JSON (official careers domain)
+  aramark_careers: 82,
 };
 
 export function getSourcePriority(sourceType: string): number {

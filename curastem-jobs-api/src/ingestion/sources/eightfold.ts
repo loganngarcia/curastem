@@ -31,12 +31,13 @@ const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 const DETAIL_CONCURRENCY = 16;
 /** PCS caps results at 10 rows per search request ("Too many rows requested" above that). */
 const PAGE_SIZE = 10;
+/** Concurrency for fetching list pages once total count is known from page 0. */
+const LIST_CONCURRENCY = 8;
 /**
- * Hard cap per ingestion run. Sources with >2000 positions (e.g. Starbucks ~21k)
- * would otherwise need 2000+ serial list API calls — far exceeding the 90s fetch timeout.
- * The remaining positions are picked up in subsequent hourly cron runs.
+ * Hard cap per ingestion run. With parallel list fetching we can safely process many more
+ * positions within the cron window. Remaining positions picked up in subsequent runs.
  */
-const MAX_POSITIONS_PER_RUN = 2000;
+const MAX_POSITIONS_PER_RUN = 5000;
 
 const HEADERS = {
   "User-Agent": USER_AGENT,
@@ -214,16 +215,29 @@ export const eightfoldFetcher: JobSource = {
     const { origin, groupDomain } = parseEightfoldCareersUrl(source.base_url);
     const companyName = companyLabelFromSource(source);
 
-    const listPositions: EightfoldListPosition[] = [];
-    let start = 0;
-    let total = Infinity;
-    while (start < total && listPositions.length < MAX_POSITIONS_PER_RUN) {
-      const page = await fetchSearchPage(origin, groupDomain, start);
-      total = page.count;
-      listPositions.push(...page.positions);
-      if (page.positions.length === 0) break;
-      if (page.positions.length < PAGE_SIZE) break;
-      start += page.positions.length;
+    // Fetch first page to learn total count, then fan out remaining pages in parallel.
+    const firstPage = await fetchSearchPage(origin, groupDomain, 0);
+    const total = firstPage.count;
+    const listPositions: EightfoldListPosition[] = [...firstPage.positions];
+
+    if (total > PAGE_SIZE && firstPage.positions.length === PAGE_SIZE) {
+      const cap = Math.min(total, MAX_POSITIONS_PER_RUN);
+      const offsets: number[] = [];
+      for (let s = PAGE_SIZE; s < cap; s += PAGE_SIZE) offsets.push(s);
+
+      const extraPages = await parallelMap(offsets, LIST_CONCURRENCY, async (start) => {
+        // One retry on transient failures (rate-limit blips).
+        try {
+          return await fetchSearchPage(origin, groupDomain, start);
+        } catch {
+          await new Promise((r) => setTimeout(r, 1000));
+          return fetchSearchPage(origin, groupDomain, start).catch(() => null);
+        }
+      });
+      for (const page of extraPages) {
+        if (!page) continue;
+        listPositions.push(...page.positions);
+      }
     }
 
     if (listPositions.length === 0) {

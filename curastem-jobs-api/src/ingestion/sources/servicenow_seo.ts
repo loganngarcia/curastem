@@ -18,7 +18,10 @@ import {
 } from "../../utils/normalize.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
-const DETAIL_CONCURRENCY = 12;
+const DETAIL_CONCURRENCY = 8;
+// Best Buy publishes 5k+ job URLs in its sitemap — cap per run to stay within
+// Cloudflare's memory budget and keep each cron cycle under the timeout budget.
+const MAX_SITEMAP_JOBS = 1000;
 
 async function parallelMap<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -80,10 +83,11 @@ export const servicenowSeoFetcher: JobSource = {
     }
 
     const xml = await res.text();
-    const rows = collectJobUrlsFromSitemap(xml);
-    if (rows.length === 0) {
+    const allRows = collectJobUrlsFromSitemap(xml);
+    if (allRows.length === 0) {
       throw new Error(`servicenow_seo: 0 job_details URLs in sitemap (${sitemapUrl})`);
     }
+    const rows = allRows.slice(0, MAX_SITEMAP_JOBS);
 
     const companyName =
       source.name.replace(/\s*\([^)]*\)\s*$/, "").trim() || source.company_handle;

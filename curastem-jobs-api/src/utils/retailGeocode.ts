@@ -184,6 +184,9 @@ export const RETAIL_GEOCODE_SLUGS: ReadonlySet<string> = new Set([
 
   // Healthcare — high-volume distributed clinics; city-level sufficient for job search
   "davita",   // 1,413 dialysis clinics nationwide
+  "kaiser-permanente",
+  "hca",
+  "unitedhealthgroup",
 
   // Staffing / security services — placements/sites are city-scoped by nature
   "pulse",

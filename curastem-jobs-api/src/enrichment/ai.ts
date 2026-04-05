@@ -47,6 +47,8 @@ const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 const EMBEDDING_MODEL = "gemini-embedding-2-preview";
 const EMBEDDING_DIMENSIONS = 768;
+/** Embedding input only — AI lazy-load extraction uses full `description_raw` in callers. */
+const JOB_EMBED_DESCRIPTION_MAX_CHARS = 4000;
 
 interface GeminiEmbedRequest {
   model: string;
@@ -105,7 +107,7 @@ function buildJobEmbedText(
   const parts: string[] = [`${title} at ${companyName}`];
   if (location) parts.push(`Location: ${location}`);
   if (descriptionRaw) {
-    const cleaned = htmlToText(descriptionRaw).slice(0, 1500);
+    const cleaned = htmlToText(descriptionRaw).slice(0, JOB_EMBED_DESCRIPTION_MAX_CHARS);
     parts.push(cleaned);
   }
   return parts.join("\n");

@@ -42,7 +42,7 @@
 GET {BASE_URL}
 ```
 
-Example: `GET https://agent-skills-api.logangarcia102.workers.dev`
+Example: `GET https://skills.curastem.org`
 
 - **Method**: `GET` only. `POST`, `PUT`, `DELETE` return `405 Method Not Allowed`.
 - **Headers**: Standard CORS. `Origin` or `Referer` must match `ALLOWED_ORIGINS` or request returns `401 Unauthorized`.
@@ -154,7 +154,7 @@ The API reads **only** the frontmatter `name` and `description`. The markdown bo
    ```bash
    echo "owner/repo" | npx wrangler secret put SKILLS_REPO
    ```
-6. **Configure Curastem**: Set the component's `skillsApiUrl` prop to your Worker URL (e.g., `https://your-worker.your-subdomain.workers.dev`).
+6. **Configure Curastem**: Set the component's `skillsApiUrl` prop to your Worker URL (e.g., `https://skills.curastem.org` or your `*.workers.dev` URL).
 
 ---
 
@@ -162,7 +162,7 @@ The API reads **only** the frontmatter `name` and `description`. The markdown bo
 
 The Curastem component uses this API as follows:
 
-1. **Property**: `skillsApiUrl` — Framer property control. Default: `https://agent-skills-api.logangarcia102.workers.dev`
+1. **Property**: `skillsApiUrl` — Framer property control. Default: `https://skills.curastem.org`
 2. **Trigger**: When the user types `/` in the chat input, the component fetches `GET {skillsApiUrl}` (if not already cached in `localStorage` under `curastem_skills_cache`).
 3. **Mapping**: Response `{ id, name, description }` is mapped to `AgentSkill` with `object: "skill"` and placeholder version fields.
 4. **Selection**: User selects skills from the menu. Selected skills are stored in `selectedSkills` state.
