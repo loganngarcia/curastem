@@ -29,6 +29,11 @@ import type {
 } from "../types.ts";
 import { CRUNCHBASE_SOURCE_ID, CRUNCHBASE_SOURCE_LEGACY_ID } from "./sourceIds.ts";
 import { normalizeLocationForGeocode } from "../utils/placesGeocode.ts";
+import {
+  companySlugFromSearchQuery,
+  companySlugsFromFilterParam,
+  titleSearchTokensForSql,
+} from "../utils/jobSearchQuery.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // companies
@@ -78,24 +83,222 @@ export async function getCompanyById(
  * Used to route company-specific queries (e.g. "alo yoga") to SQL path instead
  * of vector search, since unembedded jobs would otherwise be invisible.
  */
+const COMPANY_QUERY_JOB_SUFFIX =
+  /\s+(jobs?|careers?|openings?|hiring|roles?|vacancies|positions?|work|employment)\s*$/i;
+
+/**
+ * Single-token queries that are almost always role/industry terms, not company names.
+ * Prevents LIKE '%software%' from locking onto the wrong employer row.
+ */
+const GENERIC_JOB_SEARCH_SINGLE_WORD = new Set([
+  "software",
+  "coding",
+  "dev",
+  "developer",
+  "development",
+  "hardware",
+  "engineer",
+  "engineering",
+  "developer",
+  "development",
+  "manager",
+  "director",
+  "nursing",
+  "nurse",
+  "retail",
+  "healthcare",
+  "finance",
+  "sales",
+  "marketing",
+  "remote",
+  "hybrid",
+  "contract",
+  "internship",
+  "intern",
+  "cashier",
+  "designer",
+  "scientist",
+  "analyst",
+  "recruiter",
+  "consultant",
+  "specialist",
+  "coordinator",
+  "associate",
+  "support",
+  "accounting",
+  "legal",
+  "attorney",
+  "lawyer",
+  "therapist",
+  "physician",
+  "pharmacist",
+  "teacher",
+  "education",
+  "hospitality",
+  "warehouse",
+  "manufacturing",
+  "construction",
+]);
+
+/**
+ * In a two-word search, if the second token looks like a job title (not a company suffix),
+ * do not try the first word alone as a company — avoids "Product Manager" → LIKE '%product%'
+ * matching "Consumer Product Safety Commission".
+ */
+const JOB_TITLE_LIKE_SECOND_WORD = new Set([
+  "manager",
+  "engineer",
+  "engineering",
+  "scientist",
+  "analyst",
+  "developer",
+  "designer",
+  "architect",
+  "lead",
+  "director",
+  "officer",
+  "specialist",
+  "coordinator",
+  "associate",
+  "representative",
+  "recruiter",
+  "partner",
+  "consultant",
+  "programmer",
+  "administrator",
+  "technician",
+  "attorney",
+  "counsel",
+  "assistant",
+  "intern",
+  "nurse",
+  "therapist",
+  "writer",
+  "editor",
+  "producer",
+  "supervisor",
+  "operator",
+  "mechanic",
+  "pharmacist",
+  "physician",
+  "teacher",
+  "lawyer",
+  "executive",
+  "president",
+  "controller",
+  "accountant",
+  "marketing",
+  "sales",
+  "support",
+  "graduate",
+  "researcher",
+  "planner",
+  "buyer",
+]);
+
+/**
+ * Skip findCompanyByQuery for two-word phrases that look like job titles
+ * ("Product Designer"), not employer names — avoids locking onto the wrong company.
+ */
+export function shouldResolveSearchQueryToCompany(q: string): boolean {
+  const parts = q.trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 2 || !parts[1]) return true;
+  return !JOB_TITLE_LIKE_SECOND_WORD.has(parts[1].toLowerCase());
+}
+
+async function tryResolveCompanyPhrase(
+  db: D1Database,
+  phrase: string
+): Promise<{ slug: string } | null> {
+  const p = phrase.trim();
+  if (p.length < 2 || p.length > 80) return null;
+  if (!p.includes(" ") && GENERIC_JOB_SEARCH_SINGLE_WORD.has(p.toLowerCase())) {
+    return null;
+  }
+  const slugForm = p.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+  if (!slugForm) return null;
+  const qLower = p.toLowerCase();
+  const esc = (s: string) => s.replace(/%/g, "\\%").replace(/_/g, "\\_");
+  // Short single tokens: only exact slug or exact display name — avoids LIKE '%swe%' false positives.
+  if (!p.includes(" ") && p.length <= 5) {
+    return (
+      (await db
+        .prepare(
+          "SELECT slug FROM companies WHERE slug = ? OR LOWER(TRIM(name)) = ? LIMIT 1"
+        )
+        .bind(slugForm, qLower)
+        .first<{ slug: string }>()) ?? null
+    );
+  }
+  // Multi-word phrase: name must contain the full string (e.g. "alo yoga", "goldman sachs").
+  if (p.includes(" ")) {
+    const likePattern = `%${esc(qLower)}%`;
+    return (
+      (await db
+        .prepare(
+          "SELECT slug FROM companies WHERE slug = ? OR LOWER(name) LIKE ? ESCAPE '\\' LIMIT 1"
+        )
+        .bind(slugForm, likePattern)
+        .first<{ slug: string }>()) ?? null
+    );
+  }
+  // Single word, length >= 6: prefix match on name — never substring LIKE '%word%',
+  // which matched "Consumer Product Safety Commission" for q=product.
+  const prefixPattern = `${esc(qLower)}%`;
+  return (
+    (await db
+      .prepare(
+        "SELECT slug FROM companies WHERE slug = ? OR LOWER(TRIM(name)) = ? OR LOWER(name) LIKE ? ESCAPE '\\' LIMIT 1"
+      )
+      .bind(slugForm, qLower, prefixPattern)
+      .first<{ slug: string }>()) ?? null
+  );
+}
+
+/**
+ * Resolve a search query to a company when it matches a company name or slug.
+ * Strips trailing "jobs", "careers", etc. so "google jobs" resolves to Google.
+ */
 export async function findCompanyByQuery(
   db: D1Database,
   q: string
 ): Promise<{ slug: string } | null> {
   const trimmed = q.trim();
   if (!trimmed || trimmed.length > 80) return null;
-  const slugForm = trimmed.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-  if (!slugForm) return null;
 
-  const qLower = trimmed.toLowerCase();
-  const likePattern = `%${qLower.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+  const single = trimmed.split(/\s+/);
+  if (
+    single.length === 1 &&
+    GENERIC_JOB_SEARCH_SINGLE_WORD.has(trimmed.toLowerCase())
+  ) {
+    return null;
+  }
 
-  // Try exact slug match first, then case-insensitive name match
-  const result = await db
-    .prepare("SELECT slug FROM companies WHERE slug = ? OR LOWER(name) LIKE ? ESCAPE '\\' LIMIT 1")
-    .bind(slugForm, likePattern)
-    .first<{ slug: string }>();
-  return result ?? null;
+  const dejobbed = trimmed.replace(COMPANY_QUERY_JOB_SUFFIX, "").trim();
+  const phrases: string[] = [];
+  if (dejobbed) phrases.push(dejobbed);
+  if (trimmed !== dejobbed) phrases.push(trimmed);
+  const parts = dejobbed.split(/\s+/).filter(Boolean);
+  // Only consider "Brand" from two-word queries like "Stripe Payments", not three-word titles.
+  if (
+    parts.length === 2 &&
+    parts[0] &&
+    parts[0].length >= 2 &&
+    parts[1] &&
+    !JOB_TITLE_LIKE_SECOND_WORD.has(parts[1].toLowerCase())
+  ) {
+    phrases.push(parts[0]);
+  }
+
+  const seen = new Set<string>();
+  for (const phrase of phrases) {
+    const key = phrase.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const row = await tryResolveCompanyPhrase(db, phrase);
+    if (row) return row;
+  }
+  return null;
 }
 
 /**
@@ -1165,6 +1368,47 @@ function employmentTypeCondition(employment_type: string | undefined): {
 }
 
 /**
+ * Shared SELECT columns for ListJobsRow — listJobs, listJobsNear, listJobsByIdsChunk.
+ * Omits description_raw and job_description.
+ */
+const LIST_JOBS_ROW_SELECT = `      j.id, j.company_id, j.source_id, j.external_id,
+      j.title, j.locations, j.employment_type, j.workplace_type, j.seniority_level,
+      j.description_language,
+      j.apply_url, j.source_url, j.source_name,
+      j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
+      j.experience_years_min, j.job_address, j.job_city, j.job_state, j.job_country,
+      j.location_lat, j.location_lng,
+      j.visa_sponsorship,
+      j.job_summary, j.ai_generated_at, j.embedding_generated_at,
+      j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
+      c.name                 AS company_name,
+      c.logo_url             AS company_logo_url,
+      c.description          AS company_description,
+      c.website_url          AS company_website_url,
+      c.linkedin_url         AS company_linkedin_url,
+      c.glassdoor_url        AS company_glassdoor_url,
+      c.x_url                AS company_x_url,
+      c.instagram_url        AS company_instagram_url,
+      c.youtube_url          AS company_youtube_url,
+      c.github_url           AS company_github_url,
+      c.huggingface_url      AS company_huggingface_url,
+      c.tiktok_url           AS company_tiktok_url,
+      c.crunchbase_url       AS company_crunchbase_url,
+      c.facebook_url         AS company_facebook_url,
+      c.employee_count_range AS company_employee_count_range,
+      c.employee_count       AS company_employee_count,
+      c.founded_year         AS company_founded_year,
+      c.hq_address           AS company_hq_address,
+      c.hq_city              AS company_hq_city,
+      c.hq_country           AS company_hq_country,
+      c.hq_lat               AS company_hq_lat,
+      c.hq_lng               AS company_hq_lng,
+      c.industry             AS company_industry,
+      c.company_type         AS company_type,
+      c.total_funding_usd    AS company_total_funding_usd,
+      c.locations            AS company_locations`;
+
+/**
  * Fetch a set of jobs by their IDs, applying optional secondary filters.
  * Used by the vector search path: Vectorize returns ranked IDs, then we
  * hydrate those rows from D1 and apply location/type/company filters here.
@@ -1179,7 +1423,7 @@ function employmentTypeCondition(employment_type: string | undefined): {
 export async function listJobsByIds(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min" | "country">
+  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "seniority_level" | "description_language" | "company" | "posted_since" | "salary_min" | "country" | "visa_sponsorship">
 ): Promise<ListJobsRow[]> {
   if (ids.length === 0) return [];
 
@@ -1203,15 +1447,17 @@ export async function listJobsByIds(
 async function listJobsByIdsChunk(
   db: D1Database,
   ids: string[],
-  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "company" | "posted_since" | "salary_min" | "country">
+  filter: Pick<ListJobsFilter, "location" | "location_region" | "location_or" | "exclude_ids" | "employment_type" | "workplace_type" | "seniority_level" | "description_language" | "company" | "posted_since" | "salary_min" | "country" | "visa_sponsorship">
 ): Promise<ListJobsRow[]> {
   const placeholders = ids.map(() => "?").join(", ");
   const conditions: string[] = [`j.id IN (${placeholders})`];
   const bindings: unknown[] = [...ids];
 
   if (filter.location) {
-    conditions.push("j.locations LIKE ?");
-    bindings.push(`%${filter.location}%`);
+    const locPatterns = expandLocationLikePatterns(filter.location);
+    const orParts = locPatterns.map(() => "j.locations LIKE ?");
+    conditions.push(`(${orParts.join(" OR ")})`);
+    locPatterns.forEach((p) => bindings.push(p));
   }
   if (filter.location_region) {
     conditions.push("j.locations LIKE ?");
@@ -1241,10 +1487,21 @@ async function listJobsByIdsChunk(
     conditions.push("j.workplace_type = ?");
     bindings.push(filter.workplace_type);
   }
-  if (filter.company) {
-    conditions.push("c.slug = ?");
-    bindings.push(filter.company);
+  if (filter.seniority_level) {
+    const levels = filter.seniority_level.split(",").map((s) => s.trim()).filter(Boolean);
+    if (levels.length === 1) {
+      conditions.push("j.seniority_level = ?");
+      bindings.push(levels[0]);
+    } else if (levels.length > 1) {
+      conditions.push(`j.seniority_level IN (${levels.map(() => "?").join(", ")})`);
+      bindings.push(...levels);
+    }
   }
+  if (filter.description_language) {
+    conditions.push("j.description_language = ?");
+    bindings.push(filter.description_language);
+  }
+  appendCompanySlugConditions(conditions, bindings, filter.company);
   if (filter.posted_since) {
     conditions.push("COALESCE(j.posted_at, j.first_seen_at) >= ?");
     bindings.push(filter.posted_since);
@@ -1257,39 +1514,15 @@ async function listJobsByIdsChunk(
     conditions.push("(j.workplace_type = 'remote' OR j.job_country = ?)");
     bindings.push(filter.country);
   }
+  if (filter.visa_sponsorship === "yes" || filter.visa_sponsorship === "no") {
+    conditions.push("j.visa_sponsorship = ?");
+    bindings.push(filter.visa_sponsorship);
+  }
 
   const where = conditions.join(" AND ");
-  // Same explicit column list as listJobs — no description_raw or job_description
   const sql = `
     SELECT
-      j.id, j.company_id, j.source_id, j.external_id,
-      j.title, j.locations, j.employment_type, j.workplace_type,
-      j.apply_url, j.source_url, j.source_name,
-      j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
-      j.job_summary, j.ai_generated_at, j.embedding_generated_at,
-      j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
-      c.name                AS company_name,
-      c.logo_url            AS company_logo_url,
-      c.description         AS company_description,
-      c.website_url         AS company_website_url,
-      c.linkedin_url        AS company_linkedin_url,
-      c.glassdoor_url       AS company_glassdoor_url,
-      c.x_url               AS company_x_url,
-      c.instagram_url       AS company_instagram_url,
-      c.youtube_url         AS company_youtube_url,
-      c.github_url          AS company_github_url,
-      c.huggingface_url     AS company_huggingface_url,
-      c.tiktok_url          AS company_tiktok_url,
-      c.crunchbase_url      AS company_crunchbase_url,
-      c.facebook_url        AS company_facebook_url,
-      c.employee_count_range AS company_employee_count_range,
-      c.founded_year        AS company_founded_year,
-      c.hq_address          AS company_hq_address,
-      c.hq_city             AS company_hq_city,
-      c.hq_country          AS company_hq_country,
-      c.industry            AS company_industry,
-      c.company_type        AS company_type,
-      c.total_funding_usd   AS company_total_funding_usd
+${LIST_JOBS_ROW_SELECT}
     FROM jobs j
     JOIN companies c ON j.company_id = c.id
     WHERE ${where}
@@ -1300,6 +1533,8 @@ async function listJobsByIdsChunk(
 }
 
 export interface ListJobsFilter {
+  /** Substring match on job title only — use for role searches; avoids company slug / vector noise from `q`. */
+  title?: string;
   q?: string;
   location?: string;
   location_region?: string; // e.g. "CA" — requires location to contain this; disambiguates "San Francisco, CA" from "San Francisco, Philippines"
@@ -1309,10 +1544,13 @@ export interface ListJobsFilter {
   workplace_type?: string;
   seniority_level?: string;
   description_language?: string;
+  /** Exact company slug(s). Comma-separated = OR (e.g. meta,google,apple). */
   company?: string;
   posted_since?: number; // unix timestamp — only return jobs posted/seen at or after this time
   salary_min?: number;   // only return jobs where salary_min >= this value (annual, in salary_currency)
   country?: string;      // ISO 3166-1 alpha-2 — filter to jobs in this country (or remote)
+  /** When set, only jobs with this explicit AI-extracted visa_sponsorship value. */
+  visa_sponsorship?: import("../types.ts").VisaSponsorship;
   limit: number;
   cursor?: string; // opaque cursor = base64(last posted_at:id)
 }
@@ -1361,6 +1599,7 @@ export interface ListJobsRow {
   job_country: string | null;
   location_lat: number | null;
   location_lng: number | null;
+  visa_sponsorship: import("../types.ts").VisaSponsorship | null;
   // joined company fields
   company_name: string;
   company_logo_url: string | null;
@@ -1390,6 +1629,101 @@ export interface ListJobsRow {
   company_locations: string | null;
 }
 
+/**
+ * Builds several LIKE patterns so a model-supplied "City, California" still matches
+ * listings stored as "City, CA", and so the primary city name matches JSON text.
+ */
+function expandLocationLikePatterns(location: string): string[] {
+  const t = location.trim();
+  if (!t) return [];
+  const patterns = new Set<string>();
+  patterns.add(`%${t}%`);
+
+  const stateFullToAbbr: Array<[RegExp, string]> = [
+    [/, Alabama\s*$/i, ", AL"],
+    [/, Alaska\s*$/i, ", AK"],
+    [/, Arizona\s*$/i, ", AZ"],
+    [/, Arkansas\s*$/i, ", AR"],
+    [/, California\s*$/i, ", CA"],
+    [/, Colorado\s*$/i, ", CO"],
+    [/, Connecticut\s*$/i, ", CT"],
+    [/, Delaware\s*$/i, ", DE"],
+    [/, Florida\s*$/i, ", FL"],
+    [/, Georgia\s*$/i, ", GA"],
+    [/, Hawaii\s*$/i, ", HI"],
+    [/, Idaho\s*$/i, ", ID"],
+    [/, Illinois\s*$/i, ", IL"],
+    [/, Indiana\s*$/i, ", IN"],
+    [/, Iowa\s*$/i, ", IA"],
+    [/, Kansas\s*$/i, ", KS"],
+    [/, Kentucky\s*$/i, ", KY"],
+    [/, Louisiana\s*$/i, ", LA"],
+    [/, Maine\s*$/i, ", ME"],
+    [/, Maryland\s*$/i, ", MD"],
+    [/, Massachusetts\s*$/i, ", MA"],
+    [/, Michigan\s*$/i, ", MI"],
+    [/, Minnesota\s*$/i, ", MN"],
+    [/, Mississippi\s*$/i, ", MS"],
+    [/, Missouri\s*$/i, ", MO"],
+    [/, Montana\s*$/i, ", MT"],
+    [/, Nebraska\s*$/i, ", NE"],
+    [/, Nevada\s*$/i, ", NV"],
+    [/, New Hampshire\s*$/i, ", NH"],
+    [/, New Jersey\s*$/i, ", NJ"],
+    [/, New Mexico\s*$/i, ", NM"],
+    [/, New York\s*$/i, ", NY"],
+    [/, North Carolina\s*$/i, ", NC"],
+    [/, North Dakota\s*$/i, ", ND"],
+    [/, Ohio\s*$/i, ", OH"],
+    [/, Oklahoma\s*$/i, ", OK"],
+    [/, Oregon\s*$/i, ", OR"],
+    [/, Pennsylvania\s*$/i, ", PA"],
+    [/, Rhode Island\s*$/i, ", RI"],
+    [/, South Carolina\s*$/i, ", SC"],
+    [/, South Dakota\s*$/i, ", SD"],
+    [/, Tennessee\s*$/i, ", TN"],
+    [/, Texas\s*$/i, ", TX"],
+    [/, Utah\s*$/i, ", UT"],
+    [/, Vermont\s*$/i, ", VT"],
+    [/, Virginia\s*$/i, ", VA"],
+    [/, Washington\s*$/i, ", WA"],
+    [/, West Virginia\s*$/i, ", WV"],
+    [/, Wisconsin\s*$/i, ", WI"],
+    [/, Wyoming\s*$/i, ", WY"],
+    [/, District of Columbia\s*$/i, ", DC"],
+  ];
+  for (const [re, abbr] of stateFullToAbbr) {
+    const alt = t.replace(re, abbr);
+    if (alt !== t) patterns.add(`%${alt}%`);
+  }
+
+  const comma = t.indexOf(",");
+  if (comma > 0) {
+    const cityOnly = t.slice(0, comma).trim();
+    if (cityOnly.length >= 4) {
+      patterns.add(`%${cityOnly}%`);
+    }
+  }
+
+  return [...patterns];
+}
+
+function appendCompanySlugConditions(
+  conditions: string[],
+  bindings: unknown[],
+  company: string | undefined
+): void {
+  const slugs = companySlugsFromFilterParam(company);
+  if (slugs.length === 0) return;
+  if (slugs.length === 1) {
+    conditions.push("c.slug = ?");
+    bindings.push(slugs[0]);
+  } else {
+    conditions.push(`c.slug IN (${slugs.map(() => "?").join(", ")})`);
+    bindings.push(...slugs);
+  }
+}
+
 export async function listJobs(
   db: D1Database,
   filter: ListJobsFilter
@@ -1397,14 +1731,33 @@ export async function listJobs(
   const conditions: string[] = [];
   const bindings: unknown[] = [];
 
-  if (filter.q) {
-    conditions.push("(j.title LIKE ? OR c.name LIKE ?)");
-    const pattern = `%${filter.q}%`;
-    bindings.push(pattern, pattern);
+  if (filter.title) {
+    const raw = filter.title.trim();
+    if (raw) {
+      for (const t of titleSearchTokensForSql(raw)) {
+        conditions.push("j.title LIKE ?");
+        bindings.push(`%${t}%`);
+      }
+    }
+  } else if (filter.q) {
+    const raw = filter.q.trim();
+    const pattern = `%${raw}%`;
+    const slug = companySlugFromSearchQuery(raw);
+    // Title + exact company slug only — never c.name LIKE (substring matches
+    // "Product" in "Consumer Product Safety Commission" for role queries).
+    if (slug.length >= 2) {
+      conditions.push("(j.title LIKE ? OR c.slug = ?)");
+      bindings.push(pattern, slug);
+    } else {
+      conditions.push("j.title LIKE ?");
+      bindings.push(pattern);
+    }
   }
   if (filter.location) {
-    conditions.push("j.locations LIKE ?");
-    bindings.push(`%${filter.location}%`);
+    const locPatterns = expandLocationLikePatterns(filter.location);
+    const orParts = locPatterns.map(() => "j.locations LIKE ?");
+    conditions.push(`(${orParts.join(" OR ")})`);
+    locPatterns.forEach((p) => bindings.push(p));
   }
   if (filter.location_region) {
     conditions.push("j.locations LIKE ?");
@@ -1448,10 +1801,7 @@ export async function listJobs(
     conditions.push("j.description_language = ?");
     bindings.push(filter.description_language);
   }
-  if (filter.company) {
-    conditions.push("c.slug = ?");
-    bindings.push(filter.company);
-  }
+  appendCompanySlugConditions(conditions, bindings, filter.company);
   if (filter.country) {
     // Require an explicit per-job country match or remote — never fall back to company
     // HQ country, because a US-HQ'd company (Dell, Coca-Cola) can post jobs in India.
@@ -1469,6 +1819,10 @@ export async function listJobs(
     // salary_min is always stored as an annual figure (normalised at ingest).
     conditions.push("j.salary_min IS NOT NULL AND j.salary_min >= ?");
     bindings.push(filter.salary_min);
+  }
+  if (filter.visa_sponsorship === "yes" || filter.visa_sponsorship === "no") {
+    conditions.push("j.visa_sponsorship = ?");
+    bindings.push(filter.visa_sponsorship);
   }
 
   // Cursor decoding: cursor encodes the last row's sort key so we can do
@@ -1491,41 +1845,7 @@ export async function listJobs(
   // without them is ~10–50× smaller, cutting D1 read bytes and Worker memory.
   const selectJoined = `
     SELECT
-      j.id, j.company_id, j.source_id, j.external_id,
-      j.title, j.locations, j.employment_type, j.workplace_type, j.seniority_level,
-      j.description_language,
-      j.apply_url, j.source_url, j.source_name,
-      j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
-      j.experience_years_min, j.job_address, j.job_city, j.job_state, j.job_country,
-      j.location_lat, j.location_lng,
-      j.job_summary, j.ai_generated_at, j.embedding_generated_at,
-      j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
-      c.name                 AS company_name,
-      c.logo_url             AS company_logo_url,
-      c.description          AS company_description,
-      c.website_url          AS company_website_url,
-      c.linkedin_url         AS company_linkedin_url,
-      c.glassdoor_url        AS company_glassdoor_url,
-      c.x_url                AS company_x_url,
-      c.instagram_url        AS company_instagram_url,
-      c.youtube_url          AS company_youtube_url,
-      c.github_url           AS company_github_url,
-      c.huggingface_url      AS company_huggingface_url,
-      c.tiktok_url           AS company_tiktok_url,
-      c.crunchbase_url       AS company_crunchbase_url,
-      c.facebook_url         AS company_facebook_url,
-      c.employee_count_range AS company_employee_count_range,
-      c.employee_count       AS company_employee_count,
-      c.founded_year         AS company_founded_year,
-      c.hq_address           AS company_hq_address,
-      c.hq_city              AS company_hq_city,
-      c.hq_country           AS company_hq_country,
-      c.hq_lat               AS company_hq_lat,
-      c.hq_lng               AS company_hq_lng,
-      c.industry             AS company_industry,
-      c.company_type         AS company_type,
-      c.total_funding_usd    AS company_total_funding_usd,
-      c.locations            AS company_locations
+${LIST_JOBS_ROW_SELECT}
     FROM jobs j
     JOIN companies c ON c.id = j.company_id
     ${where}
@@ -2018,14 +2338,39 @@ export async function listJobsNear(
     exclude_remote: boolean;
     limit: number;
     exclude_ids?: string[];
+    /** Title substring only — preferred over `q` for role + geo. */
+    title?: string;
     q?: string;
     posted_since?: number;
     employment_type?: string;
+    workplace_type?: string;
     seniority_level?: string;
+    description_language?: string;
+    salary_min?: number;
+    country?: string;
     company?: string;
+    visa_sponsorship?: import("../types.ts").VisaSponsorship;
   }
 ): Promise<{ rows: ListJobsRow[] }> {
-  const { lat, lng, radius_km, exclude_remote, limit, exclude_ids, q, posted_since, employment_type, seniority_level, company } = filter;
+  const {
+    lat,
+    lng,
+    radius_km,
+    exclude_remote,
+    limit,
+    exclude_ids,
+    title: titleNear,
+    q,
+    posted_since,
+    employment_type,
+    workplace_type,
+    seniority_level,
+    description_language,
+    salary_min,
+    country,
+    company,
+    visa_sponsorship,
+  } = filter;
   const conditions: string[] = [
     "j.location_lat IS NOT NULL",
     "j.location_lng IS NOT NULL",
@@ -2040,10 +2385,22 @@ export async function listJobsNear(
   if (exclude_remote) {
     conditions.push("(j.workplace_type IS NULL OR j.workplace_type != 'remote')");
   }
-  if (q && q.trim()) {
-    conditions.push("(j.title LIKE ? OR c.name LIKE ?)");
-    const pattern = `%${q.trim()}%`;
-    bindings.push(pattern, pattern);
+  if (titleNear && titleNear.trim()) {
+    for (const t of titleSearchTokensForSql(titleNear.trim())) {
+      conditions.push("j.title LIKE ?");
+      bindings.push(`%${t}%`);
+    }
+  } else if (q && q.trim()) {
+    const raw = q.trim();
+    const pattern = `%${raw}%`;
+    const slug = companySlugFromSearchQuery(raw);
+    if (slug.length >= 2) {
+      conditions.push("(j.title LIKE ? OR c.slug = ?)");
+      bindings.push(pattern, slug);
+    } else {
+      conditions.push("j.title LIKE ?");
+      bindings.push(pattern);
+    }
   }
   if (exclude_ids && exclude_ids.length > 0) {
     const valid = exclude_ids.filter(
@@ -2059,6 +2416,22 @@ export async function listJobsNear(
     conditions.push(etNear.sql);
     bindings.push(...etNear.bindings);
   }
+  if (workplace_type) {
+    conditions.push("j.workplace_type = ?");
+    bindings.push(workplace_type);
+  }
+  if (description_language) {
+    conditions.push("j.description_language = ?");
+    bindings.push(description_language);
+  }
+  if (salary_min !== undefined) {
+    conditions.push("j.salary_min IS NOT NULL AND j.salary_min >= ?");
+    bindings.push(salary_min);
+  }
+  if (country) {
+    conditions.push("(j.workplace_type = 'remote' OR j.job_country = ?)");
+    bindings.push(country);
+  }
   if (seniority_level) {
     const levels = seniority_level.split(",").map((s) => s.trim()).filter(Boolean);
     if (levels.length === 1) {
@@ -2069,9 +2442,10 @@ export async function listJobsNear(
       bindings.push(...levels);
     }
   }
-  if (company) {
-    conditions.push("c.slug = ?");
-    bindings.push(company);
+  appendCompanySlugConditions(conditions, bindings, company);
+  if (visa_sponsorship === "yes" || visa_sponsorship === "no") {
+    conditions.push("j.visa_sponsorship = ?");
+    bindings.push(visa_sponsorship);
   }
 
   const where = conditions.join(" AND ");
@@ -2085,32 +2459,9 @@ export async function listJobsNear(
     cos(radians(${latLit})) * cos(radians(j.location_lat)) * cos(radians(j.location_lng) - radians(${lngLit}))
   ))`;
 
-  const selectCols = `
-    j.id, j.company_id, j.source_id, j.external_id,
-    j.title, j.locations, j.employment_type, j.workplace_type, j.seniority_level,
-    j.description_language,
-    j.apply_url, j.source_url, j.source_name,
-    j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
-    j.job_summary, j.ai_generated_at, j.embedding_generated_at,
-    j.posted_at, j.first_seen_at, j.dedup_key, j.created_at, j.updated_at,
-    c.name AS company_name, c.logo_url AS company_logo_url,
-    c.description AS company_description, c.website_url AS company_website_url,
-    c.linkedin_url AS company_linkedin_url, c.glassdoor_url AS company_glassdoor_url,
-    c.x_url AS company_x_url,
-    c.instagram_url AS company_instagram_url, c.youtube_url AS company_youtube_url,
-    c.github_url AS company_github_url, c.huggingface_url AS company_huggingface_url,
-    c.tiktok_url AS company_tiktok_url, c.crunchbase_url AS company_crunchbase_url,
-    c.facebook_url AS company_facebook_url,
-    c.employee_count_range AS company_employee_count_range,
-    c.founded_year AS company_founded_year,
-    c.hq_address AS company_hq_address, c.hq_city AS company_hq_city,
-    c.hq_country AS company_hq_country,
-    c.hq_lat AS company_hq_lat, c.hq_lng AS company_hq_lng,
-    c.industry AS company_industry,
-    c.company_type AS company_type, c.total_funding_usd AS company_total_funding_usd`;
-
   const sql = `
-    SELECT ${selectCols}
+    SELECT
+${LIST_JOBS_ROW_SELECT}
     FROM jobs j
     JOIN companies c ON c.id = j.company_id
     WHERE ${where}
@@ -2128,8 +2479,6 @@ export async function listJobsNear(
 export interface FullJobRow extends ListJobsRow {
   description_raw: string | null;
   job_description: string | null;
-  visa_sponsorship: import("../types.ts").VisaSponsorship | null;
-  // seniority_level is inherited from ListJobsRow
 }
 
 export async function getJobById(

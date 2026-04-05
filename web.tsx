@@ -305,8 +305,7 @@ function useSaveRestoreOnToggle<T>(
  *
  * Full documentation: agent-skills-api/README.md
  */
-const DEFAULT_SKILLS_API_URL =
-    "https://skills.curastem.org"
+const DEFAULT_SKILLS_API_URL = "https://skills.curastem.org"
 
 const SKILLS_CACHE_KEY = "curastem_skills_cache"
 
@@ -1512,6 +1511,9 @@ interface LocationInfo {
     city?: string
     region?: string
     country?: string
+    /** From IP geolocation API — used with search_jobs near_lat/near_lng (same as map). */
+    lat?: number
+    lng?: number
 }
 
 interface CachedLocation extends LocationInfo {
@@ -1569,10 +1571,20 @@ async function fetchGeolocationFromAPI(): Promise<LocationInfo | null> {
         if (!res.ok) return null
         const data = await res.json()
         if (data.success === false) return null
+        const lat =
+            typeof data.latitude === "number" && !Number.isNaN(data.latitude)
+                ? data.latitude
+                : undefined
+        const lng =
+            typeof data.longitude === "number" && !Number.isNaN(data.longitude)
+                ? data.longitude
+                : undefined
         return {
             city: data.city,
             region: data.region,
             country: data.country,
+            ...(lat !== undefined ? { lat } : {}),
+            ...(lng !== undefined ? { lng } : {}),
         }
     } catch {
         return null
@@ -1727,6 +1739,24 @@ function extractTextFromGeminiResponse(data: unknown): string {
         .map((p: { text?: string }) => p.text ?? "")
         .join("")
         .trim()
+}
+
+/** First function call in a generateContent response (follow-up turns may include tools). */
+function extractFunctionCallFromGeminiResponse(
+    data: unknown
+): { name: string; args: Record<string, unknown> } | null {
+    const parts = (data as any)?.candidates?.[0]?.content?.parts ?? []
+    for (const p of parts) {
+        const fc = (p as { functionCall?: { name?: string; args?: unknown } })
+            .functionCall
+        if (fc?.name) {
+            return {
+                name: fc.name,
+                args: (fc.args ?? {}) as Record<string, unknown>,
+            }
+        }
+    }
+    return null
 }
 
 // Substrings like "AI" must not match case-insensitively inside "email", etc.
@@ -2021,6 +2051,9 @@ function AdCarousel({
     )
 }
 
+/** Which developer overlay is shown (at most one). */
+type DebugPanelMode = "off" | "p2p" | "tools"
+
 interface Props {
     geminiApiKey: string
     skillsApiUrl?: string
@@ -2029,7 +2062,11 @@ interface Props {
     systemPrompt: string
     accentColor: string
     model: string
-    debugMode?: boolean
+    /**
+     * Off | P2P (bottom-right: room, role, PeerJS/MQTT) | Tools & MCP (bottom-left: tool calls, jobs API).
+     * Mutually exclusive — only one panel.
+     */
+    debugPanel?: DebugPanelMode
     showAds?: boolean
     koahPublisherId?: string
     defaultSuggestions?: string[]
@@ -2073,6 +2110,7 @@ interface JobSnippet {
     apply_url?: string | null
     summary?: string | null
     salary?: string | null
+    visa_sponsorship?: "yes" | "no" | null
 }
 
 interface Message {
@@ -2108,6 +2146,262 @@ interface Message {
         companyName: string
         logoUrl: string | null
     }
+}
+
+function dedupeJobRowsById(rows: any[] | undefined): any[] {
+    if (!rows?.length) return []
+    const out: any[] = []
+    const seen = new Set<string>()
+    for (const j of rows) {
+        const id = j?.id
+        if (typeof id !== "string" || seen.has(id)) continue
+        seen.add(id)
+        out.push(j)
+    }
+    return out
+}
+
+function applySearchJobsExcludeIds(
+    params: URLSearchParams,
+    seenJobIds: Set<string>,
+    argsExclude: unknown
+): void {
+    const merged = new Set<string>(seenJobIds)
+    if (argsExclude != null && argsExclude !== "") {
+        const parts = Array.isArray(argsExclude)
+            ? argsExclude
+            : String(argsExclude).split(",")
+        for (const p of parts) {
+            const id = String(p).trim()
+            if (id.length >= 4 && id.length <= 64) merged.add(id)
+        }
+    }
+    if (merged.size === 0) return
+    params.set("exclude_ids", [...merged].slice(0, 100).join(","))
+}
+
+function recordSearchJobsShownIds(
+    seen: Set<string>,
+    snippets: Array<{ id: string }>
+): void {
+    for (const s of snippets) {
+        if (s.id) seen.add(s.id)
+    }
+}
+
+/** Merge query + keywords into GET /jobs `title` (job title substring — not company name). */
+function buildJobsApiTitle(
+    query: unknown,
+    keywords: unknown
+): string | undefined {
+    const a = typeof query === "string" ? query.trim() : ""
+    const b = typeof keywords === "string" ? keywords.trim() : ""
+    if (!a && !b) return undefined
+    if (!a) return b
+    if (!b) return a
+    return `${a} ${b}`
+}
+
+const SEARCH_JOBS_MAX_POSTED_DAYS = 30
+
+/**
+ * Maps tool arg `posted_within_days` to GET /jobs `since` (unix seconds).
+ * When omitted, returns undefined so the API does not apply a hard recency cutoff —
+ * results are still ordered newest-first (`posted_at DESC`).
+ */
+function postedSinceUnixFromSearchJobsArg(raw: unknown): number | undefined {
+    if (raw == null || raw === "") return undefined
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return undefined
+    const days = Math.min(
+        Math.max(Math.floor(n), 1),
+        SEARCH_JOBS_MAX_POSTED_DAYS
+    )
+    return Math.floor(Date.now() / 1000) - days * 86400
+}
+
+const NEAR_ME_USER_MESSAGE_RE =
+    /\b(near me|nearby|around me|close to me|jobs around|local jobs|in my area|jobs near|near my|in this area|around here)\b/i
+
+/** Model often passes location: "near me" without the user message being in the same string — detect both. */
+const NEAR_ME_LOCATION_ARG_RE =
+    /\b(near me|nearby|around me|around here|close to me|local jobs|in my area|jobs near|near my|in this area)\b|^here$/i
+
+const SEARCH_JOBS_NEAR_ME_RADIUS_KM = "40"
+
+function locationArgImpliesNearMe(
+    args: Record<string, unknown>,
+    params: URLSearchParams
+): boolean {
+    const fromArgs =
+        typeof args.location === "string" ? args.location.trim() : ""
+    const fromParams = params.get("location")?.trim() ?? ""
+    const s = fromArgs || fromParams
+    if (!s) return false
+    return NEAR_ME_LOCATION_ARG_RE.test(s)
+}
+
+/** When refs are cold, resolve IP coords the same way as the lazy useEffect (search_jobs can run first). */
+async function fetchJobsProxyGeoCoords(
+    jobsApiUrl: string | null | undefined
+): Promise<{ lat: number; lng: number } | null> {
+    if (!jobsApiUrl) return null
+    const base = jobsApiUrl.replace(/\/$/, "")
+    try {
+        const ctrl = new AbortController()
+        const t = setTimeout(() => ctrl.abort(), 5000)
+        const r = await fetch(`${base}/geo`, { signal: ctrl.signal })
+        clearTimeout(t)
+        if (!r.ok) return null
+        const d = (await r.json()) as { lat?: unknown; lng?: unknown }
+        const lat = Number(d.lat)
+        const lng = Number(d.lng)
+        if (
+            Number.isFinite(lat) &&
+            Number.isFinite(lng) &&
+            lat >= -90 &&
+            lat <= 90 &&
+            lng >= -180 &&
+            lng <= 180
+        ) {
+            return { lat, lng }
+        }
+    } catch {
+        /* ignore */
+    }
+    return null
+}
+
+/**
+ * Builds GET /jobs `location_or` (comma-separated) when the user names multiple metros.
+ * API matches jobs whose location string contains ANY term — one request covers SF + NYC.
+ */
+function deriveLocationOrForJobsParams(
+    args: Record<string, unknown>
+): string | null {
+    const explicit =
+        typeof args.location_or === "string" ? args.location_or.trim() : ""
+    if (explicit) {
+        return explicit
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean)
+            .slice(0, 12)
+            .join(",")
+    }
+
+    const loc = typeof args.location === "string" ? args.location.trim() : ""
+    if (!loc) return null
+
+    const parts = loc
+        .split(/\s+or\s+/i)
+        .flatMap((segment) => segment.split(/[,;/|]/))
+        .map((p) => p.trim())
+        .filter(Boolean)
+
+    if (parts.length < 2) return null
+
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const p of parts) {
+        const k = p.toLowerCase()
+        if (seen.has(k)) continue
+        seen.add(k)
+        out.push(p)
+        if (out.length >= 12) break
+    }
+    return out.length >= 2 ? out.join(",") : null
+}
+
+function ipGeoFromLocationInfo(
+    locationInfo: LocationInfo | null
+): { lat: number; lng: number } | null {
+    if (
+        locationInfo?.lat != null &&
+        locationInfo?.lng != null &&
+        typeof locationInfo.lat === "number" &&
+        typeof locationInfo.lng === "number" &&
+        !Number.isNaN(locationInfo.lat) &&
+        !Number.isNaN(locationInfo.lng)
+    ) {
+        return { lat: locationInfo.lat, lng: locationInfo.lng }
+    }
+    return null
+}
+
+type JobSearchGeoRefs = {
+    jobsProxyGeoRef: React.MutableRefObject<{ lat: number; lng: number } | null>
+}
+
+/**
+ * Prefer GET /jobs distance search (near_lat, near_lng, radius_km) over the `location`
+ * substring filter so results cover a metro area and match the map.
+ *
+ * Chat never uses browser GPS or Photon — only GET /geo on the jobs proxy (server IP) and
+ * client IP geolocation (`locationInfo`). Named places stay as `location` text on the API.
+ * If the model already passed near_lat/near_lng, drop `location` to avoid conflicting filters.
+ */
+async function applySearchJobsGeoResolution(
+    params: URLSearchParams,
+    args: Record<string, unknown>,
+    lastUserMessage: string,
+    ipGeo: { lat: number; lng: number } | null,
+    geoRefs: JobSearchGeoRefs,
+    jobsApiUrl: string | null | undefined
+): Promise<void> {
+    const nearLatP = params.get("near_lat")
+    const nearLngP = params.get("near_lng")
+    const hasNearInParams =
+        nearLatP != null &&
+        nearLngP != null &&
+        !Number.isNaN(parseFloat(nearLatP)) &&
+        !Number.isNaN(parseFloat(nearLngP))
+
+    if (hasNearInParams) {
+        params.delete("location")
+        if (!params.has("radius_km")) params.set("radius_km", "50")
+        if (!params.has("exclude_remote")) params.set("exclude_remote", "true")
+        return
+    }
+
+    if (params.has("location_or")) {
+        params.delete("location")
+        // Distance search ignores location_or on the server — drop geo so GET /jobs uses the OR filter.
+        params.delete("near_lat")
+        params.delete("near_lng")
+        params.delete("radius_km")
+        return
+    }
+
+    const userWantsNear =
+        NEAR_ME_USER_MESSAGE_RE.test(lastUserMessage) ||
+        locationArgImpliesNearMe(args, params)
+
+    if (userWantsNear) {
+        let jobsGeo = geoRefs.jobsProxyGeoRef.current
+        if (!jobsGeo && jobsApiUrl) {
+            const fresh = await fetchJobsProxyGeoCoords(jobsApiUrl)
+            if (fresh) {
+                geoRefs.jobsProxyGeoRef.current = fresh
+                jobsGeo = fresh
+            }
+        }
+        const best = jobsGeo ?? ipGeo ?? null
+        if (best) {
+            params.delete("location")
+            params.set("near_lat", String(best.lat))
+            params.set("near_lng", String(best.lng))
+            if (!params.has("radius_km"))
+                params.set("radius_km", SEARCH_JOBS_NEAR_ME_RADIUS_KM)
+            if (!params.has("exclude_remote"))
+                params.set("exclude_remote", "true")
+        } else {
+            params.delete("location")
+        }
+        return
+    }
+
+    // Named places: leave `location` on the query for API substring match (no Photon / no coords).
 }
 
 interface FileAttachmentProps {
@@ -10011,17 +10305,21 @@ const ChatInput = React.memo(function ChatInput({
     )
 })
 
-// --- HELPER COMPONENT: DEBUG CONSOLE ---
-function DebugConsole({
+// --- HELPER: DEBUG PANEL (shared chrome for P2P vs Tools & MCP) ---
+function DebugPanel({
+    title,
+    position,
     logs,
-    role,
-    status,
     themeColors,
+    meta,
+    onClear,
 }: {
+    title: string
+    position: "left" | "right"
     logs: string[]
-    role?: string
-    status: string
     themeColors: typeof darkColors
+    meta: React.ReactNode
+    onClear: () => void
 }) {
     const scrollRef = React.useRef<HTMLDivElement>(null)
     const [copied, setCopied] = React.useState(false)
@@ -10045,6 +10343,24 @@ function DebugConsole({
             })
     }
 
+    const btnStyle: React.CSSProperties = {
+        background: themeColors.semantic.accent,
+        color: themeColors.text.primary,
+        border: "none",
+        borderRadius: 6,
+        padding: "4px 8px",
+        fontSize: 10,
+        cursor: "pointer",
+        fontWeight: "600",
+        transition: "all 0.2s",
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 28,
+        minHeight: 28,
+    }
+
     return (
         <motion.div
             drag
@@ -10053,9 +10369,9 @@ function DebugConsole({
             style={{
                 position: "fixed",
                 bottom: 20,
-                right: 20,
-                width: 300,
-                height: 400,
+                ...(position === "left" ? { left: 20 } : { right: 20 }),
+                width: 380,
+                height: 440,
                 background: themeColors.surfaceHighlight,
                 color: themeColors.text.secondary,
                 fontFamily: "monospace",
@@ -10071,7 +10387,6 @@ function DebugConsole({
             }}
             whileDrag={{ cursor: "grabbing", scale: 1.01 }}
         >
-            {/* Status Bar */}
             <div
                 style={{
                     display: "flex",
@@ -10082,72 +10397,9 @@ function DebugConsole({
                     flexShrink: 0,
                 }}
             >
-                <div
-                    style={{
-                        display: "flex",
-                        gap: 8,
-                        alignItems: "center",
-                        fontSize: 13,
-                    }}
-                >
-                    <span style={{ opacity: 0.7 }}>🔗 Room:</span>
-                    <span
-                        style={{
-                            color: themeColors.semantic.accent,
-                            fontWeight: "bold",
-                        }}
-                    >
-                        {typeof window !== "undefined"
-                            ? window.location.hash || "(no hash)"
-                            : "(no hash)"}
-                    </span>
-                </div>
-                <div
-                    style={{
-                        display: "flex",
-                        gap: 8,
-                        alignItems: "center",
-                        fontSize: 13,
-                    }}
-                >
-                    <span style={{ opacity: 0.7 }}>👤 Role:</span>
-                    <span
-                        style={{
-                            color: role
-                                ? themeColors.coloredAccents.rainbow[3]
-                                : themeColors.coloredAccents.rainbow[1],
-                            fontWeight: "bold",
-                        }}
-                    >
-                        {role || "None (Passive Mode)"}
-                    </span>
-                </div>
-                <div
-                    style={{
-                        display: "flex",
-                        gap: 8,
-                        alignItems: "center",
-                        fontSize: 13,
-                    }}
-                >
-                    <span style={{ opacity: 0.7 }}>📊 Status:</span>
-                    <span
-                        style={{
-                            color:
-                                status === "connected"
-                                    ? themeColors.coloredAccents.rainbow[3]
-                                    : status === "searching"
-                                      ? themeColors.coloredAccents.rainbow[1]
-                                      : themeColors.text.tertiary,
-                            fontWeight: "bold",
-                        }}
-                    >
-                        {status}
-                    </span>
-                </div>
+                {meta}
             </div>
 
-            {/* Header with copy button */}
             <div
                 style={{
                     display: "flex",
@@ -10155,6 +10407,7 @@ function DebugConsole({
                     alignItems: "center",
                     marginBottom: 6,
                     flexShrink: 0,
+                    gap: 8,
                 }}
             >
                 <div
@@ -10162,32 +10415,64 @@ function DebugConsole({
                         color: themeColors.text.primary,
                         fontWeight: "bold",
                         fontSize: 13,
+                        minWidth: 0,
                     }}
                 >
-                    🔍 Debug Logs
+                    {title}
                 </div>
-                <button
-                    onClick={handleCopy}
+                <div
                     style={{
-                        background: copied
-                            ? themeColors.coloredAccents.rainbow[3]
-                            : themeColors.semantic.accent,
-                        color: themeColors.text.primary,
-                        border: "none",
-                        borderRadius: 6,
-                        padding: "4px 8px",
-                        fontSize: 10,
-                        cursor: "pointer",
-                        fontWeight: "600",
-                        transition: "all 0.2s",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
                         flexShrink: 0,
                     }}
                 >
-                    {copied ? "✓ Copied" : "Copy"}
-                </button>
+                    <button
+                        type="button"
+                        title="Clear log"
+                        aria-label="Clear log"
+                        onClick={(e) => {
+                            e.stopPropagation()
+                            onClear()
+                        }}
+                        style={btnStyle}
+                    >
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden
+                        >
+                            <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+                            <path d="M21 3v5h-5" />
+                        </svg>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={(e) => {
+                            e.stopPropagation()
+                            handleCopy()
+                        }}
+                        style={{
+                            ...btnStyle,
+                            background: copied
+                                ? themeColors.coloredAccents.rainbow[3]
+                                : themeColors.semantic.accent,
+                            minWidth: "auto",
+                            padding: "4px 10px",
+                        }}
+                    >
+                        {copied ? "✓ Copied" : "Copy"}
+                    </button>
+                </div>
             </div>
 
-            {/* Logs */}
             <div
                 ref={scrollRef}
                 style={{
@@ -10197,12 +10482,12 @@ function DebugConsole({
                     lineHeight: 1.3,
                 }}
             >
-                {logs.slice(-100).map((log, i) => (
+                {logs.slice(-100).map((line, i) => (
                     <div
                         key={i}
                         style={{ marginBottom: 3, wordBreak: "break-word" }}
                     >
-                        {log}
+                        {line}
                     </div>
                 ))}
             </div>
@@ -10745,7 +11030,9 @@ function jobDetailStateFromCacheEntry(
         detailJobState: c.detailJobState ?? null,
         detailJobCountry: c.detailJobCountry ?? null,
         detailSeniorityLevel: c.detailSeniorityLevel ?? null,
-        detailLocations: Array.isArray(c.detailLocations) ? c.detailLocations : null,
+        detailLocations: Array.isArray(c.detailLocations)
+            ? c.detailLocations
+            : null,
         detailSalary: c.detailSalary ?? null,
         detailLocationPoints: Array.isArray(c.detailLocationPoints)
             ? c.detailLocationPoints
@@ -11077,7 +11364,7 @@ const BigJobCard = ({
     const pad = isMobile ? 20 : 24
     const logoSz = isMobile ? 20 : 32
     const companyFs = isMobile ? 12 : 14
-    const titleFs = isMobile ? 17 : 24
+    const titleFs = isMobile ? 16 : 21
     const timeFs = isMobile ? 12 : 14
     return (
         <div
@@ -11269,7 +11556,7 @@ const StackedJobCard = ({
 }) => {
     const px = isMobile ? 20 : 24
     const py = isMobile ? 16 : 20
-    const titleFs = isMobile ? 15 : 17
+    const titleFs = isMobile ? 15 : 16
     const metaFs = isMobile ? 12 : 14
     return (
         <div
@@ -11426,7 +11713,7 @@ const RowJobCard = ({
     themeColors: typeof darkColors
     isMobile?: boolean
 }) => {
-    const titleFs = isMobile ? 15 : 17
+    const titleFs = isMobile ? 15 : 16
     const metaFs = isMobile ? 12 : 14
     return (
         <div
@@ -11434,7 +11721,7 @@ const RowJobCard = ({
             style={{
                 alignSelf: "stretch",
                 minWidth: 0,
-                height: isMobile ? 58 : 60,
+                height: 56,
                 paddingLeft: 24,
                 paddingRight: 24,
                 boxSizing: "border-box",
@@ -11442,7 +11729,7 @@ const RowJobCard = ({
                 borderRadius: 48,
                 justifyContent: "flex-start",
                 alignItems: "center",
-                gap: 16,
+                gap: 8,
                 display: "flex",
                 overflow: "hidden",
                 cursor: job ? "pointer" : "default",
@@ -12112,7 +12399,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                         job_country?: string | null
                         location_lat?: number | null
                         location_lng?: number | null
-                        location_points?: Array<{ lat: number; lng: number }> | null
+                        location_points?: Array<{
+                            lat: number
+                            lng: number
+                        }> | null
                         company?: {
                             name?: string | null
                             description?: string | null
@@ -12399,7 +12689,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     const locationDisplay = isRemote
         ? null
         : (() => {
-              const locs = (effectiveLocations ?? []).map((s) => s.trim()).filter(Boolean)
+              const locs = (effectiveLocations ?? [])
+                  .map((s) => s.trim())
+                  .filter(Boolean)
               if (locs.length > 1) {
                   return joinLocationsOr(locs.map((s) => formatLocationPart(s)))
               }
@@ -13843,7 +14135,9 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         setIsShareHovered(false)
         // Share the Curastem deep link so recipients land on our page, not the ATS.
         const origin =
-            typeof window !== "undefined" ? window.location.origin : "https://curastem.com"
+            typeof window !== "undefined"
+                ? window.location.origin
+                : "https://curastem.com"
         const url = `${origin}/?job=${job.id}`
         const text = `${job.title} at ${job.company.name}`
         if (typeof navigator === "undefined") return
@@ -15104,10 +15398,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const pts: Array<{ lat: number; lng: number }> = []
             if (j.location_points && j.location_points.length > 0) {
                 for (const p of j.location_points) {
-                    if (
-                        typeof p.lat === "number" &&
-                        typeof p.lng === "number"
-                    )
+                    if (typeof p.lat === "number" && typeof p.lng === "number")
                         pts.push({ lat: p.lat, lng: p.lng })
                 }
             }
@@ -15124,12 +15415,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             // Nearest site — multi-location roles may list several offices.
             let km = Infinity
             for (const p of pts) {
-                const d = haversineKm(
-                    userLoc.lat,
-                    userLoc.lng,
-                    p.lat,
-                    p.lng
-                )
+                const d = haversineKm(userLoc.lat, userLoc.lng, p.lat, p.lng)
                 if (d < km) km = d
             }
             if (km > FIFTY_MILES_KM) continue
@@ -15994,17 +16280,46 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         setFilterTypeOpen(false)
                                         setFilterDropdownPos(null)
                                     }}
-                                    onWheel={isMobile && !mobileFeedExpanded ? () => snapMobileFeed(true) : undefined}
-                                    onPointerDown={isMobile && !mobileFeedExpanded ? (e) => {
-                                        if ((e.target as HTMLElement).closest("input,button,a")) return
-                                        handleMobileFeedDragStart(e)
-                                    } : undefined}
-                                    onTouchStart={isMobile && !mobileFeedExpanded ? (e) => {
-                                        if ((e.target as HTMLElement).closest("input,button,a")) return
-                                        handleMobileFeedDragStart(e)
-                                    } : undefined}
+                                    onWheel={
+                                        isMobile && !mobileFeedExpanded
+                                            ? () => snapMobileFeed(true)
+                                            : undefined
+                                    }
+                                    onPointerDown={
+                                        isMobile && !mobileFeedExpanded
+                                            ? (e) => {
+                                                  if (
+                                                      (
+                                                          e.target as HTMLElement
+                                                      ).closest(
+                                                          "input,button,a"
+                                                      )
+                                                  )
+                                                      return
+                                                  handleMobileFeedDragStart(e)
+                                              }
+                                            : undefined
+                                    }
+                                    onTouchStart={
+                                        isMobile && !mobileFeedExpanded
+                                            ? (e) => {
+                                                  if (
+                                                      (
+                                                          e.target as HTMLElement
+                                                      ).closest(
+                                                          "input,button,a"
+                                                      )
+                                                  )
+                                                      return
+                                                  handleMobileFeedDragStart(e)
+                                              }
+                                            : undefined
+                                    }
                                     style={{
-                                        overflowY: isMobile && !mobileFeedExpanded ? "hidden" : "auto",
+                                        overflowY:
+                                            isMobile && !mobileFeedExpanded
+                                                ? "hidden"
+                                                : "auto",
                                         overflowX: "hidden",
                                         padding: isMobile
                                             ? "0 12px 12px"
@@ -16246,7 +16561,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                 value={
                                                                     filterDays
                                                                 }
-                                                                onChange={(e) => {
+                                                                onChange={(
+                                                                    e
+                                                                ) => {
                                                                     haptic.light()
                                                                     setFilterDays(
                                                                         e.target
@@ -16378,7 +16695,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                 value={
                                                                     filterSeniority
                                                                 }
-                                                                onChange={(e) => {
+                                                                onChange={(
+                                                                    e
+                                                                ) => {
                                                                     haptic.light()
                                                                     setFilterSeniority(
                                                                         e.target
@@ -16509,7 +16828,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                 value={
                                                                     filterType
                                                                 }
-                                                                onChange={(e) => {
+                                                                onChange={(
+                                                                    e
+                                                                ) => {
                                                                     haptic.light()
                                                                     setFilterType(
                                                                         e.target
@@ -16849,19 +17170,29 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                                             )
                                                                         }
                                                                         onFocus={() => {
-                                                                            if (skipSearchFocusExpandRef.current) {
+                                                                            if (
+                                                                                skipSearchFocusExpandRef.current
+                                                                            ) {
                                                                                 skipSearchFocusExpandRef.current = false
                                                                                 return
                                                                             }
-                                                                            if (!mobileFeedExpandedRef.current) {
+                                                                            if (
+                                                                                !mobileFeedExpandedRef.current
+                                                                            ) {
                                                                                 mobileFeedExpandedBySearchRef.current = true
-                                                                                snapMobileFeed(true)
+                                                                                snapMobileFeed(
+                                                                                    true
+                                                                                )
                                                                             }
                                                                         }}
                                                                         onBlur={() => {
-                                                                            if (mobileFeedExpandedBySearchRef.current) {
+                                                                            if (
+                                                                                mobileFeedExpandedBySearchRef.current
+                                                                            ) {
                                                                                 mobileFeedExpandedBySearchRef.current = false
-                                                                                snapMobileFeed(false)
+                                                                                snapMobileFeed(
+                                                                                    false
+                                                                                )
                                                                             }
                                                                         }}
                                                                         placeholder={
@@ -17521,8 +17852,8 @@ function MapPreviewCard({
     const staticMapUrl = React.useMemo(() => {
         if (!googleMapsApiKey || !geoCoords) return null
         const { lat, lng } = geoCoords
-        const w = isMobile ? 640 : 544
-        const h = isMobile ? 328 : 544
+        const w = isMobile ? 640 : 552
+        const h = isMobile ? 328 : 552
         const params = new URLSearchParams({
             center: `${lat},${lng}`,
             zoom: "12",
@@ -17619,7 +17950,11 @@ const HomepageJobs = React.memo(function HomepageJobs({
     >(null)
     const geoCacheUrlRef = React.useRef<string | null>(null)
     const geoResolversRef = React.useRef<
-        Array<(v: { lat: number; lng: number; country: string | null } | null) => void>
+        Array<
+            (
+                v: { lat: number; lng: number; country: string | null } | null
+            ) => void
+        >
     >([])
     const getGeo = React.useCallback((): Promise<{
         lat: number
@@ -17666,7 +18001,10 @@ const HomepageJobs = React.memo(function HomepageJobs({
                         ? {
                               lat: lat as number,
                               lng: lng as number,
-                              country: typeof country === "string" ? country.toUpperCase() : null,
+                              country:
+                                  typeof country === "string"
+                                      ? country.toUpperCase()
+                                      : null,
                           }
                         : null
                     geoCacheRef.current = result
@@ -17701,7 +18039,9 @@ const HomepageJobs = React.memo(function HomepageJobs({
         const fetchJ = (url: string) => {
             const ctrl = new AbortController()
             const id = setTimeout(() => ctrl.abort(), 8000)
-            return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
+            return fetch(url, { signal: ctrl.signal }).finally(() =>
+                clearTimeout(id)
+            )
         }
         const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
         const apiMeta = async (
@@ -17716,11 +18056,21 @@ const HomepageJobs = React.memo(function HomepageJobs({
             if (country) u.searchParams.set("country", country)
             return fetchJ(u.toString())
                 .then((r) => (r.ok ? r.json() : { data: [], meta: {} }))
-                .then((j: { data?: unknown; meta?: { next_cursor?: string | null } }) => ({
-                    data: Array.isArray(j.data) ? (j.data as HomepageJob[]) : [],
-                    next_cursor: j.meta?.next_cursor ?? null,
+                .then(
+                    (j: {
+                        data?: unknown
+                        meta?: { next_cursor?: string | null }
+                    }) => ({
+                        data: Array.isArray(j.data)
+                            ? (j.data as HomepageJob[])
+                            : [],
+                        next_cursor: j.meta?.next_cursor ?? null,
+                    })
+                )
+                .catch(() => ({
+                    data: [] as HomepageJob[],
+                    next_cursor: null as string | null,
                 }))
-                .catch(() => ({ data: [] as HomepageJob[], next_cursor: null as string | null }))
         }
 
         ;(async () => {
@@ -17757,11 +18107,14 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 setNearbyBasedOnLocation(false)
                 // Filter by country; fall back to global if too sparse.
                 const first = await apiMeta(new URLSearchParams(), 50, country)
-                const firstFallback = first.data.length < 8 && country
-                    ? await apiMeta(new URLSearchParams(), 50)
-                    : null
+                const firstFallback =
+                    first.data.length < 8 && country
+                        ? await apiMeta(new URLSearchParams(), 50)
+                        : null
                 const poolData = firstFallback ? firstFallback.data : first.data
-                const poolCursor = firstFallback ? firstFallback.next_cursor : first.next_cursor
+                const poolCursor = firstFallback
+                    ? firstFallback.next_cursor
+                    : first.next_cursor
                 const near = dedupeByCompany(byNewestJobs(poolData), 8)
                 if (!cancelled) {
                     setNearJobs(near)
@@ -17772,12 +18125,18 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 if (poolCursor) {
                     const sp = new URLSearchParams()
                     sp.set("cursor", poolCursor)
-                    const second = await apiMeta(sp, 50, firstFallback ? null : country)
+                    const second = await apiMeta(
+                        sp,
+                        50,
+                        firstFallback ? null : country
+                    )
                     picks = picksFromGlobal(poolData, second.data, nearIds)
                 }
                 if (picks.length < 5 && poolData.length) {
                     picks = dedupeByCompany(
-                        byNewestJobs(poolData.filter((j) => !nearIds.has(j.id))),
+                        byNewestJobs(
+                            poolData.filter((j) => !nearIds.has(j.id))
+                        ),
                         10
                     )
                 }
@@ -17805,7 +18164,10 @@ const HomepageJobs = React.memo(function HomepageJobs({
             let near = dedupeByCompany(byNewestJobs(primaryRes.data), 8)
             if (near.length < 8) {
                 near = dedupeByCompany(
-                    [...byNewestJobs(primaryRes.data), ...byNewestJobs(globalFirst.data)],
+                    [
+                        ...byNewestJobs(primaryRes.data),
+                        ...byNewestJobs(globalFirst.data),
+                    ],
                     8
                 )
             }
@@ -17816,14 +18178,19 @@ const HomepageJobs = React.memo(function HomepageJobs({
             const nearIds = new Set(near.map((j) => j.id))
             let picks: HomepageJob[] = []
             // If country filter yielded too few, retry without it for Top picks
-            const globalFirstEffective = globalFirst.data.length < 5 && country
-                ? await apiMeta(new URLSearchParams(), 50)
-                : globalFirst
+            const globalFirstEffective =
+                globalFirst.data.length < 5 && country
+                    ? await apiMeta(new URLSearchParams(), 50)
+                    : globalFirst
             if (globalFirstEffective.next_cursor) {
                 const sp = new URLSearchParams()
                 sp.set("cursor", globalFirstEffective.next_cursor)
                 const globalSecond = await apiMeta(sp, 50)
-                picks = picksFromGlobal(globalFirstEffective.data, globalSecond.data, nearIds)
+                picks = picksFromGlobal(
+                    globalFirstEffective.data,
+                    globalSecond.data,
+                    nearIds
+                )
             }
             if (picks.length < 5) {
                 picks = dedupeByCompany(
@@ -17862,10 +18229,17 @@ const HomepageJobs = React.memo(function HomepageJobs({
         const fetchJ = (url: string) => {
             const ctrl = new AbortController()
             const id = setTimeout(() => ctrl.abort(), 10000)
-            return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
+            return fetch(url, { signal: ctrl.signal }).finally(() =>
+                clearTimeout(id)
+            )
         }
         const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
-        const api = (params: string, limit = 6, since = since7d, country?: string | null): Promise<HomepageJob[]> => {
+        const api = (
+            params: string,
+            limit = 6,
+            since = since7d,
+            country?: string | null
+        ): Promise<HomepageJob[]> => {
             const u = new URL(`${jobsApiUrl}/jobs`)
             if (params) {
                 const sp = new URLSearchParams(params)
@@ -17876,7 +18250,10 @@ const HomepageJobs = React.memo(function HomepageJobs({
             if (country) u.searchParams.set("country", country)
             return fetchJ(u.toString())
                 .then((r) => (r.ok ? r.json() : { data: [] }))
-                .then(({ data }) => (Array.isArray(data) ? data : []) as HomepageJob[])
+                .then(
+                    ({ data }) =>
+                        (Array.isArray(data) ? data : []) as HomepageJob[]
+                )
                 .catch(() => [] as HomepageJob[])
         }
 
@@ -17919,12 +18296,16 @@ const HomepageJobs = React.memo(function HomepageJobs({
                         setNearJobs((prev) => {
                             const seenIds = new Set(prev.map((j) => j.id))
                             const seenCos = new Set(
-                                prev.map((j) => j.company.name.trim().toLowerCase())
+                                prev.map((j) =>
+                                    j.company.name.trim().toLowerCase()
+                                )
                             )
                             const toAdd = byNewestJobs(jobs).filter(
                                 (j) =>
                                     !seenIds.has(j.id) &&
-                                    !seenCos.has(j.company.name.trim().toLowerCase())
+                                    !seenCos.has(
+                                        j.company.name.trim().toLowerCase()
+                                    )
                             )
                             return [...prev, ...toAdd].slice(0, 8)
                         })
@@ -17971,7 +18352,10 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     return [...prev, ...toAdd].slice(0, 8)
                 })
             }
-            return dedupeByCompany(byNewestJobs([...primary, ...specResults.flat()]), 8)
+            return dedupeByCompany(
+                byNewestJobs([...primary, ...specResults.flat()]),
+                8
+            )
         })
 
         const safetyTimer = setTimeout(() => {
@@ -17999,11 +18383,18 @@ const HomepageJobs = React.memo(function HomepageJobs({
         const fetchJ = (url: string) => {
             const ctrl = new AbortController()
             const id = setTimeout(() => ctrl.abort(), 10000)
-            return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id))
+            return fetch(url, { signal: ctrl.signal }).finally(() =>
+                clearTimeout(id)
+            )
         }
-        const since7d  = Math.floor(Date.now() / 1000) - 7  * 24 * 60 * 60
+        const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
         const since14d = Math.floor(Date.now() / 1000) - 14 * 24 * 60 * 60
-        const api = (params: string, limit = 6, since = since7d, country?: string | null): Promise<HomepageJob[]> => {
+        const api = (
+            params: string,
+            limit = 6,
+            since = since7d,
+            country?: string | null
+        ): Promise<HomepageJob[]> => {
             const u = new URL(`${jobsApiUrl}/jobs`)
             if (params) {
                 const sp = new URLSearchParams(params)
@@ -18014,15 +18405,24 @@ const HomepageJobs = React.memo(function HomepageJobs({
             if (country) u.searchParams.set("country", country)
             return fetchJ(u.toString())
                 .then((r) => (r.ok ? r.json() : { data: [] }))
-                .then(({ data }) => (Array.isArray(data) ? data : []) as HomepageJob[])
+                .then(
+                    ({ data }) =>
+                        (Array.isArray(data) ? data : []) as HomepageJob[]
+                )
                 .catch(() => [] as HomepageJob[])
         }
 
-        const fallbackQuery = FALLBACK_QUERIES[Math.floor(Math.random() * FALLBACK_QUERIES.length)]
+        const fallbackQuery =
+            FALLBACK_QUERIES[
+                Math.floor(Math.random() * FALLBACK_QUERIES.length)
+            ]
         let fallbackPromise: Promise<HomepageJob[]> | null = null
         const getFallback = (): Promise<HomepageJob[]> => {
             if (!fallbackPromise)
-                fallbackPromise = api(`q=${encodeURIComponent(fallbackQuery)}`, 8)
+                fallbackPromise = api(
+                    `q=${encodeURIComponent(fallbackQuery)}`,
+                    8
+                )
             return fallbackPromise
         }
 
@@ -18047,7 +18447,12 @@ const HomepageJobs = React.memo(function HomepageJobs({
             }
             // Step 2: widen to 14 days with country filter.
             const stillNeeded = 10 - deduped.length
-            const wider = await api(`q=${q}`, stillNeeded + 8, since14d, country || undefined)
+            const wider = await api(
+                `q=${q}`,
+                stillNeeded + 8,
+                since14d,
+                country || undefined
+            )
             if (cancelled) return deduped
             deduped = dedupeByCompany([...primary, ...wider], 10)
             if (!cancelled) {
@@ -18066,10 +18471,17 @@ const HomepageJobs = React.memo(function HomepageJobs({
             return final
         })()
 
-        const safetyTimer = setTimeout(() => { if (!cancelled) setLoadingPicks(false) }, 12000)
-        picksPromise.catch(() => { if (!cancelled) setLoadingPicks(false) })
+        const safetyTimer = setTimeout(() => {
+            if (!cancelled) setLoadingPicks(false)
+        }, 12000)
+        picksPromise.catch(() => {
+            if (!cancelled) setLoadingPicks(false)
+        })
 
-        return () => { cancelled = true; clearTimeout(safetyTimer) }
+        return () => {
+            cancelled = true
+            clearTimeout(safetyTimer)
+        }
     }, [jobsApiUrl, userQuery])
 
     React.useEffect(() => {
@@ -18175,90 +18587,38 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     display: "flex",
                 }}
             >
-            <div
-                style={{
-                    alignSelf: "stretch",
-                    flexDirection: "column",
-                    gap: m ? 24 : 48,
-                    display: "flex",
-                }}
-            >
                 <div
                     style={{
                         alignSelf: "stretch",
-                        textAlign: "center",
-                        color: themeColors.text.primary,
-                        fontSize: m ? 21 : 28,
-                        fontFamily: "Inter",
-                        fontWeight: 600,
-                        lineHeight: 1,
+                        flexDirection: "column",
+                        gap: m ? 24 : 48,
+                        display: "flex",
                     }}
                 >
-                    What's your next job?
-                </div>
-                {m ? (
-                    // Mobile: 4 row cards on top, map preview card at bottom
                     <div
                         style={{
                             alignSelf: "stretch",
-                            flexDirection: "column",
-                            gap: 12,
-                            display: "flex",
+                            textAlign: "center",
+                            color: themeColors.text.primary,
+                            fontSize: m ? 21 : 28,
+                            fontFamily: "Inter",
+                            fontWeight: 600,
+                            lineHeight: 1,
                         }}
                     >
-                        {nearList.slice(0, 4).map((job, i) => (
-                            <RowJobCard
-                                key={job?.id ?? i}
-                                job={job}
-                                onClick={job ? () => openJob(job) : undefined}
-                                themeColors={themeColors}
-                                isMobile
-                            />
-                        ))}
-                        <MapPreviewCard
-                            googleMapsApiKey={googleMapsApiKey}
-                            geoCoords={geoCoords}
-                            borderRadius={36}
-                            style={{ height: 164 }}
-                            onClick={onOpenMap}
-                            themeColors={themeColors}
-                            isMobile
-                        />
+                        What's your next job?
                     </div>
-                ) : (
-                    // Desktop: map preview card left, 4 row cards right
-                    <div
-                        style={{
-                            alignSelf: "stretch",
-                            justifyContent: "center",
-                            alignItems: "stretch",
-                            gap: 12,
-                            display: "flex",
-                        }}
-                    >
-                        <MapPreviewCard
-                            googleMapsApiKey={googleMapsApiKey}
-                            geoCoords={geoCoords}
-                            borderRadius={48}
-                            style={{
-                                width: 272,
-                                minWidth: 272,
-                                maxWidth: 272,
-                                minHeight: 272,
-                            }}
-                            onClick={onOpenMap}
-                            themeColors={themeColors}
-                        />
+                    {m ? (
+                        // Mobile: 4 row cards on top, map preview card at bottom
                         <div
                             style={{
-                                flex: "1 1 0",
-                                minWidth: 0,
+                                alignSelf: "stretch",
                                 flexDirection: "column",
                                 gap: 12,
                                 display: "flex",
                             }}
                         >
-                            {nearList.slice(1, 5).map((job, i) => (
+                            {nearList.slice(0, 4).map((job, i) => (
                                 <RowJobCard
                                     key={job?.id ?? i}
                                     job={job}
@@ -18266,78 +18626,134 @@ const HomepageJobs = React.memo(function HomepageJobs({
                                         job ? () => openJob(job) : undefined
                                     }
                                     themeColors={themeColors}
+                                    isMobile
                                 />
                             ))}
+                            <MapPreviewCard
+                                googleMapsApiKey={googleMapsApiKey}
+                                geoCoords={geoCoords}
+                                borderRadius={36}
+                                style={{ height: 164 }}
+                                onClick={onOpenMap}
+                                themeColors={themeColors}
+                                isMobile
+                            />
                         </div>
-                    </div>
-                )}
-            </div>
+                    ) : (
+                        // Desktop: map preview card left, 4 row cards right
+                        <div
+                            style={{
+                                alignSelf: "stretch",
+                                justifyContent: "center",
+                                alignItems: "stretch",
+                                gap: 12,
+                                display: "flex",
+                            }}
+                        >
+                            <MapPreviewCard
+                                googleMapsApiKey={googleMapsApiKey}
+                                geoCoords={geoCoords}
+                                borderRadius={48}
+                                style={{
+                                    width: 276,
+                                    minWidth: 276,
+                                    maxWidth: 276,
+                                    height: 276,
+                                    minHeight: 276,
+                                }}
+                                onClick={onOpenMap}
+                                themeColors={themeColors}
+                            />
+                            <div
+                                style={{
+                                    flex: "1 1 0",
+                                    minWidth: 0,
+                                    flexDirection: "column",
+                                    gap: 12,
+                                    display: "flex",
+                                }}
+                            >
+                                {nearList.slice(1, 5).map((job, i) => (
+                                    <RowJobCard
+                                        key={job?.id ?? i}
+                                        job={job}
+                                        onClick={
+                                            job ? () => openJob(job) : undefined
+                                        }
+                                        themeColors={themeColors}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
 
-            {/* ── CUSTOMIZE ── */}
-            <div
-                onClick={() => {
-                    haptic.light()
-                    onOpenSettings()
-                }}
-                style={{
-                    alignSelf: "stretch",
-                    height: m ? 58 : 60,
-                    paddingLeft: 24,
-                    paddingRight: 24,
-                    boxSizing: "border-box",
-                    borderRadius: 48,
-                    border:
-                        themeColors.background === lightColors.background
-                            ? `0.33px solid ${themeColors.border.subtle}`
-                            : `1px solid ${themeColors.border.subtle}`,
-                    justifyContent: "flex-start",
-                    alignItems: "center",
-                    gap: 4,
-                    display: "inline-flex",
-                    cursor: "pointer",
-                }}
-            >
+                {/* ── CUSTOMIZE ── */}
                 <div
+                    onClick={() => {
+                        haptic.light()
+                        onOpenSettings()
+                    }}
                     style={{
-                        flex: "1 1 0",
-                        color: themeColors.text.primary,
-                        fontSize: 15,
-                        fontFamily: "Inter",
-                        fontWeight: 400,
-                        lineHeight: 1.2,
+                        alignSelf: "stretch",
+                        height: 56,
+                        paddingLeft: 24,
+                        paddingRight: 24,
+                        boxSizing: "border-box",
+                        borderRadius: 48,
+                        border:
+                            themeColors.background === lightColors.background
+                                ? `0.33px solid ${themeColors.border.subtle}`
+                                : `1px solid ${themeColors.border.subtle}`,
+                        justifyContent: "flex-start",
+                        alignItems: "center",
+                        gap: 4,
+                        display: "inline-flex",
+                        cursor: "pointer",
                     }}
                 >
-                    Customize
-                </div>
-                {/* Magic pencil icon */}
-                <div
-                    data-svg-wrapper
-                    data-layer="magic pencil icon"
-                    style={{
-                        flexShrink: 0,
-                        opacity: 0.95,
-                        display: "flex",
-                    }}
-                >
-                    <svg
-                        width="17"
-                        height="16"
-                        viewBox="0 0 17 16"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
+                    <div
+                        style={{
+                            flex: "1 1 0",
+                            color: themeColors.text.primary,
+                            fontSize: 16,
+                            fontFamily: "Inter",
+                            fontWeight: 400,
+                            lineHeight: 1.2,
+                        }}
                     >
-                        <path
-                            d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z"
-                            fill={themeColors.text.primary}
-                        />
-                        <path
-                            d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z"
-                            fill={themeColors.text.primary}
-                        />
-                    </svg>
+                        Customize
+                    </div>
+                    {/* Magic pencil icon */}
+                    <div
+                        data-svg-wrapper
+                        data-layer="magic pencil icon"
+                        style={{
+                            flexShrink: 0,
+                            opacity: 0.95,
+                            display: "flex",
+                        }}
+                    >
+                        <svg
+                            width="17"
+                            height="16"
+                            viewBox="0 0 17 16"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                d="M10.387 1.78925C11.8675 0.308937 14.2683 0.308811 15.7487 1.78925C17.2286 3.26972 17.2288 5.67059 15.7487 7.15093L9.14346 13.7551C8.80365 14.0949 8.55674 14.3436 8.31308 14.5435L8.06703 14.729C7.8519 14.876 7.62351 15.0029 7.38529 15.1073L7.14437 15.2037C6.95368 15.2736 6.75663 15.3251 6.52926 15.3719L5.72654 15.5133L3.21384 15.9326C3.06401 15.9576 2.90477 15.985 2.76993 15.9951C2.66636 16.003 2.5259 16.0056 2.37318 15.9685L2.21633 15.9162C1.98231 15.8157 1.79025 15.6396 1.66889 15.418L1.62071 15.3206C1.52993 15.1089 1.53236 14.9053 1.54279 14.767C1.553 14.6323 1.57936 14.4738 1.6043 14.3241L2.0236 11.8114C2.12892 11.1795 2.19334 10.7753 2.33321 10.3936L2.43059 10.1516C2.53511 9.91333 2.66191 9.685 2.80888 9.4699L2.99341 9.22383C3.19331 8.98018 3.44199 8.73327 3.78178 8.39345L10.387 1.78925ZM4.76903 9.38067C4.40218 9.74757 4.20919 9.94293 4.07703 10.1034L3.96119 10.2572C3.8631 10.4008 3.77875 10.5534 3.709 10.7124L3.64441 10.8734C3.55965 11.1046 3.51413 11.3588 3.40041 12.041L2.98214 14.5538L2.98112 14.5558H2.9842L5.4969 14.1365L6.24939 14.0042C6.42657 13.9682 6.54804 13.9359 6.66356 13.8935L6.82451 13.8279C6.9835 13.7582 7.13613 13.6738 7.27969 13.5757L7.43347 13.4599C7.59393 13.3277 7.78938 13.1347 8.15622 12.7679L13.3918 7.53127L10.0046 4.14511L4.76903 9.38067ZM14.7604 2.77649C13.8252 1.84147 12.3095 1.84149 11.3743 2.77649L10.9929 3.15683L14.379 6.54402L14.7604 6.16265C15.6954 5.22746 15.6954 3.71168 14.7604 2.77649Z"
+                                fill={themeColors.text.primary}
+                            />
+                            <path
+                                d="M2.7116 2.06468e-07C2.90344 0.000381167 3.06418 0.145048 3.08579 0.335746C3.2188 1.50996 3.88518 2.22895 5.0772 2.33484C5.27221 2.35221 5.4217 2.51577 5.42149 2.7116C5.42119 2.90732 5.27137 3.07055 5.07634 3.0875C3.90122 3.18923 3.18922 3.90122 3.0875 5.07634C3.0706 5.27141 2.90726 5.42114 2.7116 5.42149C2.51573 5.4217 2.3522 5.27232 2.33485 5.0772C2.22893 3.88534 1.50981 3.21969 0.335747 3.08664C0.14497 3.06504 0.000320888 2.90354 2.28738e-07 2.7116C-0.000209728 2.51955 0.144147 2.3577 0.334893 2.3357C1.52598 2.19827 2.19829 1.52596 2.3357 0.334892C2.35765 0.144127 2.5196 -0.000199244 2.7116 2.06468e-07Z"
+                                fill={themeColors.text.primary}
+                            />
+                        </svg>
+                    </div>
                 </div>
             </div>
-            </div>{/* end Section 1 + Customize wrapper */}
+            {/* end Section 1 + Customize wrapper */}
 
             {/* ── SECTION 2: JOBS NEAR YOU ── */}
             <div
@@ -18470,7 +18886,9 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     >
                         {(loadingPicks
                             ? topList
-                            : topList.filter((j): j is HomepageJob => j !== null)
+                            : topList.filter(
+                                  (j): j is HomepageJob => j !== null
+                              )
                         ).map((job, i) => (
                             <StackedJobCard
                                 key={job?.id ?? i}
@@ -18505,7 +18923,6 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     </div>
                 )}
             </div>
-
         </div>
     )
 })
@@ -21794,7 +22211,8 @@ interface MiniIDEProps {
     onAppInitialState?: (state: any) => void
     remoteAppInitialState?: any
     onRequestInitialState?: () => void
-    debugMode?: boolean
+    /** When true, iframe host/client code mirrors verbose logs to the browser console. */
+    debugP2P?: boolean
 }
 
 // Simple syntax highlighter
@@ -21870,7 +22288,7 @@ const MiniIDE = React.memo(
             onAppInitialState,
             remoteAppInitialState,
             onRequestInitialState,
-            debugMode = false,
+            debugP2P = false,
         },
         ref
     ) {
@@ -22022,7 +22440,7 @@ const MiniIDE = React.memo(
             onAppMutation,
             onAppInitialState,
             onRequestInitialState,
-            debugMode,
+            debugP2P,
         ])
 
         // Replay remote events
@@ -22063,7 +22481,7 @@ const MiniIDE = React.memo(
                     "*"
                 )
             }
-        }, [remoteAppInitialState, amIHost, debugMode])
+        }, [remoteAppInitialState, amIHost, debugP2P])
 
         // Apply remote mutations (Client only)
         React.useEffect(() => {
@@ -23031,11 +23449,30 @@ export default function OmegleMentorshipUI(props: Props) {
         systemPrompt,
         accentColor,
         model = "gemini-3.1-flash-lite-preview",
-        debugMode = false,
+        debugPanel: debugPanelProp,
         showAds = true,
         koahPublisherId = "",
         defaultSuggestions = [],
     } = props
+
+    const debugPanel: DebugPanelMode = (() => {
+        if (debugPanelProp === "p2p" || debugPanelProp === "tools")
+            return debugPanelProp
+        const legacy = props as Props & {
+            debugP2P?: boolean
+            debugTools?: boolean
+            debugMode?: boolean
+        }
+        if (legacy.debugTools) return "tools"
+        if (legacy.debugP2P) return "p2p"
+        if (legacy.debugMode) return "tools"
+        return "off"
+    })()
+
+    const debugPanelRef = React.useRef<DebugPanelMode>(debugPanel)
+    React.useEffect(() => {
+        debugPanelRef.current = debugPanel
+    }, [debugPanel])
 
     // REF for Direct Mutation Access (Fixes P2P App Sync Lag)
     const miniIDERef = React.useRef<MiniIDEHandle>(null)
@@ -23910,7 +24347,9 @@ Extract this structure:
     // --- STATE: AGENT SIDEBAR — MAP ---
     const [isMapOpen, setIsMapOpen] = React.useState(false)
     // Company slug from ?company= URL param — seeds the map search box on open.
-    const [mapUrlCompany, setMapUrlCompany] = React.useState<string | null>(null)
+    const [mapUrlCompany, setMapUrlCompany] = React.useState<string | null>(
+        null
+    )
 
     // True when any agent sidebar panel is open (docs, whiteboard, apps, jobs, map)
     const isAgentOpen =
@@ -24125,6 +24564,50 @@ Extract this structure:
         null
     )
     const locationFetchedRef = React.useRef(false)
+    /** Job IDs already surfaced via search_jobs in this chat — sent as exclude_ids so "find more" is not a duplicate page. */
+    const searchJobsSeenJobIdsRef = React.useRef<Set<string>>(new Set())
+    /** Latest user speech text in Gemini Live — for search_jobs geo hint ("near me"). */
+    const liveUserUtteranceForGeoRef = React.useRef("")
+
+    /** GET `${jobsApiUrl}/geo` — server IP lat/lng (same as homepage). */
+    const jobsProxyGeoRef = React.useRef<{ lat: number; lng: number } | null>(
+        null
+    )
+    const jobsGeoFetchStartedRef = React.useRef(false)
+    /** Browser geolocation — filled only after a search_jobs "near me" tool call requests it (not on app load). */
+    const chatBrowserGeoRef = React.useRef<{ lat: number; lng: number } | null>(
+        null
+    )
+    /** GPS from map "current location" — map only; chat search_jobs near me uses /geo + IP, not this ref. */
+    const preciseLocRef = React.useRef<{ lat: number; lng: number } | null>(
+        null
+    )
+
+    React.useEffect(() => {
+        if (!jobsApiUrl || jobsGeoFetchStartedRef.current) return
+        jobsGeoFetchStartedRef.current = true
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), 5000)
+        fetch(`${jobsApiUrl}/geo`, { signal: ctrl.signal })
+            .finally(() => clearTimeout(timer))
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d: { lat?: unknown; lng?: unknown } | null) => {
+                if (!d) return
+                const lat = Number(d.lat)
+                const lng = Number(d.lng)
+                if (
+                    Number.isFinite(lat) &&
+                    Number.isFinite(lng) &&
+                    lat >= -90 &&
+                    lat <= 90 &&
+                    lng >= -180 &&
+                    lng <= 180
+                ) {
+                    jobsProxyGeoRef.current = { lat, lng }
+                }
+            })
+            .catch(() => {})
+    }, [jobsApiUrl])
 
     const fetchLocation = React.useCallback(async () => {
         if (typeof window === "undefined" || locationFetchedRef.current) return
@@ -24170,6 +24653,14 @@ Extract this structure:
             prompt += `\n\n[System Context]\nCurrent Date: ${now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" })}\nCurrent Time: ${now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
             if (locationInfo) {
                 prompt += `\nLocation: ${locationInfo.city}, ${locationInfo.region}, ${locationInfo.country}`
+                if (
+                    locationInfo.lat != null &&
+                    locationInfo.lng != null &&
+                    !Number.isNaN(locationInfo.lat) &&
+                    !Number.isNaN(locationInfo.lng)
+                ) {
+                    prompt += `\nApproximate coordinates (IP geolocation): ${locationInfo.lat}, ${locationInfo.lng}.`
+                }
             }
 
             // Inject favorite things so AI can personalise without calling retrieve_memories every turn
@@ -24178,10 +24669,16 @@ Extract this structure:
                 prompt += `\n\n[User's Favorite Things & Personal Facts]\n${favorites.join("\n")}`
             }
 
-            // Inject saved resume so AI can use it for job matching, resume creation, etc.
-            const resume = getResume()
-            if (resume) {
-                prompt += `\n\n[User's Saved Resume]\n${resume}`
+            // Text chat: do not inline full resume — use retrieve_resume (same storage).
+            // Gemini Live only exposes search_jobs + get_job_details, so voice still needs
+            // the text in-system for resume/cover-letter help.
+            const resumeText = getResume()?.trim() ?? ""
+            if (resumeText) {
+                if (forVoice) {
+                    prompt += `\n\n[User's Saved Resume]\n${resumeText}`
+                } else {
+                    prompt += `\n\n[Saved resume on device]\nPlain text is stored on-device. Call retrieve_resume when the user's request needs their full work history or skills (e.g. new resume, cover letter, tailored job advice). Do not assume resume content otherwise.`
+                }
             }
 
             // Surface only the job ID — the model must call get_job_details to
@@ -24517,13 +25014,14 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
                         },
                     })
                 )
-                if (debugMode) log("Sent time update to Gemini Live session")
+                if (debugPanel === "p2p")
+                    log("Sent time update to Gemini Live session")
             }
         }
 
         const interval = setInterval(checkTimeUpdate, 60000) // Check every minute
         return () => clearInterval(interval)
-    }, [isLiveMode, debugMode])
+    }, [isLiveMode, debugPanel])
 
     const [userIsSpeaking, setUserIsSpeaking] = React.useState(false)
     const [isLiveGenerating, setIsLiveGenerating] = React.useState(false)
@@ -24538,7 +25036,8 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
     const liveNextPlayTimeRef = React.useRef<number>(0)
     const transcriptionTimeoutRef = React.useRef<any>(null)
     const silenceTimerRef = React.useRef<any | null>(null)
-    const isUserMessageInProgressRef = React.useRef(false)
+    /** When true, the next user transcript chunk opens a new bubble (barge-in / new turn). */
+    const forceNewUserTranscriptBubbleRef = React.useRef(false)
     const suggestionsGeneratedForTurnRef = React.useRef(false)
     const lastUserSpeechTimeRef = React.useRef(0)
     const userIsSpeakingRef = React.useRef(false)
@@ -24785,7 +25284,7 @@ Do not include markdown formatting or explanations.`
         userIsSpeakingRef.current = false
         setUserIsSpeaking(false)
         suggestionsGeneratedForTurnRef.current = false
-        isUserMessageInProgressRef.current = false
+        forceNewUserTranscriptBubbleRef.current = false
     }, [stopAllAudio])
 
     const cleanup = React.useCallback(
@@ -24907,7 +25406,8 @@ Do not include markdown formatting or explanations.`
 
                     setMessages([])
                     setAttachments([])
-                    setLogs([])
+                    setP2pLogs([])
+                    setToolLogs([])
                 }
             }
 
@@ -25073,6 +25573,14 @@ Do not include markdown formatting or explanations.`
                     ? `\n\n[Current Document Content]:\n${docContent}`
                     : ""
 
+                // BCP-47 locale from the browser (used for Live ASR/TTS per SpeechConfig).
+                const deviceLanguageCode =
+                    typeof navigator !== "undefined" &&
+                    typeof navigator.language === "string" &&
+                    navigator.language.length > 0
+                        ? navigator.language
+                        : "en-US"
+
                 ws.send(
                     JSON.stringify({
                         setup: {
@@ -25088,6 +25596,7 @@ Do not include markdown formatting or explanations.`
                                             voiceName: "Puck",
                                         },
                                     },
+                                    languageCode: deviceLanguageCode,
                                 },
                             },
                             systemInstruction: {
@@ -25108,24 +25617,34 @@ Do not include markdown formatting or explanations.`
                                         {
                                             name: "search_jobs",
                                             description:
-                                                "Search Curastem's job listings. Use for ANY job request including colloquial ones like 'big tech jobs', 'startup roles', 'patient now jobs'. Expand vague terms: 'big tech' → query software/engineering roles; 'startup' → relevant role title. When company search returns 0 results, IMMEDIATELY retry without company filter using role keywords — never ask the user to rephrase. Results shown as cards in the chat.",
+                                                'Search Curastem job listings. If the user names a role, put it in query; if they want ANY role or all openings, OMIT query and keywords (use location, visa, company, etc. only). Never add seniority, stacks, or resume terms unless asked. Never concatenate many job titles into one query. Omit seniority_level unless they name a level. Expand abbreviations only (swe → software engineer). Umbrella asks: neutral roles and/or company slugs. Pass company when they name an employer. Visa when relevant. For two or more metros at once, use location_or or one location string with "or" between cities. Client excludes already-shown job IDs. Results as cards in chat.',
                                             parameters: {
                                                 type: "OBJECT",
                                                 properties: {
                                                     query: {
                                                         type: "STRING",
                                                         description:
-                                                            "Job title, role, skill, or company name",
+                                                            "Job title or role phrase ONLY if they asked for a specific role. Sent as API title= (matches job title text only, not company). If they want any role / all jobs / no title preference, omit (empty). Never invent a title or merge many roles into one string.",
+                                                    },
+                                                    keywords: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "Extra tokens only if the user mentioned skills/stacks in this turn. Omit by default — do not pull keywords from saved resume or profile.",
                                                     },
                                                     company: {
                                                         type: "STRING",
                                                         description:
-                                                            "Company slug. Convert user words to lowercase-hyphenated: 'patient now' → 'patient-now', 'PatientNow' → 'patientnow', 'Whole Foods' → 'whole-foods-market'. If 0 results, drop this and retry with query keywords instead.",
+                                                            "Employer slug(s): one slug, or comma-separated for multiple companies (OR), e.g. meta,google,apple,amazon,netflix,microsoft for FAANG-style asks. Lowercase-hyphenated. If 0 results, retry without company.",
                                                     },
                                                     location: {
                                                         type: "STRING",
                                                         description:
-                                                            "City, state, or region",
+                                                            'City or region as a short place name when you do not pass near_lat/near_lng. The API matches location substrings on postings. For "near me" the client uses GET /geo and IP only (no browser GPS). For multiple metros in one request, prefer location_or or a single string with "or" between places (e.g. San Francisco or New York).',
+                                                    },
+                                                    location_or: {
+                                                        type: "STRING",
+                                                        description:
+                                                            'Comma-separated place names when the user names two or more metros in one turn. Matches jobs whose location contains ANY term (one API request). Example: San Francisco,New York. Omit when only one place or "near me".',
                                                     },
                                                     employment_type: {
                                                         type: "STRING",
@@ -25140,17 +25659,57 @@ Do not include markdown formatting or explanations.`
                                                     seniority_level: {
                                                         type: "STRING",
                                                         description:
-                                                            "new_grad, entry, mid, senior, staff, manager, director, or executive",
+                                                            "Omit unless the user explicitly asked for a band (e.g. senior, entry level). Never infer from resume. Values: new_grad, entry, mid, senior, staff, manager, director, executive.",
                                                     },
                                                     posted_within_days: {
                                                         type: "NUMBER",
                                                         description:
-                                                            "Only jobs posted within this many days. Default 3 unless the user specifies otherwise.",
+                                                            "Optional: 1–30. Omit for newest-first listings with no hard date cutoff. Set only when the user asks to limit the time window (e.g. 7 this week, 30 this month).",
                                                     },
                                                     salary_min: {
                                                         type: "NUMBER",
                                                         description:
                                                             "Minimum annual salary (USD). Only returns jobs where salary is known and meets this threshold. E.g. 100000 for $100k+",
+                                                    },
+                                                    visa_sponsorship: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "Set 'yes' for jobs that sponsor work visas (user asks about H-1B, sponsorship, etc.). Set 'no' only if they want postings that explicitly say no sponsorship. Omit if not relevant.",
+                                                    },
+                                                    description_language: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "ISO 639-1 language of posting (en, es, de, etc.). Omit unless the user asks for a specific language.",
+                                                    },
+                                                    country: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "ISO 3166-1 alpha-2 country filter (US, GB, …). Jobs in that country or remote.",
+                                                    },
+                                                    exclude_ids: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "Comma-separated job IDs to skip (already shown).",
+                                                    },
+                                                    near_lat: {
+                                                        type: "NUMBER",
+                                                        description:
+                                                            "User latitude for nearby jobs — use with near_lng when you supply coordinates yourself (optional; chat otherwise uses /geo + IP for near me).",
+                                                    },
+                                                    near_lng: {
+                                                        type: "NUMBER",
+                                                        description:
+                                                            "User longitude — required with near_lat for distance search.",
+                                                    },
+                                                    radius_km: {
+                                                        type: "NUMBER",
+                                                        description:
+                                                            "Search radius in km when using near_lat/near_lng. Default 50.",
+                                                    },
+                                                    exclude_remote: {
+                                                        type: "BOOLEAN",
+                                                        description:
+                                                            "When searching near_lat/near_lng: false includes remote listings; true (default) keeps only local/on-site/hybrid with coords.",
                                                     },
                                                     limit: {
                                                         type: "NUMBER",
@@ -25184,6 +25743,10 @@ Do not include markdown formatting or explanations.`
                             // Sliding-window compression removes the 2-min audio+video
                             // session cap; sessions run until explicitly stopped.
                             contextWindowCompression: { slidingWindow: {} },
+                            // Align input turns with speech activity (same scope the model uses for audio).
+                            realtimeInputConfig: {
+                                turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+                            },
                         },
                     })
                 )
@@ -25263,6 +25826,7 @@ Do not include markdown formatting or explanations.`
                                 !userIsSpeakingRef.current
                             ) {
                                 userIsSpeakingRef.current = true
+                                forceNewUserTranscriptBubbleRef.current = true
                                 setUserIsSpeaking(true)
                                 captureCurrentContext().then((b64) => {
                                     if (
@@ -25375,6 +25939,7 @@ Do not include markdown formatting or explanations.`
 
                     if (data.serverContent?.interrupted) {
                         stopAllAudio()
+                        isLiveGeneratingRef.current = false
                         setIsLiveGenerating(false)
                         return
                     }
@@ -25384,7 +25949,6 @@ Do not include markdown formatting or explanations.`
                         setIsLiveGenerating(true)
 
                         suggestionsGeneratedForTurnRef.current = false
-                        isUserMessageInProgressRef.current = false
 
                         const parts = data.serverContent.modelTurn.parts
                         for (const part of parts) {
@@ -25489,11 +26053,26 @@ Do not include markdown formatting or explanations.`
                                 if (fc.name === "search_jobs") {
                                     const args = fc.args ?? {}
                                     const params = new URLSearchParams()
-                                    if (args.query) params.set("q", args.query)
+                                    const titleMerged = buildJobsApiTitle(
+                                        args.query,
+                                        args.keywords
+                                    )
+                                    if (titleMerged)
+                                        params.set("title", titleMerged)
                                     if (args.company)
                                         params.set("company", args.company)
-                                    if (args.location)
-                                        params.set("location", args.location)
+                                    {
+                                        const locOrLive =
+                                            deriveLocationOrForJobsParams(args)
+                                        if (locOrLive) {
+                                            params.set("location_or", locOrLive)
+                                        } else if (args.location) {
+                                            params.set(
+                                                "location",
+                                                args.location
+                                            )
+                                        }
+                                    }
                                     if (args.employment_type)
                                         params.set(
                                             "employment_type",
@@ -25509,63 +26088,167 @@ Do not include markdown formatting or explanations.`
                                             "seniority_level",
                                             args.seniority_level
                                         )
-                                    params.set(
-                                        "since",
-                                        String(
-                                            Math.floor(Date.now() / 1000) -
-                                                (args.posted_within_days ?? 3) *
-                                                    86400
-                                        )
-                                    )
+                                    {
+                                        const sinceLive =
+                                            postedSinceUnixFromSearchJobsArg(
+                                                args.posted_within_days
+                                            )
+                                        if (sinceLive != null) {
+                                            params.set(
+                                                "since",
+                                                String(sinceLive)
+                                            )
+                                        }
+                                    }
                                     if (args.salary_min != null)
                                         params.set(
                                             "salary_min",
                                             String(args.salary_min)
                                         )
+                                    if (
+                                        args.visa_sponsorship === "yes" ||
+                                        args.visa_sponsorship === "no"
+                                    )
+                                        params.set(
+                                            "visa_sponsorship",
+                                            args.visa_sponsorship
+                                        )
+                                    if (args.description_language)
+                                        params.set(
+                                            "description_language",
+                                            args.description_language
+                                        )
+                                    if (args.country)
+                                        params.set(
+                                            "country",
+                                            String(args.country)
+                                                .toUpperCase()
+                                                .slice(0, 2)
+                                        )
+                                    if (
+                                        args.near_lat != null &&
+                                        !Number.isNaN(Number(args.near_lat))
+                                    )
+                                        params.set(
+                                            "near_lat",
+                                            String(args.near_lat)
+                                        )
+                                    if (
+                                        args.near_lng != null &&
+                                        !Number.isNaN(Number(args.near_lng))
+                                    )
+                                        params.set(
+                                            "near_lng",
+                                            String(args.near_lng)
+                                        )
+                                    if (args.radius_km != null)
+                                        params.set(
+                                            "radius_km",
+                                            String(args.radius_km)
+                                        )
+                                    if (args.exclude_remote === false)
+                                        params.set("exclude_remote", "false")
+                                    applySearchJobsExcludeIds(
+                                        params,
+                                        searchJobsSeenJobIdsRef.current,
+                                        args.exclude_ids
+                                    )
                                     params.set(
                                         "limit",
                                         String(Math.min(args.limit ?? 6, 20))
                                     )
+                                    await applySearchJobsGeoResolution(
+                                        params,
+                                        args,
+                                        liveUserUtteranceForGeoRef.current,
+                                        ipGeoFromLocationInfo(locationInfo),
+                                        { jobsProxyGeoRef },
+                                        jobsApiUrl
+                                    )
+                                    if (debugPanelRef.current === "tools") {
+                                        try {
+                                            log(
+                                                `[live tool] search_jobs args=${JSON.stringify(args)}`,
+                                                "tools"
+                                            )
+                                        } catch {
+                                            log(
+                                                "[live tool] search_jobs (args not serializable)",
+                                                "tools"
+                                            )
+                                        }
+                                        log(
+                                            `[live tool] GET ${jobsApiUrl}/jobs?${params.toString()}`,
+                                            "tools"
+                                        )
+                                    }
                                     try {
                                         const jobsRes = await fetch(
                                             `${jobsApiUrl}/jobs?${params}`
                                         )
+                                        if (debugPanelRef.current === "tools") {
+                                            log(
+                                                `[live tool] search_jobs HTTP ${jobsRes.status}`,
+                                                "tools"
+                                            )
+                                        }
                                         if (jobsRes.ok) {
                                             const jobsData =
                                                 await jobsRes.json()
-                                            const snippets: JobSnippet[] = (
-                                                jobsData.data ?? []
-                                            ).map(
-                                                (j: any): JobSnippet => ({
-                                                    id: j.id,
-                                                    title: j.title,
-                                                    company:
-                                                        j.company?.name ?? "",
-                                                    company_logo:
-                                                        j.company?.logo_url ??
-                                                        null,
-                                                    locations:
-                                                        j.locations ?? null,
-                                                    employment_type:
-                                                        j.employment_type ??
-                                                        null,
-                                                    workplace_type:
-                                                        j.workplace_type ??
-                                                        null,
-                                                    seniority_level:
-                                                        j.seniority_level ??
-                                                        null,
-                                                    posted_at:
-                                                        j.posted_at ?? null,
-                                                    apply_url:
-                                                        j.apply_url ?? null,
-                                                    summary:
-                                                        j.job_summary ?? null,
-                                                    salary: j.salary
-                                                        ? `${j.salary.currency} ${[j.salary.min, j.salary.max].filter(Boolean).join("–")}/${j.salary.period}`
-                                                        : null,
-                                                })
+                                            const rows = dedupeJobRowsById(
+                                                jobsData.data
                                             )
+                                            const snippets: JobSnippet[] =
+                                                rows.map(
+                                                    (j: any): JobSnippet => ({
+                                                        id: j.id,
+                                                        title: j.title,
+                                                        company:
+                                                            j.company?.name ??
+                                                            "",
+                                                        company_logo:
+                                                            j.company
+                                                                ?.logo_url ??
+                                                            null,
+                                                        locations:
+                                                            j.locations ?? null,
+                                                        employment_type:
+                                                            j.employment_type ??
+                                                            null,
+                                                        workplace_type:
+                                                            j.workplace_type ??
+                                                            null,
+                                                        seniority_level:
+                                                            j.seniority_level ??
+                                                            null,
+                                                        posted_at:
+                                                            j.posted_at ?? null,
+                                                        apply_url:
+                                                            j.apply_url ?? null,
+                                                        summary:
+                                                            j.job_summary ??
+                                                            null,
+                                                        salary:
+                                                            j.salary?.display ??
+                                                            null,
+                                                        visa_sponsorship:
+                                                            j.visa_sponsorship ??
+                                                            null,
+                                                    })
+                                                )
+                                            recordSearchJobsShownIds(
+                                                searchJobsSeenJobIdsRef.current,
+                                                snippets
+                                            )
+                                            if (
+                                                debugPanelRef.current ===
+                                                "tools"
+                                            ) {
+                                                log(
+                                                    `[live tool] search_jobs rows=${snippets.length}`,
+                                                    "tools"
+                                                )
+                                            }
                                             // Show cards in chat
                                             if (snippets.length > 0) {
                                                 setMessages((prev) => [
@@ -25764,23 +26447,54 @@ Do not include markdown formatting or explanations.`
                         React.startTransition(() => {
                             setMessages((prev) => {
                                 const last = prev[prev.length - 1]
-                                const isAppendingToExisting =
-                                    last && last.role === "user"
 
-                                if (
-                                    !isAppendingToExisting &&
-                                    !isUserMessageInProgressRef.current
-                                ) {
-                                    isUserMessageInProgressRef.current = true
-                                }
-
-                                if (isAppendingToExisting) {
+                                if (last?.role === "user") {
+                                    forceNewUserTranscriptBubbleRef.current = false
+                                    liveUserUtteranceForGeoRef.current += text
                                     return [
                                         ...prev.slice(0, -1),
-                                        { ...last, text: last.text + text },
+                                        {
+                                            ...last,
+                                            text: (last.text || "") + text,
+                                        },
                                     ]
                                 }
-                                return [...prev, { role: "user", text: text }]
+
+                                // Late input ASR can arrive after modelTurn (ordering is not guaranteed).
+                                // Merge into the preceding user bubble while the assistant reply is still
+                                // generating or playing; otherwise open a new user message.
+                                const responseStillPlaying =
+                                    isLiveGeneratingRef.current ||
+                                    activeAudioSourcesRef.current.length > 0
+
+                                if (
+                                    last?.role === "assistant" &&
+                                    responseStillPlaying &&
+                                    !forceNewUserTranscriptBubbleRef.current
+                                ) {
+                                    let userIdx = -1
+                                    for (let i = prev.length - 1; i >= 0; i--) {
+                                        if (prev[i].role === "user") {
+                                            userIdx = i
+                                            break
+                                        }
+                                    }
+                                    if (userIdx >= 0) {
+                                        liveUserUtteranceForGeoRef.current +=
+                                            text
+                                        const next = [...prev]
+                                        const u = next[userIdx]
+                                        next[userIdx] = {
+                                            ...u,
+                                            text: (u.text || "") + text,
+                                        }
+                                        return next
+                                    }
+                                }
+
+                                forceNewUserTranscriptBubbleRef.current = false
+                                liveUserUtteranceForGeoRef.current = text
+                                return [...prev, { role: "user", text }]
                             })
                         })
                     }
@@ -25837,9 +26551,8 @@ Do not include markdown formatting or explanations.`
     }, [stopLiveSession])
 
     // --- STATE: DEBUGGING ---
-    // Toggle this via the 'Debug Mode' property in Framer to see on-screen logs.
-    // Useful for mobile debugging where browser console isn't easily accessible.
-    const [logs, setLogs] = React.useState<string[]>([])
+    const [p2pLogs, setP2pLogs] = React.useState<string[]>([])
+    const [toolLogs, setToolLogs] = React.useState<string[]>([])
     const [showReportModal, setShowReportModal] = React.useState(false)
     const [reportType, setReportType] = React.useState<"user" | "chat">("user")
     const [isBanned, setIsBanned] = React.useState(false)
@@ -25886,14 +26599,20 @@ Do not include markdown formatting or explanations.`
         }
     }, [isBanned, status])
 
-    // Helper for standardized console logging
-    // Use this wrapper instead of console.log to ensure output appears in the UI debug console
-    const log = (msg: string) => {
-        setLogs((prev) => [
-            ...prev,
-            `[${new Date().toLocaleTimeString()}] ${msg}`,
-        ])
-        if (debugMode) console.log(`[Curastem Mentorship] ${msg}`)
+    type LogChannel = "p2p" | "tools"
+
+    /** On-screen + optional console mirror; tool/MCP lines go to the Tools buffer only. */
+    const log = (msg: string, channel: LogChannel = "p2p") => {
+        const line = `[${new Date().toLocaleTimeString()}] ${msg}`
+        if (channel === "tools") {
+            setToolLogs((prev) => [...prev.slice(-199), line])
+            if (debugPanelRef.current === "tools")
+                console.log(`[Curastem tools] ${msg}`)
+        } else {
+            setP2pLogs((prev) => [...prev.slice(-199), line])
+            if (debugPanelRef.current === "p2p")
+                console.log(`[Curastem p2p] ${msg}`)
+        }
     }
 
     // (Role state moved to top of component to fix scoping for system prompt)
@@ -26137,6 +26856,10 @@ Do not include markdown formatting or explanations.`
         }
     }, [currentChatId])
 
+    React.useEffect(() => {
+        searchJobsSeenJobIdsRef.current.clear()
+    }, [currentChatId])
+
     // Automatically save chat history when content changes (debounced)
     React.useEffect(() => {
         const timer = setTimeout(() => {
@@ -26342,7 +27065,11 @@ Do not include markdown formatting or explanations.`
                 const url = new URL(window.location.href)
                 if (url.searchParams.get("job") !== job.id) {
                     url.searchParams.set("job", job.id)
-                    window.history.pushState({ job: job.id }, "", url.toString())
+                    window.history.pushState(
+                        { job: job.id },
+                        "",
+                        url.toString()
+                    )
                 }
                 document.title = `${job.title} at ${job.company.name} | Curastem`
             }
@@ -26439,7 +27166,6 @@ Do not include markdown formatting or explanations.`
             })
             .catch(() => {})
     }, [openJobDetail])
-
 
     React.useEffect(() => {
         if (typeof window !== "undefined") {
@@ -28170,12 +28896,6 @@ Do not include markdown formatting or explanations.`
         appMode,
     ])
 
-    // Persists precise GPS coords across map panel open/close cycles.
-    // Stored here (parent) so re-mounting MapAgentPanel doesn't lose the cached position.
-    const preciseLocRef = React.useRef<{ lat: number; lng: number } | null>(
-        null
-    )
-
     const toggleMap = React.useCallback(() => {
         if (isMapOpen) {
             setIsMapOpen(false)
@@ -28268,7 +28988,9 @@ Do not include markdown formatting or explanations.`
         if (showYouSettings) {
             if (!url.searchParams.has("settings")) {
                 url.searchParams.set("settings", "")
-                const clean = url.toString().replace(/settings=(&|$)/, "settings$1")
+                const clean = url
+                    .toString()
+                    .replace(/settings=(&|$)/, "settings$1")
                 window.history.pushState({ panel: "settings" }, "", clean)
             }
         } else {
@@ -28807,36 +29529,30 @@ Do not include markdown formatting or explanations.`
         })
     }, [])
 
-    const handleAppMutation = React.useCallback(
-        (mutation: any) => {
-            if (dataConnectionsRef.current.size === 0) return
+    const handleAppMutation = React.useCallback((mutation: any) => {
+        if (dataConnectionsRef.current.size === 0) return
 
-            // Debug log
-            // if (debugMode) console.log("[App] Broadcasting mutation:", mutation)
+        // Debug log
+        // if (debugMode) console.log("[App] Broadcasting mutation:", mutation)
 
-            broadcastData({
-                type: "app-mutation",
-                payload: mutation,
-            })
-        },
-        [debugMode]
-    )
+        broadcastData({
+            type: "app-mutation",
+            payload: mutation,
+        })
+    }, [])
 
-    const handleAppInitialState = React.useCallback(
-        (state: any) => {
-            if (dataConnectionsRef.current.size === 0) return
+    const handleAppInitialState = React.useCallback((state: any) => {
+        if (dataConnectionsRef.current.size === 0) return
 
-            // Debug log
-            // if (debugMode)
-            //     console.log("[App] Broadcasting initial state:", state)
+        // Debug log
+        // if (debugMode)
+        //     console.log("[App] Broadcasting initial state:", state)
 
-            broadcastData({
-                type: "app-initial-state",
-                payload: state,
-            })
-        },
-        [debugMode]
-    )
+        broadcastData({
+            type: "app-initial-state",
+            payload: state,
+        })
+    }, [])
 
     const handleRequestInitialState = React.useCallback(() => {
         // Forward request to host iframe
@@ -28845,7 +29561,7 @@ Do not include markdown formatting or explanations.`
             //     console.log("[App] Forwarding initial state request to host")
             miniIDERef.current.requestInitialState()
         }
-    }, [amIHost, debugMode])
+    }, [amIHost])
 
     const handleDocChange = React.useCallback((content: string) => {
         setDocContent(content)
@@ -29673,7 +30389,8 @@ Do not include markdown formatting or explanations.`
                     log("Volunteer connected - Wiping previous session data...")
                     setMessages([])
                     setAttachments([])
-                    setLogs([])
+                    setP2pLogs([])
+                    setToolLogs([])
                     setIsDocOpen(false)
                     setDocContent(DEFAULT_DOC_CONTENT)
                     setIsWhiteboardOpen(false)
@@ -30597,7 +31314,7 @@ Do not include markdown formatting or explanations.`
                     return newMap
                 })
             } else if (data.type === "app-interaction") {
-                if (debugMode)
+                if (debugPanel === "p2p")
                     console.log(
                         "[Peer] Received app-interaction from peer:",
                         data.payload
@@ -31146,10 +31863,15 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                             {
                                 name: "search_jobs",
                                 description: [
-                                    "Search Curastem's job listings. Use for ANY job request including colloquial ones like 'big tech jobs', 'startup roles', 'patient now jobs'.",
-                                    "Expand vague terms: 'big tech' → search software/engineering roles; 'startup' → relevant role title.",
-                                    "When a company search returns 0 results, IMMEDIATELY retry without company filter using role keywords — never ask the user to rephrase.",
-                                    "Do NOT call for general career advice — only when the user wants to see job listings.",
+                                    "Search Curastem job listings. If the user names a role, set query; if they want ANY role or all openings, OMIT query and keywords — use only location, visa, company, filters.",
+                                    "Never concatenate many job titles into one query. Do not add seniority, stacks, or resume/profile terms unless they asked for that.",
+                                    "Omit seniority_level unless they explicitly name a level (e.g. senior PM, entry level). Never infer seniority from resume or profile.",
+                                    "Expand abbreviations only (swe → software engineer, pm → product manager) when they named a role.",
+                                    "Umbrella phrases ('big tech', retail): neutral role terms and/or company slugs — not the user's resume headline unless they asked.",
+                                    "Pass company slug when they name an employer. Keywords only for skills they mentioned this turn.",
+                                    "Visa: visa_sponsorship yes when relevant. More jobs: client excludes already-shown IDs. Company 0 results: retry without company.",
+                                    'Multiple metros in one ask: location_or or one location with "or" between places — one call, not one search per city.',
+                                    "Do NOT call for general career advice — only when the user wants listings.",
                                 ].join(" "),
                                 parameters: {
                                     type: "OBJECT",
@@ -31157,17 +31879,27 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         query: {
                                             type: "STRING",
                                             description:
-                                                "Search keywords. Expand colloquial terms: 'big tech' → 'software engineer', 'startup' → relevant role. Examples: 'cashier', 'software engineer', 'customer service'.",
+                                                "Job title or role phrase if they asked for a specific role. Sent as API title= (job title substring only). If any role / all jobs, omit (empty). Never invent a title or merge many roles into one string.",
+                                        },
+                                        keywords: {
+                                            type: "STRING",
+                                            description:
+                                                "Only if the user named skills/stacks in this message. Omit by default — do not pull from resume or profile.",
                                         },
                                         company: {
                                             type: "STRING",
                                             description:
-                                                "Company slug. Convert user words to lowercase-hyphenated: 'patient now' → 'patient-now', 'PatientNow' → 'patientnow', 'Whole Foods' → 'whole-foods-market'. If 0 results, drop this and retry with query keywords instead.",
+                                                "Employer slug(s): one or comma-separated OR list (e.g. meta,google,apple). Lowercase-hyphenated. If 0 results, retry without company.",
                                         },
                                         location: {
                                             type: "STRING",
                                             description:
-                                                "City, state, or region to filter by. Examples: 'Austin TX', 'New York'. Leave empty for all locations.",
+                                                'Short city or region when not using near_lat/near_lng. The API matches location text on postings. For "near me" the client uses GET /geo and IP only (no browser GPS). Leave empty for all locations or use country alone. For multiple metros, prefer location_or or one string with "or" between places.',
+                                        },
+                                        location_or: {
+                                            type: "STRING",
+                                            description:
+                                                'Comma-separated place names when the user names two or more metros in one turn. Matches jobs in ANY listed place (one request). Example: San Francisco,New York. Omit for a single place or "near me".',
                                         },
                                         employment_type: {
                                             type: "STRING",
@@ -31182,17 +31914,57 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                         seniority_level: {
                                             type: "STRING",
                                             description:
-                                                "Experience level: new_grad, entry, mid, senior, staff, manager, director, or executive.",
+                                                "Omit unless the user explicitly asked for a band. Never infer from resume. new_grad, entry, mid, senior, staff, manager, director, executive.",
                                         },
                                         posted_within_days: {
                                             type: "NUMBER",
                                             description:
-                                                "Only return jobs posted within this many days. Default 3 unless the user specifies otherwise. Examples: 1 (today), 7 (this week), 30 (this month).",
+                                                "Optional: 1–30. Omit for newest-first with no strict cutoff. Set when the user names a window (e.g. 7 this week, 30 this month).",
                                         },
                                         salary_min: {
                                             type: "NUMBER",
                                             description:
                                                 "Minimum annual salary (USD). Only returns jobs where salary is known and meets this threshold. Examples: 100000 for $100k+, 150000 for $150k+.",
+                                        },
+                                        visa_sponsorship: {
+                                            type: "STRING",
+                                            description:
+                                                "Set 'yes' for jobs that sponsor work visas (H-1B, sponsorship requests). Set 'no' only if the user wants postings that explicitly state no sponsorship. Omit if not relevant.",
+                                        },
+                                        description_language: {
+                                            type: "STRING",
+                                            description:
+                                                "ISO 639-1 language of posting (en, es, de). Omit unless the user asks for a specific language.",
+                                        },
+                                        country: {
+                                            type: "STRING",
+                                            description:
+                                                "ISO 3166-1 alpha-2 country filter (US, GB). Jobs in that country or remote.",
+                                        },
+                                        exclude_ids: {
+                                            type: "STRING",
+                                            description:
+                                                "Comma-separated job IDs to exclude (already shown).",
+                                        },
+                                        near_lat: {
+                                            type: "NUMBER",
+                                            description:
+                                                "Latitude for nearby jobs — use with near_lng when passing coordinates explicitly (chat uses /geo + IP for near me without browser GPS).",
+                                        },
+                                        near_lng: {
+                                            type: "NUMBER",
+                                            description:
+                                                "Longitude for nearby jobs — required with near_lat.",
+                                        },
+                                        radius_km: {
+                                            type: "NUMBER",
+                                            description:
+                                                "Radius in km for near_lat/near_lng. Default 50.",
+                                        },
+                                        exclude_remote: {
+                                            type: "BOOLEAN",
+                                            description:
+                                                "With geo search: false includes remote jobs; true (default) excludes remote-only roles.",
                                         },
                                         limit: {
                                             type: "NUMBER",
@@ -31214,6 +31986,7 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     "Fetch full details about a specific job: responsibilities, qualifications, salary, company info.",
                                     "Use when the user asks for more details about a job, wants to know if they're a good fit, or asks to write a cover letter for a specific posting.",
                                     "If the user is currently viewing a job in the sidebar and asks about 'this job' or 'it', use that job's ID from the system context — do NOT ask the user to provide the ID.",
+                                    "When they also asked for a cover letter or resume for that job, output create_cover_letter or create_resume in the same turn after you receive the job details (the client runs chained tools).",
                                 ].join(" "),
                                 parameters: {
                                     type: "OBJECT",
@@ -31340,7 +32113,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     "Adds a new item to the user's 'Your favorite things' list — personal facts, interests, hobbies, or goals they share during conversation.",
                                     "ONLY call for things the user reveals that are meaningful and durable — e.g. a hobby, career goal, favourite subject, challenge they mentioned.",
                                     "ALWAYS call retrieve_memories first (in a prior turn or the same session) to avoid saving duplicates.",
-                                    "NEVER save: things already in system context (name, school, work, resume), temporary preferences, one-off questions, or trivial details.",
+                                    "NEVER save: things already in system context (name, school, work), content from retrieve_resume, temporary preferences, one-off questions, or trivial details.",
                                     "One item per call. Keep it concise (1 sentence, written as a fact).",
                                 ].join(" "),
                                 parameters: {
@@ -31493,7 +32266,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     },
                 }
 
-                if (debugMode) {
+                if (debugPanel === "p2p") {
                     // console.log("[Gemini] Thinking Mode:", useThinking ? "ENABLED" : "DISABLED", { isWhiteboardOpen, isWhiteboardIntent })
                 }
 
@@ -31905,6 +32678,19 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 // Handle Tool Call - Final Execution
                 // ---------------------------------------------------------------------------
                 if (accumulatedFunctionCall) {
+                    if (debugPanelRef.current === "tools") {
+                        try {
+                            log(
+                                `[tool] ${accumulatedFunctionCall.name} args=${JSON.stringify(accumulatedFunctionCall.args)}`,
+                                "tools"
+                            )
+                        } catch {
+                            log(
+                                `[tool] ${accumulatedFunctionCall.name} (args not JSON-serializable)`,
+                                "tools"
+                            )
+                        }
+                    }
                     if (accumulatedFunctionCall.name === "create_app") {
                         const code =
                             (accumulatedFunctionCall.args as any)?.code || ""
@@ -32819,29 +33605,94 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         // ---------------------------------------------------------------------------
                         const args = accumulatedFunctionCall.args as any
                         const params = new URLSearchParams()
-                        if (args.query) params.set("q", args.query)
+                        const titleStream = buildJobsApiTitle(
+                            args.query,
+                            args.keywords
+                        )
+                        if (titleStream) params.set("title", titleStream)
                         if (args.company) params.set("company", args.company)
-                        if (args.location) params.set("location", args.location)
+                        {
+                            const locOrStream =
+                                deriveLocationOrForJobsParams(args)
+                            if (locOrStream) {
+                                params.set("location_or", locOrStream)
+                            } else if (args.location) {
+                                params.set("location", args.location)
+                            }
+                        }
                         if (args.employment_type)
                             params.set("employment_type", args.employment_type)
                         if (args.workplace_type)
                             params.set("workplace_type", args.workplace_type)
                         if (args.seniority_level)
                             params.set("seniority_level", args.seniority_level)
-                        params.set(
-                            "since",
-                            String(
-                                Math.floor(Date.now() / 1000) -
-                                    (args.posted_within_days ?? 3) * 86400
-                            )
-                        )
+                        {
+                            const sinceStream =
+                                postedSinceUnixFromSearchJobsArg(
+                                    args.posted_within_days
+                                )
+                            if (sinceStream != null) {
+                                params.set("since", String(sinceStream))
+                            }
+                        }
                         if (args.salary_min != null)
                             params.set("salary_min", String(args.salary_min))
+                        if (
+                            args.visa_sponsorship === "yes" ||
+                            args.visa_sponsorship === "no"
+                        )
+                            params.set(
+                                "visa_sponsorship",
+                                args.visa_sponsorship
+                            )
+                        if (args.description_language)
+                            params.set(
+                                "description_language",
+                                args.description_language
+                            )
+                        if (args.country)
+                            params.set(
+                                "country",
+                                String(args.country).toUpperCase().slice(0, 2)
+                            )
+                        if (
+                            args.near_lat != null &&
+                            !Number.isNaN(Number(args.near_lat))
+                        )
+                            params.set("near_lat", String(args.near_lat))
+                        if (
+                            args.near_lng != null &&
+                            !Number.isNaN(Number(args.near_lng))
+                        )
+                            params.set("near_lng", String(args.near_lng))
+                        if (args.radius_km != null)
+                            params.set("radius_km", String(args.radius_km))
+                        if (args.exclude_remote === false)
+                            params.set("exclude_remote", "false")
                         if (args.cursor) params.set("cursor", args.cursor)
+                        applySearchJobsExcludeIds(
+                            params,
+                            searchJobsSeenJobIdsRef.current,
+                            args.exclude_ids
+                        )
                         params.set(
                             "limit",
                             String(Math.min(args.limit ?? 6, 20))
                         )
+                        await applySearchJobsGeoResolution(
+                            params,
+                            args,
+                            userText,
+                            ipGeoFromLocationInfo(locationInfo),
+                            { jobsProxyGeoRef },
+                            jobsApiUrl
+                        )
+                        if (debugPanelRef.current === "tools") {
+                            log(
+                                `[tool] search_jobs GET ${jobsApiUrl}/jobs?${params.toString()}`,
+                                "tools"
+                            )
+                        }
 
                         let jobSnippets: JobSnippet[] = []
                         let searchError = false
@@ -32850,9 +33701,16 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 `${jobsApiUrl}/jobs?${params}`,
                                 { signal: controller.signal }
                             )
+                            if (debugPanelRef.current === "tools") {
+                                log(
+                                    `[tool] search_jobs HTTP ${jobsRes.status}`,
+                                    "tools"
+                                )
+                            }
                             if (jobsRes.ok) {
                                 const jobsData = await jobsRes.json()
-                                jobSnippets = (jobsData.data ?? []).map(
+                                const rows = dedupeJobRowsById(jobsData.data)
+                                jobSnippets = rows.map(
                                     (j: any): JobSnippet => ({
                                         id: j.id,
                                         title: j.title,
@@ -32869,11 +33727,21 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         posted_at: j.posted_at ?? null,
                                         apply_url: j.apply_url ?? null,
                                         summary: j.job_summary ?? null,
-                                        salary: j.salary
-                                            ? `${j.salary.currency} ${[j.salary.min, j.salary.max].filter(Boolean).join("–")}/${j.salary.period}`
-                                            : null,
+                                        salary: j.salary?.display ?? null,
+                                        visa_sponsorship:
+                                            j.visa_sponsorship ?? null,
                                     })
                                 )
+                                recordSearchJobsShownIds(
+                                    searchJobsSeenJobIdsRef.current,
+                                    jobSnippets
+                                )
+                                if (debugPanelRef.current === "tools") {
+                                    log(
+                                        `[tool] search_jobs rows=${jobSnippets.length}`,
+                                        "tools"
+                                    )
+                                }
                             }
                         } catch (err) {
                             if ((err as Error).name !== "AbortError") {
@@ -33085,6 +33953,15 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             }),
                         }
                         const introText = computeDisplayText(accumulatedText)
+                        let displayFunctionCall: any = accumulatedFunctionCall
+                        let displayFunctionResponse: any = {
+                            name: "get_job_details",
+                            response: { fetched: !!jobDetail },
+                        }
+                        let displayToolUsed:
+                            | "resume"
+                            | "cover_letter"
+                            | undefined
                         try {
                             const res = await fetch(
                                 `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
@@ -33098,15 +33975,173 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 }
                             )
                             const data = await res.json().catch(() => ({}))
-                            const followUpText = res.ok
+                            const followUpTextRaw = res.ok
                                 ? extractTextFromGeminiResponse(data)
                                 : ""
-                            const followUpDisplay =
-                                computeDisplayText(followUpText)
-                            accumulatedText = introText
-                                ? `${introText}\n\n${followUpDisplay}`
-                                : followUpDisplay || "Here are the job details!"
-                            parseSuggestionsFrom(followUpText)
+                            const chainedFc =
+                                extractFunctionCallFromGeminiResponse(data)
+
+                            if (
+                                chainedFc &&
+                                (chainedFc.name === "create_cover_letter" ||
+                                    chainedFc.name === "create_resume")
+                            ) {
+                                const toolName = chainedFc.name
+                                displayFunctionCall = {
+                                    name: toolName,
+                                    args: chainedFc.args,
+                                }
+                                displayFunctionResponse = {
+                                    name: toolName,
+                                    response: {
+                                        content: "Created successfully.",
+                                    },
+                                }
+                                displayToolUsed =
+                                    toolName === "create_resume"
+                                        ? "resume"
+                                        : "cover_letter"
+                                const newContent =
+                                    (chainedFc.args as any)?.content || ""
+                                setDocType(
+                                    toolName === "create_resume"
+                                        ? "resume"
+                                        : "cover_letter"
+                                )
+                                if (!isDocOpen) setIsDocOpen(true)
+                                isDocOpenRef.current = true
+
+                                if (
+                                    toolName === "create_resume" &&
+                                    resumeAnimPhaseRef.current !== "idle" &&
+                                    resumeAnimPhaseRef.current !== "done"
+                                ) {
+                                    const used = capturedOrbitWordsInHtml(
+                                        newContent,
+                                        resumeCapturedItemsRef.current.map(
+                                            (c) => c.word
+                                        )
+                                    )
+                                    const markedContent = markKeywordsInHtml(
+                                        newContent,
+                                        used
+                                    )
+                                    setDocContent(markedContent)
+                                    setResumeUsedKeywords(used)
+                                    setResumeAnimPhase("landing")
+                                    if (dataConnectionsRef.current.size > 0) {
+                                        broadcastData({
+                                            type: "resume-anim-land",
+                                            payload: {
+                                                markedContent,
+                                                usedKeywords: used,
+                                            },
+                                        })
+                                    }
+                                } else {
+                                    setDocContent(newContent)
+                                }
+
+                                if (
+                                    toolName === "create_resume" &&
+                                    newContent &&
+                                    resumeJobIdRef.current
+                                ) {
+                                    resumeCache.current.set(
+                                        resumeJobIdRef.current,
+                                        newContent
+                                    )
+                                }
+                                if (dataConnectionsRef.current.size > 0) {
+                                    broadcastData({
+                                        type: "doc-update",
+                                        payload: newContent,
+                                    })
+                                    broadcastData({
+                                        type: "doc-start",
+                                        payload: {
+                                            docType:
+                                                toolName === "create_resume"
+                                                    ? "resume"
+                                                    : "cover_letter",
+                                        },
+                                    })
+                                }
+                                const isResume = toolName === "create_resume"
+                                let ackCombined = followUpTextRaw
+                                parseSuggestionsFrom(followUpTextRaw)
+                                try {
+                                    const followUpRes = await fetch(
+                                        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                        {
+                                            method: "POST",
+                                            headers: {
+                                                "Content-Type":
+                                                    "application/json",
+                                            },
+                                            body: JSON.stringify({
+                                                contents: [
+                                                    {
+                                                        role: "user",
+                                                        parts: [
+                                                            {
+                                                                text: `The user asked you to write a ${isResume ? "resume" : "cover letter"}: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.`,
+                                                            },
+                                                        ],
+                                                    },
+                                                ],
+                                                generationConfig: {
+                                                    temperature: 1.0,
+                                                    maxOutputTokens: 100,
+                                                    thinkingConfig: {
+                                                        thinkingBudget: 0,
+                                                    },
+                                                },
+                                            }),
+                                            signal: controller.signal,
+                                        }
+                                    )
+                                    const followUpData = await followUpRes
+                                        .json()
+                                        .catch(() => ({}))
+                                    const ack = followUpRes.ok
+                                        ? extractTextFromGeminiResponse(
+                                              followUpData
+                                          )
+                                        : ""
+                                    ackCombined =
+                                        computeDisplayText(ack) ||
+                                        followUpTextRaw ||
+                                        (isResume
+                                            ? "Here's your resume!"
+                                            : "Here's your cover letter!")
+                                    parseSuggestionsFrom(ack)
+                                } catch (err) {
+                                    if ((err as Error).name !== "AbortError")
+                                        console.error(
+                                            `${toolName} post-job follow-up:`,
+                                            err
+                                        )
+                                    ackCombined =
+                                        followUpTextRaw ||
+                                        (isResume
+                                            ? "Here's your resume!"
+                                            : "Here's your cover letter!")
+                                }
+                                const followUpDisplay =
+                                    computeDisplayText(ackCombined)
+                                accumulatedText = introText
+                                    ? `${introText}\n\n${followUpDisplay}`
+                                    : followUpDisplay
+                            } else {
+                                const followUpDisplay =
+                                    computeDisplayText(followUpTextRaw)
+                                accumulatedText = introText
+                                    ? `${introText}\n\n${followUpDisplay}`
+                                    : followUpDisplay ||
+                                      "Here are the job details!"
+                                parseSuggestionsFrom(followUpTextRaw)
+                            }
                         } catch (err) {
                             if ((err as Error).name !== "AbortError")
                                 console.error("get_job_details follow-up:", err)
@@ -33122,11 +34157,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 newArr[newArr.length - 1] = {
                                     ...newArr[newArr.length - 1],
                                     text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "get_job_details",
-                                        response: { fetched: !!jobDetail },
-                                    },
+                                    functionCall: displayFunctionCall,
+                                    functionResponse: displayFunctionResponse,
+                                    ...(displayToolUsed && {
+                                        toolUsed: displayToolUsed,
+                                    }),
                                 }
                             }
                             return newArr
@@ -35287,7 +36322,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             handleRequestInitialState
                                         }
                                         amIHost={amIHost}
-                                        debugMode={debugMode}
+                                        debugP2P={debugPanel === "p2p"}
                                         onDownload={() => {
                                             const blob = new Blob([appCode], {
                                                 type: "text/html",
@@ -40061,13 +41096,144 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 onChange={handleResumeUpload}
             />
 
-            {/* DEBUG CONSOLE */}
-            {debugMode && (
-                <DebugConsole
-                    logs={logs}
-                    role={role}
-                    status={status}
+            {debugPanel === "p2p" && (
+                <DebugPanel
+                    title="🔍 P2P debug"
+                    position="right"
+                    logs={p2pLogs}
                     themeColors={themeColors}
+                    onClear={() => setP2pLogs([])}
+                    meta={
+                        <>
+                            <div
+                                style={{
+                                    display: "flex",
+                                    gap: 8,
+                                    alignItems: "center",
+                                    fontSize: 13,
+                                }}
+                            >
+                                <span style={{ opacity: 0.7 }}>🔗 Room:</span>
+                                <span
+                                    style={{
+                                        color: themeColors.semantic.accent,
+                                        fontWeight: "bold",
+                                    }}
+                                >
+                                    {typeof window !== "undefined"
+                                        ? window.location.hash || "(no hash)"
+                                        : "(no hash)"}
+                                </span>
+                            </div>
+                            <div
+                                style={{
+                                    display: "flex",
+                                    gap: 8,
+                                    alignItems: "center",
+                                    fontSize: 13,
+                                }}
+                            >
+                                <span style={{ opacity: 0.7 }}>👤 Role:</span>
+                                <span
+                                    style={{
+                                        color: role
+                                            ? themeColors.coloredAccents
+                                                  .rainbow[3]
+                                            : themeColors.coloredAccents
+                                                  .rainbow[1],
+                                        fontWeight: "bold",
+                                    }}
+                                >
+                                    {role || "None (Passive Mode)"}
+                                </span>
+                            </div>
+                            <div
+                                style={{
+                                    display: "flex",
+                                    gap: 8,
+                                    alignItems: "center",
+                                    fontSize: 13,
+                                }}
+                            >
+                                <span style={{ opacity: 0.7 }}>📊 Status:</span>
+                                <span
+                                    style={{
+                                        color:
+                                            status === "connected"
+                                                ? themeColors.coloredAccents
+                                                      .rainbow[3]
+                                                : status === "searching"
+                                                  ? themeColors.coloredAccents
+                                                        .rainbow[1]
+                                                  : themeColors.text.tertiary,
+                                        fontWeight: "bold",
+                                    }}
+                                >
+                                    {status}
+                                </span>
+                            </div>
+                        </>
+                    }
+                />
+            )}
+            {debugPanel === "tools" && (
+                <DebugPanel
+                    title="🔧 Tools & MCP debug"
+                    position="left"
+                    logs={toolLogs}
+                    themeColors={themeColors}
+                    onClear={() => setToolLogs([])}
+                    meta={
+                        <>
+                            {model ? (
+                                <div
+                                    style={{
+                                        fontSize: 11,
+                                        opacity: 0.85,
+                                        wordBreak: "break-word",
+                                    }}
+                                >
+                                    <span style={{ opacity: 0.7 }}>
+                                        🤖 Chat model:
+                                    </span>{" "}
+                                    {model}
+                                </div>
+                            ) : null}
+                            {jobsApiUrl ? (
+                                <div
+                                    style={{
+                                        fontSize: 11,
+                                        opacity: 0.85,
+                                        wordBreak: "break-all",
+                                    }}
+                                >
+                                    <span style={{ opacity: 0.7 }}>
+                                        💼 Jobs API:
+                                    </span>{" "}
+                                    {jobsApiUrl}
+                                </div>
+                            ) : null}
+                            <div style={{ fontSize: 11, opacity: 0.85 }}>
+                                <span style={{ opacity: 0.7 }}>
+                                    🔑 Gemini key:
+                                </span>{" "}
+                                {geminiApiKey?.trim()
+                                    ? "set in Framer"
+                                    : "missing"}
+                            </div>
+                            <div
+                                style={{
+                                    fontSize: 10,
+                                    opacity: 0.65,
+                                    wordBreak: "break-word",
+                                }}
+                            >
+                                AI HTTP:
+                                generativelanguage.googleapis.com/v1beta (key
+                                not logged)
+                            </div>
+                        </>
+                    }
                 />
             )}
 
@@ -41044,10 +42210,12 @@ addPropertyControls(OmegleMentorshipUI, {
         title: "Accent Color",
         defaultValue: darkColors.semantic.accent,
     },
-    debugMode: {
-        type: ControlType.Boolean,
-        title: "Debug Mode",
-        defaultValue: false,
+    debugPanel: {
+        type: ControlType.Enum,
+        title: "Debug panel",
+        defaultValue: "off",
+        options: ["off", "p2p", "tools"],
+        optionTitles: ["Off", "P2P (peer / MQTT)", "Tools & MCP"],
         description:
             "Enables an on-screen console overlay with copy button for debugging.",
     },

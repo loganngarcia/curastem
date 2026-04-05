@@ -2,7 +2,8 @@
  * GET /jobs — paginated job listing endpoint.
  *
  * Supports filtering by:
- *   q               — semantic search (uses Vectorize when available; falls back to SQL LIKE)
+ *   q               — semantic search (Vectorize + SQL); title-only matching also considers company slug
+ *   title           — substring match on job title only (no company slug, no Vectorize). Prefer for role searches.
  *   location        — partial match on location string
  *   location_region — AND with location (e.g. "CA" disambiguates San Francisco, CA from Philippines)
  *   location_or     — comma-separated; match if location contains ANY term (e.g. Bay Area cities)
@@ -15,9 +16,12 @@
  *   workplace_type  — exact match: remote | hybrid | on_site
  *   seniority_level      — exact match: new_grad | entry | mid | senior | staff | manager | director | executive
  *   description_language — exact match: ISO 639-1 code, e.g. en | es | de | fr | pt | it | nl | pl | ja | zh
- *   company              — exact match on company slug
- *   since           — unix timestamp; only jobs posted/seen at or after this time
+ *   company              — exact match on company slug(s); comma-separated = OR (e.g. meta,google,apple)
+ *   since           — optional unix timestamp; only jobs posted/seen at or after this time. Omit for all matching rows ordered by recency (newest first).
  *   salary_min      — only jobs where salary_min >= this value (annual, in job's currency)
+ *   visa_sponsorship — yes | no; only jobs where AI extraction recorded that value
+ *   exclude_ids     — comma-separated job IDs to omit (e.g. already shown in UI)
+ *   near_lat, near_lng, radius_km — distance search (km); requires geocoded jobs; optional exclude_remote=false to include remote
  *   limit           — max results per page (default 20, max 50)
  *   cursor          — opaque cursor for pagination
  *
@@ -33,7 +37,10 @@
  *   5. Cursor encodes a vector-mode offset ("vs:N") for pagination.
  *
  * SQL path (when q= is absent OR vector search is unavailable):
- *   Standard keyset cursor pagination against D1. Cursor encodes (posted_at, id).
+ *   Keyset pagination; q matches j.title (LIKE) or exact c.slug — not c.name substring.
+ *
+ * Vector path: after hydration, rows must match every significant token in q in j.title
+ * so employer names cannot satisfy the search.
  *
  * ──────────────────────────────────────────────────────────────────────────
  * CURSOR DESIGN
@@ -44,7 +51,19 @@
  * Clients do not need to distinguish between these formats.
  */
 
-import { listJobs, listJobsByIds, listJobsNear, findCompanyByQuery, type ListJobsRow } from "../db/queries.ts";
+import {
+  listJobs,
+  listJobsByIds,
+  listJobsNear,
+  findCompanyByQuery,
+  shouldResolveSearchQueryToCompany,
+  type ListJobsRow,
+} from "../db/queries.ts";
+import { enrichLocationsWithCountry } from "../utils/locationsDisplay.ts";
+import {
+  jobTitleMatchesSearchTokens,
+  normalizeJobSearchQuery,
+} from "../utils/jobSearchQuery.ts";
 import { buildPublicSalary, embedQuery } from "../enrichment/ai.ts";
 import type { Env, PublicJob } from "../types.ts";
 import { jsonOk } from "../utils/errors.ts";
@@ -111,6 +130,7 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
       // Malformed JSON — treat as no location
     }
   }
+  locations = enrichLocationsWithCountry(locations, row.job_country ?? null);
 
   let companyLocations: string[] | null = null;
   if (row.company_locations) {
@@ -138,7 +158,7 @@ export function rowToPublicJob(row: ListJobsRow): PublicJob {
     // they are populated on the detail endpoint (GET /jobs/:id)
     job_summary: row.job_summary,
     job_description: null,
-    visa_sponsorship: null,
+    visa_sponsorship: row.visa_sponsorship ?? null,
     experience_years_min: row.experience_years_min ?? null,
     job_address: row.job_address ?? null,
     job_city: row.job_city ?? null,
@@ -205,6 +225,7 @@ export async function handleListJobs(
   const limit = isNaN(limitRaw) || limitRaw < 1 ? DEFAULT_LIMIT : Math.min(limitRaw, MAX_LIMIT);
 
   const q = params.get("q") ?? undefined;
+  const titleRaw = params.get("title") ?? undefined;
   const location = params.get("location") ?? undefined;
   const location_region = params.get("location_region") ?? undefined;
   const location_orRaw = params.get("location_or") ?? undefined;
@@ -227,6 +248,10 @@ export async function handleListJobs(
   const countryRaw = params.get("country");
   const country = countryRaw ? countryRaw.toUpperCase().slice(0, 2) : undefined;
 
+  const visaRaw = params.get("visa_sponsorship");
+  const visa_sponsorship =
+    visaRaw === "yes" || visaRaw === "no" ? visaRaw : undefined;
+
   const nearLatRaw = params.get("near_lat");
   const nearLngRaw = params.get("near_lng");
   const nearLat = nearLatRaw ? parseFloat(nearLatRaw) : NaN;
@@ -238,6 +263,8 @@ export async function handleListJobs(
   // ── Distance-based "jobs near you" path ────────────────────────────────────
   // When near_lat + near_lng are provided, return jobs ordered by distance (km).
   // Excludes remote-only jobs. Requires location_lat/lng to be populated (geocode backfill).
+  const titleForSearch = titleRaw ? normalizeJobSearchQuery(titleRaw) : undefined;
+
   if (!isNaN(nearLat) && !isNaN(nearLng) && nearLat >= -90 && nearLat <= 90 && nearLng >= -180 && nearLng <= 180) {
     try {
       const { rows } = await listJobsNear(env.JOBS_DB, {
@@ -247,11 +274,17 @@ export async function handleListJobs(
         exclude_remote,
         limit,
         exclude_ids,
-        q,
+        title: titleForSearch,
+        q: titleForSearch ? undefined : q,
         posted_since,
         employment_type,
+        workplace_type,
         seniority_level,
+        description_language,
+        salary_min,
+        country,
         company: company || undefined,
+        visa_sponsorship,
       });
       return jsonOk({
         data: rows.map(rowToPublicJob),
@@ -270,21 +303,34 @@ export async function handleListJobs(
   // Skip this check for short/generic queries (< 4 words, no spaces after 2nd word)
   // like "software engineer" or "data analyst" — they're almost never company names
   // and the extra D1 round-trip adds ~20ms of latency to every homepage load.
-  let qForSearch: string | undefined = q;
-  const looksLikeCompanyQuery = q && q.trim().split(/\s+/).length >= 2 && q.trim().length > 6;
-  if (q && !company && looksLikeCompanyQuery) {
+  let qForSearch: string | undefined = titleForSearch ? undefined : q;
+  const qw = q?.trim() ?? "";
+  const words = qw.split(/\s+/).filter(Boolean);
+  const looksLikeCompanyQuery =
+    !!q &&
+    !titleForSearch &&
+    !company &&
+    ((words.length >= 2 && qw.length > 6) ||
+      (words.length === 1 && qw.length >= 3 && qw.length <= 48));
+  if (q && !company && !titleForSearch && looksLikeCompanyQuery && shouldResolveSearchQueryToCompany(q)) {
     const resolved = await findCompanyByQuery(env.JOBS_DB, q);
     if (resolved) {
       company = resolved.slug;
       qForSearch = undefined; // Return all jobs at company, not title-filtered
     }
   }
+  if (qForSearch) {
+    qForSearch = normalizeJobSearchQuery(qForSearch);
+  }
+
+  const qForVector = q && !company ? normalizeJobSearchQuery(q) : q;
 
   // ── Vector search path ─────────────────────────────────────────────────────
   // Use Vectorize when a query is provided and the binding is configured.
   // Skip when we resolved to a company — SQL path handles company queries.
+  // Skip when title= is set — role searches use deterministic title LIKE only.
   // Wrapped in try-catch so any Gemini/Vectorize failure falls through to SQL.
-  if (q && !company && env.JOBS_VECTORS && env.GEMINI_API_KEY) {
+  if (q && !titleForSearch && !company && env.JOBS_VECTORS && env.GEMINI_API_KEY) {
     try {
       // Determine offset for paginated vector results
       const vectorOffset = cursor ? (decodeVectorCursor(cursor) ?? 0) : 0;
@@ -293,7 +339,11 @@ export async function handleListJobs(
       // title independently (parallel + individually KV-cached), then average
       // into a centroid vector. One Vectorize query covers all titles at once
       // without adding extra round-trips compared to a single-title search.
-      const titles = q.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 5);
+      const titles = (qForVector ?? q)
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .slice(0, 5);
 
       const getEmbedding = async (title: string): Promise<number[]> => {
         const key = `qembed:${title.toLowerCase()}`;
@@ -310,7 +360,7 @@ export async function handleListJobs(
 
       let queryVector: number[];
       if (titles.length <= 1) {
-        queryVector = await getEmbedding(titles[0] ?? q.trim());
+        queryVector = await getEmbedding(titles[0] ?? (qForVector ?? q).trim());
       } else {
         // Embed all titles in parallel — each is cached independently so repeat
         // visits with the same profile pay no Gemini cost.
@@ -336,18 +386,28 @@ export async function handleListJobs(
       // returning an empty result set, which would be confusing to callers.
       if (rankedIds.length > 0) {
         // Hydrate from D1, applying secondary filters (location, type, company, recency)
-        const filteredRows = await listJobsByIds(env.JOBS_DB, rankedIds, {
+        let filteredRows = await listJobsByIds(env.JOBS_DB, rankedIds, {
           location,
           location_region,
           location_or,
           exclude_ids,
           employment_type,
           workplace_type,
+          seniority_level,
+          description_language,
           company,
           posted_since,
           salary_min,
           country,
+          visa_sponsorship,
         });
+
+        const qForTitleGate = (titleForSearch ?? qForVector ?? q)?.trim();
+        if (qForTitleGate) {
+          filteredRows = filteredRows.filter((r) =>
+            jobTitleMatchesSearchTokens(r.title, qForTitleGate)
+          );
+        }
 
         // Re-rank: blend similarity position with recency so newer jobs surface first
         // when semantically equivalent. Formula: combined = sim_rank + recency_penalty
@@ -375,7 +435,17 @@ export async function handleListJobs(
         // jobs by title text match (SQL applies posted_since efficiently).
         const tooFewForRecency =
           posted_since && vectorOffset === 0 && reranked.length < limit;
-        if (!(reranked.length === 0 && vectorOffset === 0 && posted_since) && !tooFewForRecency) {
+
+        // Vector IDs matched but hydration + filters removed every row — fall through
+        // to SQL (e.g. rare filter edge cases).
+        const vectorHydrationEmpty =
+          reranked.length === 0 && rankedIds.length > 0 && vectorOffset === 0;
+
+        if (
+          !vectorHydrationEmpty &&
+          !(reranked.length === 0 && vectorOffset === 0 && posted_since) &&
+          !tooFewForRecency
+        ) {
           // Paginate within the re-ranked result set
           const page = reranked.slice(vectorOffset, vectorOffset + limit);
           const nextCursor = buildVectorCursor(vectorOffset, page.length, reranked.length);
@@ -400,6 +470,7 @@ export async function handleListJobs(
   // ── SQL fallback path ──────────────────────────────────────────────────────
   // Standard keyset pagination used when q= is absent or Vectorize is not set up.
   const { rows, total } = await listJobs(env.JOBS_DB, {
+    title: titleForSearch,
     q: qForSearch,
     location,
     location_region,
@@ -413,6 +484,7 @@ export async function handleListJobs(
     posted_since,
     salary_min,
     country,
+    visa_sponsorship,
     limit,
     cursor,
   });

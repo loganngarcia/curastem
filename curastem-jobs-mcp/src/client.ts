@@ -23,14 +23,34 @@ export class JobsApiError extends Error {
 }
 
 export interface ListJobsParams {
+  /** Broad search (Vectorize + SQL). Prefer `title` for role-only matching. */
   q?: string | undefined;
+  /** Substring match on job title only — no company slug / vector noise. */
+  title?: string | undefined;
   location?: string | undefined;
+  /** Comma-separated — match if job locations contain ANY term (multi-metro). */
+  location_or?: string | undefined;
   employment_type?: string | undefined;
   workplace_type?: string | undefined;
   seniority_level?: string | undefined;
+  /** Comma-separated company slugs = OR match (e.g. meta,google,apple). */
   company?: string | undefined;
   since?: number | undefined;
   salary_min?: number | undefined;
+  /** Only jobs where enrichment recorded sponsorship (yes) or explicitly no (no). */
+  visa_sponsorship?: "yes" | "no" | undefined;
+  /** ISO 639-1 code — e.g. en, es, de */
+  description_language?: string | undefined;
+  /** ISO 3166-1 alpha-2 — jobs in this country or remote. */
+  country?: string | undefined;
+  /** Omit these job IDs (comma-separated in the query string). */
+  exclude_ids?: string[] | undefined;
+  /** With near_lng — return jobs within radius_km (default 50). Requires geocoded listings. */
+  near_lat?: number | undefined;
+  near_lng?: number | undefined;
+  radius_km?: number | undefined;
+  /** When using near_* , set false to include remote-only jobs (default true). */
+  exclude_remote?: boolean | undefined;
   limit?: number | undefined;
   cursor?: string | undefined;
 }
@@ -80,13 +100,25 @@ export class JobsApiClient {
   async listJobs(params: ListJobsParams): Promise<JobsListResponse> {
     const qs = new URLSearchParams();
     if (params.q) qs.set("q", params.q);
+    if (params.title) qs.set("title", params.title);
     if (params.location) qs.set("location", params.location);
+    if (params.location_or) qs.set("location_or", params.location_or);
     if (params.employment_type) qs.set("employment_type", params.employment_type);
     if (params.workplace_type) qs.set("workplace_type", params.workplace_type);
     if (params.seniority_level) qs.set("seniority_level", params.seniority_level);
     if (params.company) qs.set("company", params.company);
     if (params.since) qs.set("since", String(params.since));
     if (params.salary_min !== undefined) qs.set("salary_min", String(params.salary_min));
+    if (params.visa_sponsorship === "yes" || params.visa_sponsorship === "no") {
+      qs.set("visa_sponsorship", params.visa_sponsorship);
+    }
+    if (params.description_language) qs.set("description_language", params.description_language);
+    if (params.country) qs.set("country", params.country.slice(0, 2).toUpperCase());
+    if (params.exclude_ids?.length) qs.set("exclude_ids", params.exclude_ids.join(","));
+    if (params.near_lat !== undefined) qs.set("near_lat", String(params.near_lat));
+    if (params.near_lng !== undefined) qs.set("near_lng", String(params.near_lng));
+    if (params.radius_km !== undefined) qs.set("radius_km", String(params.radius_km));
+    if (params.exclude_remote === false) qs.set("exclude_remote", "false");
     if (params.limit) qs.set("limit", String(params.limit));
     if (params.cursor) qs.set("cursor", params.cursor);
 

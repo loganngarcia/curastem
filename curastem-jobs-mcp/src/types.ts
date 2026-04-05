@@ -84,6 +84,8 @@ export interface Job {
   job_city: string | null;
   /** Country from the posting. */
   job_country: string | null;
+  /** AI-extracted from posting text when explicit. */
+  visa_sponsorship?: "yes" | "no" | null;
   /** Skill/technology keywords extracted from the description. Present on detail endpoint only. */
   keywords?: string[];
 }

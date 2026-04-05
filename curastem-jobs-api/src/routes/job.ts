@@ -27,6 +27,7 @@ import { authenticate, recordKeyUsage } from "../middleware/auth.ts";
 import { checkRateLimit } from "../middleware/rateLimit.ts";
 import { logger } from "../utils/logger.ts";
 import { seniorityFromExperienceYears } from "../utils/normalize.ts";
+import { enrichLocationsWithCountry } from "../utils/locationsDisplay.ts";
 
 function rowToFullPublicJob(row: FullJobRow): PublicJob {
   const bestPostedAt = row.posted_at ?? row.first_seen_at;
@@ -55,6 +56,7 @@ function rowToFullPublicJob(row: FullJobRow): PublicJob {
       // Malformed JSON — treat as no location
     }
   }
+  locations = enrichLocationsWithCountry(locations, row.job_country ?? null);
 
   let companyLocations: string[] | null = null;
   if (row.company_locations) {

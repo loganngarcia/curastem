@@ -533,9 +533,10 @@ export interface PublicJob {
   posted_at: string;         // ISO 8601; best-available posting time
   apply_url: string;
   /**
-   * Normalized work locations. null = unknown.
+   * Normalized work locations from the ATS (JSON array in D1). null = unknown.
    * locations[0] is the primary display value; multi-city roles have multiple entries.
-   * e.g. ["San Francisco, CA"] | ["New York, NY", "Remote"] | null
+   * Strings are usually city/region (e.g. "San Francisco, CA", "London"); country may be omitted.
+   * The API appends a display country from job_country when missing — see job_country.
    */
   locations: string[] | null;
   employment_type: EmploymentType | null;
