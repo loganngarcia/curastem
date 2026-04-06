@@ -1704,14 +1704,19 @@ function plainTextToResumeDocHtml(text: string): string {
         .join("")
 }
 
-/** Structured resume HTML for profile Edit — same rules as the `create_resume` tool `content` field. */
-const CREATE_RESUME_HTML_FORMAT_INSTRUCTIONS = `Full HTML resume, in order:
+/** Curastem doc editor: Title (h1), section lines (h1.doc-block-section), and paragraphs only — no h2/h3/h4. */
+const DOC_EDITOR_HTML_BLOCK_RULES = `<h1> or <h1 class="doc-block-title"> (title); <h1 class="doc-block-section"> (sections); <p>, <ul>/<li>, <b>/<strong>, <a>. No <h2>-<h4>.`
 
-1. <h1> — Name
+/** Structured resume HTML for profile Edit — same rules as the `create_resume` tool `content` field. */
+const CREATE_RESUME_HTML_FORMAT_INSTRUCTIONS = `${DOC_EDITOR_HTML_BLOCK_RULES}
+
+Full HTML resume, in order:
+
+1. <h1> or <h1 class="doc-block-title"> — Name
 2. <p> — Contact on one line; separate items with space · space. Copy verbatim from the source. Use <a href="..."> for URLs and mailto: for emails. Do not invent contacts.
-3. <h2>Experience</h2> — Newest job first. Per job: <p><b>Title</b> · Company · Dates</p> then <ul><li>achievements</li></ul>. Job title and dates stay in the <p>, not in <li>. No nested lists. You may rewrite bullets for clarity and keyword alignment with the role (when a job is in context, match the posting where it helps). Keep every concrete metric accurate (percentages, dollar amounts, counts, multiples, time ranges) — do not drop or soften numbers.
-4. <h2>Education</h2> — <ul>, one <li> per degree
-5. <h2>Skills</h2> — 2–3 <p> lines by category. Each: <p><b>Category:</b> comma-separated items</p> (e.g. <b>Software:</b> …, <b>Communication:</b> …). If a job posting or role is in context, only include skills that match what the posting asks for, or that are a reasonable fit from the title, duties, and what you know about the company; leave out unrelated skills. With no job target, use categories that reflect the full resume.
+3. <h1 class="doc-block-section">Experience</h1> — Newest job first. Per job: <p><b>Title</b> · Company · Dates</p> then <ul><li>achievements</li></ul>. Job title and dates stay in the <p>, not in <li>. No nested lists. You may rewrite bullets for clarity and keyword alignment with the role (when a job is in context, match the posting where it helps). Keep every concrete metric accurate (percentages, dollar amounts, counts, multiples, time ranges) — do not drop or soften numbers.
+4. <h1 class="doc-block-section">Education</h1> — <ul>, one <li> per degree
+5. <h1 class="doc-block-section">Skills</h1> — 2–3 <p> lines by category. Each: <p><b>Category:</b> comma-separated items</p> (e.g. <b>Software:</b> …, <b>Communication:</b> …). If a job posting or role is in context, only include skills that match what the posting asks for, or that are a reasonable fit from the title, duties, and what you know about the company; leave out unrelated skills. With no job target, use categories that reflect the full resume.
 
 <b> only in experience job headers and skill category labels. No <i>. Complete sections.`
 
@@ -3611,23 +3616,73 @@ const VideoPlayer = React.memo(function VideoPlayer({
 })
 
 // --- HELPER COMPONENT: DOC EDITOR ---
+
+/** Block-level typography for Docs (editor toolbar + exports). Inter only. */
+/** Title and Heading 1 both use `<h1>`; Heading 1 is `h1.doc-block-section` (replaces `<h2>`). */
+type DocBlockKey = "p" | "section" | "title"
+
+const DOC_FONT_STACK = "Inter, system-ui, sans-serif"
+const DOC_BLOCK_SECTION_CLASS = "doc-block-section"
+const DOC_BLOCK_TITLE_CLASS = "doc-block-title"
+
+const DOC_BLOCK_OPTIONS: readonly {
+    key: DocBlockKey
+    label: string
+    /** Rendered size in the document and in PDF/DOCX export. */
+    fontSizePx: number
+    /** If set, block-style dropdown row uses this (e.g. Paragraph preview 14px while doc body stays 16px). */
+    dropdownFontSizePx?: number
+    fontWeight: number
+    rowMinHeightPx: number
+}[] = [
+    {
+        key: "title",
+        label: "Title",
+        fontSizePx: 28,
+        fontWeight: 700,
+        rowMinHeightPx: 48,
+    },
+    {
+        key: "section",
+        label: "Heading 1",
+        fontSizePx: 18,
+        fontWeight: 700,
+        rowMinHeightPx: 40,
+    },
+    {
+        key: "p",
+        label: "Paragraph",
+        fontSizePx: 16,
+        dropdownFontSizePx: 14,
+        fontWeight: 400,
+        rowMinHeightPx: 40,
+    },
+] as const
+
+function docBlockExportSizePx(key: DocBlockKey): number {
+    const o = DOC_BLOCK_OPTIONS.find((b) => b.key === key)
+    return o?.fontSizePx ?? 16
+}
+
+function applyDocBlockClasses(el: HTMLElement, blockKey: DocBlockKey) {
+    if (blockKey === "p") {
+        el.classList.remove(DOC_BLOCK_TITLE_CLASS, DOC_BLOCK_SECTION_CLASS)
+        return
+    }
+    if (blockKey === "title") {
+        el.classList.remove(DOC_BLOCK_SECTION_CLASS)
+        el.classList.add(DOC_BLOCK_TITLE_CLASS)
+        return
+    }
+    if (blockKey === "section") {
+        el.classList.remove(DOC_BLOCK_TITLE_CLASS)
+        el.classList.add(DOC_BLOCK_SECTION_CLASS)
+    }
+}
+
 interface DocEditorProps {
     content: string
     onChange: (content: string) => void
-    settings: {
-        fontStyle: "serif" | "sans"
-        fontSize: number
-        h1Size: number
-        h2Size: number
-        pSize: number
-    }
-    onSettingsChange: (settings: {
-        fontStyle: "serif" | "sans"
-        fontSize: number
-        h1Size: number
-        h2Size: number
-        pSize: number
-    }) => void
     themeColors?: typeof darkColors
     isMobileLayout?: boolean
     remoteCursors?: Map<string, { x: number; y: number; color: string }>
@@ -4014,8 +4069,6 @@ function chatMatchesSidebarSearch(
 const DocEditor = React.memo(function DocEditor({
     content,
     onChange,
-    settings,
-    onSettingsChange,
     themeColors = darkColors,
     isMobileLayout = false,
     remoteCursors,
@@ -4036,13 +4089,6 @@ const DocEditor = React.memo(function DocEditor({
     // Store the actual Range object, not just a cloned one
     const [savedRange, setSavedRange] = React.useState<Range | null>(null)
 
-    const [selectedFontSize, setSelectedFontSize] = React.useState(
-        settings.pSize
-    )
-    const [fontSizeInput, setFontSizeInput] = React.useState(
-        settings.pSize.toString()
-    )
-    const [isEditingFontSize, setIsEditingFontSize] = React.useState(false)
     const [showLinkDropdown, setShowLinkDropdown] = React.useState(false)
     const [showDownloadMenu, setShowDownloadMenu] = React.useState(false)
     const [selectedDownloadMenuIndex, setSelectedDownloadMenuIndex] =
@@ -4064,40 +4110,34 @@ const DocEditor = React.memo(function DocEditor({
     const [hoveredToolbarItem, setHoveredToolbarItem] = React.useState<
         string | null
     >(null)
-    const [isFontDecreaseHovered, setIsFontDecreaseHovered] =
-        React.useState(false)
-    const [isFontIncreaseHovered, setIsFontIncreaseHovered] =
-        React.useState(false)
     const [isDownloadHovered, setIsDownloadHovered] = React.useState(false)
     const [isCloseHovered, setIsCloseHovered] = React.useState(false)
 
-    // CSS Variables for performance
+    const [showBlockDropdown, setShowBlockDropdown] = React.useState(false)
+    const [blockDropdownIndex, setBlockDropdownIndex] = React.useState(-1)
+    const blockDropdownButtonRef = React.useRef<HTMLButtonElement>(null)
+    const blockDropdownPanelRef = React.useRef<HTMLDivElement>(null)
+    const [blockDropdownPosition, setBlockDropdownPosition] =
+        React.useState<React.CSSProperties>({
+            position: "fixed",
+            top: 0,
+            left: 0,
+            visibility: "hidden",
+        })
+    const [currentBlockKey, setCurrentBlockKey] =
+        React.useState<DocBlockKey>("p")
+
     const styleVariables = React.useMemo(
         () =>
             ({
-                "--doc-h1-size": `${settings.h1Size}px`,
-                "--doc-h2-size": `${settings.h2Size}px`,
-                "--doc-p-size": `${settings.pSize}px`,
-                "--doc-font-serif": '"Times New Roman", serif',
-                "--doc-font-sans": "Inter, sans-serif",
                 "--doc-accent": themeColors.semantic.accent,
                 "--doc-text-color": themeColors.text.primary,
                 "--doc-border-color":
                     themeColors.background === lightColors.background
                         ? themeColors.border.subtle
                         : "hsla(0, 0%, 100%, 0.2)",
-                "--doc-current-font":
-                    settings.fontStyle === "serif"
-                        ? "var(--doc-font-serif)"
-                        : "var(--doc-font-sans)",
             }) as React.CSSProperties,
-        [
-            settings.h1Size,
-            settings.h2Size,
-            settings.pSize,
-            settings.fontStyle,
-            themeColors,
-        ]
+        [themeColors]
     )
 
     // --- Core Editor Logic ---
@@ -4152,82 +4192,115 @@ const DocEditor = React.memo(function DocEditor({
 
     // --- Formatting Logic ---
 
-    const getSelectionInfo = React.useCallback(() => {
+    const getCurrentBlockKey = React.useCallback((): DocBlockKey => {
         const selection = window.getSelection()
         let node: Node | null = null
 
-        // Try to get node from current selection
         if (
             selection &&
             selection.rangeCount > 0 &&
             editorRef.current?.contains(selection.anchorNode)
         ) {
             node = selection.anchorNode
-        }
-        // Fallback to savedRange
-        else if (
+        } else if (
             savedRange &&
             editorRef.current?.contains(savedRange.startContainer)
         ) {
             node = savedRange.startContainer
         }
 
-        if (!node) return { tag: "P", size: settings.pSize }
+        if (!node) return "p"
 
         while (node && node !== editorRef.current) {
             if (node.nodeType === Node.ELEMENT_NODE) {
-                const tag = (node as HTMLElement).tagName
-                if (tag === "H1") return { tag: "H1", size: settings.h1Size }
-                if (tag === "H2") return { tag: "H2", size: settings.h2Size }
-                if (["P", "LI", "DIV"].includes(tag))
-                    return { tag: "P", size: settings.pSize }
+                const el = node as HTMLElement
+                const tag = el.tagName
+                if (tag === "H1") {
+                    if (el.classList.contains(DOC_BLOCK_SECTION_CLASS))
+                        return "section"
+                    return "title"
+                }
+                if (tag === "H2") return "section"
+                if (["P", "LI", "DIV", "H3", "H4"].includes(tag))
+                    return "p"
             }
             node = node.parentNode
         }
-        return { tag: "P", size: settings.pSize }
-    }, [settings, editorRef, savedRange])
+        return "p"
+    }, [savedRange])
 
-    const updateFontSize = React.useCallback(
-        (newSize: number) => {
-            const size = Math.max(8, Math.min(72, newSize))
+    const applyBlockFormat = React.useCallback(
+        (blockKey: DocBlockKey) => {
+            if (!editorRef.current) return
 
-            // Restore selection if needed (when clicking buttons outside editor)
-            if (
-                editorRef.current &&
-                !editorRef.current.contains(document.activeElement)
-            ) {
+            const selection = window.getSelection()
+            if (!selection) return
+
+            if (!editorRef.current.contains(document.activeElement)) {
                 editorRef.current.focus()
-                const selection = window.getSelection()
-                if (selection && savedRange) {
+                if (savedRange) {
                     selection.removeAllRanges()
                     selection.addRange(savedRange)
                 }
             }
 
-            // Always update the global setting for the current text category
-            const info = getSelectionInfo()
-            if (info.tag === "H1") {
-                onSettingsChange({ ...settings, h1Size: size })
-            } else if (info.tag === "H2") {
-                onSettingsChange({ ...settings, h2Size: size })
+            const formatTag = blockKey === "p" ? "p" : "h1"
+
+            if (selection.isCollapsed) {
+                const range = selection.getRangeAt(0)
+                const originalOffset = getCaretCharacterOffsetWithin(
+                    editorRef.current
+                )
+                let node = range.commonAncestorContainer as HTMLElement | null
+                while (node && node !== editorRef.current) {
+                    if (
+                        ["P", "LI", "H1", "H2", "DIV"].includes(
+                            node.nodeName.toUpperCase()
+                        )
+                    )
+                        break
+                    node = node.parentElement
+                }
+
+                if (node && node !== editorRef.current) {
+                    const newRange = document.createRange()
+                    newRange.selectNodeContents(node)
+                    selection.removeAllRanges()
+                    selection.addRange(newRange)
+                    document.execCommand(
+                        "formatBlock",
+                        false,
+                        formatTag.toLowerCase()
+                    )
+                    setCaretPosition(editorRef.current, originalOffset)
+                }
             } else {
-                onSettingsChange({ ...settings, pSize: size })
+                document.execCommand(
+                    "formatBlock",
+                    false,
+                    formatTag.toLowerCase()
+                )
             }
 
-            setSelectedFontSize(size)
-            if (!isEditingFontSize) setFontSizeInput(size.toString())
+            let n: Node | null = selection.anchorNode
+            while (n && n !== editorRef.current) {
+                if (n.nodeType === Node.ELEMENT_NODE) {
+                    const el = n as HTMLElement
+                    const t = el.tagName
+                    if (["P", "H1", "LI", "DIV"].includes(t)) {
+                        applyDocBlockClasses(el, blockKey)
+                        break
+                    }
+                }
+                n = n.parentNode
+            }
 
-            // Save the selection after update
+            handleInput()
             saveSelection()
+            setCurrentBlockKey(blockKey)
+            setShowBlockDropdown(false)
         },
-        [
-            getSelectionInfo,
-            settings,
-            onSettingsChange,
-            isEditingFontSize,
-            savedRange,
-            saveSelection,
-        ]
+        [savedRange, handleInput, saveSelection]
     )
 
     const handleSmartFormat = React.useCallback(
@@ -4320,7 +4393,9 @@ const DocEditor = React.memo(function DocEditor({
                 const tag = (blockElement as HTMLElement).tagName
                 if (
                     tag &&
-                    ["P", "DIV", "H1", "H2", "LI"].includes(tag.toUpperCase())
+                    ["P", "DIV", "H1", "H2", "LI"].includes(
+                        tag.toUpperCase()
+                    )
                 )
                     break
                 blockElement = blockElement.parentElement
@@ -4335,7 +4410,19 @@ const DocEditor = React.memo(function DocEditor({
                 e.preventDefault()
                 if (blockElement.nodeType === Node.ELEMENT_NODE)
                     (blockElement as HTMLElement).textContent = ""
-                document.execCommand("formatBlock", false, "h2")
+                document.execCommand("formatBlock", false, "h1")
+                const sel = window.getSelection()
+                let n: Node | null = sel?.anchorNode ?? null
+                while (n && editorRef.current?.contains(n)) {
+                    if (n.nodeType === Node.ELEMENT_NODE) {
+                        const el = n as HTMLElement
+                        if (el.tagName === "H1") {
+                            applyDocBlockClasses(el, "section")
+                            break
+                        }
+                    }
+                    n = n.parentNode
+                }
                 handleInput()
                 saveSelection()
             } else if (fullText === "#") {
@@ -4343,6 +4430,18 @@ const DocEditor = React.memo(function DocEditor({
                 if (blockElement.nodeType === Node.ELEMENT_NODE)
                     (blockElement as HTMLElement).textContent = ""
                 document.execCommand("formatBlock", false, "h1")
+                const sel = window.getSelection()
+                let n: Node | null = sel?.anchorNode ?? null
+                while (n && editorRef.current?.contains(n)) {
+                    if (n.nodeType === Node.ELEMENT_NODE) {
+                        const el = n as HTMLElement
+                        if (el.tagName === "H1") {
+                            applyDocBlockClasses(el, "title")
+                            break
+                        }
+                    }
+                    n = n.parentNode
+                }
                 handleInput()
                 saveSelection()
             } else if (fullText === "-") {
@@ -4354,7 +4453,7 @@ const DocEditor = React.memo(function DocEditor({
                 saveSelection()
             }
         },
-        [handleInput, saveSelection]
+        [handleInput, saveSelection, editorRef]
     )
 
     // --- Event Listeners ---
@@ -4374,9 +4473,7 @@ const DocEditor = React.memo(function DocEditor({
                 saveSelection()
 
                 let linkFound = false
-                let size = 0
 
-                // Check both anchor and focus nodes for links
                 const nodesToCheck = [selection.anchorNode, selection.focusNode]
 
                 for (const startNode of nodesToCheck) {
@@ -4384,35 +4481,21 @@ const DocEditor = React.memo(function DocEditor({
 
                     let node: Node | null = startNode
                     while (node && node !== editorRef.current) {
-                        if (node.nodeType === Node.ELEMENT_NODE) {
-                            const el = node as HTMLElement
-                            const tag = el.tagName
-
-                            if (tag === "A") linkFound = true
-
-                            if (!size && el.style.fontSize) {
-                                const parsed = parseFloat(el.style.fontSize)
-                                if (!isNaN(parsed)) size = Math.round(parsed)
-                            }
-
-                            if (!size) {
-                                if (tag === "H1") size = settings.h1Size
-                                else if (tag === "H2") size = settings.h2Size
-                                else if (["P", "LI", "DIV"].includes(tag))
-                                    size = settings.pSize
-                            }
+                        if (
+                            node.nodeType === Node.ELEMENT_NODE &&
+                            (node as HTMLElement).tagName === "A"
+                        ) {
+                            linkFound = true
+                            break
                         }
                         node = node.parentNode
                     }
 
-                    if (linkFound) break // Found a link, no need to check further
+                    if (linkFound) break
                 }
 
                 setIsLinkActive(linkFound)
-                if (!size) size = settings.pSize
-
-                setSelectedFontSize(size)
-                if (!isEditingFontSize) setFontSizeInput(size.toString())
+                setCurrentBlockKey(getCurrentBlockKey())
             })
         }
         document.addEventListener("selectionchange", handleSelectionChange)
@@ -4423,7 +4506,7 @@ const DocEditor = React.memo(function DocEditor({
             )
             cancelAnimationFrame(rafId)
         }
-    }, [isEditingFontSize, saveSelection, settings])
+    }, [saveSelection, getCurrentBlockKey])
 
     // Adjust link dropdown position to prevent cutoff
     React.useLayoutEffect(() => {
@@ -4483,6 +4566,45 @@ const DocEditor = React.memo(function DocEditor({
         window.addEventListener("resize", adjustPosition)
         return () => window.removeEventListener("resize", adjustPosition)
     }, [showLinkDropdown])
+
+    React.useLayoutEffect(() => {
+        if (
+            !showBlockDropdown ||
+            !blockDropdownButtonRef.current ||
+            !blockDropdownPanelRef.current
+        )
+            return
+
+        const adjust = () => {
+            const buttonRect =
+                blockDropdownButtonRef.current!.getBoundingClientRect()
+            const panelRect =
+                blockDropdownPanelRef.current!.getBoundingClientRect()
+            const EDGE = 8
+            let top = buttonRect.bottom + 8
+            let left = buttonRect.left
+            if (left + panelRect.width > window.innerWidth - EDGE) {
+                left = Math.max(
+                    EDGE,
+                    window.innerWidth - panelRect.width - EDGE
+                )
+            }
+            if (left < EDGE) left = EDGE
+            if (top + panelRect.height > window.innerHeight - EDGE) {
+                top = buttonRect.top - panelRect.height - 8
+            }
+            setBlockDropdownPosition({
+                position: "fixed",
+                top,
+                left,
+                visibility: "visible",
+            })
+        }
+
+        adjust()
+        window.addEventListener("resize", adjust)
+        return () => window.removeEventListener("resize", adjust)
+    }, [showBlockDropdown])
 
     // Keyboard Shortcuts
     React.useEffect(() => {
@@ -4551,18 +4673,6 @@ const DocEditor = React.memo(function DocEditor({
                         document.execCommand(e.shiftKey ? "redo" : "undo")
                         handleInput()
                         break
-                    case ",":
-                        if (e.shiftKey) {
-                            e.preventDefault()
-                            updateFontSize(selectedFontSize - 1)
-                        }
-                        break
-                    case ".":
-                        if (e.shiftKey) {
-                            e.preventDefault()
-                            updateFontSize(selectedFontSize + 1)
-                        }
-                        break
                 }
 
                 // Handle Cmd+Shift+8 for bullet list
@@ -4578,8 +4688,6 @@ const DocEditor = React.memo(function DocEditor({
         handleSmartFormat,
         handleFormat,
         handleInput,
-        selectedFontSize,
-        updateFontSize,
     ])
 
     // Outside Click for Link Dropdown
@@ -4771,10 +4879,7 @@ const DocEditor = React.memo(function DocEditor({
             if (format === "pdf") {
                 const isOnePage =
                     docType === "resume" || docType === "cover_letter"
-                const fontFamily =
-                    settings.fontStyle === "serif"
-                        ? '"Times New Roman", serif'
-                        : "Inter, sans-serif"
+                const fontFamily = "Inter, system-ui, sans-serif"
 
                 if (isOnePage) {
                     try {
@@ -4786,7 +4891,9 @@ const DocEditor = React.memo(function DocEditor({
                         const MARGIN_PT = 36
                         const CONTENT_W_PT = PAGE_W_PT - MARGIN_PT * 2
                         const CONTENT_H_PT = PAGE_H_PT - MARGIN_PT * 2
-                        const useSerif = settings.fontStyle === "serif"
+                        const DOC_PX_BODY = docBlockExportSizePx("p")
+                        const DOC_PX_TITLE = docBlockExportSizePx("title")
+                        const DOC_PX_SECTION = docBlockExportSizePx("section")
 
                         // Spacing constants — cover letter gets slightly more air.
                         const bodyLineMult = isCoverLetter ? 1.46 : 1.45
@@ -4882,16 +4989,34 @@ const DocEditor = React.memo(function DocEditor({
                                 const el = node as Element
                                 const tag = el.tagName.toLowerCase()
                                 if (tag === "h1") {
-                                    out.push({
-                                        kind: "h1",
-                                        text: el.textContent?.trim() || "",
-                                    })
+                                    if (
+                                        el.classList.contains(
+                                            DOC_BLOCK_SECTION_CLASS
+                                        )
+                                    ) {
+                                        out.push({ kind: "rule" })
+                                        out.push({
+                                            kind: "h2",
+                                            text:
+                                                el.textContent?.trim() || "",
+                                        })
+                                    } else {
+                                        out.push({
+                                            kind: "h1",
+                                            text:
+                                                el.textContent?.trim() || "",
+                                        })
+                                    }
                                 } else if (tag === "h2") {
                                     out.push({ kind: "rule" })
                                     out.push({
                                         kind: "h2",
                                         text: el.textContent?.trim() || "",
                                     })
+                                } else if (tag === "h3" || tag === "h4") {
+                                    const runs = inlineRuns(el)
+                                    if (runs.some((r) => r.text.trim()))
+                                        out.push({ kind: "p", runs })
                                 } else if (tag === "p") {
                                     const runs = inlineRuns(el)
                                     if (runs.some((r) => r.text.trim()))
@@ -4930,33 +5055,15 @@ const DocEditor = React.memo(function DocEditor({
                         const pdfDoc = await PDFDocument.create()
                         const page = pdfDoc.addPage([PAGE_W_PT, PAGE_H_PT])
 
-                        const [
-                            regularFont,
-                            boldFont,
-                            italicFont,
-                            boldItalicFont,
-                        ] = await Promise.all([
-                            pdfDoc.embedFont(
-                                useSerif
-                                    ? StandardFonts.TimesRoman
-                                    : StandardFonts.Helvetica
-                            ),
-                            pdfDoc.embedFont(
-                                useSerif
-                                    ? StandardFonts.TimesRomanBold
-                                    : StandardFonts.HelveticaBold
-                            ),
-                            pdfDoc.embedFont(
-                                useSerif
-                                    ? StandardFonts.TimesRomanItalic
-                                    : StandardFonts.HelveticaOblique
-                            ),
-                            pdfDoc.embedFont(
-                                useSerif
-                                    ? StandardFonts.TimesRomanBoldItalic
-                                    : StandardFonts.HelveticaBoldOblique
-                            ),
-                        ])
+                        const [helReg, helBold, helItalic, helBoldIt] =
+                            await Promise.all([
+                                pdfDoc.embedFont(StandardFonts.Helvetica),
+                                pdfDoc.embedFont(StandardFonts.HelveticaBold),
+                                pdfDoc.embedFont(StandardFonts.HelveticaOblique),
+                                pdfDoc.embedFont(
+                                    StandardFonts.HelveticaBoldOblique
+                                ),
+                            ])
 
                         const black = rgb(0.07, 0.07, 0.07)
                         const gray = rgb(0.2, 0.2, 0.2)
@@ -4974,12 +5081,12 @@ const DocEditor = React.memo(function DocEditor({
 
                         const pickFont = (bold: boolean, italic: boolean) =>
                             bold && italic
-                                ? boldItalicFont
+                                ? helBoldIt
                                 : bold
-                                  ? boldFont
+                                  ? helBold
                                   : italic
-                                    ? italicFont
-                                    : regularFont
+                                    ? helItalic
+                                    : helReg
 
                         // Word-wrap styled runs using real font metrics. Returns lines of runs.
                         const wrapRuns = (
@@ -5090,8 +5197,10 @@ const DocEditor = React.memo(function DocEditor({
                         // Measure total layout height at a given base font size using real font metrics.
                         // This is the same logic as the draw pass, just without the draw calls.
                         const measureHeight = (basePt: number): number => {
-                            const h1Pt = basePt * 1.55
-                            const h2Pt = basePt * 1.15
+                            const px = (n: number) =>
+                                basePt * (n / DOC_PX_BODY)
+                            const h1Pt = px(DOC_PX_TITLE)
+                            const h2Pt = px(DOC_PX_SECTION)
                             const lineH = basePt * bodyLineMult
                             const h1LineH = h1Pt * 1.3
                             const h2LineH = h2Pt * 1.35
@@ -5167,9 +5276,9 @@ const DocEditor = React.memo(function DocEditor({
                             return totalH
                         }
 
-                        // Binary-search for the largest font size that fits on one page.
+                        // Binary-search for the largest body pt that fits on one page (headings scale with DOC_BLOCK_OPTIONS px).
                         let lo = 6,
-                            hi = 14,
+                            hi = 20,
                             bestPt = 10
                         for (let i = 0; i < 12; i++) {
                             const mid = (lo + hi) / 2
@@ -5179,8 +5288,9 @@ const DocEditor = React.memo(function DocEditor({
                             } else hi = mid
                         }
 
-                        const h1Pt = bestPt * 1.55
-                        const h2Pt = bestPt * 1.15
+                        const px = (n: number) => bestPt * (n / DOC_PX_BODY)
+                        const h1Pt = px(DOC_PX_TITLE)
+                        const h2Pt = px(DOC_PX_SECTION)
                         const baseBodyLineH = bestPt * bodyLineMult
                         const h1LineH = h1Pt * 1.3
                         const h2LineH = h2Pt * 1.35
@@ -5203,7 +5313,13 @@ const DocEditor = React.memo(function DocEditor({
                                     h1Pt
                                 )) {
                                     y -= h1LineH
-                                    drawRuns(line, MARGIN_PT, y, h1Pt, black)
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT,
+                                        y,
+                                        h1Pt,
+                                        black
+                                    )
                                 }
                                 y -= bestPt * 0.4
                             } else if (block.kind === "rule") {
@@ -5233,7 +5349,13 @@ const DocEditor = React.memo(function DocEditor({
                                     h2Pt
                                 )) {
                                     y -= h2LineH
-                                    drawRuns(line, MARGIN_PT, y, h2Pt, black)
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT,
+                                        y,
+                                        h2Pt,
+                                        black
+                                    )
                                 }
                                 y -= bestPt * 0.5
                             } else if (block.kind === "p") {
@@ -5245,7 +5367,13 @@ const DocEditor = React.memo(function DocEditor({
                                     bestPt
                                 )) {
                                     y -= baseBodyLineH
-                                    drawRuns(line, MARGIN_PT, y, bestPt, black)
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT,
+                                        y,
+                                        bestPt,
+                                        black
+                                    )
                                 }
                                 y -= gapAfterParagraph(bestPt)
                                 firstP = false
@@ -5356,7 +5484,7 @@ const DocEditor = React.memo(function DocEditor({
                     iframe.style.cssText =
                         "position:fixed;left:-9999px;top:0;width:0;height:0;border:0;"
                     document.body.appendChild(iframe)
-                    const baseCSS = `@page{size:8.5in 11in;margin:0.5in;}body{margin:0;padding:0;font-family:${fontFamily};font-size:${Math.max(1, settings.pSize - 5)}pt;line-height:1.6;}h1{font-size:${Math.max(1, settings.h1Size - 5)}px;font-weight:700;}h2{font-size:${Math.max(1, settings.h2Size - 5)}px;font-weight:700;border-bottom:1px solid #333;}a{color:#0077cc;text-decoration:underline;}`
+                    const baseCSS = `@page{size:8.5in 11in;margin:0.5in;}body{margin:0;padding:0;font-family:Inter,system-ui,sans-serif;font-size:16px;font-weight:400;line-height:1.55;color:#111;}h1:not(.${DOC_BLOCK_SECTION_CLASS}){font-size:28px;font-weight:700;margin:0.6em 0 0.35em;}h1.${DOC_BLOCK_SECTION_CLASS},h2{font-size:18px;font-weight:700;margin:0.75em 0 0.5em;padding-bottom:0.35em;border-bottom:1px solid #333;}p,li{font-size:16px;font-weight:400;}h3,h4{font-size:16px;font-weight:400;margin:0.35em 0;}a{color:#0077cc;text-decoration:underline;}`
                     const iDoc = iframe.contentWindow?.document
                     if (iDoc) {
                         iDoc.open()
@@ -5543,11 +5671,10 @@ const DocEditor = React.memo(function DocEditor({
                                     .appendChild(node.cloneNode(true))
                                     .parentNode!.childNodes,
                                 {
-                                    font:
-                                        settings.fontStyle === "serif"
-                                            ? "Times New Roman"
-                                            : "Inter",
-                                    size: getAdjustedSize(settings.pSize),
+                                    font: "Inter",
+                                    size: getAdjustedSize(
+                                        docBlockExportSizePx("p")
+                                    ),
                                     color: getHexColor(colors.surfaceBlack),
                                 }
                             )
@@ -5575,29 +5702,53 @@ const DocEditor = React.memo(function DocEditor({
                     const tagName = el.tagName.toLowerCase()
 
                     if (tagName === "h1") {
-                        // For headings, we use specific sizing/bolding manually
-                        const runs = processInlineNodes(el.childNodes, {
-                            font:
-                                settings.fontStyle === "serif"
-                                    ? "Times New Roman"
-                                    : "Inter",
-                            size: getAdjustedSize(settings.h1Size),
-                            bold: true,
-                            color: getHexColor(colors.surfaceBlack),
-                        })
-                        docxChildren.push(
-                            new Paragraph({
-                                children: runs,
-                                spacing: { before: 240, after: 120 },
+                        if (el.classList.contains(DOC_BLOCK_SECTION_CLASS)) {
+                            const runs = processInlineNodes(el.childNodes, {
+                                font: "Inter",
+                                size: getAdjustedSize(
+                                    docBlockExportSizePx("section")
+                                ),
+                                bold: true,
+                                color: getHexColor(colors.surfaceBlack),
                             })
-                        )
+                            docxChildren.push(
+                                new Paragraph({
+                                    children: runs,
+                                    border: {
+                                        bottom: {
+                                            color: getHexColor(
+                                                colors.surfaceBlack
+                                            ),
+                                            space: 1,
+                                            value: "single",
+                                            size: 6,
+                                        },
+                                    },
+                                    spacing: { before: 240, after: 120 },
+                                })
+                            )
+                        } else {
+                            const runs = processInlineNodes(el.childNodes, {
+                                font: "Inter",
+                                size: getAdjustedSize(
+                                    docBlockExportSizePx("title")
+                                ),
+                                bold: true,
+                                color: getHexColor(colors.surfaceBlack),
+                            })
+                            docxChildren.push(
+                                new Paragraph({
+                                    children: runs,
+                                    spacing: { before: 240, after: 120 },
+                                })
+                            )
+                        }
                     } else if (tagName === "h2") {
                         const runs = processInlineNodes(el.childNodes, {
-                            font:
-                                settings.fontStyle === "serif"
-                                    ? "Times New Roman"
-                                    : "Inter",
-                            size: getAdjustedSize(settings.h2Size),
+                            font: "Inter",
+                            size: getAdjustedSize(
+                                docBlockExportSizePx("section")
+                            ),
                             bold: true,
                             color: getHexColor(colors.surfaceBlack),
                         })
@@ -5622,11 +5773,10 @@ const DocEditor = React.memo(function DocEditor({
                                 const runs = processInlineNodes(
                                     child.childNodes,
                                     {
-                                        font:
-                                            settings.fontStyle === "serif"
-                                                ? "Times New Roman"
-                                                : "Inter",
-                                        size: getAdjustedSize(settings.pSize),
+                                        font: "Inter",
+                                        size: getAdjustedSize(
+                                            docBlockExportSizePx("p")
+                                        ),
                                         color: getHexColor(colors.surfaceBlack),
                                     }
                                 )
@@ -5654,11 +5804,10 @@ const DocEditor = React.memo(function DocEditor({
                                 const runs = processInlineNodes(
                                     child.childNodes,
                                     {
-                                        font:
-                                            settings.fontStyle === "serif"
-                                                ? "Times New Roman"
-                                                : "Inter",
-                                        size: getAdjustedSize(settings.pSize),
+                                        font: "Inter",
+                                        size: getAdjustedSize(
+                                            docBlockExportSizePx("p")
+                                        ),
                                         color: getHexColor(colors.surfaceBlack),
                                     }
                                 )
@@ -5682,13 +5831,15 @@ const DocEditor = React.memo(function DocEditor({
                                 )
                             }
                         })
-                    } else if (tagName === "p" || tagName === "div") {
+                    } else if (
+                        tagName === "p" ||
+                        tagName === "div" ||
+                        tagName === "h3" ||
+                        tagName === "h4"
+                    ) {
                         const runs = processInlineNodes(el.childNodes, {
-                            font:
-                                settings.fontStyle === "serif"
-                                    ? "Times New Roman"
-                                    : "Inter",
-                            size: getAdjustedSize(settings.pSize),
+                            font: "Inter",
+                            size: getAdjustedSize(docBlockExportSizePx("p")),
                             color: getHexColor(colors.surfaceBlack),
                         })
                         // Ensure empty paragraphs still take up space
@@ -5758,18 +5909,7 @@ const DocEditor = React.memo(function DocEditor({
 
             setShowDownloadMenu(false)
         },
-        // Include all settings so re-download always recalculates with the latest content and font sizes
-        [
-            content,
-            docType,
-            docCompany,
-            userDisplayName,
-            settings.fontStyle,
-            settings.fontSize,
-            settings.h1Size,
-            settings.h2Size,
-            settings.pSize,
-        ]
+        [content, docType, docCompany, userDisplayName, themeColors]
     )
 
     const downloadMenuItems = React.useMemo(
@@ -5855,158 +5995,210 @@ const DocEditor = React.memo(function DocEditor({
                         transition: "opacity 0.5s ease",
                     }}
                 >
-                    {/* Font Size Control */}
-                    <div
-                        style={{
-                            height: 40,
-                            paddingLeft: 8,
-                            paddingRight: 4,
-                            background: themeColors.surface,
-                            borderRadius: 28,
-                            justifyContent: "center",
-                            alignItems: "center",
-                            gap: 4,
-                            display: "flex",
-                        }}
-                    >
-                        <div
-                            onClick={() => {
-                                haptic.light()
-                                updateFontSize(selectedFontSize - 1)
-                            }}
+                    {/* Block style (replaces legacy font size control) */}
+                    <div style={{ position: "relative" }}>
+                        <button
+                            ref={blockDropdownButtonRef}
+                            type="button"
+                            data-layer="header type"
+                            className="HeaderType"
                             onMouseDown={(e) => e.preventDefault()}
                             onPointerDown={(e) => e.preventDefault()}
-                            onMouseEnter={() => setIsFontDecreaseHovered(true)}
-                            onMouseLeave={() => setIsFontDecreaseHovered(false)}
+                            onClick={() => {
+                                haptic.light()
+                                setCurrentBlockKey(getCurrentBlockKey())
+                                setShowBlockDropdown((open) => !open)
+                            }}
+                            aria-expanded={showBlockDropdown}
+                            aria-haspopup="listbox"
+                            aria-label="Text style"
                             style={{
-                                cursor: "pointer",
-                                display: "flex",
+                                width: 104,
+                                height: 40,
+                                paddingLeft: 16,
+                                paddingRight: 4,
+                                borderRadius: 35,
+                                justifyContent: "space-between",
                                 alignItems: "center",
-                                justifyContent: "center",
-                                marginLeft: 4,
-                                userSelect: "none",
-                                position: "relative",
+                                display: "inline-flex",
+                                background: "transparent",
+                                border: "none",
+                                cursor: "pointer",
+                                paddingTop: 0,
+                                paddingBottom: 0,
                             }}
                         >
-                            <svg
-                                width="16"
-                                height="40"
-                                viewBox="0 0 16 40"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                            >
-                                <path
-                                    d="M2 20H14"
-                                    stroke={themeColors.text.primary}
-                                    strokeOpacity="0.95"
-                                    strokeWidth="1.23935"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                />
-                            </svg>
-                            {isFontDecreaseHovered && (
-                                <Tooltip
-                                    style={{
-                                        top: "100%",
-                                        left: "50%",
-                                        transform: "translate(-50%, 8px)",
-                                        zIndex: 100,
-                                    }}
-                                >
-                                    Decrease font size ({getModifierKey()}
-                                    +Shift+,)
-                                </Tooltip>
-                            )}
-                        </div>
-                        <div
-                            style={{
-                                width: 24,
-                                position: "relative", // Ensure absolute input is relative to this
-                                textAlign: "center",
-                                justifyContent: "center",
-                                display: "flex",
-                                flexDirection: "column",
-                                color: themeColors.text.primary,
-                                fontSize: 14,
-                                fontFamily: "Inter",
-                                fontWeight: "400",
-                                lineHeight: "19.32px",
-                                wordWrap: "break-word",
-                            }}
-                        >
-                            <input
-                                type="number"
-                                value={fontSizeInput}
-                                onChange={(e) => {
-                                    setFontSizeInput(e.target.value)
-                                    const v = parseInt(e.target.value)
-                                    if (!isNaN(v)) updateFontSize(v)
-                                }}
-                                onFocus={() => setIsEditingFontSize(true)}
-                                onBlur={() => {
-                                    setIsEditingFontSize(false)
-                                    setFontSizeInput(
-                                        selectedFontSize.toString()
-                                    )
-                                }}
+                            <div
+                                data-layer={
+                                    DOC_BLOCK_OPTIONS.find(
+                                        (b) => b.key === currentBlockKey
+                                    )?.label ?? "Paragraph"
+                                }
+                                className="Paragraph"
                                 style={{
-                                    width: "100%",
-                                    opacity: 0,
-                                    position: "absolute",
-                                    cursor: "text",
-                                    fontSize: 16,
+                                    justifyContent: "center",
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    alignItems: "flex-start",
+                                    textAlign: "left",
+                                    color: themeColors.text.primary,
+                                    opacity: 0.95,
+                                    fontSize: 14,
+                                    fontFamily: "Inter, system-ui, sans-serif",
+                                    fontWeight: 400,
+                                    lineHeight: "18.20px",
+                                    wordWrap: "break-word",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    minWidth: 0,
+                                    flex: 1,
                                 }}
-                            />
-                            {fontSizeInput}
-                        </div>
-                        <div
-                            onClick={() => {
-                                haptic.light()
-                                updateFontSize(selectedFontSize + 1)
-                            }}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onPointerDown={(e) => e.preventDefault()}
-                            onMouseEnter={() => setIsFontIncreaseHovered(true)}
-                            onMouseLeave={() => setIsFontIncreaseHovered(false)}
-                            style={{
-                                cursor: "pointer",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                userSelect: "none",
-                                position: "relative",
-                            }}
-                        >
-                            <svg
-                                width="16"
-                                height="40"
-                                viewBox="0 0 16 40"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
                             >
-                                <path
-                                    d="M14 20H8M8 20H2M8 20V14M8 20V26"
-                                    stroke={themeColors.text.primary}
-                                    strokeOpacity="0.95"
-                                    strokeWidth="1.28"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                />
-                            </svg>
-                            {isFontIncreaseHovered && (
-                                <Tooltip
-                                    style={{
-                                        top: "100%",
-                                        left: "50%",
-                                        transform: "translate(-50%, 8px)",
-                                        zIndex: 100,
-                                    }}
+                                {DOC_BLOCK_OPTIONS.find(
+                                    (b) => b.key === currentBlockKey
+                                )?.label ?? "Paragraph"}
+                            </div>
+                            <div
+                                data-svg-wrapper
+                                data-layer="downwards chevron icon"
+                                className="DownwardsChevronIcon"
+                            >
+                                <svg
+                                    width="10"
+                                    height="6"
+                                    viewBox="0 0 10 6"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    aria-hidden
                                 >
-                                    Increase font size ({getModifierKey()}
-                                    +Shift+.)
-                                </Tooltip>
+                                    <path
+                                        d="M0.601562 0.599976L4.60156 4.59998L8.60156 0.599976"
+                                        stroke={themeColors.text.primary}
+                                        strokeOpacity={0.95}
+                                        strokeWidth="1.2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                            </div>
+                        </button>
+                        {showBlockDropdown &&
+                            typeof document !== "undefined" &&
+                            createPortal(
+                                <>
+                                    <div
+                                        style={{
+                                            position: "fixed",
+                                            inset: 0,
+                                            zIndex: 9998,
+                                        }}
+                                        onClick={() =>
+                                            setShowBlockDropdown(false)
+                                        }
+                                    />
+                                    <div
+                                        ref={blockDropdownPanelRef}
+                                        role="listbox"
+                                        style={{
+                                            ...blockDropdownPosition,
+                                            zIndex: 9999,
+                                            background:
+                                                themeColors.background ===
+                                                lightColors.background
+                                                    ? themeColors.background
+                                                    : themeColors.surfaceMenu,
+                                            borderRadius: 28,
+                                            boxShadow:
+                                                "0px 4px 24px hsla(0, 0%, 0%, 0.08)",
+                                            outline: `0.33px ${themeColors.border.subtle} solid`,
+                                            outlineOffset: "-0.33px",
+                                            padding: 10,
+                                            minWidth: 240,
+                                            maxWidth: 320,
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            gap: 4,
+                                            pointerEvents: "auto",
+                                        }}
+                                        onMouseDown={(e) => e.preventDefault()}
+                                    >
+                                        {DOC_BLOCK_OPTIONS.map((opt, idx) => (
+                                            <button
+                                                key={opt.key}
+                                                type="button"
+                                                role="option"
+                                                aria-selected={
+                                                    opt.key === currentBlockKey
+                                                }
+                                                onMouseEnter={() =>
+                                                    setBlockDropdownIndex(idx)
+                                                }
+                                                onClick={() =>
+                                                    applyBlockFormat(opt.key)
+                                                }
+                                                style={{
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    justifyContent:
+                                                        "space-between",
+                                                    gap: 12,
+                                                    width: "100%",
+                                                    minHeight: opt.rowMinHeightPx,
+                                                    padding: "6px 12px",
+                                                    borderRadius: 16,
+                                                    border: "none",
+                                                    cursor: "pointer",
+                                                    textAlign: "left",
+                                                    fontFamily: DOC_FONT_STACK,
+                                                    fontSize:
+                                                        opt.dropdownFontSizePx ??
+                                                        opt.fontSizePx,
+                                                    fontWeight: opt.fontWeight,
+                                                    color: themeColors.text
+                                                        .primary,
+                                                    background:
+                                                        opt.key ===
+                                                        currentBlockKey
+                                                            ? themeColors.hover
+                                                                  .default
+                                                            : blockDropdownIndex ===
+                                                                idx
+                                                              ? themeColors
+                                                                    .hover
+                                                                    .subtle
+                                                              : "transparent",
+                                                }}
+                                            >
+                                                <span>{opt.label}</span>
+                                                {opt.key ===
+                                                    currentBlockKey && (
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 16 16"
+                                                        fill="none"
+                                                        aria-hidden
+                                                    >
+                                                        <path
+                                                            d="M13.5 4.5L6.5 11.5L3 8"
+                                                            stroke={
+                                                                themeColors
+                                                                    .text
+                                                                    .primary
+                                                            }
+                                                            strokeWidth="1.5"
+                                                            strokeLinecap="round"
+                                                            strokeLinejoin="round"
+                                                        />
+                                                    </svg>
+                                                )}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </>,
+                                document.body
                             )}
-                        </div>
                     </div>
 
                     {/* Bold */}
@@ -6548,9 +6740,10 @@ const DocEditor = React.memo(function DocEditor({
                             paddingBottom: isMobileLayout
                                 ? "max(160px, calc(48px + env(safe-area-inset-bottom, 0px) + 88px))"
                                 : "48px", // mobile: extra space so text clears the floating chat input bar
-                            fontSize: "var(--doc-p-size)",
-                            fontFamily: "var(--doc-current-font)",
-                            lineHeight: 1.6,
+                            fontSize: 14,
+                            fontFamily: DOC_FONT_STACK,
+                            fontWeight: 400,
+                            lineHeight: 1.55,
                             position: "relative",
                             zIndex: 1,
                             userSelect: "text",
@@ -6565,9 +6758,26 @@ const DocEditor = React.memo(function DocEditor({
             <style>{`
                 .DocEditor, .DocEditor * { color: var(--doc-text-color); }
                 .DocEditor a { color: var(--doc-accent); }
-                .DocEditor h1 { font-size: var(--doc-h1-size); font-weight: 700; margin-top: 1em; margin-bottom: 0.5em; }
-                .DocEditor h2 { font-size: var(--doc-h2-size); font-weight: 700; text-transform: uppercase; border-bottom: 1px solid var(--doc-border-color); margin-top: 1.2em; margin-bottom: 0.5em; }
-                .DocEditor hr { border: 0; height: 1px; background: var(--doc-border-color); margin: 1.5em 0; }
+                .DocEditor h1:not(.${DOC_BLOCK_SECTION_CLASS}) { font-size: 28px; font-family: ${DOC_FONT_STACK}; font-weight: 700; line-height: 1.2; margin-top: 0.85em; margin-bottom: 0.4em; }
+                .DocEditor h1.${DOC_BLOCK_SECTION_CLASS}, .DocEditor h2 {
+                    font-size: 18px;
+                    font-family: ${DOC_FONT_STACK};
+                    font-weight: 700;
+                    line-height: 1.25;
+                    margin-top: 0.75em;
+                    margin-bottom: 0.55em;
+                    padding-bottom: 0.35em;
+                    border-bottom: 1px solid var(--doc-border-color);
+                }
+                .DocEditor h3, .DocEditor h4 { font-size: 16px; font-family: ${DOC_FONT_STACK}; font-weight: 400; line-height: 1.55; margin-top: 0.5em; margin-bottom: 0.35em; }
+                .DocEditor p, .DocEditor li { font-size: 16px; font-family: ${DOC_FONT_STACK}; font-weight: 400; line-height: 1.55; }
+                .DocEditor hr {
+                    border: 0;
+                    border-top: 1px solid var(--doc-border-color);
+                    height: 0;
+                    margin: 1.5em 0;
+                    background: transparent;
+                }
                 .DocEditor ul, .DocEditor ol { padding-left: 24px; margin: 12px 0; }
                 .DocEditor a { text-decoration: underline; cursor: pointer; }
             `}</style>
@@ -17923,8 +18133,8 @@ function MapPreviewCard({
     const staticMapUrl = React.useMemo(() => {
         if (!googleMapsApiKey || !geoCoords) return null
         const { lat, lng } = geoCoords
-        const w = isMobile ? 640 : 552
-        const h = isMobile ? 328 : 552
+        const w = isMobile ? 640 : 260
+        const h = isMobile ? 328 : 260
         const params = new URLSearchParams({
             center: `${lat},${lng}`,
             zoom: "12",
@@ -18726,11 +18936,11 @@ const HomepageJobs = React.memo(function HomepageJobs({
                                 geoCoords={geoCoords}
                                 borderRadius={48}
                                 style={{
-                                    width: 276,
-                                    minWidth: 276,
-                                    maxWidth: 276,
-                                    height: 276,
-                                    minHeight: 276,
+                                    width: 260,
+                                    minWidth: 260,
+                                    maxWidth: 260,
+                                    height: 260,
+                                    minHeight: 260,
                                 }}
                                 onClick={onOpenMap}
                                 themeColors={themeColors}
@@ -24702,21 +24912,6 @@ ${extracted.resumeText.trim()}`
     >("doc")
     /** Company for job-scoped resume/cover — restored from chat; live job overrides in DocEditor. */
     const [docCompany, setDocCompany] = React.useState("")
-    interface DocSettings {
-        fontStyle: "serif" | "sans"
-        fontSize: number // Base font size
-        h1Size: number
-        h2Size: number
-        pSize: number
-    }
-
-    const [docSettings, setDocSettings] = React.useState<DocSettings>({
-        fontStyle: "sans",
-        fontSize: 16,
-        h1Size: 24,
-        h2Size: 18,
-        pSize: 16,
-    })
     const [remoteCursors, setRemoteCursors] = React.useState<
         Map<string, { x: number; y: number; color: string }>
     >(new Map())
@@ -31981,7 +32176,9 @@ CONSTRAINTS (non-negotiable):
                                         content: {
                                             type: "STRING",
                                             description:
-                                                "The full HTML content. Use <h1>/<h2> for headings, <p> for body text, <ul>/<li> for lists, <b>/<strong> for bold, <i>/<em> for italics, <a href='...'> for links. Write complete polished content — never truncate.",
+                                                "The full HTML content. " +
+                                                DOC_EDITOR_HTML_BLOCK_RULES +
+                                                " Optional <i>/<em>. Never truncate.",
                                         },
                                     },
                                     required: ["content"],
@@ -32296,13 +32493,15 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     properties: {
                                         content: {
                                             type: "STRING",
-                                            description: `The full HTML cover letter. Follow this exact structure (use real company and candidate names when known):
+                                            description: `The full HTML cover letter. ${DOC_EDITOR_HTML_BLOCK_RULES}
 
-1. <h1>Hi team [Company Name]!</h1> (or "Hi team!" if the company is unknown)
+Follow this structure (use real company and candidate names when known):
+
+1. <h1 class="doc-block-title">Hi team [Company Name]!</h1> or <h1>Hi team [Company Name]!</h1> (or "Hi team!" if the company is unknown)
 2. One <p> with a 2–3 sentence direct-talk summary of who the candidate is and why this role fits
-3. <p><b>What I've done</b></p> then a <ul> with 2–5 <li> bullets (concrete wins, skills, or experience — full sentences, not placeholders)
-4. <p><b>What I can do for [Company Name]</b></p> then a <ul> with 2–5 <li> bullets tied to that company and role
-5. <p><b>How to contact me</b></p> then a <ul> with 1–4 <li> bullets for GitHub, LinkedIn, portfolio, and/or email as relevant. Use <a href="..."> only for real links from User Context or chat — never invent URLs. Fewer bullets is fine if that is all you know
+3. <h1 class="doc-block-section">What I've done</h1> then a <ul> with 2–5 <li> bullets (concrete wins, skills, or experience — full sentences, not placeholders)
+4. <h1 class="doc-block-section">What I can do for [Company Name]</h1> then a <ul> with 2–5 <li> bullets tied to that company and role
+5. <h1 class="doc-block-section">How to contact me</h1> then a <ul> with 1–4 <li> bullets for GitHub, LinkedIn, portfolio, and/or email as relevant. Use <a href="..."> only for real links from User Context or chat — never invent URLs. Fewer bullets is fine if that is all you know
 6. <p>Thank you,<br/>[Candidate Name]</p>
 
 Write the complete letter with real bullet text — never empty bullets. PDF export formats to one page when downloaded.`,
@@ -36366,8 +36565,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         <DocEditor
                                             content={docContent}
                                             onChange={handleDocChange}
-                                            settings={docSettings}
-                                            onSettingsChange={setDocSettings}
                                             themeColors={chatThemeColors}
                                             isMobileLayout={false}
                                             remoteCursors={remoteCursors}
@@ -36578,8 +36775,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     <DocEditor
                                         content={docContent}
                                         onChange={handleDocChange}
-                                        settings={docSettings}
-                                        onSettingsChange={setDocSettings}
                                         themeColors={chatThemeColors}
                                         isMobileLayout={isMobileLayout}
                                         remoteCursors={remoteCursors}
