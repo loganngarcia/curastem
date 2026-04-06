@@ -18091,21 +18091,41 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
 })
 
 /**
- * Return up to `limit` jobs with at most one per company.
- * If unique companies don't fill `limit`, backfill with remaining duplicates.
+ * Prefer one job per company, then backfill with more rows from the same pool
+ * (same company is OK) until `limit` — otherwise one company posting 8 roles only shows one card.
  */
 function dedupeByCompany(jobs: HomepageJob[], limit: number): HomepageJob[] {
-    const seen = new Set<string>()
-    const unique: HomepageJob[] = []
+    const seenCo = new Set<string>()
+    const usedIds = new Set<string>()
+    const out: HomepageJob[] = []
     for (const j of jobs) {
         const key = j.company.name.trim().toLowerCase()
-        if (!seen.has(key)) {
-            seen.add(key)
-            unique.push(j)
-            if (unique.length >= limit) break
+        if (!seenCo.has(key)) {
+            seenCo.add(key)
+            out.push(j)
+            usedIds.add(j.id)
+            if (out.length >= limit) return out
         }
     }
-    return unique
+    for (const j of jobs) {
+        if (out.length >= limit) break
+        if (!usedIds.has(j.id)) {
+            usedIds.add(j.id)
+            out.push(j)
+        }
+    }
+    return out
+}
+
+/** Section 3 rows from the same pooled /jobs response as near — avoids a second query when the pool is large enough. */
+function topPicksFromPoolAfterNear(
+    pooled: HomepageJob[],
+    near: HomepageJob[],
+    byNewestJobs: (jobs: HomepageJob[]) => HomepageJob[]
+): HomepageJob[] {
+    const nearIds = new Set(near.map((j) => j.id))
+    const rest = byNewestJobs(pooled).filter((j) => !nearIds.has(j.id))
+    return dedupeByCompany(rest, 10)
 }
 
 // ─── MAP PREVIEW CARD ─────────────────────────────────────────────────────────
@@ -18200,6 +18220,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
     onJobClick,
     onHomepageDeckJobs,
     onOpenMap,
+    onJobsHomepageQuery,
 }: {
     jobsApiUrl: string
     googleMapsApiKey?: string
@@ -18211,18 +18232,37 @@ const HomepageJobs = React.memo(function HomepageJobs({
     /** Flat order: next → near → top, for job panel cycling with chat results */
     onHomepageDeckJobs?: (jobs: HomepageJob[]) => void
     onOpenMap?: () => void
+    /** Tools & MCP debug: log each unique /jobs request URL + API row count. */
+    onJobsHomepageQuery?: (url: string, rowCount: number) => void
 }) {
+    const onJobsHomepageQueryRef = React.useRef(onJobsHomepageQuery)
+    React.useEffect(() => {
+        onJobsHomepageQueryRef.current = onJobsHomepageQuery
+    })
+    const emitJobsQuery = (url: string, rowCount: number) => {
+        onJobsHomepageQueryRef.current?.(url, rowCount)
+    }
+
     const [nearJobs, setNearJobs] = React.useState<HomepageJob[]>([])
+    const nearJobsExcludeRef = React.useRef<HomepageJob[]>([])
+    nearJobsExcludeRef.current = nearJobs
     const [topJobs, setTopJobs] = React.useState<HomepageJob[]>([])
+    const topJobsRef = React.useRef<HomepageJob[]>([])
+    topJobsRef.current = topJobs
+    /** How many Top picks rows were filled from the near-effect pool (0–10). If 10, picks effect skips network. */
+    const topPicksPrefillCountRef = React.useRef(0)
     const [loadingPicks, setLoadingPicks] = React.useState(true)
     const [loadingNear, setLoadingNear] = React.useState(true)
     const [nearbyBasedOnLocation, setNearbyBasedOnLocation] =
         React.useState(true) // true until we know we fell back to keyword search
+    /** When profile job title is set, Top picks (Section 3) waits until near rows (1+2) finish. */
+    const [homepageNearReady, setHomepageNearReady] = React.useState(
+        () => !userQuery.trim()
+    )
     const [geoCoords, setGeoCoords] = React.useState<{
         lat: number
         lng: number
     } | null>(null)
-    // Lazy-load Top Picks: only fire API calls when user scrolls near Section 3.
     const topPicksTriggered = true
 
     // Geo is IP-based — fetch once per jobsApiUrl, cache in a ref so query changes don't re-hit /geo
@@ -18309,8 +18349,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
             return tb - ta
         })
 
-    // No job title — SQL-only. Near + Top picks must not chain: picks used to wait on
-    // exclude_ids after near finished (double latency). Use parallel fetches or one pool.
+    // No job title — SQL-only. Geo: one radius request (limit 24), then global only if
+    // near/top pools are still thin or local returned < 20 rows (no cursor pagination).
     React.useEffect(() => {
         if (!jobsApiUrl || userQuery.trim()) return
         let cancelled = false
@@ -18335,23 +18375,31 @@ const HomepageJobs = React.memo(function HomepageJobs({
             u.searchParams.set("limit", String(limit))
             u.searchParams.set("since", String(since7d))
             if (country) u.searchParams.set("country", country)
-            return fetchJ(u.toString())
+            const urlStr = u.toString()
+            return fetchJ(urlStr)
                 .then((r) => (r.ok ? r.json() : { data: [], meta: {} }))
                 .then(
                     (j: {
                         data?: unknown
                         meta?: { next_cursor?: string | null }
-                    }) => ({
-                        data: Array.isArray(j.data)
+                    }) => {
+                        const data = Array.isArray(j.data)
                             ? (j.data as HomepageJob[])
-                            : [],
-                        next_cursor: j.meta?.next_cursor ?? null,
-                    })
+                            : []
+                        emitJobsQuery(urlStr, data.length)
+                        return {
+                            data,
+                            next_cursor: j.meta?.next_cursor ?? null,
+                        }
+                    }
                 )
-                .catch(() => ({
-                    data: [] as HomepageJob[],
-                    next_cursor: null as string | null,
-                }))
+                .catch(() => {
+                    emitJobsQuery(urlStr, 0)
+                    return {
+                        data: [] as HomepageJob[],
+                        next_cursor: null as string | null,
+                    }
+                })
         }
 
         ;(async () => {
@@ -18369,60 +18417,37 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 lng >= -180 &&
                 lng <= 180
 
-            // Top picks from the *same* 50 rows as "near" often only had 3–5 unique
-            // companies left after removing 8 near jobs (many postings per company).
-            // Page 2 (cursor) is a fresh slice — enough diversity for 10 cards.
-            const picksFromGlobal = (
-                page1: HomepageJob[],
-                page2: HomepageJob[],
-                nearIds: Set<string>
-            ): HomepageJob[] => {
-                const merged = byNewestJobs([...page2, ...page1])
-                return dedupeByCompany(
-                    merged.filter((j) => !nearIds.has(j.id)),
-                    10
-                )
+            const mergeIds = (
+                pooled: HomepageJob[],
+                seen: Set<string>,
+                batch: HomepageJob[]
+            ) => {
+                for (const j of byNewestJobs(batch)) {
+                    if (!seen.has(j.id)) {
+                        seen.add(j.id)
+                        pooled.push(j)
+                    }
+                }
             }
 
             if (!hasCoords) {
                 setNearbyBasedOnLocation(false)
-                // Filter by country; fall back to global if too sparse.
                 const first = await apiMeta(new URLSearchParams(), 50, country)
                 const firstFallback =
                     first.data.length < 8 && country
                         ? await apiMeta(new URLSearchParams(), 50)
                         : null
                 const poolData = firstFallback ? firstFallback.data : first.data
-                const poolCursor = firstFallback
-                    ? firstFallback.next_cursor
-                    : first.next_cursor
                 const near = dedupeByCompany(byNewestJobs(poolData), 8)
+                const top = topPicksFromPoolAfterNear(
+                    poolData,
+                    near,
+                    byNewestJobs
+                )
                 if (!cancelled) {
                     setNearJobs(near)
+                    setTopJobs(top)
                     setLoadingNear(false)
-                }
-                const nearIds = new Set(near.map((j) => j.id))
-                let picks: HomepageJob[] = []
-                if (poolCursor) {
-                    const sp = new URLSearchParams()
-                    sp.set("cursor", poolCursor)
-                    const second = await apiMeta(
-                        sp,
-                        50,
-                        firstFallback ? null : country
-                    )
-                    picks = picksFromGlobal(poolData, second.data, nearIds)
-                }
-                if (picks.length < 5 && poolData.length) {
-                    picks = dedupeByCompany(
-                        byNewestJobs(
-                            poolData.filter((j) => !nearIds.has(j.id))
-                        ),
-                        10
-                    )
-                }
-                if (!cancelled) {
-                    setTopJobs(picks)
                     setLoadingPicks(false)
                 }
                 return
@@ -18433,56 +18458,39 @@ const HomepageJobs = React.memo(function HomepageJobs({
             const nearP = new URLSearchParams({
                 near_lat: String(lat),
                 near_lng: String(lng),
-                radius_km: "75",
+                radius_km: "50",
                 exclude_remote: "true",
                 since: String(since7d),
             })
-            // Country filter on global pool; near-radius already scopes by geography.
-            const [primaryRes, globalFirst] = await Promise.all([
-                apiMeta(nearP, 24),
-                apiMeta(new URLSearchParams(), 50, country),
-            ])
-            let near = dedupeByCompany(byNewestJobs(primaryRes.data), 8)
-            if (near.length < 8) {
-                near = dedupeByCompany(
-                    [
-                        ...byNewestJobs(primaryRes.data),
-                        ...byNewestJobs(globalFirst.data),
-                    ],
-                    8
-                )
+            const primaryRes = await apiMeta(nearP, 24)
+            if (cancelled) return
+
+            const pooled: HomepageJob[] = []
+            const seen = new Set<string>()
+            mergeIds(pooled, seen, primaryRes.data)
+
+            let near = dedupeByCompany(byNewestJobs(pooled), 8)
+            let top = topPicksFromPoolAfterNear(pooled, near, byNewestJobs)
+            const needGlobal =
+                near.length < 8 ||
+                top.length < 10 ||
+                primaryRes.data.length < 20
+
+            if (needGlobal) {
+                const g1 = await apiMeta(new URLSearchParams(), 50, country)
+                if (!cancelled) mergeIds(pooled, seen, g1.data)
+                if (g1.data.length < 5 && country) {
+                    const g2 = await apiMeta(new URLSearchParams(), 50)
+                    if (!cancelled) mergeIds(pooled, seen, g2.data)
+                }
+                near = dedupeByCompany(byNewestJobs(pooled), 8)
+                top = topPicksFromPoolAfterNear(pooled, near, byNewestJobs)
             }
+
             if (!cancelled) {
                 setNearJobs(near)
+                setTopJobs(top)
                 setLoadingNear(false)
-            }
-            const nearIds = new Set(near.map((j) => j.id))
-            let picks: HomepageJob[] = []
-            // If country filter yielded too few, retry without it for Top picks
-            const globalFirstEffective =
-                globalFirst.data.length < 5 && country
-                    ? await apiMeta(new URLSearchParams(), 50)
-                    : globalFirst
-            if (globalFirstEffective.next_cursor) {
-                const sp = new URLSearchParams()
-                sp.set("cursor", globalFirstEffective.next_cursor)
-                const globalSecond = await apiMeta(sp, 50)
-                picks = picksFromGlobal(
-                    globalFirstEffective.data,
-                    globalSecond.data,
-                    nearIds
-                )
-            }
-            if (picks.length < 5) {
-                picks = dedupeByCompany(
-                    byNewestJobs(
-                        globalFirst.data.filter((j) => !nearIds.has(j.id))
-                    ),
-                    10
-                )
-            }
-            if (!cancelled) {
-                setTopJobs(picks)
                 setLoadingPicks(false)
             }
         })().catch(() => {
@@ -18497,14 +18505,17 @@ const HomepageJobs = React.memo(function HomepageJobs({
         }
     }, [jobsApiUrl, userQuery, getGeo])
 
-    // ── NEAR fetch (profile job title — vector path may apply via q=) ─────────────
+    // ── NEAR fetch (profile job title — title= is SQL LIKE on job title, no Vectorize) ─
     React.useEffect(() => {
         if (!jobsApiUrl || !userQuery.trim()) {
             if (!jobsApiUrl) setLoadingNear(false)
+            if (!userQuery.trim()) setHomepageNearReady(true)
             return
         }
+        setHomepageNearReady(false)
         setLoadingNear(true)
         setNearbyBasedOnLocation(true)
+        topPicksPrefillCountRef.current = 0
         let cancelled = false
 
         const fetchJ = (url: string) => {
@@ -18529,36 +18540,23 @@ const HomepageJobs = React.memo(function HomepageJobs({
             u.searchParams.set("limit", String(limit))
             u.searchParams.set("since", String(since))
             if (country) u.searchParams.set("country", country)
-            return fetchJ(u.toString())
+            const urlStr = u.toString()
+            return fetchJ(urlStr)
                 .then((r) => (r.ok ? r.json() : { data: [] }))
-                .then(
-                    ({ data }) =>
-                        (Array.isArray(data) ? data : []) as HomepageJob[]
-                )
-                .catch(() => [] as HomepageJob[])
+                .then(({ data }) => {
+                    const rows = (Array.isArray(data) ? data : []) as HomepageJob[]
+                    emitJobsQuery(urlStr, rows.length)
+                    return rows
+                })
+                .catch(() => {
+                    emitJobsQuery(urlStr, 0)
+                    return [] as HomepageJob[]
+                })
         }
-
-        const pickFallbacks = (n: number): string[] => {
-            const used = new Set<number>()
-            const out: string[] = []
-            while (out.length < n && used.size < FALLBACK_QUERIES.length) {
-                const i = Math.floor(Math.random() * FALLBACK_QUERIES.length)
-                if (!used.has(i)) {
-                    used.add(i)
-                    out.push(FALLBACK_QUERIES[i])
-                }
-            }
-            return out
-        }
-
-        const speculativeFetches = pickFallbacks(3).map((q) =>
-            api(`q=${encodeURIComponent(q)}`, 6)
-        )
 
         const nearPromise = getGeo().then(async (coords) => {
             const lat = coords?.lat ?? NaN
             const lng = coords?.lng ?? NaN
-            const country = coords?.country ?? null
             const hasCoords =
                 !isNaN(lat) &&
                 !isNaN(lng) &&
@@ -18569,82 +18567,122 @@ const HomepageJobs = React.memo(function HomepageJobs({
 
             if (hasCoords) setGeoCoords({ lat, lng })
 
-            if (!hasCoords) {
-                setNearbyBasedOnLocation(false)
-                speculativeFetches.forEach((p) => {
-                    p.then((jobs) => {
-                        if (cancelled || jobs.length === 0) return
-                        setNearJobs((prev) => {
-                            const seenIds = new Set(prev.map((j) => j.id))
-                            const seenCos = new Set(
-                                prev.map((j) =>
-                                    j.company.name.trim().toLowerCase()
-                                )
-                            )
-                            const toAdd = byNewestJobs(jobs).filter(
-                                (j) =>
-                                    !seenIds.has(j.id) &&
-                                    !seenCos.has(
-                                        j.company.name.trim().toLowerCase()
-                                    )
-                            )
-                            return [...prev, ...toAdd].slice(0, 8)
-                        })
-                        setLoadingNear(false)
-                    })
-                })
-                const results = await Promise.all(speculativeFetches)
-                return dedupeByCompany(byNewestJobs(results.flat()), 8)
+            const mergeInto = (
+                pooled: HomepageJob[],
+                seenIds: Set<string>,
+                batch: HomepageJob[]
+            ) => {
+                for (const j of byNewestJobs(batch)) {
+                    if (!seenIds.has(j.id)) {
+                        seenIds.add(j.id)
+                        pooled.push(j)
+                    }
+                }
             }
 
-            const buildNearParams = (withQ: boolean) => {
+            // `q=` enables semantic (Vectorize) on global /jobs; near path is still SQL but
+            // we only do one local radius then one global call (latency).
+            const buildNearParams = (radiusKm: number) => {
                 const p = new URLSearchParams({
                     near_lat: String(lat),
                     near_lng: String(lng),
-                    radius_km: "75",
+                    radius_km: String(radiusKm),
                     exclude_remote: "true",
                     since: String(since7d),
                 })
-                if (withQ && userQuery.trim()) p.set("q", userQuery.trim())
+                if (userQuery.trim()) p.set("q", userQuery.trim())
                 return p.toString()
             }
 
-            const primary = await api(buildNearParams(true), 14)
-            if (!cancelled) {
-                const initial = dedupeByCompany(byNewestJobs(primary), 8)
-                setNearJobs(initial)
-                setLoadingNear(false)
-                if (initial.length >= 8) return initial
+            const globalQParams = () => {
+                const p = new URLSearchParams({ since: String(since7d) })
+                if (userQuery.trim()) p.set("q", userQuery.trim())
+                return p.toString()
             }
 
-            const specResults = await Promise.all(speculativeFetches)
-            const extra = byNewestJobs(specResults.flat())
-            if (!cancelled) {
-                setNearJobs((prev) => {
-                    const seenIds = new Set(prev.map((j) => j.id))
-                    const seenCos = new Set(
-                        prev.map((j) => j.company.name.trim().toLowerCase())
-                    )
-                    const toAdd = extra.filter(
-                        (j) =>
-                            !seenIds.has(j.id) &&
-                            !seenCos.has(j.company.name.trim().toLowerCase())
-                    )
-                    return [...prev, ...toAdd].slice(0, 8)
-                })
+            const fallbackQParams = () => {
+                const fb =
+                    FALLBACK_QUERIES[
+                        Math.floor(Math.random() * FALLBACK_QUERIES.length)
+                    ]
+                const p = new URLSearchParams({ since: String(since7d) })
+                p.set("q", fb)
+                return p.toString()
             }
-            return dedupeByCompany(
-                byNewestJobs([...primary, ...specResults.flat()]),
-                8
-            )
+
+            // No geo: one global semantic query only.
+            if (!hasCoords) {
+                setNearbyBasedOnLocation(false)
+                const global = await api(globalQParams(), 24)
+                if (cancelled) return []
+                let pooledNt = [...global]
+                let near = dedupeByCompany(byNewestJobs(pooledNt), 8)
+                if (near.length < 8) {
+                    const fb = await api(fallbackQParams(), 16)
+                    if (!cancelled) {
+                        pooledNt = [...global, ...fb]
+                        near = dedupeByCompany(byNewestJobs(pooledNt), 8)
+                    }
+                }
+                const topNt = topPicksFromPoolAfterNear(
+                    pooledNt,
+                    near,
+                    byNewestJobs
+                )
+                if (!cancelled) {
+                    setNearJobs(near)
+                    setTopJobs(topNt)
+                    topPicksPrefillCountRef.current = topNt.length
+                    setLoadingPicks(topNt.length < 10)
+                    setLoadingNear(false)
+                }
+                return near
+            }
+
+            const pooled: HomepageJob[] = []
+            const seenIds = new Set<string>()
+
+            // 1) Local 50km + q
+            const local = await api(buildNearParams(50), 24)
+            if (cancelled) return []
+            mergeInto(pooled, seenIds, local)
+
+            // 2) Whole index (semantic q) — fills sections when local has no LIKE matches.
+            let near = dedupeByCompany(byNewestJobs(pooled), 8)
+            if (near.length < 8) {
+                const global = await api(globalQParams(), 40)
+                if (!cancelled) mergeInto(pooled, seenIds, global)
+                near = dedupeByCompany(byNewestJobs(pooled), 8)
+            }
+
+            // 3) Last resort — one diverse short query (still uses q for vector path).
+            if (near.length < 8) {
+                const fb = await api(fallbackQParams(), 16)
+                if (!cancelled) mergeInto(pooled, seenIds, fb)
+                near = dedupeByCompany(byNewestJobs(pooled), 8)
+            }
+
+            const topFromPool = topPicksFromPoolAfterNear(pooled, near, byNewestJobs)
+            if (!cancelled) {
+                setNearJobs(near)
+                setTopJobs(topFromPool)
+                topPicksPrefillCountRef.current = topFromPool.length
+                setLoadingPicks(topFromPool.length < 10)
+                setLoadingNear(false)
+            }
+            return near
         })
 
         const safetyTimer = setTimeout(() => {
             if (!cancelled) setLoadingNear(false)
         }, 12000)
-        nearPromise.catch(() => {
-            if (!cancelled) setLoadingNear(false)
-        })
+        nearPromise
+            .catch(() => {
+                if (!cancelled) setLoadingNear(false)
+            })
+            .finally(() => {
+                if (!cancelled) setHomepageNearReady(true)
+            })
 
         return () => {
             cancelled = true
@@ -18656,6 +18694,11 @@ const HomepageJobs = React.memo(function HomepageJobs({
     React.useEffect(() => {
         if (!jobsApiUrl || !topPicksTriggered || !userQuery.trim()) {
             if (!jobsApiUrl) setLoadingPicks(false)
+            return
+        }
+        if (!homepageNearReady) return
+        if (topPicksPrefillCountRef.current >= 10) {
+            setLoadingPicks(false)
             return
         }
         setLoadingPicks(true)
@@ -18684,40 +18727,48 @@ const HomepageJobs = React.memo(function HomepageJobs({
             u.searchParams.set("limit", String(limit))
             u.searchParams.set("since", String(since))
             if (country) u.searchParams.set("country", country)
-            return fetchJ(u.toString())
+            const urlStr = u.toString()
+            return fetchJ(urlStr)
                 .then((r) => (r.ok ? r.json() : { data: [] }))
-                .then(
-                    ({ data }) =>
-                        (Array.isArray(data) ? data : []) as HomepageJob[]
-                )
-                .catch(() => [] as HomepageJob[])
+                .then(({ data }) => {
+                    const rows = (Array.isArray(data) ? data : []) as HomepageJob[]
+                    emitJobsQuery(urlStr, rows.length)
+                    return rows
+                })
+                .catch(() => {
+                    emitJobsQuery(urlStr, 0)
+                    return [] as HomepageJob[]
+                })
         }
 
-        const fallbackQuery =
-            FALLBACK_QUERIES[
-                Math.floor(Math.random() * FALLBACK_QUERIES.length)
-            ]
-        let fallbackPromise: Promise<HomepageJob[]> | null = null
-        const getFallback = (): Promise<HomepageJob[]> => {
-            if (!fallbackPromise)
-                fallbackPromise = api(
-                    `q=${encodeURIComponent(fallbackQuery)}`,
-                    8
-                )
-            return fallbackPromise
+        const buildQParams = (
+            since: number,
+            qText: string,
+            excludeShown: boolean
+        ): string => {
+            const p = new URLSearchParams({ since: String(since) })
+            p.set("q", qText)
+            if (excludeShown) {
+                const ids = [
+                    ...nearJobsExcludeRef.current.map((j) => j.id),
+                    ...topJobsRef.current.map((j) => j.id),
+                ]
+                    .filter(Boolean)
+                    .slice(0, 80)
+                if (ids.length) p.set("exclude_ids", ids.join(","))
+            }
+            return p.toString()
         }
 
-        const q = encodeURIComponent(userQuery.trim())
         const picksPromise = (async (): Promise<HomepageJob[]> => {
-            // Resolve country in parallel with the first fetch — geo is cached after the near effect fires.
-            const [primary, geoResult] = await Promise.all([
-                api(`q=${q}`, 24),
-                getGeo(),
-            ])
+            // Top up section 3 only when the near-effect pool did not already yield 10 rows.
+            const existing = topJobsRef.current
+            let primary = await api(
+                buildQParams(since7d, userQuery.trim(), true),
+                28
+            )
             if (cancelled) return []
-            const country = geoResult?.country ?? null
-            let deduped = dedupeByCompany(primary, 10)
-            // Drop skeletons as soon as we have something to show (vector path can lag).
+            let deduped = dedupeByCompany([...existing, ...primary], 10)
             if (!cancelled && deduped.length > 0) {
                 setTopJobs(deduped)
                 if (deduped.length >= 3) setLoadingPicks(false)
@@ -18726,23 +18777,30 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 if (!cancelled) setLoadingPicks(false)
                 return deduped
             }
-            // Step 2: widen to 14 days with country filter.
-            const stillNeeded = 10 - deduped.length
+            const geoResult = await getGeo()
+            if (cancelled) return deduped
+            const country = geoResult?.country ?? null
             const wider = await api(
-                `q=${q}`,
-                stillNeeded + 8,
+                buildQParams(since14d, userQuery.trim(), true),
+                24,
                 since14d,
                 country || undefined
             )
             if (cancelled) return deduped
-            deduped = dedupeByCompany([...primary, ...wider], 10)
+            deduped = dedupeByCompany([...deduped, ...wider], 10)
             if (!cancelled) {
                 setTopJobs(deduped)
                 setLoadingPicks(false)
             }
             if (deduped.length >= 10) return deduped
-            // Step 3: last resort — fill remaining from diverse fallback.
-            const fallback = await getFallback()
+            const fb =
+                FALLBACK_QUERIES[
+                    Math.floor(Math.random() * FALLBACK_QUERIES.length)
+                ]
+            const fallback = await api(
+                buildQParams(since7d, fb, true),
+                12
+            )
             if (cancelled) return deduped
             const final = dedupeByCompany([...deduped, ...fallback], 10)
             if (!cancelled) {
@@ -18763,7 +18821,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
             cancelled = true
             clearTimeout(safetyTimer)
         }
-    }, [jobsApiUrl, userQuery])
+    }, [jobsApiUrl, userQuery, homepageNearReady, getGeo])
 
     React.useEffect(() => {
         onHomepageDeckJobs?.([...nearJobs, ...topJobs])
@@ -26999,6 +27057,29 @@ Do not include markdown formatting or explanations.`
                 console.log(`[Curastem p2p] ${msg}`)
         }
     }
+
+    /** Tools & MCP panel: deduped /jobs homepage fetch URLs (with profile job title for context). */
+    const homepageJobsQueryLoggedRef = React.useRef<Set<string>>(new Set())
+    React.useEffect(() => {
+        homepageJobsQueryLoggedRef.current.clear()
+    }, [jobsApiUrl, debouncedYouWork])
+    const logRefForHomepageJobs = React.useRef(log)
+    React.useEffect(() => {
+        logRefForHomepageJobs.current = log
+    }, [log])
+    const debouncedYouWorkHomepageDebugRef = React.useRef(debouncedYouWork)
+    React.useEffect(() => {
+        debouncedYouWorkHomepageDebugRef.current = debouncedYouWork
+    }, [debouncedYouWork])
+    const emitHomepageJobsQuery = React.useCallback((url: string, rowCount: number) => {
+        if (homepageJobsQueryLoggedRef.current.has(url)) return
+        homepageJobsQueryLoggedRef.current.add(url)
+        const t = debouncedYouWorkHomepageDebugRef.current.trim()
+        logRefForHomepageJobs.current(
+            `[jobs homepage]${t ? ` title="${t}"` : ""} ${rowCount} rows ${url}`,
+            "tools"
+        )
+    }, [])
 
     // (Role state moved to top of component to fix scoping for system prompt)
 
@@ -37431,6 +37512,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 onJobClick={openJobDetail}
                                 onHomepageDeckJobs={handleHomepageDeckJobs}
                                 onOpenMap={toggleMap}
+                                onJobsHomepageQuery={
+                                    debugPanel === "tools"
+                                        ? emitHomepageJobsQuery
+                                        : undefined
+                                }
                             />
                         )}
                     {messages.map((msg, idx) => {
