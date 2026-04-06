@@ -1660,19 +1660,90 @@ const updateMemory = (index: number, newText: string | null): string => {
     }
 }
 
+/** Plain text from stored resume HTML (or DocEditor) for prompts and retrieve_resume. */
+function htmlToPlainResumeText(html: string): string {
+    if (typeof document === "undefined") return html
+    const div = document.createElement("div")
+    div.innerHTML = html
+    return (div.innerText || "").replace(/\r\n/g, "\n")
+}
+
 const getResume = (): string | null => {
     try {
         if (typeof window === "undefined") return null
+        const html = localStorage.getItem("curastem_resume_doc_html")
+        if (html?.trim()) return htmlToPlainResumeText(html)
         return localStorage.getItem("curastem_resume")
     } catch {
         return null
     }
 }
 
+/** Plain text from chat `save_resume`; clears structured profile HTML so one source wins. */
 const saveResume = (content: string): void => {
     try {
         localStorage.setItem("curastem_resume", content)
+        localStorage.removeItem("curastem_resume_doc_html")
     } catch {}
+}
+
+/** Plain text from profile storage → minimal HTML for DocEditor. */
+function plainTextToResumeDocHtml(text: string): string {
+    const normalized = text.replace(/\r\n/g, "\n")
+    if (!normalized.trim()) return "<p></p>"
+    return normalized
+        .split("\n")
+        .map((line) => {
+            if (!line.length) return "<p><br></p>"
+            const esc = line
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+            return `<p>${esc}</p>`
+        })
+        .join("")
+}
+
+/** Structured resume HTML for profile Edit — same rules as the `create_resume` tool `content` field. */
+const CREATE_RESUME_HTML_FORMAT_INSTRUCTIONS = `Full HTML resume, in order:
+
+1. <h1> — Name
+2. <p> — Contact on one line; separate items with space · space. Copy verbatim from the source. Use <a href="..."> for URLs and mailto: for emails. Do not invent contacts.
+3. <h2>Experience</h2> — Newest job first. Per job: <p><b>Title</b> · Company · Dates</p> then <ul><li>achievements</li></ul>. Job title and dates stay in the <p>, not in <li>. No nested lists. You may rewrite bullets for clarity and keyword alignment with the role (when a job is in context, match the posting where it helps). Keep every concrete metric accurate (percentages, dollar amounts, counts, multiples, time ranges) — do not drop or soften numbers.
+4. <h2>Education</h2> — <ul>, one <li> per degree
+5. <h2>Skills</h2> — 2–3 <p> lines by category. Each: <p><b>Category:</b> comma-separated items</p> (e.g. <b>Software:</b> …, <b>Communication:</b> …). If a job posting or role is in context, only include skills that match what the posting asks for, or that are a reasonable fit from the title, duties, and what you know about the company; leave out unrelated skills. With no job target, use categories that reflect the full resume.
+
+<b> only in experience job headers and skill category labels. No <i>. Complete sections.`
+
+const PROFILE_RESUME_DOC_HTML_KEY = "curastem_resume_doc_html"
+
+function getProfileResumeDocHtml(): string | null {
+    try {
+        if (typeof window === "undefined") return null
+        return localStorage.getItem(PROFILE_RESUME_DOC_HTML_KEY)
+    } catch {
+        return null
+    }
+}
+
+function saveProfileResumeDocHtml(html: string): void {
+    try {
+        localStorage.setItem(PROFILE_RESUME_DOC_HTML_KEY, html)
+        localStorage.removeItem("curastem_resume")
+    } catch {}
+}
+
+function clearProfileResumeDocHtml(): void {
+    try {
+        localStorage.removeItem(PROFILE_RESUME_DOC_HTML_KEY)
+    } catch {}
+}
+
+function stripLeadingMarkdownFence(text: string): string {
+    return text
+        .replace(/^```[a-z]*\n?/i, "")
+        .replace(/```$/i, "")
+        .trim()
 }
 
 const CAREER_COLLEGE_RESOURCES_CONTENT = `--- MENTORSHIP & CAREER ---
@@ -23756,9 +23827,12 @@ export default function OmegleMentorshipUI(props: Props) {
     })
     const [resumeMenuOpen, setResumeMenuOpen] = React.useState(false)
     const [hoveredResumeMenuItem, setHoveredResumeMenuItem] = React.useState<
-        "download" | "delete" | null
+        "edit" | "download" | "delete" | null
     >(null)
     const [isProcessingResume, setIsProcessingResume] = React.useState(false)
+    /** True while structured HTML (create_resume step) runs after extract; Edit/Download stay dimmed. */
+    const [isResumeHtmlPending, setIsResumeHtmlPending] =
+        React.useState(false)
     const resumeFileInputRef = React.useRef<HTMLInputElement>(null)
     const interestsTextareaRef = React.useRef<HTMLTextAreaElement>(null)
     const interestsUndoStack = React.useRef<string[]>([])
@@ -23855,6 +23929,7 @@ export default function OmegleMentorshipUI(props: Props) {
                 resumeFileInputRef.current.value = ""
 
             setIsProcessingResume(true)
+            setIsResumeHtmlPending(false)
             try {
                 // Read file as base64 data URL
                 const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -23875,7 +23950,9 @@ Extract this structure:
   "interests": ["array of skills, hobbies, interests found — max 10 concise phrases"],
   "resumeText": "the full plain-text content of the resume",
   "seniorityLevel": "one of: intern | new_grad | entry | mid | senior | staff | manager | director | executive — infer from years of total professional experience, job titles, and education. Use intern for students/no experience, new_grad for <1yr, entry for 1-2yr, mid for 3-5yr, senior for 6-9yr, staff for 10+yr individual contributors, manager/director/executive for leadership roles."
-}`
+}
+
+Keep emails, phones, and URLs in resumeText exactly as printed in the document.`
 
                 const extractRes = await fetch(
                     `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
@@ -23962,9 +24039,6 @@ Extract this structure:
                     savedAt: Date.now(),
                 })
 
-                // Save plain resume text for AI tool calls
-                if (extracted.resumeText) saveResume(extracted.resumeText)
-
                 // Save inferred seniority level for backend personalization
                 const validSeniority = [
                     "intern",
@@ -24004,10 +24078,92 @@ Extract this structure:
                     }
                     setYouInterests(updated)
                 }
+
+                setIsProcessingResume(false)
+
+                // Same structured HTML as the create_resume tool — stored for profile Edit
+                if (extracted.resumeText?.trim()) {
+                    setIsResumeHtmlPending(true)
+                    const nameContext =
+                        extracted.fullName?.trim() ||
+                        youName.trim() ||
+                        "(unknown)"
+                    const schoolContext =
+                        extracted.school?.trim() || youSchool.trim() || ""
+                    const workContext =
+                        extracted.work?.trim() || youWork.trim() || ""
+                    const formatPrompt = `Turn the plain resume below into HTML. Output only the HTML (no markdown).
+
+${CREATE_RESUME_HTML_FORMAT_INSTRUCTIONS}
+
+Use the plain text for all resume content. These hints are only for <h1> if the name is unclear (not for contact):
+- Name: ${nameContext}
+- School: ${schoolContext}
+- Work: ${workContext}
+
+Plain resume:
+${extracted.resumeText.trim()}`
+
+                    const htmlRes = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                contents: [
+                                    {
+                                        parts: [{ text: formatPrompt }],
+                                    },
+                                ],
+                                generationConfig: {
+                                    temperature: 0,
+                                    maxOutputTokens: 8192,
+                                },
+                                safetySettings: [
+                                    {
+                                        category: "HARM_CATEGORY_HARASSMENT",
+                                        threshold: "BLOCK_NONE",
+                                    },
+                                    {
+                                        category: "HARM_CATEGORY_HATE_SPEECH",
+                                        threshold: "BLOCK_NONE",
+                                    },
+                                    {
+                                        category:
+                                            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                                        threshold: "BLOCK_NONE",
+                                    },
+                                    {
+                                        category:
+                                            "HARM_CATEGORY_DANGEROUS_CONTENT",
+                                        threshold: "BLOCK_NONE",
+                                    },
+                                ],
+                            }),
+                        }
+                    )
+                    if (htmlRes.ok) {
+                        const htmlData = await htmlRes.json()
+                        const rawHtml: string =
+                            htmlData?.candidates?.[0]?.content?.parts
+                                ?.map((p: any) => p.text || "")
+                                .join("") || ""
+                        const cleaned = stripLeadingMarkdownFence(rawHtml)
+                        if (cleaned) {
+                            saveProfileResumeDocHtml(cleaned)
+                        } else if (extracted.resumeText) {
+                            saveResume(extracted.resumeText)
+                        }
+                    } else if (extracted.resumeText) {
+                        saveResume(extracted.resumeText)
+                    }
+                    setIsResumeHtmlPending(false)
+                }
             } catch {
                 // Silently fail — file input resets, no state changes
             } finally {
                 setIsProcessingResume(false)
+                setIsResumeHtmlPending(false)
             }
         },
         [geminiApiKey, youName, youSchool, youWork]
@@ -24015,6 +24171,23 @@ Extract this structure:
 
     const handleResumeDownload = React.useCallback(() => {
         haptic.light()
+        const html = getProfileResumeDocHtml()?.trim()
+        if (html) {
+            const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Resume</title></head><body>${html}</body></html>`
+            const blob = new Blob([doc], { type: "text/html;charset=utf-8" })
+            const url = URL.createObjectURL(blob)
+            const link = document.createElement("a")
+            link.href = url
+            const base =
+                resumeFile?.name.replace(/\.[^.]+$/, "").trim() || "Resume"
+            link.download = `${base}.html`
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+            setTimeout(() => URL.revokeObjectURL(url), 5000)
+            setResumeMenuOpen(false)
+            return
+        }
         if (!resumeFile) return
         const link = document.createElement("a")
         link.href = resumeFile.base64
@@ -24028,9 +24201,11 @@ Extract this structure:
     const handleResumeDelete = React.useCallback(() => {
         haptic.light()
         setResumeFile(null)
-        // Also wipe the plain-text resume so AI tools no longer see stale data
-        if (typeof window !== "undefined")
+        setIsResumeHtmlPending(false)
+        if (typeof window !== "undefined") {
             localStorage.removeItem("curastem_resume")
+            clearProfileResumeDocHtml()
+        }
         setResumeMenuOpen(false)
     }, [])
 
@@ -24316,6 +24491,12 @@ Extract this structure:
     // --- STATE: AGENT SIDEBAR — DOC EDITOR ---
     const [isDocOpen, setIsDocOpen] = React.useState(false)
     const isDocOpenRef = React.useRef(false)
+    /** When true, doc edits sync to profile resume HTML (`curastem_resume_doc_html`); getResume() derives plain text from that. */
+    const profileResumeSyncRef = React.useRef(false)
+    const profileResumeLastHtmlRef = React.useRef("")
+    const profileResumeSaveTimeoutRef = React.useRef<ReturnType<
+        typeof setTimeout
+    > | null>(null)
 
     // Sync ref for access inside callbacks/loops
     React.useEffect(() => {
@@ -24434,6 +24615,15 @@ Extract this structure:
     // Close the DocEditor — clear resume keyword state and dismiss the job
     // panel when it was left open for the job→resume flow (phase is idle then).
     const handleDocClose = React.useCallback(() => {
+        if (profileResumeSyncRef.current) {
+            if (profileResumeSaveTimeoutRef.current) {
+                clearTimeout(profileResumeSaveTimeoutRef.current)
+                profileResumeSaveTimeoutRef.current = null
+            }
+            const html = profileResumeLastHtmlRef.current
+            saveProfileResumeDocHtml(html)
+        }
+        profileResumeSyncRef.current = false
         setIsDocOpen(false)
         isDocOpenRef.current = false
         setResumeAnimPhase("idle")
@@ -29566,6 +29756,16 @@ Do not include markdown formatting or explanations.`
     const handleDocChange = React.useCallback((content: string) => {
         setDocContent(content)
 
+        if (profileResumeSyncRef.current) {
+            profileResumeLastHtmlRef.current = content
+            if (profileResumeSaveTimeoutRef.current)
+                clearTimeout(profileResumeSaveTimeoutRef.current)
+            profileResumeSaveTimeoutRef.current = setTimeout(() => {
+                profileResumeSaveTimeoutRef.current = null
+                saveProfileResumeDocHtml(content)
+            }, 400)
+        }
+
         const now = Date.now()
         const interval = 50 // Match cursor update rate (20fps)
         const timeSinceLastSend = now - lastDocSendTimeRef.current
@@ -29589,6 +29789,34 @@ Do not include markdown formatting or explanations.`
                 lastDocSendTimeRef.current = Date.now()
             }, interval - timeSinceLastSend)
         }
+    }, [])
+
+    const handleProfileResumeEdit = React.useCallback(() => {
+        haptic.light()
+        setResumeMenuOpen(false)
+        setHoveredResumeMenuItem(null)
+        setShowYouSettings(false)
+        setResumeAnimPhase("idle")
+        setResumeCapturedItems([])
+        setResumeUsedKeywords([])
+        setIsJobOpen(false)
+        setIsAppOpen(false)
+        isAppOpenRef.current = false
+        setIsWhiteboardOpen(false)
+        isWhiteboardOpenRef.current = false
+        profileResumeSyncRef.current = true
+        const plain = getResume()?.trim() ?? ""
+        const storedHtml = getProfileResumeDocHtml()?.trim()
+        const initialHtml =
+            storedHtml && storedHtml.length > 0
+                ? storedHtml
+                : plainTextToResumeDocHtml(plain)
+        profileResumeLastHtmlRef.current = initialHtml
+        setDocContent(initialHtml)
+        setDocType("resume")
+        setDocCompany("")
+        setIsDocOpen(true)
+        isDocOpenRef.current = true
     }, [])
 
     const handleDocPointerMove = React.useCallback((x: number, y: number) => {
@@ -32039,6 +32267,9 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     "Creates a polished AI-generated resume and opens it in the doc editor.",
                                     "Call when the user explicitly asks to create, write, or build a resume.",
                                     "Write the full resume content in the content parameter — include all standard sections: summary, experience, education, skills.",
+                                    "When [Currently Viewed Job] or other job details are in context, tailor the Skills section to that role (requirements, title, company) and drop skills that do not fit.",
+                                    "Experience bullets may be rephrased for clarity and role/keyword fit; keep all real figures (%, $, counts, ranges) accurate and do not strip metrics.",
+                                    "Use contact info the user actually gave (e.g. retrieve_resume); do not invent emails or links.",
                                     "Do NOT call save_resume after this — AI-generated resumes are not the user's real resume.",
                                 ].join(" "),
                                 parameters: {
@@ -32046,21 +32277,8 @@ Never guess IDs — only use IDs that appear in the snapshot.`,
                                     properties: {
                                         content: {
                                             type: "STRING",
-                                            description: `The full HTML resume. Follow this exact order and structure:
-
-1. <h1> — Candidate full name
-2. <p> — Email | LinkedIn | GitHub | Portfolio (use what you know; leave fields blank if unknown)
-3. <h2>Experience</h2> — list jobs most recent first. If multiple roles have an end date of "Present", put the most relevant to the target job first. For EACH job use this exact pattern — job header on its own <p>, bullets in a separate <ul>:
-   <p><b>Job Title</b> · Company Name · Start – End</p>
-   <ul>
-     <li>Action verb + task + measurable result (e.g. "Increased conversion rate by 34%")</li>
-     <li>2–3 bullets per job, each on its own <li>. NO nested lists.</li>
-   </ul>
-   NEVER put the job title, company, or dates inside a <li>. They belong only in the <p> header above the <ul>.
-4. <h2>Education</h2> — <ul> with one <li> per degree: Degree, School, Year
-5. <h2>Skills</h2> — comma-separated <p> of relevant skills
-
-Rules: use <b> only for job titles and company names in the <p> header. NO <i>/<em> anywhere. Write every section completely — never truncate. This will be auto-formatted to one page when downloaded.`,
+                                            description:
+                                                CREATE_RESUME_HTML_FORMAT_INSTRUCTIONS,
                                         },
                                     },
                                     required: ["content"],
@@ -35731,7 +35949,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             const aiText =
                 `Call create_resume immediately with a complete, tailored HTML resume.\n\n` +
                 contextParts.join("\n\n") +
-                `\n\nWrite every section in full — do not ask questions, do not call any other tools first. The candidate is applying TO GET this job.`
+                `\n\nWrite every section in full — do not ask questions, do not call any other tools first. The candidate is applying TO GET this job. In Skills, only include items that fit this posting and role (and reasonable inferences from title and company); omit unrelated skills.`
 
             const orbitTimer = startResumeOrbitAnimation()
             const sentOk = await handleSendMessage(displayText, aiText)
@@ -40231,7 +40449,68 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         >
                             Resume
                         </div>
-                        {resumeFile ? (
+                        {isProcessingResume ? (
+                            // Until PDF/text extract finishes
+                            <div
+                                style={{
+                                    alignSelf: "stretch",
+                                    height: 44,
+                                    paddingLeft: 16,
+                                    paddingRight: 16,
+                                    background:
+                                        themeColors.background ===
+                                        lightColors.background
+                                            ? themeColors.background
+                                            : themeColors.surface,
+                                    border:
+                                        themeColors.background ===
+                                        lightColors.background
+                                            ? `0.33px solid ${themeColors.border.subtle}`
+                                            : "none",
+                                    borderRadius: 28,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    opacity: 0.6,
+                                }}
+                            >
+                                <span
+                                    style={{
+                                        flex: "1 1 0",
+                                        color: themeColors.text.primary,
+                                        fontSize: iosSafariInputFontPx(),
+                                        fontFamily: "Inter",
+                                        fontWeight: "400",
+                                        lineHeight:
+                                            iosSafariInputFontPx() === 16
+                                                ? "24px"
+                                                : "21px",
+                                    }}
+                                >
+                                    Analyzing resume…
+                                </span>
+                                <style>{`
+                                            @keyframes resumeSpinnerPulse {
+                                                0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+                                                40% { opacity: 1; transform: scale(1); }
+                                            }
+                                            .ResumeSpinnerDot { animation: resumeSpinnerPulse 1.2s infinite ease-in-out; border-radius: 50%; width: 5px; height: 5px; background: ${themeColors.text.secondary}; }
+                                            .ResumeSpinnerDot:nth-child(2) { animation-delay: 0.2s; }
+                                            .ResumeSpinnerDot:nth-child(3) { animation-delay: 0.4s; }
+                                        `}</style>
+                                <div
+                                    style={{
+                                        display: "flex",
+                                        gap: 4,
+                                        alignItems: "center",
+                                    }}
+                                >
+                                    <div className="ResumeSpinnerDot" />
+                                    <div className="ResumeSpinnerDot" />
+                                    <div className="ResumeSpinnerDot" />
+                                </div>
+                            </div>
+                        ) : resumeFile ? (
                             // File saved — filename row with 3-dot menu
                             <div
                                 className="SettingsResumeRow"
@@ -40385,18 +40664,108 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                     }
                                                 )}
                                             </div>
-                                            {/* Download */}
+                                            {/* Edit — pencil matches chat sidebar Rename */}
                                             <div
-                                                onClick={handleResumeDownload}
-                                                onMouseEnter={() =>
-                                                    setHoveredResumeMenuItem(
-                                                        "download"
-                                                    )
-                                                }
+                                                onClick={() => {
+                                                    if (isResumeHtmlPending)
+                                                        return
+                                                    handleProfileResumeEdit()
+                                                }}
+                                                onMouseEnter={() => {
+                                                    if (!isResumeHtmlPending)
+                                                        setHoveredResumeMenuItem(
+                                                            "edit"
+                                                        )
+                                                }}
                                                 style={{
                                                     ...styles.menuItem,
+                                                    opacity: isResumeHtmlPending
+                                                        ? 0.5
+                                                        : 1,
+                                                    pointerEvents:
+                                                        isResumeHtmlPending
+                                                            ? "none"
+                                                            : "auto",
                                                     ...(hoveredResumeMenuItem ===
-                                                    "download"
+                                                        "edit" &&
+                                                    !isResumeHtmlPending
+                                                        ? styles.menuItemHover
+                                                        : {}),
+                                                }}
+                                            >
+                                                <div
+                                                    style={{
+                                                        width: 15,
+                                                        display: "flex",
+                                                        justifyContent:
+                                                            "center",
+                                                    }}
+                                                >
+                                                    <svg
+                                                        width="17"
+                                                        height="17"
+                                                        viewBox="0 0 17 17"
+                                                        fill="none"
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                    >
+                                                        <path
+                                                            d="M13.7466 6.61748L5.43491 14.9325C5.00818 15.3595 4.42939 15.5995 3.82574 15.6H0.601562V12.3967C0.601562 11.7933 0.841563 11.2142 1.26823 10.7875L10.7766 1.2683C10.988 1.05651 11.2392 0.888481 11.5156 0.77381C11.7921 0.659139 12.0884 0.600076 12.3877 0.599999C12.687 0.599921 12.9833 0.65883 13.2598 0.773358C13.5363 0.887886 13.7875 1.05579 13.9991 1.26746L14.9374 2.20663C15.3645 2.63375 15.6045 3.21303 15.6045 3.81705C15.6045 4.42108 15.3645 5.00036 14.9374 5.42747L13.7466 6.61748ZM13.7466 6.61748L9.58742 2.4583"
+                                                            stroke={
+                                                                themeColors
+                                                                    .text
+                                                                    .primary
+                                                            }
+                                                            strokeOpacity="0.95"
+                                                            strokeWidth="1.2"
+                                                            strokeLinecap="round"
+                                                            strokeLinejoin="round"
+                                                        />
+                                                    </svg>
+                                                </div>
+                                                <div
+                                                    style={{
+                                                        flex: "1 1 0",
+                                                        justifyContent:
+                                                            "center",
+                                                        display: "flex",
+                                                        flexDirection: "column",
+                                                        color: themeColors.text
+                                                            .primary,
+                                                        fontSize: 14,
+                                                        fontFamily: "Inter",
+                                                        fontWeight: "400",
+                                                        lineHeight: "19.32px",
+                                                        wordWrap: "break-word",
+                                                    }}
+                                                >
+                                                    Edit
+                                                </div>
+                                            </div>
+                                            {/* Download */}
+                                            <div
+                                                onClick={() => {
+                                                    if (isResumeHtmlPending)
+                                                        return
+                                                    handleResumeDownload()
+                                                }}
+                                                onMouseEnter={() => {
+                                                    if (!isResumeHtmlPending)
+                                                        setHoveredResumeMenuItem(
+                                                            "download"
+                                                        )
+                                                }}
+                                                style={{
+                                                    ...styles.menuItem,
+                                                    opacity: isResumeHtmlPending
+                                                        ? 0.5
+                                                        : 1,
+                                                    pointerEvents:
+                                                        isResumeHtmlPending
+                                                            ? "none"
+                                                            : "auto",
+                                                    ...(hoveredResumeMenuItem ===
+                                                        "download" &&
+                                                    !isResumeHtmlPending
                                                         ? styles.menuItemHover
                                                         : {}),
                                                 }}
@@ -40515,67 +40884,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         </div>
                                     </>
                                 )}
-                            </div>
-                        ) : isProcessingResume ? (
-                            // Processing state
-                            <div
-                                style={{
-                                    alignSelf: "stretch",
-                                    height: 44,
-                                    paddingLeft: 16,
-                                    paddingRight: 16,
-                                    background:
-                                        themeColors.background ===
-                                        lightColors.background
-                                            ? themeColors.background
-                                            : themeColors.surface,
-                                    border:
-                                        themeColors.background ===
-                                        lightColors.background
-                                            ? `0.33px solid ${themeColors.border.subtle}`
-                                            : "none",
-                                    borderRadius: 28,
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: 8,
-                                    opacity: 0.6,
-                                }}
-                            >
-                                <span
-                                    style={{
-                                        flex: "1 1 0",
-                                        color: themeColors.text.primary,
-                                        fontSize: iosSafariInputFontPx(),
-                                        fontFamily: "Inter",
-                                        fontWeight: "400",
-                                        lineHeight:
-                                            iosSafariInputFontPx() === 16
-                                                ? "24px"
-                                                : "21px",
-                                    }}
-                                >
-                                    Analyzing resume…
-                                </span>
-                                <style>{`
-                                            @keyframes resumeSpinnerPulse {
-                                                0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
-                                                40% { opacity: 1; transform: scale(1); }
-                                            }
-                                            .ResumeSpinnerDot { animation: resumeSpinnerPulse 1.2s infinite ease-in-out; border-radius: 50%; width: 5px; height: 5px; background: ${themeColors.text.secondary}; }
-                                            .ResumeSpinnerDot:nth-child(2) { animation-delay: 0.2s; }
-                                            .ResumeSpinnerDot:nth-child(3) { animation-delay: 0.4s; }
-                                        `}</style>
-                                <div
-                                    style={{
-                                        display: "flex",
-                                        gap: 4,
-                                        alignItems: "center",
-                                    }}
-                                >
-                                    <div className="ResumeSpinnerDot" />
-                                    <div className="ResumeSpinnerDot" />
-                                    <div className="ResumeSpinnerDot" />
-                                </div>
                             </div>
                         ) : (
                             // Upload button
