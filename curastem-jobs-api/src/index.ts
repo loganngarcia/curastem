@@ -5,18 +5,23 @@
  * ROUTES
  * ──────────────────────────────────────────────────────────────────────────
  *   GET  /health          Unauthenticated health check. Returns { status: "ok" }.
+ *   GET  /auth/maps-key   Framer: Maps JS key (GOOGLE_MAPS_API_KEY; restrict by HTTP referrer).
+ *   GET  /auth/gemini-token  Framer: ephemeral Gemini Live token (GEMINI_API_KEY server-side).
+ *   POST /proxy/gemini    Framer: Gemini REST/SSE proxy (?model=&action=&alt=sse).
  *   GET  /stats           Aggregate market stats (counts, top companies, etc.).
  *   GET  /jobs            Paginated, filterable job listing.
  *   GET  /jobs/map        One chip entry per company (for map, no 50-job limit).
  *   GET  /jobs/:id        Single job with lazy AI enrichment.
  *   POST /admin/trigger   Manually trigger ingestion (requires valid API key).
+ *   POST /admin/cron      Run the same pipeline as the scheduled Worker (poll GET /health).
+ *   POST /admin/seed-sources  Insert/update `sources` rows from migrate.ts (no ingestion queue).
  *   ?source=mc-meta&meta_job_url=<url>  Ingest one Meta role (job_details or create_application URL).
  *
  * ──────────────────────────────────────────────────────────────────────────
  * SCHEDULED TRIGGER
  * ──────────────────────────────────────────────────────────────────────────
- *   Cron: "0 * * * *" (every hour at :00)
- *   Action: seeds sources → ensures D1 schema for company website probe → seeds → corrections → ingestion → enrichment
+ *   Cron: "0 * * * *" — enqueue one INGESTION_QUEUE message per enabled source (parallel consumers).
+ *   Cron: "30 * * * *" — Exa/company backlog, probes, embedding + geocode + description backfills.
  *
  * ──────────────────────────────────────────────────────────────────────────
  * AUTHENTICATION
@@ -47,19 +52,19 @@ import { handleGetJob } from "./routes/job.ts";
 import { authenticate, recordKeyUsage } from "./middleware/auth.ts";
 import { checkRateLimit } from "./middleware/rateLimit.ts";
 import { handleGetStats } from "./routes/stats.ts";
-import { runIngestion, processSourceById, backfillEmbeddings } from "./ingestion/runner.ts";
-import { runExaEnrichment, runCompanyEnrichment, runLogoOnlyEnrichment, runWordmarkUpgrade } from "./enrichment/company.ts";
-import { ensureCompanyWebsiteProbeColumns, ensureCompanyExaColumns, ensureNewJobColumns, listJobsForMap, type MapBbox, type MapCenter } from "./db/queries.ts";
-import {
-  applyCompanyMetadataCorrections,
-  migrateRenameCrunchbaseSource,
-  seedCompanyWebsites,
-  seedSources,
-} from "./db/migrate.ts";
+import { processSourceById, backfillEmbeddings, ingestSourceFromQueue } from "./ingestion/runner.ts";
+import { enrichCompanyById, runExaEnrichment, runCompanyEnrichment, runLogoOnlyEnrichment, runWordmarkUpgrade } from "./enrichment/company.ts";
+import { ensureCompanyExaColumns, listJobsForMap, type MapBbox, type MapCenter } from "./db/queries.ts";
 import type { Env } from "./types.ts";
 import { Errors, jsonOk } from "./utils/errors.ts";
 import { logger } from "./utils/logger.ts";
-import { recordCronFailure, recordCronSuccess, shouldSkipCron } from "./utils/cronCircuit.ts";
+import { runBackfillPipeline, runSchedulerPipeline, runScheduledPipeline } from "./scheduledPipeline.ts";
+import { migrateRenameCrunchbaseSource, seedSources } from "./db/migrate.ts";
+import {
+  handleGeminiProxy,
+  handleGeminiToken,
+  handleMapsKey,
+} from "./routes/framerGoogleAuth.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Route dispatch
@@ -81,7 +86,7 @@ async function handleRequest(
     return new Response(null, {
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Headers": "Authorization, Content-Type",
         "Access-Control-Max-Age": "86400",
       },
@@ -92,15 +97,19 @@ async function handleRequest(
   // Includes cron diagnostics: last_invoked (did CF fire the handler?)
   // and last_error (what crashed it, if anything).
   if (path === "/health" && method === "GET") {
-    const [invokedRaw, lastError, stage] = await Promise.all([
+    const [invokedRaw, backfillInvokedRaw, lastError, stage] = await Promise.all([
       env.RATE_LIMIT_KV.get("cron_last_invoked_at"),
+      env.RATE_LIMIT_KV.get("backfill_last_invoked_at"),
       env.RATE_LIMIT_KV.get("cron_last_error"),
       env.RATE_LIMIT_KV.get("cron_stage"),
     ]);
     const lastInvoked = invokedRaw
       ? new Date(parseInt(invokedRaw, 10) * 1000).toISOString()
       : null;
-    return jsonOk({ status: "ok", version: "1.0.0", cron: { last_invoked: lastInvoked, stage, last_error: lastError } });
+    const backfillLastInvoked = backfillInvokedRaw
+      ? new Date(parseInt(backfillInvokedRaw, 10) * 1000).toISOString()
+      : null;
+    return jsonOk({ status: "ok", version: "1.0.0", cron: { last_invoked: lastInvoked, backfill_last_invoked: backfillLastInvoked, stage, last_error: lastError } });
   }
 
   // GET /geo — unauthenticated, returns the caller's lat/lng from Cloudflare's edge geolocation.
@@ -113,6 +122,21 @@ async function handleRequest(
       JSON.stringify({ lat, lng, city: cf?.city ?? null, region: cf?.region ?? null, country: cf?.country ?? null }),
       { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" } }
     );
+  }
+
+  // GET /auth/maps-key — browser Maps JS key (also HTTP-restrict in Google Cloud).
+  if (path === "/auth/maps-key" && method === "GET") {
+    return handleMapsKey(env);
+  }
+
+  // GET /auth/gemini-token — mint Gemini Live ephemeral token (v1alpha).
+  if (path === "/auth/gemini-token" && method === "GET") {
+    return handleGeminiToken(env);
+  }
+
+  // POST /proxy/gemini — forward Gemini REST / SSE; key stays on the Worker.
+  if (path === "/proxy/gemini" && method === "POST") {
+    return handleGeminiProxy(request, env);
   }
 
   // GET /stats — aggregate market overview (job counts, top companies, etc.)
@@ -227,21 +251,46 @@ async function handleRequest(
       );
       return jsonOk({ status: "triggered", source_id: sourceId, message: "Source ingestion started in background — poll last_fetched_at in D1 to confirm completion." });
     }
-    // Full-run mode: background via waitUntil (best-effort, may be cut off for
-    // large deployments — prefer the cron for full runs).
+    // Full-run mode: same code path as the hourly cron (minus heartbeat KV writes).
     ctx.waitUntil(
-      (async () => {
-        await seedSources(env.JOBS_DB);
-        await migrateRenameCrunchbaseSource(env.JOBS_DB);
-        await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
-        await ensureCompanyExaColumns(env.JOBS_DB);
-        await ensureNewJobColumns(env.JOBS_DB);
-        await seedCompanyWebsites(env.JOBS_DB);
-        await applyCompanyMetadataCorrections(env.JOBS_DB, env.LOGO_DEV_TOKEN);
-        await runIngestion(env);
-      })()
+      runScheduledPipeline(env, { skipCircuitBreaker: true, recordHeartbeat: false }).catch((err) => {
+        logger.error("admin_trigger_full_failed", { error: String(err) });
+      })
     );
-    return jsonOk({ status: "triggered", message: "Full ingestion started in background" });
+    return jsonOk({
+      status: "triggered",
+      message: "Full cron pipeline started in background — same as POST /admin/cron without heartbeat.",
+    });
+  }
+
+  // POST /admin/cron — scheduler (enqueue sources) then backfill pass. Skips the circuit breaker.
+  // Poll GET /health until cron.stage is "backfill_done" (or cron.last_error is set).
+  if (path === "/admin/cron" && method === "POST") {
+    ctx.waitUntil(
+      runScheduledPipeline(env, { skipCircuitBreaker: true, recordHeartbeat: true }).catch((err) => {
+        logger.error("admin_cron_failed", { error: String(err) });
+      })
+    );
+    return jsonOk({
+      status: "triggered",
+      message: "Cron pipeline started — poll GET /health for cron.stage \"done\".",
+    });
+  }
+
+  // POST /admin/seed-sources — run migrate.ts `seedSources()` only (INSERT OR IGNORE + URL migrations).
+  // Use from local `wrangler dev` with D1 `remote: true` to push new source rows without enqueueing ingestion.
+  if (path === "/admin/seed-sources" && method === "POST") {
+    try {
+      await seedSources(env.JOBS_DB);
+      await migrateRenameCrunchbaseSource(env.JOBS_DB);
+      return jsonOk({ status: "completed", message: "seedSources + migrateRenameCrunchbaseSource finished." });
+    } catch (err) {
+      logger.error("admin_seed_sources_failed", { error: String(err) });
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
   }
 
   // POST /admin/embed — synchronously embed up to ?limit= jobs (default 25).
@@ -587,51 +636,55 @@ export default {
   },
 
   /**
-   * Scheduled cron handler — runs every hour (cron: "0 * * * *").
-   *
-   * Circuit breaker: after 3 consecutive failures, skip runs for 6 hours to
-   * avoid burning Cloudflare/Gemini costs on repeated failing invocations.
+   * Scheduled cron — :00 scheduler (enqueue sources) or :30 backfill (embeddings, geocode, etc.).
    */
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const isBackfill = event.cron === "30 * * * *";
     ctx.waitUntil(
-      (async () => {
-        // Heartbeat written before any other logic — tells us if Cloudflare is
-        // invoking the scheduled handler at all (vs. pausing it after failures).
-        const invokedAt = Math.floor(Date.now() / 1000);
-        const kv = env.RATE_LIMIT_KV;
-        const stage = (s: string) => kv.put("cron_stage", s, { expirationTtl: 3600 });
-        await kv.put("cron_last_invoked_at", String(invokedAt), { expirationTtl: 7 * 24 * 3600 });
-        await stage("started");
-
-        if (await shouldSkipCron(kv)) {
-          logger.info("scheduled_handler_skipped", { reason: "circuit_open" });
-          await stage("skipped_circuit");
-          return;
+      (isBackfill ? runBackfillPipeline(env) : runSchedulerPipeline(env, { skipCircuitBreaker: false })).catch(
+        (err) => {
+          logger.error("scheduled_pipeline_wait_failed", { error: String(err) });
         }
-        try {
-          await stage("seed_sources");
-          await seedSources(env.JOBS_DB);
-          await stage("migrations");
-          await migrateRenameCrunchbaseSource(env.JOBS_DB);
-          await ensureCompanyWebsiteProbeColumns(env.JOBS_DB);
-          await ensureCompanyExaColumns(env.JOBS_DB);
-          await ensureNewJobColumns(env.JOBS_DB);
-          await stage("seed_company_websites");
-          await seedCompanyWebsites(env.JOBS_DB);
-          await stage("metadata_corrections");
-          await applyCompanyMetadataCorrections(env.JOBS_DB, env.LOGO_DEV_TOKEN);
-          await stage("run_ingestion");
-          await runIngestion(env);
-          await stage("done");
-          await recordCronSuccess(kv);
-        } catch (err) {
-          const msg = String(err);
-          logger.error("scheduled_handler_failed", { error: msg });
-          // Persist the last crash reason so /health can surface it without Workers Logs.
-          await kv.put("cron_last_error", msg, { expirationTtl: 7 * 24 * 3600 });
-          await recordCronFailure(kv);
-        }
-      })()
+      )
     );
+  },
+
+  /**
+   * Queue consumers — parallel per-source ingestion and per-company enrichment.
+   */
+  async queue(batch: MessageBatch<{ sourceId?: string; companyId?: string }>, env: Env): Promise<void> {
+    if (batch.queue === "curastem-ingestion") {
+      for (const msg of batch.messages) {
+        try {
+          const sourceId = msg.body.sourceId;
+          if (typeof sourceId !== "string" || !sourceId) {
+            msg.ack();
+            continue;
+          }
+          await ingestSourceFromQueue(env, sourceId);
+          msg.ack();
+        } catch (err) {
+          logger.error("ingestion_queue_message_failed", { error: String(err) });
+          msg.retry();
+        }
+      }
+      return;
+    }
+    if (batch.queue === "curastem-enrichment") {
+      for (const msg of batch.messages) {
+        try {
+          const companyId = msg.body.companyId;
+          if (typeof companyId !== "string" || !companyId) {
+            msg.ack();
+            continue;
+          }
+          await enrichCompanyById(env, companyId);
+          msg.ack();
+        } catch (err) {
+          logger.error("enrichment_queue_message_failed", { error: String(err) });
+          msg.retry();
+        }
+      }
+    }
   },
 };

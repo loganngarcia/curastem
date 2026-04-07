@@ -28,8 +28,8 @@
 
   // Secrets (set via `wrangler secret put`):
   //   GEMINI_API_KEY        — Google Gemini API key for AI extraction + embeddings
-  //   BRANDFETCH_CLIENT_ID  — Brandfetch API key for company logo/social enrichment
-  //                           Free tier: 500 req/day — get one at brandfetch.com/developers
+  //   BRANDFETCH_CLIENT_ID  — Brandfetch fallback (logo if Logo.dev misses; social links)
+  //                           Free tier: 500 req/day — brandfetch.com/developers
   //   USAJOBS_API_KEY       — USAJOBS API key for federal jobs (free at developer.usajobs.gov)
   //   LOGO_DEV_TOKEN        — Logo.dev sk_ (Search API) or pk_ (img CDN); Google favicon if unset / no match
   "vars": {},
@@ -57,17 +57,42 @@
     "binding": "BROWSER"
   },
 
-  // Hourly ingestion cron — runs every hour at :00
+  // :00 — enqueue one message per enabled source (ingestion queue consumers run in parallel).
+  // :30 — embedding/geocode/description backfills + batch Exa/company safety net (full CPU budget).
   "triggers": {
-    "crons": ["0 * * * *"]
+    "crons": ["0 * * * *", "30 * * * *"]
   },
 
-  // Raise per-request CPU time to 30s (max on Paid plan).
-  // Most time is spent waiting on I/O, so this rarely fires, but allows
-  // CPU-heavy operations (regex backfill, JSON parsing) to complete safely.
-  "limits": {
-    "cpu_ms": 30000
+  // Queues: parallel ingestion per source; per-company enrichment after each source run.
+  // Create once: wrangler queues create curastem-ingestion && wrangler queues create curastem-enrichment && wrangler queues create curastem-ingestion-dlq
+  "queues": {
+    "producers": [
+      { "queue": "curastem-ingestion", "binding": "INGESTION_QUEUE" },
+      { "queue": "curastem-enrichment", "binding": "ENRICHMENT_QUEUE" }
+    ],
+    "consumers": [
+      {
+        "queue": "curastem-ingestion",
+        "max_batch_size": 1,
+        "max_concurrency": 10,
+        "max_retries": 2,
+        "dead_letter_queue": "curastem-ingestion-dlq"
+      },
+      {
+        "queue": "curastem-enrichment",
+        "max_batch_size": 1,
+        "max_concurrency": 5,
+        "max_retries": 3
+      }
+    ]
   },
+
+  // Do not set limits.cpu_ms here. Wrangler allows at most 300_000 ms (5 min) via cpu_ms, but
+  // https://developers.cloudflare.com/workers/platform/limits/#cpu-time gives Workers Paid
+  // cron triggers with interval >= 1 hour up to 15 minutes of CPU time per invocation.
+  // Our schedule is hourly (0 * * * *), so omitting cpu_ms lets that higher cron default apply.
+  // HTTP requests to this Worker still use the normal HTTP CPU defaults for fetch handlers.
+  // You can mirror the same policy in Dashboard → Worker → Settings if a stale cap appears.
 
   // Persist logs and traces to the Cloudflare dashboard (already enabled via UI).
   // head_sampling_rate: 1 = capture every invocation (scheduled + fetch).

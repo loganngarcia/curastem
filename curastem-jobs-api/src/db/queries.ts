@@ -21,6 +21,7 @@
  * per batch regardless of how many statements are included.
  */
 
+import type { VectorizeIndex } from "@cloudflare/workers-types";
 import type {
   ApiKeyRow,
   CompanyRow,
@@ -542,6 +543,9 @@ export async function listCompaniesForSocialEnrichment(
 /**
  * Ensures `jobs` has migration 011 columns (experience_years_min, job address fields).
  * Self-healing: runs on every cron/admin path so the worker never fails on a cold D1.
+ *
+ * Do not run a full-table `location_primary` backfill here — unbounded UPDATE OOMs D1 in-Worker.
+ * Use `backfillLocationPrimary` from the `:30` cron instead.
  */
 export async function ensureNewJobColumns(db: D1Database): Promise<void> {
   const info = await db.prepare("PRAGMA table_info(jobs)").all<{ name: string }>();
@@ -553,12 +557,49 @@ export async function ensureNewJobColumns(db: D1Database): Promise<void> {
     ["job_city",             "TEXT"],
     ["job_state",            "TEXT"],
     ["job_country",          "TEXT"],
+    ["location_primary",     "TEXT"],
   ];
 
   for (const [col, type] of missing) {
     if (!names.has(col)) {
       await db.prepare(`ALTER TABLE jobs ADD COLUMN ${col} ${type}`).run();
     }
+  }
+}
+
+/**
+ * Batched backfill for rows created before `location_primary` was denormalized.
+ * Small LIMIT keeps D1 memory under Worker limits; `:30` cron calls this each hour until drained.
+ */
+export async function backfillLocationPrimary(db: D1Database, limit = 1000): Promise<number> {
+  const result = await db
+    .prepare(
+      `UPDATE jobs SET location_primary = json_extract(locations, '$[0]')
+       WHERE id IN (
+         SELECT id FROM jobs
+         WHERE locations IS NOT NULL AND location_primary IS NULL
+         LIMIT ?
+       )`
+    )
+    .bind(limit)
+    .run();
+  return result.meta.changes ?? 0;
+}
+
+/**
+ * Idempotent CREATE INDEX for analytics / deep-dive migrations (see schema.sql + migrations/014).
+ * Consider backfill index lives in migrations/015 only — avoid building it in-Worker (OOM risk).
+ */
+export async function ensureJobIndexes(db: D1Database): Promise<void> {
+  const stmts = [
+    `CREATE INDEX IF NOT EXISTS idx_jobs_location_primary ON jobs (location_primary)`,
+    `CREATE INDEX IF NOT EXISTS idx_jobs_job_country ON jobs (job_country, posted_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_jobs_salary_min ON jobs (salary_min, posted_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_jobs_visa_sponsorship ON jobs (visa_sponsorship, posted_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_api_keys_active_hash ON api_keys (key_hash) WHERE active = 1`,
+  ];
+  for (const sql of stmts) {
+    await db.prepare(sql).run();
   }
 }
 
@@ -856,6 +897,7 @@ export async function upsertJob(
   const { normalizeLocationsList, detectEmploymentTypeFromText, detectSeniorityFromText } = await import("../utils/normalize.ts");
   const locs = normalizeLocationsList(locationRaw, input.company_slug);
   const locationsJson = locs && locs.length > 0 ? JSON.stringify(locs) : null;
+  const locationPrimary = locs && locs.length > 0 ? locs[0]! : null;
 
   const detectedEt = employment_type ?? detectEmploymentTypeFromText(title, description_raw);
   const detectedSl = seniority_level ?? detectSeniorityFromText(title, description_raw);
@@ -869,19 +911,19 @@ export async function upsertJob(
     await db
       .prepare(
         `INSERT INTO jobs (
-          id, company_id, source_id, external_id, title, locations,
+          id, company_id, source_id, external_id, title, locations, location_primary,
           employment_type, workplace_type, seniority_level, apply_url, source_url, source_name,
           description_raw, salary_min, salary_max, salary_currency, salary_period,
           posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
         ) VALUES (
-          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?, ?, ?
         )`
       )
       .bind(
-        id, company_id, source_id, external_id, title, locationsJson,
+        id, company_id, source_id, external_id, title, locationsJson, locationPrimary,
         detectedEt ?? null, workplace_type ?? null, detectedSl ?? null, apply_url, source_url ?? null, source_name,
         description_raw ?? null, salary_min ?? null, salary_max ?? null, salary_currency ?? null, salary_period ?? null,
         posted_at ?? null, now, dedup_key, location_lat ?? null, location_lng ?? null, now, now
@@ -903,6 +945,7 @@ export async function upsertJob(
         title                  = ?,
         -- Only fill locations when AI hasn't set it yet; once AI populates it, ingest doesn't overwrite
         locations              = CASE WHEN locations IS NULL THEN ? ELSE locations END,
+        location_primary       = CASE WHEN locations IS NULL THEN ? ELSE location_primary END,
         employment_type        = COALESCE(?, employment_type),
         workplace_type         = ?,
         seniority_level        = COALESCE(seniority_level, ?),
@@ -926,6 +969,7 @@ export async function upsertJob(
       company_id,
       title,
       locationsJson,
+      locationPrimary,
       detectedEt ?? null,
       workplace_type ?? null,
       updatedSl ?? null,
@@ -1056,14 +1100,15 @@ export async function batchCheckCrossSourceDups(
  * Equal or higher priority rows on other sources are left untouched.
  *
  * `incomingPriority` and `priorityOf` mirror the parameters of {@link batchCheckCrossSourceDups}.
- * Stale Vectorize vectors for deleted job ids are not cleaned up (harmless for search).
+ * When `vectorIndex` is set, deleted job ids are removed from Vectorize so semantic search stays aligned.
  */
 export async function batchDeleteJobsSupersededByHigherPriority(
   db: D1Database,
   incomingSourceId: string,
   incomingPriority: number,
   priorityOf: (sourceType: string) => number,
-  dedupKeys: string[]
+  dedupKeys: string[],
+  vectorIndex?: VectorizeIndex
 ): Promise<number> {
   if (dedupKeys.length === 0) return 0;
 
@@ -1090,6 +1135,13 @@ export async function batchDeleteJobsSupersededByHigherPriority(
       const delPh = idChunk.map(() => "?").join(",");
       await db.prepare(`DELETE FROM jobs WHERE id IN (${delPh})`).bind(...idChunk).run();
       deleted += idChunk.length;
+      if (vectorIndex && idChunk.length > 0) {
+        try {
+          await vectorIndex.deleteByIds(idChunk);
+        } catch {
+          // Best-effort; D1 rows are already gone — next query may still see stale vectors briefly
+        }
+      }
     }
   }
   return deleted;
@@ -1120,16 +1172,17 @@ export async function batchUpsertJobs(
   // by a previous partially-completed Worker that was killed before last_fetched_at was set.
   // The UPDATE path (below) handles true refreshes when existingMap is correctly populated.
   const INSERT_SQL = `INSERT OR IGNORE INTO jobs (
-    id, company_id, source_id, external_id, title, locations,
+    id, company_id, source_id, external_id, title, locations, location_primary,
     employment_type, workplace_type, seniority_level, apply_url, source_url, source_name,
     description_raw, description_language,
     salary_min, salary_max, salary_currency, salary_period,
     posted_at, first_seen_at, dedup_key, location_lat, location_lng, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const UPDATE_SQL = `UPDATE jobs SET
     company_id = ?, title = ?,
     locations = CASE WHEN locations IS NULL THEN ? ELSE locations END,
+    location_primary = CASE WHEN locations IS NULL THEN ? ELSE location_primary END,
     employment_type = COALESCE(?, employment_type),
     workplace_type = ?, apply_url = ?, source_url = ?,
     salary_min      = COALESCE(?, salary_min),
@@ -1160,6 +1213,7 @@ export async function batchUpsertJobs(
 
     const locs = normalizeLocationsList(locationRaw, company_slug);
     const locationsJson = locs && locs.length > 0 ? JSON.stringify(locs) : null;
+    const locationPrimary = locs && locs.length > 0 ? locs[0]! : null;
     const existing = existingMap.get(external_id);
 
     // D1 rejects `undefined` bindings with a cryptic type error — coerce every
@@ -1189,7 +1243,7 @@ export async function batchUpsertJobs(
     if (!existing) {
       inserts.push(
         db.prepare(INSERT_SQL).bind(
-          id, company_id, source_id, external_id, title, locationsJson,
+          id, company_id, source_id, external_id, title, locationsJson, locationPrimary,
           n(detectedEt), n(workplace_type), n(detectedSl), apply_url, n(source_url), source_name,
           n(description_raw), detectedLang,
           n(effectiveSalaryMin), n(effectiveSalaryMax), n(effectiveSalaryCurrency), n(effectiveSalaryPeriod),
@@ -1214,6 +1268,7 @@ export async function batchUpsertJobs(
         db.prepare(UPDATE_SQL).bind(
           company_id, title,
           locationsJson,
+          locationPrimary,
           n(detectedEt),
           n(workplace_type), apply_url, n(source_url),
           n(updatedSalaryMin), n(updatedSalaryMax), n(updatedSalaryCurrency), n(updatedSalaryPeriod),
@@ -1277,7 +1332,7 @@ export async function getJobsNeedingEmbedding(
     .prepare(`
       SELECT j.id, j.title, c.name AS company_name,
              j.locations,
-             json_extract(j.locations, '$[0]') AS location_primary,
+             COALESCE(j.location_primary, json_extract(j.locations, '$[0]')) AS location_primary,
              j.description_raw
       FROM jobs j
       JOIN companies c ON j.company_id = c.id
@@ -1372,7 +1427,7 @@ function employmentTypeCondition(employment_type: string | undefined): {
  * Omits description_raw and job_description.
  */
 const LIST_JOBS_ROW_SELECT = `      j.id, j.company_id, j.source_id, j.external_id,
-      j.title, j.locations, j.employment_type, j.workplace_type, j.seniority_level,
+      j.title, j.locations, j.location_primary, j.employment_type, j.workplace_type, j.seniority_level,
       j.description_language,
       j.apply_url, j.source_url, j.source_name,
       j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
@@ -1433,11 +1488,10 @@ export async function listJobsByIds(
     chunks.push(ids.slice(i, i + D1_IN_CHUNK));
   }
 
-  const allRows: ListJobsRow[] = [];
-  for (const chunk of chunks) {
-    const rows = await listJobsByIdsChunk(db, chunk, filter);
-    allRows.push(...rows);
-  }
+  const chunkResults = await Promise.all(
+    chunks.map((chunk) => listJobsByIdsChunk(db, chunk, filter))
+  );
+  const allRows = chunkResults.flat();
 
   // Re-sort by the original Vectorize similarity order across all chunks
   const idOrder = new Map(ids.map((id, i) => [id, i]));
@@ -1573,6 +1627,7 @@ export interface ListJobsRow {
   external_id: string;
   title: string;
   locations: string | null;  // serialized JSON array; locations[0] is primary display value
+  location_primary: string | null;
   employment_type: import("../types.ts").EmploymentType | null;
   workplace_type: import("../types.ts").WorkplaceType | null;
   seniority_level: import("../types.ts").SeniorityLevel | null;
@@ -1831,7 +1886,10 @@ export async function listJobs(
     try {
       const decoded = atob(filter.cursor);
       const [ts, id] = decoded.split(":");
-      conditions.push("(j.posted_at < ? OR (j.posted_at = ? AND j.id < ?))");
+      // Must match ORDER BY and buildRegularCursor (posted_at ?? first_seen_at).
+      conditions.push(
+        "(COALESCE(j.posted_at, j.first_seen_at) < ? OR (COALESCE(j.posted_at, j.first_seen_at) = ? AND j.id < ?))"
+      );
       bindings.push(Number(ts), Number(ts), id);
     } catch {
       // Malformed cursor: ignore and start from beginning
@@ -1855,7 +1913,7 @@ ${LIST_JOBS_ROW_SELECT}
   // and re-counting the full table on every paginated request is wasteful.
   if (filter.cursor) {
     const dataResult = await db
-      .prepare(`${selectJoined} ORDER BY j.posted_at DESC, j.id DESC LIMIT ?`)
+      .prepare(`${selectJoined} ORDER BY COALESCE(j.posted_at, j.first_seen_at) DESC, j.id DESC LIMIT ?`)
       .bind(...bindings, filter.limit)
       .all<ListJobsRow>();
     return { rows: dataResult.results ?? [], total: null };
@@ -1868,7 +1926,7 @@ ${LIST_JOBS_ROW_SELECT}
       .bind(...bindings)
       .first<{ n: number }>(),
     db
-      .prepare(`${selectJoined} ORDER BY j.posted_at DESC, j.id DESC LIMIT ?`)
+      .prepare(`${selectJoined} ORDER BY COALESCE(j.posted_at, j.first_seen_at) DESC, j.id DESC LIMIT ?`)
       .bind(...bindings, filter.limit)
       .all<ListJobsRow>(),
   ]);
@@ -2285,14 +2343,14 @@ export async function getLocationsNeedingGeocode(
 ): Promise<Array<{ location: string }>> {
   const { results } = await db
     .prepare(
-      `SELECT json_extract(locations, '$[0]') AS location,
+      `SELECT COALESCE(location_primary, json_extract(locations, '$[0]')) AS location,
               MAX(COALESCE(posted_at, first_seen_at)) AS newest
        FROM jobs
        WHERE locations IS NOT NULL
-         AND json_extract(locations, '$[0]') IS NOT NULL
-         AND json_extract(locations, '$[0]') != ''
+         AND COALESCE(location_primary, json_extract(locations, '$[0]')) IS NOT NULL
+         AND COALESCE(location_primary, json_extract(locations, '$[0]')) != ''
          AND location_lat IS NULL AND location_lng IS NULL
-       GROUP BY json_extract(locations, '$[0]')
+       GROUP BY COALESCE(location_primary, json_extract(locations, '$[0]'))
        ORDER BY newest DESC
        LIMIT ?`
     )
@@ -2314,7 +2372,7 @@ export async function updateJobsWithCoords(
   const result = await db
     .prepare(
       `UPDATE jobs SET location_lat = ?, location_lng = ?
-       WHERE json_extract(locations, '$[0]') = ?`
+       WHERE COALESCE(location_primary, json_extract(locations, '$[0]')) = ?`
     )
     .bind(lat, lng, location)
     .run();
@@ -2447,6 +2505,16 @@ export async function listJobsNear(
     conditions.push("j.visa_sponsorship = ?");
     bindings.push(visa_sponsorship);
   }
+
+  // Bounding-box prefilter before Haversine — ~111 km per degree latitude; longitude scales with cos(lat).
+  const latRad = (lat * Math.PI) / 180;
+  const cosLat = Math.cos(latRad);
+  const lngScale = Math.max(Math.abs(cosLat), 0.01);
+  const dLat = radius_km / 111.0;
+  const dLng = radius_km / (111.0 * lngScale);
+  conditions.push("j.location_lat BETWEEN ? AND ?");
+  conditions.push("j.location_lng BETWEEN ? AND ?");
+  bindings.push(lat - dLat, lat + dLat, lng - dLng, lng + dLng);
 
   const where = conditions.join(" AND ");
 
@@ -2585,20 +2653,22 @@ export async function getConsiderJobsNeedingDescription(
   // Exclude jobs whose company already has a direct (non-Consider) source in D1 —
   // those jobs will get their description from the direct ATS fetch instead,
   // so fetching again here would be redundant cron work.
+  // CTE materializes once (avoids correlated NOT EXISTS that timed out on large D1 tables).
   const { results } = await db
     .prepare(`
+      WITH has_direct AS (
+        SELECT DISTINCT j2.company_id
+        FROM jobs j2
+        INNER JOIN sources s2 ON j2.source_id = s2.id
+        WHERE s2.source_type != 'consider'
+          AND j2.description_raw IS NOT NULL
+      )
       SELECT j.id, j.apply_url, j.salary_min, j.salary_max, j.salary_currency, j.salary_period,
              j.locations, j.workplace_type
       FROM jobs j
       INNER JOIN sources s ON j.source_id = s.id AND s.source_type = 'consider'
       WHERE j.description_raw IS NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM jobs j2
-          INNER JOIN sources s2 ON j2.source_id = s2.id
-          WHERE j2.company_id = j.company_id
-            AND j2.description_raw IS NOT NULL
-            AND s2.source_type != 'consider'
-        )
+        AND j.company_id NOT IN (SELECT company_id FROM has_direct WHERE company_id IS NOT NULL)
       ORDER BY j.first_seen_at DESC
       LIMIT ?
     `)
@@ -2638,6 +2708,15 @@ export async function backfillJobDescription(
   const now = Math.floor(Date.now() / 1000);
   const { detectLanguage } = await import("../enrichment/language.ts");
   const detectedLang = detectLanguage(fields.description_raw);
+  let locPrimary: string | null = null;
+  if (fields.locations) {
+    try {
+      const arr = JSON.parse(fields.locations) as unknown;
+      if (Array.isArray(arr) && arr.length > 0 && typeof arr[0] === "string") locPrimary = arr[0];
+    } catch {
+      /* ignore invalid JSON */
+    }
+  }
   await db
     .prepare(`
       UPDATE jobs SET
@@ -2650,6 +2729,7 @@ export async function backfillJobDescription(
         salary_currency = CASE WHEN salary_currency IS NULL AND ? IS NOT NULL THEN ? ELSE salary_currency END,
         salary_period   = CASE WHEN salary_period IS NULL AND ? IS NOT NULL THEN ? ELSE salary_period END,
         locations       = CASE WHEN locations IS NULL AND ? IS NOT NULL THEN ? ELSE locations END,
+        location_primary = CASE WHEN locations IS NULL AND ? IS NOT NULL THEN ? ELSE location_primary END,
         workplace_type  = CASE WHEN workplace_type IS NULL AND ? IS NOT NULL THEN ? ELSE workplace_type END,
         employment_type = CASE WHEN employment_type IS NULL AND ? IS NOT NULL THEN ? ELSE employment_type END,
         updated_at      = ?
@@ -2670,6 +2750,7 @@ export async function backfillJobDescription(
       fields.salary_currency ?? null, fields.salary_currency ?? null,
       fields.salary_period ?? null, fields.salary_period ?? null,
       fields.locations ?? null, fields.locations ?? null,
+      fields.locations ?? null, locPrimary,
       fields.workplace_type ?? null, fields.workplace_type ?? null,
       fields.employment_type ?? null, fields.employment_type ?? null,
       now, id
@@ -2719,6 +2800,8 @@ export async function updateJobAiFields(
   } = extras ?? {};
 
   const locationsJson = locations && locations.length > 0 ? JSON.stringify(locations) : null;
+  const locationPrimaryFromAi =
+    locations != null && locations.length > 0 ? locations[0]! : null;
 
   // AI overrides workplace_type and employment_type — it reads the full description
   // and correctly handles remote/hybrid and contract/full-time signals that ATS metadata fields miss.
@@ -2730,6 +2813,7 @@ export async function updateJobAiFields(
            job_description      = ?,
            ai_generated_at      = ?,
            locations            = COALESCE(?, locations),
+           location_primary     = COALESCE(?, location_primary),
            description_language = COALESCE(?, description_language),
            workplace_type       = COALESCE(?, workplace_type),
            employment_type      = COALESCE(?, employment_type),
@@ -2751,6 +2835,7 @@ export async function updateJobAiFields(
       jobDescription,
       now,
       locationsJson,
+      locationPrimaryFromAi,
       description_language ?? null,
       workplace_type ?? null,
       employment_type ?? null,
@@ -2961,11 +3046,29 @@ export interface MarketStats {
   total_sources: number;
 }
 
+const MARKET_STATS_KV_KEY = "market_stats_cache_v1";
+const MARKET_STATS_TTL_SEC = 300;
+
 /**
  * Aggregate statistics for the market overview endpoint.
  * All counts are run in a single D1 batch to minimize round-trips.
+ * When `kv` is set, results are cached for {@link MARKET_STATS_TTL_SEC} seconds.
  */
-export async function getMarketStats(db: D1Database): Promise<MarketStats> {
+export async function getMarketStats(
+  db: D1Database,
+  kv?: KVNamespace
+): Promise<MarketStats> {
+  if (kv) {
+    const raw = await kv.get(MARKET_STATS_KV_KEY);
+    if (raw) {
+      try {
+        return JSON.parse(raw) as MarketStats;
+      } catch {
+        // fall through to D1
+      }
+    }
+  }
+
   const now = Math.floor(Date.now() / 1000);
   const day = 86400;
 
@@ -3001,7 +3104,7 @@ export async function getMarketStats(db: D1Database): Promise<MarketStats> {
     db.prepare("SELECT COUNT(*) AS n FROM sources WHERE enabled = 1"),
   ]);
 
-  return {
+  const stats: MarketStats = {
     total_jobs: (totalResult.results[0] as { n: number })?.n ?? 0,
     jobs_last_24h: (last24hResult.results[0] as { n: number })?.n ?? 0,
     jobs_last_7d: (last7dResult.results[0] as { n: number })?.n ?? 0,
@@ -3012,6 +3115,14 @@ export async function getMarketStats(db: D1Database): Promise<MarketStats> {
     total_companies: (totalCompaniesResult.results[0] as { n: number })?.n ?? 0,
     total_sources: (totalSourcesResult.results[0] as { n: number })?.n ?? 0,
   };
+
+  if (kv) {
+    await kv.put(MARKET_STATS_KV_KEY, JSON.stringify(stats), {
+      expirationTtl: MARKET_STATS_TTL_SEC,
+    });
+  }
+
+  return stats;
 }
 
 /**
@@ -3057,14 +3168,14 @@ export async function listJobsNeedingPlacesGeocode(
   // location_primary = locations[0], the primary normalized location string
   const { results } = await db
     .prepare(
-      `SELECT j.id, json_extract(j.locations, '$[0]') AS location_primary, c.name AS company_name
+      `SELECT j.id, COALESCE(j.location_primary, json_extract(j.locations, '$[0]')) AS location_primary, c.name AS company_name
        FROM jobs j
        JOIN companies c ON c.id = j.company_id
        WHERE c.slug IN (${placeholders})
          AND j.location_lat IS NULL
          AND j.locations IS NOT NULL
-         AND json_extract(j.locations, '$[0]') IS NOT NULL
-         AND json_extract(j.locations, '$[0]') NOT LIKE '%emote%'
+         AND COALESCE(j.location_primary, json_extract(j.locations, '$[0]')) IS NOT NULL
+         AND COALESCE(j.location_primary, json_extract(j.locations, '$[0]')) NOT LIKE '%emote%'
        ORDER BY j.first_seen_at DESC
        LIMIT ?`
     )

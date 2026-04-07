@@ -13,7 +13,7 @@
  * For all other ATS (Workday, custom career pages, etc.) we skip gracefully.
  * Those jobs will have description_raw = null and rely on AI summary from title alone.
  *
- * Rate limiting: we process BATCH_SIZE jobs per cron run, with a 200ms delay
+ * Rate limiting: we process BATCH_SIZE jobs per cron run, with a 150ms delay
  * between requests to avoid hammering any single ATS.
  */
 
@@ -21,9 +21,8 @@ import { backfillJobDescription, getConsiderJobsNeedingDescription } from "../db
 import { logger } from "../utils/logger.ts";
 import { normalizeWorkplaceType } from "../utils/normalize.ts";
 
-// 500 jobs/run × 24 runs/day = 12,000/day → ~55k Consider jobs fully described in ~5 days.
-// 500 × 150ms delay = 75s added to cron — within the 900s budget given ~15 boards total.
-const BATCH_SIZE = 500;
+// 100 jobs/run keeps wall time (~15s delay + fetches) within the :30 cron budget.
+const BATCH_SIZE = 100;
 const REQUEST_DELAY_MS = 150;
 
 const HEADERS = {
@@ -196,7 +195,13 @@ export async function backfillConsiderDescriptions(
   db: D1Database,
   limit = BATCH_SIZE
 ): Promise<{ succeeded: number; skipped: number; failed: number }> {
-  const jobs = await getConsiderJobsNeedingDescription(db, limit);
+  let jobs: Awaited<ReturnType<typeof getConsiderJobsNeedingDescription>>;
+  try {
+    jobs = await getConsiderJobsNeedingDescription(db, limit);
+  } catch (err) {
+    logger.warn("consider_description_query_failed", { error: String(err) });
+    return { succeeded: 0, skipped: 0, failed: 0 };
+  }
   if (jobs.length === 0) return { succeeded: 0, skipped: 0, failed: 0 };
 
   logger.info("consider_description_backfill_started", { count: jobs.length });

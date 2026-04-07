@@ -7,10 +7,8 @@
  *   - The MCP get_market_overview tool
  *   - Internal monitoring of ingestion health
  *
- * All counts are fetched in a single D1 batch (one round-trip) so this
- * endpoint is fast even on a large dataset. Results are not cached at
- * the API layer — the database query itself is cheap enough that caching
- * adds more complexity than it saves at this scale.
+ * All counts are fetched in a single D1 batch (one round-trip). Responses are
+ * cached in KV for five minutes to cap load as the jobs table grows.
  *
  * Response shape is intentionally flat and simple so frontends can
  * consume it without transformation.
@@ -35,6 +33,6 @@ export async function handleGetStats(
 
   recordKeyUsage(env.JOBS_DB, auth.key.id, ctx);
 
-  const stats = await getMarketStats(env.JOBS_DB);
+  const stats = await getMarketStats(env.JOBS_DB, env.RATE_LIMIT_KV);
   return jsonOk(stats);
 }

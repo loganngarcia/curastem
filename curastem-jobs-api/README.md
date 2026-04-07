@@ -31,6 +31,20 @@ API (per request)
   Auth middleware → Rate limiter → Route handler → D1 query → [lazy AI extraction] → JSON response
 ```
 
+### Queues (Cloudflare Queues)
+
+One **ingestion** message per enabled source each hour (`curastem-ingestion`). Consumers run `processSource` with inline embeddings and isolated CPU or subrequest budgets. One **enrichment** message per company touched by a source run (`curastem-enrichment`) for Exa plus Logo.dev or Brandfetch plus Gemini.
+
+Create queues once (already done in production):
+
+```bash
+wrangler queues create curastem-ingestion
+wrangler queues create curastem-enrichment
+wrangler queues create curastem-ingestion-dlq
+```
+
+The `:30` cron runs embedding or geocode and description backfills plus batch Exa or company enrichment for backlog rows.
+
 ### Separation of concerns
 
 | Concept | Table | Notes |

@@ -23,13 +23,16 @@ High-level context for AI agents. Use this for orientation and principles; disco
 - What's most important is open-source maintainability. This is a large-scale open-source project that thousands of developers need to understand clearly and rely on to be stable and rapidly ship new features for production-ready workflows. 
 
 **Jobs API**
-- Use Cloudflare MCP for any Cloudflare operations, when available
-- Some ATS create empty company listings; before adding any company, make sure it returns job listings. 
+- Use Cloudflare MCP for any Cloudflare interactions and operations, when available
+- Always deploy any Cloudflare changes without asking
+- When adding companies, always make sure each properly return jobs and job descriptions. Say the count in chat for each company added.
+- **D1 schema changes** — one PR should update `curastem-jobs-api/schema.sql`, matching `*Row` types in `types.ts`, and any `ensure*Columns` / `ensureJobIndexes` guards in `src/db/queries.ts` so cold databases and docs stay aligned.
 - Job URLs should point directly to the posting page, not a search or filtered list.
-- Locations should be normalized to a consistent format (e.g., "City, ST" or "Remote").
+- Locations should be normalized to a consistent format (e.g., "City, ST" for US, "City, Country" for international, or "Remote").
 - Avoid redundant API calls — skip enrichment when data is already populated.
-- Company logos: keep small (e.g., 64px max); prefer SVG when available.
-- AI enrichment (summary, structured description, salary) uses Gemini; salary only when explicitly found in the text.
+- Company logos: keep small (e.g., 64px max)
+- AI lazy loading enrichment: Gemini for summary, structured description, location, salary, etc
+- Regex enrichment: salary, location, experience level, etc when available
 
 **Framer components** (`web.tsx`, `donorform.tsx`, etc.)
 - Must follow Framer code component conventions: layout annotations, root element with `props.style`, property controls + defaultProps.

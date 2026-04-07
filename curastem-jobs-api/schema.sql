@@ -107,6 +107,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   title           TEXT NOT NULL,
   locations       TEXT,               -- JSON array of normalized city strings, e.g. '["San Francisco, CA","New York, NY"]'
                                       -- null = unknown; locations[0] is the primary display value
+  -- Denormalized mirror of json_extract(locations,'$[0]') for indexed filters and geocode paths.
+  location_primary TEXT,
   employment_type TEXT,               -- "full_time" | "part_time" | "contract" | "internship" | "temporary" | null
   workplace_type  TEXT,               -- "remote" | "hybrid" | "on_site" | null
 
@@ -176,7 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_dedup_key ON jobs (dedup_key);
 CREATE INDEX IF NOT EXISTS idx_jobs_title ON jobs (title);
 -- Geocode backfill: find jobs missing coords, ordered newest-first
 CREATE INDEX IF NOT EXISTS idx_jobs_location_coords ON jobs (location_lat, first_seen_at DESC);
--- No scalar location index on the locations JSON; geocoding uses json_extract(locations, '$[0]')
+CREATE INDEX IF NOT EXISTS idx_jobs_location_primary ON jobs (location_primary);
 CREATE INDEX IF NOT EXISTS idx_jobs_employment_type ON jobs (employment_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_workplace_type ON jobs (workplace_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_seniority_level ON jobs (seniority_level);
@@ -188,6 +190,18 @@ CREATE INDEX IF NOT EXISTS idx_jobs_experience_years ON jobs (experience_years_m
 -- Without this the query requires a full table scan to find un-embedded jobs.
 CREATE INDEX IF NOT EXISTS idx_jobs_embedding_backfill
   ON jobs (embedding_generated_at, first_seen_at DESC);
+
+-- Consider description backfill: consider-source rows missing description, newest-first
+CREATE INDEX IF NOT EXISTS idx_jobs_consider_backfill
+  ON jobs (source_id, first_seen_at DESC) WHERE description_raw IS NULL;
+
+-- Common API filters (listJobs) — composite with recency for selective scans
+CREATE INDEX IF NOT EXISTS idx_jobs_job_country
+  ON jobs (job_country, posted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_salary_min
+  ON jobs (salary_min, posted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_visa_sponsorship
+  ON jobs (visa_sponsorship, posted_at DESC);
 
 -- ──────────────────────────────────────────────────────────────────────────────
 -- company_location_geocodes
@@ -237,3 +251,11 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys (key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys (active);
+-- Auth path: WHERE key_hash = ? AND active = 1 — smaller partial index
+CREATE INDEX IF NOT EXISTS idx_api_keys_active_hash ON api_keys (key_hash) WHERE active = 1;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- Schema change discipline (read before adding columns)
+-- New job/company columns: update this file, types.ts *Row interfaces, and ensure*Columns
+-- in src/db/queries.ts in the same PR so cold D1 and docs stay aligned.
+-- ──────────────────────────────────────────────────────────────────────────────

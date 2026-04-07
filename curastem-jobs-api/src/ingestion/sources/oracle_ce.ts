@@ -10,9 +10,9 @@
  *   GET {origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions  — search / list
  *   GET {origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails — full posting (finder `ById;Id={id}`)
  *
- * Most tenants use list-only ingestion (ShortDescriptionStr). **Marriott** (`company_handle === "marriott"`)
- * additionally batches `ById` detail calls for `ExternalDescriptionStr`, then **`htmlToText`** (same helper
- * as AI enrichment) so `description_raw` is plain text, not markup.
+ * Most tenants use list-only ingestion (ShortDescriptionStr). **Marriott** and **Honeywell** list rows
+ * often omit short copy; those sources batch `ById` detail calls for `ExternalDescriptionStr`, then
+ * **`htmlToText`** (same helper as AI enrichment) so `description_raw` is plain text, not markup.
  * There is no separate “apply URL” in the JSON: apply starts from the CE job page (same URL we store).
  *
  * Finder `findReqs` expects bind variables as a comma-separated list of `key=value` pairs
@@ -167,9 +167,12 @@ export const oracleCeFetcher: JobSource = {
     const { origin, locale, siteNumber } = parseCandidateExperienceUrl(source.base_url);
     const restBase = `${origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions`;
     const companyName = source.name.replace(/\s*\(Oracle CE\)\s*/i, "").trim();
-    /** Large tenants skip N detail HTTP calls; Marriott list payload omits descriptions — hydrate via REST. */
+    /** Large tenants skip N detail HTTP calls; Marriott/Honeywell list payloads omit descriptions — hydrate via REST. */
     const fetchPostingHtml =
-      source.company_handle === "marriott" || source.id === "ce-marriott";
+      source.company_handle === "marriott" ||
+      source.id === "ce-marriott" ||
+      source.company_handle === "honeywell" ||
+      source.id === "oc-honeywell";
 
     const jobs: NormalizedJob[] = [];
     let offset = 0;
@@ -245,7 +248,8 @@ export const oracleCeFetcher: JobSource = {
       }
 
       offset += batch.length;
-      if (batch.length < PAGE_SIZE) break;
+      // Do not stop on short pages alone — some tenants return fewer than `limit` before the last page.
+      if (offset >= totalJobs) break;
     }
 
     if (!fetchPostingHtml || jobs.length === 0) {

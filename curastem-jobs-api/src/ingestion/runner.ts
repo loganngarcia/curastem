@@ -23,16 +23,10 @@ import {
   batchDeleteJobsSupersededByHigherPriority,
   batchGetExistingJobs,
   batchMarkJobsEmbedded,
-  batchSetLanguage,
-  batchSetHeuristicFields,
-  batchSetHeuristicSalary,
   batchUpsertJobs,
   batchGetCompanyLocationCoords,
   upsertCompanyLocationGeocode,
   getJobsNeedingEmbedding,
-  getJobsNeedingHeuristicEnrichment,
-  getJobsNeedingLanguageDetection,
-  getJobsNeedingSalaryEnrichment,
   getLocationsNeedingGeocode,
   getSourceById,
   listEnabledSources,
@@ -48,7 +42,7 @@ import { embedJob } from "../enrichment/ai.ts";
 import { runCompanyEnrichment, runExaEnrichment } from "../enrichment/company.ts";
 import { runCompanyPlacesGeocode } from "../enrichment/placesGeocodeCompanies.ts";
 import { runCompanyWebsiteProbeBatch } from "../enrichment/websiteProbe.ts";
-import { getFetcher, getSourcePriority } from "./registry.ts";
+import { getFetcher, getSourcePriority, SOURCE_PRIORITY } from "./registry.ts";
 import { geocode, geocodeAddress } from "../utils/geocode.ts";
 import { placesGeocode, hasGeocodeableCity, normalizeLocationForGeocode } from "../utils/placesGeocode.ts";
 import { RETAIL_GEOCODE_SLUGS, RETAIL_TITLE_RE } from "../utils/retailGeocode.ts";
@@ -149,6 +143,17 @@ async function processSource(
     return result;
   }
 
+  // Dedup uses getSourcePriority(source_name); missing SOURCE_PRIORITY entry silently becomes 50.
+  if (
+    getSourcePriority(source.source_type) === 50 &&
+    !Object.prototype.hasOwnProperty.call(SOURCE_PRIORITY, source.source_type)
+  ) {
+    logger.warn("source_type_default_priority_not_in_source_priority", {
+      source_id: source.id,
+      source_type: source.source_type,
+    });
+  }
+
   let rawJobs: Awaited<ReturnType<typeof fetcher.fetch>>;
   try {
     const fetchTimeoutMs =
@@ -192,8 +197,8 @@ async function processSource(
   // Optional slice for admin trigger — large single-source runs can exceed D1 limits if processed at once.
   const sliceStart = jobOffset != null && jobOffset > 0 ? jobOffset : 0;
   const sliceEnd = jobLimit != null ? sliceStart + jobLimit : undefined;
-  const jobsToProcess = sliceStart > 0 || sliceEnd != null ? rawJobs.slice(sliceStart, sliceEnd) : rawJobs;
-
+  let jobsToProcess =
+    sliceStart > 0 || sliceEnd != null ? rawJobs.slice(sliceStart, sliceEnd) : rawJobs;
   // ── Phase 1: Upsert unique companies ──────────────────────────────────────
   // Cache slug → companyId so single-company sources (Greenhouse, Lever, Ashby,
   // Workday) only pay 1 D1 subrequest for the company instead of N (one per job).
@@ -285,7 +290,8 @@ async function processSource(
       source.id,
       incomingPriority,
       getSourcePriority,
-      nonDupMetas.map((m) => m.dedupKey)
+      nonDupMetas.map((m) => m.dedupKey),
+      env.JOBS_VECTORS
     );
     if (superseded > 0) {
       logger.info("dedup_superseded_lower_priority", { source_id: source.id, deleted: superseded });
@@ -586,10 +592,13 @@ async function processSource(
 
   // ── Phase 6: Embed new/changed jobs at insert time ─────────────────────────
   // skipEmbeddings=true for single-source admin triggers (30s request limit).
-  // No cap — embed all jobs that need it. Backfill catches any that fail or timeout.
+  // Batched like embedding backfill — same concurrency as cron backfill pass.
+  type EmbedTask = { jobId: string; normalized: (typeof jobsToProcess)[number] };
+  const embedTasks: EmbedTask[] = [];
   for (let i = 0; i < upsertResults.length; i++) {
     const { inserted, needsEmbedding } = upsertResults[i];
-    if (inserted) result.inserted++; else result.updated++;
+    if (inserted) result.inserted++;
+    else result.updated++;
 
     if (
       !skipEmbeddings &&
@@ -597,19 +606,27 @@ async function processSource(
       env.JOBS_VECTORS &&
       env.GEMINI_API_KEY
     ) {
-      const { jobId, normalized } = nonDupMetas[i];
-      try {
-        const vector = await embedJob(
-          env.GEMINI_API_KEY,
+      embedTasks.push({ jobId: nonDupMetas[i].jobId, normalized: nonDupMetas[i].normalized });
+    }
+  }
+
+  for (let i = 0; i < embedTasks.length; i += EMBEDDING_CONCURRENCY) {
+    const chunk = embedTasks.slice(i, i + EMBEDDING_CONCURRENCY);
+    const settled = await Promise.allSettled(
+      chunk.map(({ jobId, normalized }) =>
+        embedJob(
+          env.GEMINI_API_KEY!,
           normalized.title,
           normalized.company_name,
           locationsRawToEmbedString(normalized.location),
           normalized.description_raw
-        );
-        pendingVectors.push({ id: jobId, values: vector });
-      } catch (embedErr) {
-        logger.warn("job_embedding_failed", { job_id: jobId, error: String(embedErr) });
-      }
+        ).then((values) => ({ id: jobId, values }))
+      )
+    );
+    for (let j = 0; j < settled.length; j++) {
+      const r = settled[j];
+      if (r.status === "fulfilled") pendingVectors.push(r.value);
+      else logger.warn("job_embedding_failed", { job_id: chunk[j].jobId, error: String(r.reason) });
     }
   }
 
@@ -640,6 +657,20 @@ async function processSource(
     }
   }
 
+  if (env.ENRICHMENT_QUEUE && uniqueCompanyIds.size > 0) {
+    const ids = [...uniqueCompanyIds];
+    const ENRICH_SEND_CHUNK = 100;
+    try {
+      for (let i = 0; i < ids.length; i += ENRICH_SEND_CHUNK) {
+        await env.ENRICHMENT_QUEUE.sendBatch(
+          ids.slice(i, i + ENRICH_SEND_CHUNK).map((companyId) => ({ body: { companyId } }))
+        );
+      }
+    } catch (qErr) {
+      logger.warn("enrichment_queue_send_failed", { source_id: source.id, error: String(qErr) });
+    }
+  }
+
   await updateSourceFetchResult(db, source.id, now, result.fetched, null);
   result.duration_ms = Date.now() - start;
   return result;
@@ -654,7 +685,7 @@ async function processSource(
  * Worst-case budget per run (5 Getro + 7 Consider sources in initial batch):
  *   500  Getro detail fetches     (5 boards × 100 GETRO_JOBS_PER_RUN + overhead)
  *   182  Consider search-jobs     (7 boards × ~26 fetches each)
- *   100  embedding Gemini fetches ← this constant
+ *   125  embedding Gemini fetches ← this constant
  *   100  geocode Photon fetches
  *   ~50  Workday/Consider description backfills
  *   ~30  Exa / Brandfetch enrichment fetches
@@ -663,7 +694,8 @@ async function processSource(
  *
  * Speed: requests run 5 concurrent → 100 / 5 = 20 batches × ~250ms = ~5s wall clock.
  */
-const EMBEDDING_BACKFILL_BATCH = 100;
+// Slightly higher because queue-driven ingestion can still leave gaps if a source times out.
+const EMBEDDING_BACKFILL_BATCH = 125;
 const EMBEDDING_CONCURRENCY    = 5;
 
 /**
@@ -773,96 +805,6 @@ async function backfillGeocode(env: Env): Promise<void> {
   }
 }
 
-// Pure CPU — no network. 2,000 jobs × ~0.1ms each ≈ 200ms per run.
-const LANGUAGE_BACKFILL_BATCH = 2000;
-
-async function backfillLanguage(env: Env): Promise<void> {
-  const { detectLanguage } = await import("../enrichment/language.ts");
-  const jobs = await getJobsNeedingLanguageDetection(env.JOBS_DB, LANGUAGE_BACKFILL_BATCH);
-  if (jobs.length === 0) return;
-
-  const detected: Array<{ id: string; description_language: string }> = [];
-  for (const job of jobs) {
-    const lang = detectLanguage(job.description_raw);
-    if (lang) detected.push({ id: job.id, description_language: lang });
-  }
-
-  await batchSetLanguage(env.JOBS_DB, detected);
-  logger.info("language_backfill_completed", {
-    processed: jobs.length,
-    detected: detected.length,
-    null_result: jobs.length - detected.length,
-  });
-}
-
-// Pure CPU regex — no network. 5,000 jobs × ~0.2ms each ≈ 1s per run.
-const HEURISTIC_BACKFILL_BATCH = 5000;
-
-/**
- * Backfill heuristic employment_type and seniority_level for existing jobs that
- * have a description but were ingested before regex detection was added.
- *
- * Runs at the end of every cron, newest-first so recently posted jobs are
- * classified first. A job is skipped once both fields are non-null.
- */
-async function backfillHeuristicFields(env: Env): Promise<void> {
-  const { detectEmploymentTypeFromText, detectSeniorityFromText } = await import("../utils/normalize.ts");
-  const jobs = await getJobsNeedingHeuristicEnrichment(env.JOBS_DB, HEURISTIC_BACKFILL_BATCH);
-  if (jobs.length === 0) return;
-
-  const rows: Array<{ id: string; employment_type: string | null; seniority_level: string | null }> = [];
-  for (const job of jobs) {
-    const et = job.employment_type ?? detectEmploymentTypeFromText(job.title, job.description_raw);
-    const sl = job.seniority_level ?? detectSeniorityFromText(job.title, job.description_raw);
-    // Only write if we detected at least one new value
-    if (et !== job.employment_type || sl !== job.seniority_level) {
-      rows.push({ id: job.id, employment_type: et, seniority_level: sl });
-    }
-  }
-
-  await batchSetHeuristicFields(env.JOBS_DB, rows);
-  logger.info("heuristic_backfill_completed", {
-    processed: jobs.length,
-    updated: rows.length,
-    no_change: jobs.length - rows.length,
-  });
-}
-
-// Pure CPU regex — no network. 5,000 jobs × ~0.2ms each ≈ 1s per run.
-const SALARY_BACKFILL_BATCH = 5000;
-
-/**
- * Backfill regex-detected salary fields for jobs that have a description but
- * no salary data yet. Runs after the heuristic fields pass — same "pure CPU,
- * no network" budget. Newest-first so recently posted jobs get salary first.
- */
-async function backfillHeuristicSalary(env: Env): Promise<void> {
-  const { extractSalaryFromText } = await import("../utils/normalize.ts");
-  const jobs = await getJobsNeedingSalaryEnrichment(env.JOBS_DB, SALARY_BACKFILL_BATCH);
-  if (jobs.length === 0) return;
-
-  const rows: Array<{ id: string; salary_min: number; salary_max: number | null; salary_currency: string; salary_period: string }> = [];
-  for (const job of jobs) {
-    const detected = extractSalaryFromText(job.description_raw);
-    if (detected.min !== null && detected.period !== null && detected.currency !== null) {
-      rows.push({
-        id:              job.id,
-        salary_min:      detected.min,
-        salary_max:      detected.max,
-        salary_currency: detected.currency,
-        salary_period:   detected.period,
-      });
-    }
-  }
-
-  await batchSetHeuristicSalary(env.JOBS_DB, rows);
-  logger.info("salary_backfill_completed", {
-    processed: jobs.length,
-    detected:  rows.length,
-    no_match:  jobs.length - rows.length,
-  });
-}
-
 /**
  * Run ingestion for a single source by ID.
  * Used by the POST /admin/trigger?source=<id> endpoint for synchronous,
@@ -892,80 +834,51 @@ export async function processSourceById(
 }
 
 /**
- * Main ingestion entry point called by the scheduled Worker handler.
+ * Hourly :00 scheduler — enqueue one message per enabled source (see INGESTION_QUEUE consumer).
  */
-export async function runIngestion(env: Env): Promise<void> {
-  const overallStart = Date.now();
-  logger.info("ingestion_started");
-
-  // Fetch up to MAX_SOURCES candidates; stop early if elapsed time exceeds the
-  // SOURCE_BUDGET_MS threshold so backfill passes always get a guaranteed time slice.
-  // Workers Paid cron limit: 15 minutes (900s). We reserve 500s for backfills,
-  // leaving 400s for source ingestion. Any run that hits a cluster of slow sources
-  // (Workday ~15s, a16z ~46s) will stop early rather than starving the backfills.
-  const MAX_SOURCES = 50;
-  const SOURCE_BUDGET_MS = 400_000; // 400s — leaves 500s for embedding + desc + geocode backfills
-
-  const sources = await listEnabledSources(env.JOBS_DB, MAX_SOURCES);
-  logger.info("ingestion_sources_loaded", { count: sources.length });
-  if (env.RATE_LIMIT_KV) {
-    await env.RATE_LIMIT_KV.put(
-      "cron_stage",
-      `run_ingestion:${sources.length}_sources`,
-      { expirationTtl: 3600 }
-    );
+export async function enqueueIngestionSources(env: Env): Promise<{ enqueued: number }> {
+  const sources = await listEnabledSources(env.JOBS_DB, 150);
+  if (!env.INGESTION_QUEUE) {
+    throw new Error("INGESTION_QUEUE binding missing — check wrangler.jsonc queues.producers");
   }
+  const bodies = sources.map((s) => ({ body: { sourceId: s.id } }));
+  let enqueued = 0;
+  const CHUNK = 100;
+  for (let i = 0; i < bodies.length; i += CHUNK) {
+    await env.INGESTION_QUEUE.sendBatch(bodies.slice(i, i + CHUNK));
+    enqueued += Math.min(CHUNK, bodies.length - i);
+  }
+  logger.info("ingestion_sources_enqueued", { count: enqueued });
+  return { enqueued };
+}
 
-  const results: IngestionResult[] = [];
-
-  for (const source of sources) {
-    const elapsed = Date.now() - overallStart;
-    if (elapsed > SOURCE_BUDGET_MS) {
-      logger.warn("ingestion_source_budget_exceeded", {
-        elapsed_ms: elapsed,
-        sources_processed: results.length,
-        sources_remaining: sources.length - results.length,
-      });
-      break;
-    }
-    logger.info("ingestion_source_started", { source_id: source.id, source_name: source.name });
-    let result: IngestionResult;
+/**
+ * INGESTION_QUEUE consumer — one source per invocation (isolated CPU / subrequest budget).
+ * Inline embeddings enabled; companies are sent to ENRICHMENT_QUEUE after upsert.
+ */
+export async function ingestSourceFromQueue(env: Env, sourceId: string): Promise<void> {
+  const source = await getSourceById(env.JOBS_DB, sourceId);
+  if (!source) {
+    logger.warn("ingestion_queue_unknown_source", { source_id: sourceId });
+    return;
+  }
+  try {
+    await processSource(env, source, false);
+  } catch (err) {
+    const errStr = String(err);
+    logger.error("ingestion_queue_source_crashed", { source_id: source.id, error: errStr });
     try {
-      result = await processSource(env, source, false);
-    } catch (err) {
-      // Unexpected error that escaped processSource's own error handling — log and continue.
-      // Always mark last_fetched_at so this source doesn't permanently block the queue.
-      const errStr = String(err);
-      logger.error("ingestion_source_crashed", { source_id: source.id, error: errStr });
-      try {
-        await updateSourceFetchResult(env.JOBS_DB, source.id, Math.floor(Date.now() / 1000), 0, errStr);
-      } catch { /* ignore — best effort */ }
-      result = {
-        source_id: source.id, source_name: source.name,
-        fetched: 0, inserted: 0, updated: 0, skipped: 0,
-        deduplicated: 0, failed: 0,
-        error: errStr, duration_ms: 0,
-      };
-    }
-    logger.ingestionResult(result);
-    results.push(result);
+      await updateSourceFetchResult(env.JOBS_DB, source.id, Math.floor(Date.now() / 1000), 0, errStr);
+    } catch { /* best effort */ }
+    throw err;
   }
+}
 
-  const summary = {
-    sources_processed: results.length,
-    sources_errored: results.filter((r) => r.error !== null).length,
-    total_fetched: results.reduce((s, r) => s + r.fetched, 0),
-    total_inserted: results.reduce((s, r) => s + r.inserted, 0),
-    total_updated: results.reduce((s, r) => s + r.updated, 0),
-    total_skipped: results.reduce((s, r) => s + r.skipped, 0),
-    total_deduplicated: results.reduce((s, r) => s + r.deduplicated, 0),
-    total_failed: results.reduce((s, r) => s + r.failed, 0),
-    duration_ms: Date.now() - overallStart,
-  };
-  logger.ingestionSummary(summary);
-
-  // Exa enrichment — primary source for company profile, social links, HQ, etc.
-  // Runs before Brandfetch so Brandfetch only fills what Exa left null.
+/**
+ * :30 cron — batch Exa/company enrichment backlog, website probes, embedding/geocode/description backfills.
+ * Per-source ingestion + per-company enrichment run via queues on their own schedules.
+ */
+export async function runBackfillPipelineBody(env: Env): Promise<void> {
   if (env.EXA_API_KEY) {
     try {
       await runExaEnrichment(env.JOBS_DB, env.EXA_API_KEY, env.LOGO_DEV_TOKEN);
@@ -976,7 +889,6 @@ export async function runIngestion(env: Env): Promise<void> {
     logger.warn("exa_enrichment_skipped", { reason: "EXA_API_KEY not set" });
   }
 
-  // Brandfetch + AI description — fallback for fields Exa left null.
   if (env.GEMINI_API_KEY) {
     try {
       await runCompanyEnrichment(env.JOBS_DB, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN, 50);
@@ -993,26 +905,17 @@ export async function runIngestion(env: Env): Promise<void> {
     logger.error("website_probe_cron_failed", { error: String(err) });
   }
 
-  // Embedding backfill — generates Vectorize vectors for any jobs that were
-  // ingested but never embedded (e.g. from a previous cron run that timed out
-  // mid-embedding, or jobs that predated the Vectorize integration).
-  // Runs last so ingestion always completes even if the backfill is slow.
   try {
     await backfillEmbeddings(env);
   } catch (err) {
     logger.error("embedding_backfill_cron_failed", { error: String(err) });
   }
-
-  // Geocode backfill — populates location_lat/lng for distance-based "jobs near you".
-  // Nominatim: 1 req/sec. We do 10 locations per run.
   try {
     await backfillGeocode(env);
   } catch (err) {
     logger.error("geocode_backfill_cron_failed", { error: String(err) });
   }
 
-  // Places API geocoding — company HQ coords for newly enriched companies only.
-  // Per-job geocoding for retail chains runs inline during ingestion (above), not here.
   if (env.GOOGLE_MAPS_API_KEY) {
     try {
       await runCompanyPlacesGeocode(env.JOBS_DB, env.GOOGLE_MAPS_API_KEY, env.RATE_LIMIT_KV);
@@ -1021,49 +924,14 @@ export async function runIngestion(env: Env): Promise<void> {
     }
   }
 
-  // Consider description backfill — fetches full job descriptions from the native
-  // ATS (Greenhouse/Lever/Ashby) for jobs ingested via the Consider portfolio API,
-  // which does not include descriptions in its search response.
-  // 50 jobs/run × 200ms delay = ~10s. At 24 runs/day, 15k jobs clear in ~12.5 days.
   try {
     await backfillConsiderDescriptions(env.JOBS_DB);
   } catch (err) {
     logger.error("consider_description_backfill_cron_failed", { error: String(err) });
   }
-
-  // Workday list API only returns bulletFields (a brief teaser), not the full description.
-  // 100 jobs/run × 200ms delay = ~20s. At 24 runs/day, ~5k jobs clear in ~2 days.
   try {
     await backfillWorkdayDescriptions(env.JOBS_DB);
   } catch (err) {
     logger.error("workday_description_backfill_cron_failed", { error: String(err) });
-  }
-
-  // Language detection backfill — runs the heuristic detector on jobs that have a
-  // description but no language tag yet (e.g. jobs ingested before this feature shipped).
-  // Pure CPU, no network calls, so 2,000/run is fast (~200ms) and clears the backlog quickly.
-  try {
-    await backfillLanguage(env);
-  } catch (err) {
-    logger.error("language_backfill_cron_failed", { error: String(err) });
-  }
-
-  // Heuristic field backfill — populates employment_type and seniority_level for
-  // existing jobs that were ingested before regex detection was introduced.
-  // Pure CPU regex, no network — 5,000/run ≈ 1s. At 24 runs/day, the backlog
-  // of ~170k jobs clears in ~1–2 days.
-  try {
-    await backfillHeuristicFields(env);
-  } catch (err) {
-    logger.error("heuristic_backfill_cron_failed", { error: String(err) });
-  }
-
-  // Salary backfill — regex-scans descriptions for pay transparency disclosures
-  // (California requires salary ranges on every posting). Pure CPU, no network.
-  // 5,000/run × 24/day clears a 120k-job backlog in ~1 day.
-  try {
-    await backfillHeuristicSalary(env);
-  } catch (err) {
-    logger.error("salary_heuristic_backfill_cron_failed", { error: String(err) });
   }
 }

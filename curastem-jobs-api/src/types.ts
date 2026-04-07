@@ -54,9 +54,9 @@ export interface Env {
    */
   BROWSER: Fetcher;
   /**
-   * Brandfetch API key for company enrichment (logo, LinkedIn, X, Glassdoor).
-   * Free tier: 500 requests/day — get a key at brandfetch.com/developers.
-   * Optional: enrichment falls back to Clearbit logo + slug inference if unset.
+   * Brandfetch API key — fallback for logos when Logo.dev has no asset, and for
+   * LinkedIn / X / Glassdoor when Exa left them null. Logos prefer Logo.dev first.
+   * Free tier: 500 requests/day — brandfetch.com/developers
    */
   BRANDFETCH_CLIENT_ID?: string;
   /**
@@ -85,6 +85,26 @@ export interface Env {
    * Set via: wrangler secret put GOOGLE_MAPS_API_KEY
    */
   GOOGLE_MAPS_API_KEY?: string;
+  /**
+   * Producer: hourly scheduler sends one message per enabled source id.
+   * Consumer: runs full `processSource` with inline embeddings (isolated CPU/subrequest budget).
+   */
+  INGESTION_QUEUE: Queue<IngestionQueueMessage>;
+  /**
+   * Producer: after each source ingestion, one message per affected company id.
+   * Consumer: Exa profile + social + Logo.dev + Brandfetch + Gemini for that company.
+   */
+  ENRICHMENT_QUEUE: Queue<EnrichmentQueueMessage>;
+}
+
+/** Payload for {@link Env.INGESTION_QUEUE}. */
+export interface IngestionQueueMessage {
+  sourceId: string;
+}
+
+/** Payload for {@link Env.ENRICHMENT_QUEUE}. */
+export interface EnrichmentQueueMessage {
+  companyId: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -158,6 +178,8 @@ export interface JobRow {
   external_id: string;
   title: string;
   locations: string | null;  // serialized JSON array, e.g. '["San Francisco, CA"]'; locations[0] is primary
+  /** Denormalized locations[0] — kept in sync on write for indexed geocode paths. */
+  location_primary: string | null;
   employment_type: EmploymentType | null;
   workplace_type: WorkplaceType | null;
   apply_url: string;

@@ -87,6 +87,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-stubhubinc",    name: "StubHub (Greenhouse)",       source_type: "greenhouse", company_handle: "stubhubinc",    base_url: "https://boards-api.greenhouse.io/v1/boards/stubhubinc/jobs" },
   { id: "gh-squarespace",   name: "Squarespace (Greenhouse)",   source_type: "greenhouse", company_handle: "squarespace",   base_url: "https://boards-api.greenhouse.io/v1/boards/squarespace/jobs" },
   { id: "gh-everlane",      name: "Everlane (Greenhouse)",      source_type: "greenhouse", company_handle: "everlane",      base_url: "https://boards-api.greenhouse.io/v1/boards/everlane/jobs" },
+  // Board handle `relyance` (e.g. job-boards.greenhouse.io/embed/job_app?for=relyance&token=…)
+  { id: "gh-relyance",      name: "Relyance AI (Greenhouse)",    source_type: "greenhouse", company_handle: "relyance",      base_url: "https://boards-api.greenhouse.io/v1/boards/relyance/jobs" },
   { id: "gh-renttherunway", name: "Rent the Runway (Greenhouse)", source_type: "greenhouse", company_handle: "renttherunway", base_url: "https://boards-api.greenhouse.io/v1/boards/renttherunway/jobs" },
   { id: "gh-aloyoga",       name: "Alo Yoga (Greenhouse)",      source_type: "greenhouse", company_handle: "aloyoga",       base_url: "https://boards-api.greenhouse.io/v1/boards/aloyoga/jobs" },
   { id: "gh-gorjana",       name: "Gorjana (Greenhouse)",       source_type: "greenhouse", company_handle: "gorjana",       base_url: "https://boards-api.greenhouse.io/v1/boards/gorjana/jobs" },
@@ -195,6 +197,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-transcarent", name: "Transcarent (Greenhouse)", source_type: "greenhouse", company_handle: "transcarent", base_url: "https://boards-api.greenhouse.io/v1/boards/transcarent/jobs" },
   { id: "gh-sigmacomputing", name: "Sigma Computing (Greenhouse)", source_type: "greenhouse", company_handle: "sigmacomputing", base_url: "https://boards-api.greenhouse.io/v1/boards/sigmacomputing/jobs" },
   { id: "gh-quince", name: "Quince (Greenhouse)", source_type: "greenhouse", company_handle: "quince", base_url: "https://boards-api.greenhouse.io/v1/boards/quince/jobs" },
+  // Board handle `quisitivejobs` (e.g. job-boards.greenhouse.io/embed/job_app?for=quisitivejobs&token=…)
+  { id: "gh-quisitive", name: "Quisitive (Greenhouse)", source_type: "greenhouse", company_handle: "quisitivejobs", base_url: "https://boards-api.greenhouse.io/v1/boards/quisitivejobs/jobs" },
   { id: "gh-apolloio", name: "Apollo.io (Greenhouse)", source_type: "greenhouse", company_handle: "apolloio", base_url: "https://boards-api.greenhouse.io/v1/boards/apolloio/jobs" },
   { id: "gh-calm", name: "Calm (Greenhouse)", source_type: "greenhouse", company_handle: "calm", base_url: "https://boards-api.greenhouse.io/v1/boards/calm/jobs" },
   { id: "gh-riotgames", name: "Riot Games (Greenhouse)", source_type: "greenhouse", company_handle: "riotgames", base_url: "https://boards-api.greenhouse.io/v1/boards/riotgames/jobs" },
@@ -247,6 +251,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-senrasystems",     name: "Senra Systems (Greenhouse)",     source_type: "greenhouse", company_handle: "senrasystems",     base_url: "https://boards-api.greenhouse.io/v1/boards/senrasystems/jobs" },
   { id: "gh-stokespacetechnologies", name: "Stoke Space (Greenhouse)", source_type: "greenhouse", company_handle: "stokespacetechnologies", base_url: "https://boards-api.greenhouse.io/v1/boards/stokespacetechnologies/jobs" },
   { id: "gh-superblocks",      name: "Superblocks (Greenhouse)",       source_type: "greenhouse", company_handle: "superblocks",      base_url: "https://boards-api.greenhouse.io/v1/boards/superblocks/jobs" },
+  // Board handle `superset` (super{set} / Hive roles; e.g. job-boards.greenhouse.io/embed/job_app?for=superset&token=…)
+  { id: "gh-superset",         name: "super{set} (Greenhouse)",        source_type: "greenhouse", company_handle: "superset",         base_url: "https://boards-api.greenhouse.io/v1/boards/superset/jobs" },
   { id: "gh-array",            name: "Array (Greenhouse)",             source_type: "greenhouse", company_handle: "array",            base_url: "https://boards-api.greenhouse.io/v1/boards/array/jobs" },
   { id: "gh-augmentcomputing", name: "Augment Code (Greenhouse)",      source_type: "greenhouse", company_handle: "augmentcomputing", base_url: "https://boards-api.greenhouse.io/v1/boards/augmentcomputing/jobs" },
   { id: "gh-lovable",          name: "Lovable (Greenhouse)",           source_type: "greenhouse", company_handle: "lovable",          base_url: "https://boards-api.greenhouse.io/v1/boards/lovable/jobs" },
@@ -356,6 +362,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ab-1password",    name: "1Password (Ashby)",        source_type: "ashby", company_handle: "1password",    base_url: "https://api.ashbyhq.com/posting-api/job-board/1password?includeCompensation=true" },
   { id: "ab-benchling",    name: "Benchling (Ashby)",        source_type: "ashby", company_handle: "benchling",    base_url: "https://api.ashbyhq.com/posting-api/job-board/benchling?includeCompensation=true" },
   { id: "ab-blackbird-labs-inc", name: "Blackbird Labs (Ashby)", source_type: "ashby", company_handle: "blackbird-labs-inc", base_url: "https://api.ashbyhq.com/posting-api/job-board/blackbird-labs-inc?includeCompensation=true" },
+  { id: "ab-bobyard",      name: "Bobyard (Ashby)",          source_type: "ashby", company_handle: "bobyard",      base_url: "https://api.ashbyhq.com/posting-api/job-board/bobyard?includeCompensation=true" },
   { id: "ab-watershed",    name: "Watershed (Ashby)",        source_type: "ashby", company_handle: "watershed",    base_url: "https://api.ashbyhq.com/posting-api/job-board/watershed?includeCompensation=true" },
   { id: "ab-whatnot",      name: "Whatnot (Ashby)",         source_type: "ashby", company_handle: "whatnot",      base_url: "https://api.ashbyhq.com/posting-api/job-board/whatnot?includeCompensation=true" },
   { id: "ab-wealthsimple", name: "Wealthsimple (Ashby)",     source_type: "ashby", company_handle: "wealthsimple", base_url: "https://api.ashbyhq.com/posting-api/job-board/wealthsimple?includeCompensation=true" },
@@ -379,6 +386,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ab-shepherd",     name: "Shepherd (Ashby)",          source_type: "ashby",     company_handle: "shepherd",      base_url: "https://api.ashbyhq.com/posting-api/job-board/shepherd?includeCompensation=true" },
   { id: "ab-kindred",          name: "Kindred (Ashby)",                source_type: "ashby", company_handle: "kindred",          base_url: "https://api.ashbyhq.com/posting-api/job-board/kindred?includeCompensation=true" },
   { id: "ab-tldraw",           name: "tldraw (Ashby)",                 source_type: "ashby", company_handle: "tldraw",           base_url: "https://api.ashbyhq.com/posting-api/job-board/tldraw?includeCompensation=true" },
+  // Public board https://jobs.ashbyhq.com/tradeify (posting-api handle tradeify)
+  { id: "ab-tradeify",         name: "Tradeify (Ashby)",               source_type: "ashby", company_handle: "tradeify",         base_url: "https://api.ashbyhq.com/posting-api/job-board/tradeify?includeCompensation=true" },
   { id: "ab-magicschool",      name: "MagicSchool (Ashby)",            source_type: "ashby", company_handle: "magicschool",      base_url: "https://api.ashbyhq.com/posting-api/job-board/magicschool?includeCompensation=true" },
   { id: "ab-mandolin",         name: "Mandolin (Ashby)",               source_type: "ashby", company_handle: "mandolin",         base_url: "https://api.ashbyhq.com/posting-api/job-board/mandolin?includeCompensation=true" },
   { id: "ab-stacks",           name: "Stacks (Ashby)",                 source_type: "ashby", company_handle: "stacks",           base_url: "https://api.ashbyhq.com/posting-api/job-board/stacks?includeCompensation=true" },
@@ -763,6 +772,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wd-crowdstrike", name: "CrowdStrike", source_type: "workday", company_handle: "crowdstrike", base_url: "https://crowdstrike.wd5.myworkdayjobs.com/wday/cxs/crowdstrike/crowdstrikecareers/jobs" },
   { id: "wd-walmart",   name: "Walmart",    source_type: "workday", company_handle: "walmart",   base_url: "https://walmart.wd5.myworkdayjobs.com/wday/cxs/walmart/WalmartExternal/jobs" },
   { id: "wd-workday",   name: "Workday",    source_type: "workday", company_handle: "workday",   base_url: "https://workday.wd5.myworkdayjobs.com/wday/cxs/workday/Workday/jobs" },
+  { id: "wd-zendesk",   name: "Zendesk (Workday)", source_type: "workday", company_handle: "zendesk", base_url: "https://zendesk.wd1.myworkdayjobs.com/wday/cxs/zendesk/zendesk/jobs" },
   { id: "wd-nvidia",    name: "NVIDIA",     source_type: "workday", company_handle: "nvidia",    base_url: "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs" },
   { id: "wd-boeing",      name: "Boeing",           source_type: "workday", company_handle: "boeing",         base_url: "https://boeing.wd1.myworkdayjobs.com/wday/cxs/boeing/external_subsidiary/jobs" },
   { id: "wd-northrop",    name: "Northrop Grumman", source_type: "workday", company_handle: "ngc",            base_url: "https://ngc.wd1.myworkdayjobs.com/wday/cxs/ngc/Northrop_Grumman_External_Site/jobs" },
@@ -799,6 +809,10 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wd-att",         name: "AT&T",             source_type: "workday", company_handle: "att",            base_url: "https://att.wd1.myworkdayjobs.com/wday/cxs/att/attgeneral/jobs" },
   { id: "wd-wellsfargo",  name: "Wells Fargo",      source_type: "workday", company_handle: "wf",             base_url: "https://wf.wd1.myworkdayjobs.com/wday/cxs/wf/WellsFargoJobs/jobs" },
   { id: "wd-citi",        name: "Citigroup",        source_type: "workday", company_handle: "citi",           base_url: "https://citi.wd5.myworkdayjobs.com/wday/cxs/citi/2/jobs" },
+  // Rocket Mortgage / Rocket Companies — Workday tenant host is still `quickenloans`; board slug `rocket_careers` (CXS + public job URLs).
+  { id: "wd-rocket",      name: "Rocket Companies (Workday)", source_type: "workday", company_handle: "rocket", base_url: "https://quickenloans.wd5.myworkdayjobs.com/wday/cxs/quickenloans/rocket_careers/jobs" },
+  { id: "wd-resmed",      name: "ResMed (Workday)",           source_type: "workday", company_handle: "resmed", base_url: "https://resmed.wd3.myworkdayjobs.com/wday/cxs/resmed/ResMed_External_Careers/jobs" },
+  { id: "wd-pax8",        name: "Pax8 (Workday)",             source_type: "workday", company_handle: "pax8",   base_url: "https://pax8inc.wd12.myworkdayjobs.com/wday/cxs/pax8inc/Pax8Careers/jobs" },
   { id: "wd-cocacola",    name: "Coca-Cola",        source_type: "workday", company_handle: "coke",           base_url: "https://coke.wd1.myworkdayjobs.com/wday/cxs/coke/coca-cola-careers/jobs" },
   { id: "wd-pg",          name: "Procter & Gamble", source_type: "workday", company_handle: "pg",             base_url: "https://pg.wd5.myworkdayjobs.com/wday/cxs/pg/1000/jobs" },
   { id: "wd-mondelez",    name: "Mondelez",         source_type: "workday", company_handle: "mdlz",           base_url: "https://mdlz.wd3.myworkdayjobs.com/wday/cxs/mdlz/external/jobs" },
@@ -1319,6 +1333,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "oc-kroger", name: "Kroger (Oracle CE)", source_type: "oracle_ce", company_handle: "kroger", base_url: "https://eluq.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001" },
   // Marriott — public UI at careers.marriott.com; Oracle CE REST on ejwl FA host (replaces disabled br-marriott browser seed).
   { id: "ce-marriott", name: "Marriott (Oracle CE)", source_type: "oracle_ce", company_handle: "marriott", base_url: "https://ejwl.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/MI_CS_1" },
+  // Honeywell — site slug `Honeywell`; list API omits ShortDescriptionStr (detail `ExternalDescriptionStr` in oracle_ce.ts).
+  { id: "oc-honeywell", name: "Honeywell (Oracle CE)", source_type: "oracle_ce", company_handle: "honeywell", base_url: "https://ibqbjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/Honeywell" },
   // Aramark — WordPress JSON used by careers.aramark.com search SPA (`page-search.js`).
   { id: "ar-aramark", name: "Aramark", source_type: "aramark_careers", company_handle: "aramark", base_url: "https://careers.aramark.com/wp-json/aramark/jobs" },
   { id: "wd-petco",      name: "Petco", source_type: "workday", company_handle: "petco", base_url: "https://petco.wd1.myworkdayjobs.com/wday/cxs/petco/External/jobs" },
@@ -1697,6 +1713,7 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "oc-macys", hours: 48 },
   { id: "oc-albertsons", hours: 48 },
   { id: "oc-kroger", hours: 48 },
+  { id: "oc-honeywell", hours: 48 },
   { id: "ce-marriott", hours: 48 },
   { id: "ar-aramark", hours: 24 },
   { id: "wd-petco", hours: 48 },

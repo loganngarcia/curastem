@@ -8,10 +8,11 @@
  *   2. Exa social deep pass ($0.012) — 9 social links + dynamic 10th slot that
  *      backfills the highest-priority null field from pass 1 (industry, company_type,
  *      hq_city, hq_country, etc.). Run-once, tracked by exa_social_enriched_at.
- *   3. Brandfetch — fallback for logo / any social links still null after Exa.
- *   4. Logo.dev (img.logo.dev) — raster logo by domain when configured; Google
- *      Favicon CDN as fallback.
- *   5. Gemini AI — generates a one-sentence company description from job text.
+ *   3. Logo.dev — primary for logos (`resolveLogoUrl`: img CDN with pk_, or Search API with sk_).
+ *      Google favicon only when Logo.dev has no asset (see `utils/logoUrl.ts`).
+ *   4. Brandfetch — fallback for logo when Logo.dev returns a placeholder; also fills
+ *      LinkedIn / X / Glassdoor when still null after Exa.
+ *   5. Gemini AI — one-sentence company description from job text.
  *
  * Runs after every ingestion cron pass. Non-blocking — failures are logged and
  * skipped so one bad company never stops the rest.
@@ -33,16 +34,18 @@ import {
   listCompaniesWithWordmarkLogo,
   listCompaniesForExaEnrichment,
   listCompaniesForSocialEnrichment,
+  getCompanyById,
   updateCompanyEnrichment,
 } from "../db/queries.ts";
 import { geocode } from "../utils/geocode.ts";
 import { logger } from "../utils/logger.ts";
 import { LOGO_MAX_PX, isLowTrustLogoUrl, resolveLogoUrl, resolveLogoUrlByName } from "../utils/logoUrl.ts";
-import type { CompanyRow } from "../types.ts";
+import type { CompanyRow, Env } from "../types.ts";
 
 const ENRICHMENT_STALE_SECONDS = 7 * 24 * 60 * 60; // full Brandfetch/AI re-enrich every 7 days
 const ENRICHMENT_RETRY_SECONDS = 24 * 60 * 60;     // retry missing fields every 24h
-const EXA_BATCH = 10; // companies per cron run — category + deep run sequentially, well under 10 QPS
+/** Batch Exa pass on :30 cron — larger now that ingestion is queue-isolated per source. */
+const EXA_BATCH = 25;
 
 // ─── Brandfetch ───────────────────────────────────────────────────────────────
 
@@ -160,6 +163,140 @@ const PASS1_BACKFILL_PRIORITY: Array<{
   { key: "linkedin_url",   stale: (v) => !v },
 ];
 
+async function enrichOneCompanyExaProfile(
+  db: D1Database,
+  company: CompanyRow,
+  exaApiKey: string,
+  logoDevToken: string | undefined,
+  now: number
+): Promise<void> {
+  try {
+    const profile = await fetchExaDeepProfileData(company.name, exaApiKey, company.website_url);
+    const fields: Parameters<typeof updateCompanyEnrichment>[2] = {
+      exa_company_enriched_at: now,
+    };
+
+    if (profile) {
+      const inferSuppressed = (company.website_infer_suppressed ?? 0) !== 0;
+
+      if (!company.website_url && profile.website_url && !inferSuppressed)
+        fields.website_url = profile.website_url;
+
+      const logoIsPlaceholder = isLowTrustLogoUrl(company.logo_url);
+      if (logoIsPlaceholder) {
+        const domain = profile.website_url
+          ? extractDomain(profile.website_url)
+          : (company.website_url ? extractDomain(company.website_url) : null);
+        if (domain) fields.logo_url = await resolveLogoUrl(domain, logoDevToken);
+      }
+
+      if (!company.linkedin_url && profile.linkedin_url)                   fields.linkedin_url         = profile.linkedin_url;
+      if (!company.employee_count_range && profile.employee_count_range)   fields.employee_count_range = profile.employee_count_range;
+      if (!company.employee_count && profile.employee_count)               fields.employee_count       = profile.employee_count;
+      if (!company.founded_year && profile.founded_year)                   fields.founded_year         = profile.founded_year;
+      if (!company.hq_address && profile.hq_address)                       fields.hq_address           = profile.hq_address;
+      if (!company.hq_city && profile.hq_city)                             fields.hq_city              = profile.hq_city;
+      if (!company.hq_country && profile.hq_country)                       fields.hq_country           = profile.hq_country;
+      if (!company.industry && profile.industry)                           fields.industry             = profile.industry;
+      if (!company.company_type && profile.company_type)                   fields.company_type         = profile.company_type;
+      if (!company.total_funding_usd && profile.total_funding_usd)         fields.total_funding_usd    = profile.total_funding_usd;
+
+      const needsGeocode = !company.hq_lat && !company.hq_lng;
+      const geocodeTarget = fields.hq_city ?? company.hq_city;
+      if (needsGeocode && geocodeTarget) {
+        try {
+          const coords = await geocode(geocodeTarget);
+          if (coords) {
+            fields.hq_lat = coords.lat;
+            fields.hq_lng = coords.lng;
+          }
+        } catch {
+          /* non-fatal */
+        }
+      }
+    }
+
+    await updateCompanyEnrichment(db, company.id, fields);
+    logger.info("exa_profile_enriched", {
+      company_id: company.id, slug: company.slug,
+      found: !!profile, fields_set: Object.keys(fields).filter((k) => k !== "exa_company_enriched_at"),
+    });
+  } catch (err) {
+    logger.error("exa_profile_failed", { company_id: company.id, slug: company.slug, error: String(err) });
+  }
+}
+
+async function enrichOneCompanyExaSocial(
+  db: D1Database,
+  company: CompanyRow,
+  exaApiKey: string,
+  now: number
+): Promise<void> {
+  try {
+    const fallbackKey =
+      PASS1_BACKFILL_PRIORITY.find(({ key, stale }) => stale(company[key]))?.key ?? null;
+
+    const deep = await fetchExaDeepSocialData(
+      company.name, exaApiKey, company.website_url, fallbackKey, company.industry,
+    );
+    const fields: Parameters<typeof updateCompanyEnrichment>[2] = {
+      exa_social_enriched_at: now,
+    };
+
+    if (deep) {
+      if (!company.x_url && deep.x_url)                     fields.x_url           = deep.x_url;
+      if (!company.instagram_url && deep.instagram_url)      fields.instagram_url   = deep.instagram_url;
+      if (!company.tiktok_url && deep.tiktok_url)            fields.tiktok_url      = deep.tiktok_url;
+      if (!company.github_url && deep.github_url)            fields.github_url      = deep.github_url;
+      if (!company.youtube_url && deep.youtube_url)          fields.youtube_url     = deep.youtube_url;
+      if (!company.glassdoor_url && deep.glassdoor_url)      fields.glassdoor_url   = deep.glassdoor_url;
+      if (!company.crunchbase_url && deep.crunchbase_url)    fields.crunchbase_url  = deep.crunchbase_url;
+      if (!company.huggingface_url && deep.huggingface_url)  fields.huggingface_url = deep.huggingface_url;
+      if (!company.facebook_url && deep.facebook_url)        fields.facebook_url    = deep.facebook_url;
+
+      if (deep.fallback?.key && deep.fallback.raw != null && deep.fallback.raw !== "") {
+        const { key, raw } = deep.fallback;
+        switch (key) {
+          case "industry":
+            fields.industry = normalizeIndustry(raw as string); break;
+          case "company_type":
+            fields.company_type = normalizeCompanyType(raw as string); break;
+          case "hq_city":
+            fields.hq_city = String(raw).trim() || null; break;
+          case "hq_country":
+            fields.hq_country = normalizeCountryCode(raw as string) ?? (String(raw).trim() || null); break;
+          case "employee_count": {
+            const n = Math.round(Number(raw));
+            if (n > 0) {
+              fields.employee_count       = n;
+              fields.employee_count_range = normalizeEmployeeCount(n);
+            }
+            break;
+          }
+          case "founded_year":
+            fields.founded_year = Number(raw) || null; break;
+          case "total_funding_usd":
+            fields.total_funding_usd = Math.round(Number(raw)) || null; break;
+          case "hq_address":
+            fields.hq_address = String(raw).trim() || null; break;
+          case "linkedin_url":
+            fields.linkedin_url = normalizeUrl(raw as string); break;
+        }
+      }
+    }
+
+    await updateCompanyEnrichment(db, company.id, fields);
+    logger.info("exa_social_enriched", {
+      company_id: company.id, slug: company.slug,
+      found: !!deep,
+      fallback_field: fallbackKey,
+      fields_set: Object.keys(fields).filter((k) => k !== "exa_social_enriched_at"),
+    });
+  } catch (err) {
+    logger.error("exa_social_failed", { company_id: company.id, slug: company.slug, error: String(err) });
+  }
+}
+
 /**
  * Run Exa enrichment for companies that have never been enriched.
  * Both passes are run-once — exa_company_enriched_at and exa_social_enriched_at
@@ -182,63 +319,7 @@ export async function runExaEnrichment(
   if (profileCompanies.length > 0) {
     logger.info("exa_profile_started", { count: profileCompanies.length });
     for (const company of profileCompanies) {
-      try {
-        const profile = await fetchExaDeepProfileData(company.name, exaApiKey, company.website_url);
-        // Always mark as attempted — prevents immediate retry on null result
-        const fields: Parameters<typeof updateCompanyEnrichment>[2] = {
-          exa_company_enriched_at: now,
-        };
-
-        if (profile) {
-          const inferSuppressed = (company.website_infer_suppressed ?? 0) !== 0;
-
-          if (!company.website_url && profile.website_url && !inferSuppressed)
-            fields.website_url = profile.website_url;
-
-          // Logo: derive favicon from the resolved domain
-          const logoIsPlaceholder = isLowTrustLogoUrl(company.logo_url);
-          if (logoIsPlaceholder) {
-            const domain = profile.website_url
-              ? extractDomain(profile.website_url)
-              : (company.website_url ? extractDomain(company.website_url) : null);
-            if (domain) fields.logo_url = await resolveLogoUrl(domain, logoDevToken);
-          }
-
-          if (!company.linkedin_url && profile.linkedin_url)                   fields.linkedin_url         = profile.linkedin_url;
-          if (!company.employee_count_range && profile.employee_count_range)   fields.employee_count_range = profile.employee_count_range;
-          if (!company.employee_count && profile.employee_count)               fields.employee_count       = profile.employee_count;
-          if (!company.founded_year && profile.founded_year)                   fields.founded_year         = profile.founded_year;
-          if (!company.hq_address && profile.hq_address)                       fields.hq_address           = profile.hq_address;
-          if (!company.hq_city && profile.hq_city)                             fields.hq_city              = profile.hq_city;
-          if (!company.hq_country && profile.hq_country)                       fields.hq_country           = profile.hq_country;
-          if (!company.industry && profile.industry)                           fields.industry             = profile.industry;
-          if (!company.company_type && profile.company_type)                   fields.company_type         = profile.company_type;
-          if (!company.total_funding_usd && profile.total_funding_usd)         fields.total_funding_usd    = profile.total_funding_usd;
-
-          // Geocode HQ city if we just got a city and don't already have coords
-          const needsGeocode = !company.hq_lat && !company.hq_lng;
-          const geocodeTarget = fields.hq_city ?? company.hq_city;
-          if (needsGeocode && geocodeTarget) {
-            try {
-              const coords = await geocode(geocodeTarget);
-              if (coords) {
-                fields.hq_lat = coords.lat;
-                fields.hq_lng = coords.lng;
-              }
-            } catch {
-              // Non-fatal — coords are enrichment metadata
-            }
-          }
-        }
-
-        await updateCompanyEnrichment(db, company.id, fields);
-        logger.info("exa_profile_enriched", {
-          company_id: company.id, slug: company.slug,
-          found: !!profile, fields_set: Object.keys(fields).filter((k) => k !== "exa_company_enriched_at"),
-        });
-      } catch (err) {
-        logger.error("exa_profile_failed", { company_id: company.id, slug: company.slug, error: String(err) });
-      }
+      await enrichOneCompanyExaProfile(db, company, exaApiKey, logoDevToken, now);
     }
     logger.info("exa_profile_completed", { count: profileCompanies.length });
     // Still companies waiting — skip social pass entirely this cron run.
@@ -251,71 +332,7 @@ export async function runExaEnrichment(
   if (socialCompanies.length > 0) {
     logger.info("exa_social_started", { count: socialCompanies.length });
     for (const company of socialCompanies) {
-      try {
-        // Use the free 10th schema slot to backfill the highest-priority null Pass 1 field.
-        const fallbackKey =
-          PASS1_BACKFILL_PRIORITY.find(({ key, stale }) => stale(company[key]))?.key ?? null;
-
-        const deep = await fetchExaDeepSocialData(
-          company.name, exaApiKey, company.website_url, fallbackKey, company.industry,
-        );
-        const fields: Parameters<typeof updateCompanyEnrichment>[2] = {
-          exa_social_enriched_at: now,
-        };
-
-        if (deep) {
-          if (!company.x_url && deep.x_url)                     fields.x_url           = deep.x_url;
-          if (!company.instagram_url && deep.instagram_url)      fields.instagram_url   = deep.instagram_url;
-          if (!company.tiktok_url && deep.tiktok_url)            fields.tiktok_url      = deep.tiktok_url;
-          if (!company.github_url && deep.github_url)            fields.github_url      = deep.github_url;
-          if (!company.youtube_url && deep.youtube_url)          fields.youtube_url     = deep.youtube_url;
-          if (!company.glassdoor_url && deep.glassdoor_url)      fields.glassdoor_url   = deep.glassdoor_url;
-          if (!company.crunchbase_url && deep.crunchbase_url)    fields.crunchbase_url  = deep.crunchbase_url;
-          if (!company.huggingface_url && deep.huggingface_url)  fields.huggingface_url = deep.huggingface_url;
-          if (!company.facebook_url && deep.facebook_url)        fields.facebook_url    = deep.facebook_url;
-
-          // Apply the Pass 1 fallback field if Exa returned a value for it
-          if (deep.fallback?.key && deep.fallback.raw != null && deep.fallback.raw !== "") {
-            const { key, raw } = deep.fallback;
-            switch (key) {
-              case "industry":
-                fields.industry = normalizeIndustry(raw as string); break;
-              case "company_type":
-                fields.company_type = normalizeCompanyType(raw as string); break;
-              case "hq_city":
-                fields.hq_city = String(raw).trim() || null; break;
-              case "hq_country":
-                fields.hq_country = normalizeCountryCode(raw as string) ?? (String(raw).trim() || null); break;
-              case "employee_count": {
-                const n = Math.round(Number(raw));
-                if (n > 0) {
-                  fields.employee_count       = n;
-                  fields.employee_count_range = normalizeEmployeeCount(n);
-                }
-                break;
-              }
-              case "founded_year":
-                fields.founded_year = Number(raw) || null; break;
-              case "total_funding_usd":
-                fields.total_funding_usd = Math.round(Number(raw)) || null; break;
-              case "hq_address":
-                fields.hq_address = String(raw).trim() || null; break;
-              case "linkedin_url":
-                fields.linkedin_url = normalizeUrl(raw as string); break;
-            }
-          }
-        }
-
-        await updateCompanyEnrichment(db, company.id, fields);
-        logger.info("exa_social_enriched", {
-          company_id: company.id, slug: company.slug,
-          found: !!deep,
-          fallback_field: fallbackKey,
-          fields_set: Object.keys(fields).filter((k) => k !== "exa_social_enriched_at"),
-        });
-      } catch (err) {
-        logger.error("exa_social_failed", { company_id: company.id, slug: company.slug, error: String(err) });
-      }
+      await enrichOneCompanyExaSocial(db, company, exaApiKey, now);
     }
     logger.info("exa_social_completed", { count: socialCompanies.length });
   }
@@ -325,7 +342,7 @@ export async function runExaEnrichment(
   }
 }
 
-// ─── Brandfetch + AI pass ─────────────────────────────────────────────────────
+// ─── Logo.dev + Brandfetch + AI pass ──────────────────────────────────────────
 
 async function enrichCompany(
   db: D1Database,
@@ -407,7 +424,7 @@ async function enrichCompany(
 // ─── Public entry point ───────────────────────────────────────────────────────
 
 /**
- * Logo-only pass — resolves Brandfetch → Logo.dev → Google favicon for every company
+ * Logo-only pass — resolves Logo.dev → Brandfetch → Google favicon for every company
  * with logo_url IS NULL. No staleness gate: this runs immediately after logos are cleared
  * without waiting for the description_enriched_at retry window.
  * Does NOT touch description_enriched_at so it won't re-trigger AI description generation.
@@ -543,10 +560,44 @@ export async function runCompanyEnrichment(
 
   logger.info("company_enrichment_started", { count: companies.length });
 
-  for (const company of companies) {
-    await enrichCompany(db, company, geminiApiKey, brandfetchClientId, logoDevToken);
+  const ENRICH_COMPANY_CONCURRENCY = 3;
+  for (let i = 0; i < companies.length; i += ENRICH_COMPANY_CONCURRENCY) {
+    const slice = companies.slice(i, i + ENRICH_COMPANY_CONCURRENCY);
+    await Promise.all(
+      slice.map((company) =>
+        enrichCompany(db, company, geminiApiKey, brandfetchClientId, logoDevToken)
+      )
+    );
   }
 
   logger.info("company_enrichment_completed", { count: companies.length });
   return companies.length;
+}
+
+/**
+ * Exa profile + social (when needed) + Logo.dev / Brandfetch / Gemini for one company.
+ * Used by {@link Env.ENRICHMENT_QUEUE} consumer after ingestion touches that company.
+ */
+export async function enrichCompanyById(env: Env, companyId: string): Promise<void> {
+  const db = env.JOBS_DB;
+  let company = await getCompanyById(db, companyId);
+  if (!company) return;
+  const now = Math.floor(Date.now() / 1000);
+
+  if (env.EXA_API_KEY) {
+    if (!company.exa_company_enriched_at) {
+      await enrichOneCompanyExaProfile(db, company, env.EXA_API_KEY, env.LOGO_DEV_TOKEN, now);
+      company = await getCompanyById(db, companyId);
+      if (!company) return;
+    }
+    if (company.exa_company_enriched_at && !company.exa_social_enriched_at) {
+      await enrichOneCompanyExaSocial(db, company, env.EXA_API_KEY, now);
+      company = await getCompanyById(db, companyId);
+      if (!company) return;
+    }
+  }
+
+  if (env.GEMINI_API_KEY) {
+    await enrichCompany(db, company, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN);
+  }
 }

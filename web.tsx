@@ -2131,10 +2131,10 @@ function AdCarousel({
 type DebugPanelMode = "off" | "p2p" | "tools"
 
 interface Props {
-    geminiApiKey: string
+    /** Curastem Worker base URL (maps key, Gemini proxy, Live token). Default api.curastem.org. */
+    apiBaseUrl?: string
     skillsApiUrl?: string
     jobsApiUrl?: string
-    googleMapsApiKey?: string
     systemPrompt: string
     accentColor: string
     model: string
@@ -15151,6 +15151,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // Overlays need a laid-out map — first idle means projection/panes are valid
     const [mapHasIdle, setMapHasIdle] = React.useState(false)
     const isDark = themeColors.background !== lightColors.background
+    // Match MapPreviewCard placeholder (large cells while Maps JS loads)
+    const mapLoadingGridG = 47
+    const mapLoadingGridLine = isDark
+        ? "rgba(255,255,255,0.07)"
+        : "rgba(0,0,0,0.06)"
 
     // Load Maps JS API once per page
     React.useEffect(() => {
@@ -15864,29 +15869,23 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 aria-label="Jobs map"
             />
 
-            {/* Waiting for script — only shown when key is present */}
-            {!mapsReady && googleMapsApiKey && (
+            {/* Fullscreen grid placeholder until Maps JS is ready (no “Loading” copy) */}
+            {!mapsReady && (
                 <div
+                    aria-hidden
                     style={{
                         position: "absolute",
                         inset: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: themeColors.backgroundDark,
+                        zIndex: 1,
+                        pointerEvents: "none",
                         borderRadius: panelRadius,
+                        background: [
+                            `repeating-linear-gradient(0deg, transparent, transparent ${mapLoadingGridG}px, ${mapLoadingGridLine} ${mapLoadingGridG}px, ${mapLoadingGridLine} ${mapLoadingGridG + 1}px)`,
+                            `repeating-linear-gradient(90deg, transparent, transparent ${mapLoadingGridG}px, ${mapLoadingGridLine} ${mapLoadingGridG}px, ${mapLoadingGridLine} ${mapLoadingGridG + 1}px)`,
+                            themeColors.backgroundDark,
+                        ].join(","),
                     }}
-                >
-                    <span
-                        style={{
-                            color: textSecondary,
-                            fontSize: 14,
-                            fontFamily: "Inter",
-                        }}
-                    >
-                        {"Loading map…"}
-                    </span>
-                </div>
+                />
             )}
 
             {/* Toolbar — top right, matches Figma spec */}
@@ -18166,9 +18165,10 @@ function MapPreviewCard({
         return `https://maps.googleapis.com/maps/api/staticmap?${params}`
     }, [googleMapsApiKey, geoCoords, isMobile])
 
-    if (!googleMapsApiKey) return null
-
     const bg = isDark ? themeColors.surfaceHighlight : themeColors.surface
+    const gridLine = isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)"
+    // ~48px cells (47px gap + 1px line) so the placeholder grid reads at a glance
+    const g = 47
 
     return (
         <div
@@ -18189,7 +18189,7 @@ function MapPreviewCard({
                 ...style,
             }}
         >
-            {staticMapUrl && (
+            {staticMapUrl ? (
                 <img
                     src={staticMapUrl}
                     alt="Map preview"
@@ -18202,6 +18202,18 @@ function MapPreviewCard({
                         objectFit: "cover",
                         pointerEvents: "none",
                         userSelect: "none",
+                    }}
+                />
+            ) : (
+                <div
+                    aria-hidden
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        background: [
+                            `repeating-linear-gradient(0deg, transparent, transparent ${g}px, ${gridLine} ${g}px, ${gridLine} ${g + 1}px)`,
+                            `repeating-linear-gradient(90deg, transparent, transparent ${g}px, ${gridLine} ${g}px, ${gridLine} ${g + 1}px)`,
+                        ].join(","),
                     }}
                 />
             )}
@@ -23781,10 +23793,9 @@ function mountCurastemDocumentOverscrollGuard(): () => void {
 
 export default function OmegleMentorshipUI(props: Props) {
     const {
-        geminiApiKey,
+        apiBaseUrl = "https://api.curastem.org",
         skillsApiUrl,
         jobsApiUrl = "https://jobs-proxy.curastem.org",
-        googleMapsApiKey = "",
         systemPrompt,
         accentColor,
         model = "gemini-3.1-flash-lite-preview",
@@ -23793,6 +23804,38 @@ export default function OmegleMentorshipUI(props: Props) {
         koahPublisherId = "",
         defaultSuggestions = [],
     } = props
+
+    const apiBase = React.useMemo(
+        () => apiBaseUrl.replace(/\/$/, ""),
+        [apiBaseUrl]
+    )
+
+    const [mapsApiKey, setMapsApiKey] = React.useState<string | null>(null)
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        let cancelled = false
+        fetch(`${apiBase}/auth/maps-key`)
+            .then((r) => (r.ok ? r.json() : {}))
+            .then((d: { key?: string }) => {
+                if (cancelled || !d.key) return
+                setMapsApiKey(d.key)
+            })
+            .catch(() => {})
+        return () => {
+            cancelled = true
+        }
+    }, [apiBase])
+
+    const geminiProxyUrl = React.useCallback(
+        (modelId: string, action: string, stream = false) => {
+            const q = new URLSearchParams()
+            q.set("model", modelId)
+            q.set("action", action)
+            if (stream) q.set("alt", "sse")
+            return `${apiBase}/proxy/gemini?${q.toString()}`
+        },
+        [apiBase]
+    )
 
     const debugPanel: DebugPanelMode = (() => {
         if (debugPanelProp === "p2p" || debugPanelProp === "tools")
@@ -24223,7 +24266,7 @@ Extract this structure:
 Keep emails, phones, and URLs in resumeText exactly as printed in the document.`
 
                 const extractRes = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
+                    `${geminiProxyUrl("gemini-3.1-flash-lite-preview", "generateContent")}`,
                     {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -24373,7 +24416,7 @@ Plain resume:
 ${extracted.resumeText.trim()}`
 
                     const htmlRes = await fetch(
-                        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
+                        `${geminiProxyUrl("gemini-3.1-flash-lite-preview", "generateContent")}`,
                         {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -24434,7 +24477,7 @@ ${extracted.resumeText.trim()}`
                 setIsResumeHtmlPending(false)
             }
         },
-        [geminiApiKey, youName, youSchool, youWork]
+        [geminiProxyUrl, youName, youSchool, youWork]
     )
 
     const handleResumeDownload = React.useCallback(() => {
@@ -25588,7 +25631,7 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
 
     const fetchAiSuggestions = React.useCallback(
         async (lastAiMessageContent: string) => {
-            if (!geminiApiKey || !lastAiMessageContent.trim()) {
+            if (!lastAiMessageContent.trim()) {
                 return
             }
 
@@ -25625,7 +25668,7 @@ Do not include markdown formatting or explanations.`
                 }
 
                 const response = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${SUGGESTION_MODEL_ID}:generateContent?key=${geminiApiKey}`,
+                    `${geminiProxyUrl(SUGGESTION_MODEL_ID, "generateContent")}`,
                     {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -25672,7 +25715,7 @@ Do not include markdown formatting or explanations.`
         // cannot be placed in the deps array (TDZ). broadcastData is a stable useCallback
         // reference, so capturing it via closure is safe and causes no stale-closure bugs.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        [geminiApiKey, captureCurrentContext, isDocOpen, docContent]
+        [geminiProxyUrl, captureCurrentContext, isDocOpen, docContent]
     )
 
     const stopLiveSession = React.useCallback(() => {
@@ -25994,18 +26037,28 @@ Do not include markdown formatting or explanations.`
     }, [cleanup])
 
     const startLiveSession = React.useCallback(async () => {
-        log(`startLiveSession called. API Key present: ${!!geminiApiKey}`)
-        if (!geminiApiKey) {
-            log("Missing Gemini API Key")
-            return
-        }
+        log("startLiveSession called")
         haptic.medium()
 
         const liveModel = "models/gemini-3.1-flash-live-preview"
         log(`Using Live Model: ${liveModel}`)
 
         try {
-            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${geminiApiKey}`
+            const tokenRes = await fetch(`${apiBase}/auth/gemini-token`)
+            if (!tokenRes.ok) {
+                log(`Gemini token fetch failed: ${tokenRes.status}`)
+                return
+            }
+            const tokenJson = (await tokenRes.json()) as {
+                token?: string
+                error?: string
+            }
+            const liveToken = tokenJson.token
+            if (!liveToken) {
+                log("Missing ephemeral token from Worker")
+                return
+            }
+            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(liveToken)}`
             const ws = new WebSocket(url)
             liveClientRef.current = ws
 
@@ -26971,7 +27024,7 @@ Do not include markdown formatting or explanations.`
             stopLiveSession()
         }
     }, [
-        geminiApiKey,
+        apiBase,
         getSystemPromptWithContext,
         isDocOpen,
         docContent,
@@ -27156,14 +27209,14 @@ Do not include markdown formatting or explanations.`
                           Strictly check for: Nudity, sexually explicit content, gore, violence, impersonation, profanity, blatant advertising, scams, or illegal activity.
                           Respond with ONLY "VIOLATION" if found, or "SAFE" if not.`
     ): Promise<string> => {
-        if (!geminiApiKey || evidenceParts.length === 0) return "UNKNOWN"
+        if (evidenceParts.length === 0) return "UNKNOWN"
 
         const moderationModel = "gemini-3.1-flash-lite-preview"
 
         try {
             log("Sending moderation request to Gemini...")
             const response = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${moderationModel}:generateContent?key=${geminiApiKey}`,
+                `${geminiProxyUrl(moderationModel, "generateContent")}`,
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -27252,7 +27305,7 @@ Do not include markdown formatting or explanations.`
                 clearInterval(interval)
             }
         }
-    }, [status, geminiApiKey, model])
+    }, [status, geminiProxyUrl, model])
 
     // --- STATE: AI CHAT (GEMINI) ---
     const [messages, setMessages] = React.useState<Message[]>(() => {
@@ -27648,7 +27701,7 @@ Do not include markdown formatting or explanations.`
 
     const generateChatTitle = React.useCallback(
         async (firstMessageText: string) => {
-            if (!geminiApiKey || !currentChatId) return
+            if (!currentChatId) return
 
             // Skip if title exists or generation is in progress
             const existing = savedChats.find((c) => c.id === currentChatId)
@@ -27664,7 +27717,7 @@ Do not include markdown formatting or explanations.`
                 const prompt = `Summarize this message into a short title (3-5 words). Just the title, no quotes: "${firstMessageText}"`
 
                 const response = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
+                    `${geminiProxyUrl("gemini-3.1-flash-lite-preview", "generateContent")}`,
                     {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -27734,7 +27787,7 @@ Do not include markdown formatting or explanations.`
                 generatingTitleForRef.current.delete(currentChatId)
             }
         },
-        [geminiApiKey, currentChatId, savedChats]
+        [geminiProxyUrl, currentChatId, savedChats]
     )
 
     const saveChatHistory = React.useCallback(
@@ -30571,7 +30624,7 @@ Do not include markdown formatting or explanations.`
             // Disconnect locally and find new
             cleanup()
         },
-        [cleanup, remoteScreenStream, geminiApiKey, model]
+        [cleanup, remoteScreenStream, geminiProxyUrl, model]
     )
 
     const getCurrentStream = () => {
@@ -31987,19 +32040,6 @@ Do not include markdown formatting or explanations.`
             currentAttachments: any[],
             originRole: "user" | "peer"
         ) => {
-            if (!geminiApiKey) {
-                if (originRole === "user") {
-                    setMessages((prev) => [
-                        ...prev,
-                        {
-                            role: "model",
-                            text: "Please provide a Gemini API Key in the properties panel.",
-                        },
-                    ])
-                }
-                return false
-            }
-
             if (abortControllerRef.current) {
                 abortControllerRef.current.abort()
             }
@@ -32775,7 +32815,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 }
 
                 const fetchPromise = fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${geminiApiKey}&alt=sse`,
+                    `${geminiProxyUrl(model, "streamGenerateContent", true)}`,
                     {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -33218,7 +33258,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         // token limits and keep the call fast.
                         try {
                             const followUpRes = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -33303,7 +33343,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         // Follow up with a short contextual message describing what was written.
                         try {
                             const followUpRes = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -33430,7 +33470,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         let followUpRaw = ""
                         try {
                             const res = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -33550,7 +33590,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         }
                         try {
                             const res = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -33676,7 +33716,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         const isResume = toolName === "create_resume"
                         try {
                             const followUpRes = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -33795,7 +33835,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         }
                         try {
                             const res = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -34036,7 +34076,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                   : `The user asked you to draw on the whiteboard: "${userText}". You just added the diagram. In 1–2 sentences describe what you drew and ask one question to refine it. Be friendly. Max 40 words.`
                         try {
                             const wbRes = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -34293,7 +34333,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         const introText = computeDisplayText(accumulatedText)
                         try {
                             const res = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -34462,7 +34502,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             | undefined
                         try {
                             const res = await fetch(
-                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                `${geminiProxyUrl(model, "generateContent")}`,
                                 {
                                     method: "POST",
                                     headers: {
@@ -34570,7 +34610,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 parseSuggestionsFrom(followUpTextRaw)
                                 try {
                                     const followUpRes = await fetch(
-                                        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
+                                        `${geminiProxyUrl(model, "generateContent")}`,
                                         {
                                             method: "POST",
                                             headers: {
@@ -34737,7 +34777,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             messages,
             systemPrompt,
             model,
-            geminiApiKey,
+            geminiProxyUrl,
             isDocOpen,
             getSystemPromptWithContext,
         ]
@@ -36474,7 +36514,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     >
                         <MapAgentPanel
                             jobsApiUrl={jobsApiUrl}
-                            googleMapsApiKey={googleMapsApiKey}
+                            googleMapsApiKey={mapsApiKey ?? ""}
                             themeColors={themeColors}
                             isMobile={isMobileLayout}
                             onClose={() => setIsMapOpen(false)}
@@ -37504,7 +37544,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         jobsApiUrl && (
                             <HomepageJobs
                                 jobsApiUrl={jobsApiUrl}
-                                googleMapsApiKey={googleMapsApiKey}
+                                googleMapsApiKey={mapsApiKey ?? ""}
                                 userQuery={debouncedYouWork}
                                 isMobileLayout={isMobileLayout}
                                 themeColors={themeColors}
@@ -41806,11 +41846,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             ) : null}
                             <div style={{ fontSize: 11, opacity: 0.85 }}>
                                 <span style={{ opacity: 0.7 }}>
-                                    🔑 Gemini key:
+                                    🔑 Gemini:
                                 </span>{" "}
-                                {geminiApiKey?.trim()
-                                    ? "set in Framer"
-                                    : "missing"}
+                                proxied via {apiBaseUrl || "api.curastem.org"}
                             </div>
                             <div
                                 style={{
@@ -41819,9 +41857,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     wordBreak: "break-word",
                                 }}
                             >
-                                AI HTTP:
-                                generativelanguage.googleapis.com/v1beta (key
-                                not logged)
+                                AI HTTP: Worker /proxy/gemini (no client key)
                             </div>
                         </>
                     }
@@ -42754,12 +42790,12 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
 
 // --- FRAMER PROPERTY CONTROLS ---
 addPropertyControls(OmegleMentorshipUI, {
-    geminiApiKey: {
+    apiBaseUrl: {
         type: ControlType.String,
-        title: "Gemini API Key",
-        description: "Enter your API key from Google AI Studio.",
-        defaultValue: "",
-        obscured: true,
+        title: "Curastem API base URL",
+        description:
+            "Cloudflare Worker (api.curastem.org). Serves Maps key, Gemini proxy, and Live tokens. No keys in Framer.",
+        defaultValue: "https://api.curastem.org",
     },
     skillsApiUrl: {
         type: ControlType.String,
@@ -42774,14 +42810,6 @@ addPropertyControls(OmegleMentorshipUI, {
         description:
             "URL of the Curastem Jobs proxy Worker. No API key needed — the key is stored server-side.",
         defaultValue: "https://jobs-proxy.curastem.org",
-    },
-    googleMapsApiKey: {
-        type: ControlType.String,
-        title: "Google Maps API Key",
-        description:
-            "Browser-restricted Maps JavaScript API key. Enable: Maps JavaScript API, Marker library (AdvancedMarkerElement job chips), Geocoding API, Distance Matrix API. Restrict to your site's origin.",
-        defaultValue: "",
-        obscured: true,
     },
     model: {
         type: ControlType.String,
