@@ -8,9 +8,27 @@
  * / `company` from user intent; the worker executes retrieval with those arguments.
  *
  * Direct HTTP clients without an LLM should send explicit terms in `q` (and filters).
+ *
+ * **Comma-separated roles** — Up to {@link MAX_JOB_SEARCH_PHRASES} phrases separated by
+ * commas (e.g. `Product Manager, Software Engineer`) match jobs whose title satisfies
+ * **any** phrase (see {@link jobTitleMatchesCommaSeparatedQuery}). Aligns with vector
+ * embedding, which averages one embedding per phrase.
  */
+export const MAX_JOB_SEARCH_PHRASES = 5;
+
 export function normalizeJobSearchQuery(q: string): string {
   return q.trim().replace(/\s+/g, " ");
+}
+
+/** Comma-separated role phrases for `q` — deduped, capped, trimmed. */
+export function jobSearchPhrasesFromQ(q: string): string[] {
+  const n = normalizeJobSearchQuery(q);
+  if (!n) return [];
+  const parts = n
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return [...new Set(parts)].slice(0, MAX_JOB_SEARCH_PHRASES);
 }
 
 /** Same slug rules as company rows — used for exact employer match alongside title search. */
@@ -25,16 +43,31 @@ export function companySlugFromSearchQuery(q: string): string {
  * Every "significant" token in q must appear in the job title. Stops vector and
  * legacy SQL noise where employer names contained words like "Product" (e.g. CPSC).
  */
+function normalizeSearchToken(t: string): string {
+  return t.replace(/^[,;:.]+|[,;:.]+$/g, "").toLowerCase();
+}
+
 export function jobTitleMatchesSearchTokens(title: string, q: string): boolean {
   const qn = normalizeJobSearchQuery(q).toLowerCase();
   if (!qn) return true;
-  const tokens = qn.split(/\s+/).filter((t) => t.length >= 2);
+  const tokens = qn
+    .split(/\s+/)
+    .map(normalizeSearchToken)
+    .filter((t) => t.length >= 2);
   if (tokens.length === 0) {
     if (qn.length <= 1) return true;
     return title.toLowerCase().includes(qn);
   }
   const tl = title.toLowerCase();
   return tokens.every((t) => tl.includes(t));
+}
+
+/** True if the job title matches every token in any single comma-separated phrase of `q`. */
+export function jobTitleMatchesCommaSeparatedQuery(title: string, q: string): boolean {
+  const phrases = jobSearchPhrasesFromQ(q);
+  if (phrases.length === 0) return true;
+  if (phrases.length === 1) return jobTitleMatchesSearchTokens(title, phrases[0]);
+  return phrases.some((p) => jobTitleMatchesSearchTokens(title, p));
 }
 
 const TITLE_SQL_MAX_TOKENS = 8;
@@ -73,4 +106,24 @@ export function titleSearchTokensForSql(title: string): string[] {
     return [n];
   }
   return [];
+}
+
+/**
+ * `AND` clause + LIKE patterns for GET /jobs/map title filter. Comma-separated `q`
+ * becomes OR of `j.title LIKE` (aligned with GET /jobs multi-phrase SQL).
+ */
+export function mapSqlJobTitleLikeFromQ(q: string | undefined): {
+  sql: string;
+  patterns: string[];
+} | null {
+  const phrases = jobSearchPhrasesFromQ(q ?? "");
+  if (phrases.length === 0) return null;
+  const patterns = phrases.map((p) => `%${p}%`);
+  if (phrases.length === 1) {
+    return { sql: "AND j.title LIKE ?", patterns };
+  }
+  return {
+    sql: `AND (${phrases.map(() => "j.title LIKE ?").join(" OR ")})`,
+    patterns,
+  };
 }

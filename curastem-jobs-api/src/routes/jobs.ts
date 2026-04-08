@@ -39,8 +39,9 @@
  * SQL path (when q= is absent OR vector search is unavailable):
  *   Keyset pagination; q matches j.title (LIKE) or exact c.slug — not c.name substring.
  *
- * Vector path: after hydration, rows must match every significant token in q in j.title
- * so employer names cannot satisfy the search.
+ * Vector path: after hydration, rows must match every significant token in **one** comma-
+ * separated phrase of q in j.title (OR across phrases) so employer names cannot satisfy
+ * the search and multi-role profiles still return relevant jobs.
  *
  * ──────────────────────────────────────────────────────────────────────────
  * CURSOR DESIGN
@@ -61,7 +62,8 @@ import {
 } from "../db/queries.ts";
 import { enrichLocationsWithCountry } from "../utils/locationsDisplay.ts";
 import {
-  jobTitleMatchesSearchTokens,
+  jobTitleMatchesCommaSeparatedQuery,
+  MAX_JOB_SEARCH_PHRASES,
   normalizeJobSearchQuery,
 } from "../utils/jobSearchQuery.ts";
 import { buildPublicSalary, embedQuery } from "../enrichment/ai.ts";
@@ -343,7 +345,7 @@ export async function handleListJobs(
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean)
-        .slice(0, 5);
+        .slice(0, MAX_JOB_SEARCH_PHRASES);
 
       const getEmbedding = async (title: string): Promise<number[]> => {
         const key = `qembed:${title.toLowerCase()}`;
@@ -405,7 +407,7 @@ export async function handleListJobs(
         const qForTitleGate = (titleForSearch ?? qForVector ?? q)?.trim();
         if (qForTitleGate) {
           filteredRows = filteredRows.filter((r) =>
-            jobTitleMatchesSearchTokens(r.title, qForTitleGate)
+            jobTitleMatchesCommaSeparatedQuery(r.title, qForTitleGate)
           );
         }
 

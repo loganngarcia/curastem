@@ -33,6 +33,8 @@ import { normalizeLocationForGeocode } from "../utils/placesGeocode.ts";
 import {
   companySlugFromSearchQuery,
   companySlugsFromFilterParam,
+  jobSearchPhrasesFromQ,
+  mapSqlJobTitleLikeFromQ,
   titleSearchTokensForSql,
 } from "../utils/jobSearchQuery.ts";
 
@@ -1795,17 +1797,27 @@ export async function listJobs(
       }
     }
   } else if (filter.q) {
-    const raw = filter.q.trim();
-    const pattern = `%${raw}%`;
-    const slug = companySlugFromSearchQuery(raw);
-    // Title + exact company slug only — never c.name LIKE (substring matches
-    // "Product" in "Consumer Product Safety Commission" for role queries).
-    if (slug.length >= 2) {
-      conditions.push("(j.title LIKE ? OR c.slug = ?)");
-      bindings.push(pattern, slug);
-    } else {
-      conditions.push("j.title LIKE ?");
-      bindings.push(pattern);
+    const phrases = jobSearchPhrasesFromQ(filter.q);
+    if (phrases.length === 1) {
+      const raw = phrases[0];
+      const pattern = `%${raw}%`;
+      const slug = companySlugFromSearchQuery(raw);
+      // Title + exact company slug only — never c.name LIKE (substring matches
+      // "Product" in "Consumer Product Safety Commission" for role queries).
+      if (slug.length >= 2) {
+        conditions.push("(j.title LIKE ? OR c.slug = ?)");
+        bindings.push(pattern, slug);
+      } else {
+        conditions.push("j.title LIKE ?");
+        bindings.push(pattern);
+      }
+    } else if (phrases.length > 1) {
+      const orParts: string[] = [];
+      for (const raw of phrases) {
+        orParts.push("j.title LIKE ?");
+        bindings.push(`%${raw}%`);
+      }
+      conditions.push(`(${orParts.join(" OR ")})`);
     }
   }
   if (filter.location) {
@@ -1974,6 +1986,65 @@ export interface MapCenter {
   lng: number;
 }
 
+/**
+ * When max(lat span, lng span) exceeds this (degrees), ordering by distance to the
+ * pan center makes every chip hug that point — bad for country-scale views. We
+ * instead bias candidates toward geographic spread, then grid-pick below.
+ * Keep in sync with `MAP_SPREAD_VIEWPORT_DEG` in web.tsx MapAgentPanel.
+ */
+const MAP_SPREAD_VIEWPORT_MAX_SPAN_DEG = 4.2;
+
+/** Round-robin one chip per grid cell so continental zoom shows coasts and interior, not only near map center. */
+function spreadPickMapRows(
+  rows: MapCompanyRow[],
+  bbox: MapBbox,
+  limit: number
+): MapCompanyRow[] {
+  if (rows.length <= limit) return rows;
+  const spanLat = Math.max(bbox.maxLat - bbox.minLat, 1e-9);
+  const spanLng = Math.max(bbox.maxLng - bbox.minLng, 1e-9);
+  const gridN = Math.min(18, Math.max(6, Math.round(Math.sqrt(limit * 1.2))));
+  const buckets = new Map<string, MapCompanyRow[]>();
+  for (const r of rows) {
+    const gx = Math.min(
+      gridN - 1,
+      Math.max(0, Math.floor(((r.chip_lat - bbox.minLat) / spanLat) * gridN))
+    );
+    const gy = Math.min(
+      gridN - 1,
+      Math.max(0, Math.floor(((r.chip_lng - bbox.minLng) / spanLng) * gridN))
+    );
+    const key = `${gx},${gy}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(r);
+  }
+  for (const arr of buckets.values()) {
+    arr.sort((a, b) => b.job_count - a.job_count);
+  }
+  const keys = Array.from(buckets.keys()).sort((a, b) => {
+    const [ax, ay] = a.split(",").map(Number);
+    const [bx, by] = b.split(",").map(Number);
+    return ax - bx || ay - by;
+  });
+  const out: MapCompanyRow[] = [];
+  let round = 0;
+  while (out.length < limit && keys.length > 0) {
+    let added = false;
+    for (const k of keys) {
+      const arr = buckets.get(k)!;
+      if (arr.length > round) {
+        out.push(arr[round]);
+        added = true;
+        if (out.length >= limit) break;
+      }
+    }
+    if (!added) break;
+    round++;
+    if (round > 250) break;
+  }
+  return out.slice(0, limit);
+}
+
 export async function listJobsForMap(
   db: D1Database,
   since: number,
@@ -1994,11 +2065,13 @@ export async function listJobsForMap(
 
   const bindings: unknown[] = [since];
   let qClause = "";
-  if (q && q.trim()) {
+  const titleLike = mapSqlJobTitleLikeFromQ(q);
+  if (titleLike) {
     // Title-only match for map chips — company-name matching causes false-positive chips
     // (e.g. "Descript" appearing for the query "design" with zero matching job titles).
-    qClause = `AND j.title LIKE ?`;
-    bindings.push(`%${q.trim()}%`);
+    // Comma-separated q matches any phrase (same as GET /jobs SQL).
+    qClause = titleLike.sql;
+    bindings.push(...titleLike.patterns);
   }
   let typeClause = "";
   const etMap = employmentTypeCondition(employment_type);
@@ -2018,12 +2091,33 @@ export async function listJobsForMap(
     }
   }
 
-  // Order by squared distance from map center using the chip centroid (AVG expression).
-  // No sqrt needed since we only care about relative order.
-  const orderClause = center
-    ? `ORDER BY (AVG(j.location_lat) - ${center.lat}) * (AVG(j.location_lat) - ${center.lat}) +
-                (AVG(j.location_lng) - ${center.lng}) * (AVG(j.location_lng) - ${center.lng}) ASC`
-    : `ORDER BY job_count DESC`;
+  const spanLat = bbox ? bbox.maxLat - bbox.minLat : 0;
+  const spanLng = bbox ? bbox.maxLng - bbox.minLng : 0;
+  const spreadViewport =
+    !!bbox && Math.max(spanLat, spanLng) >= MAP_SPREAD_VIEWPORT_MAX_SPAN_DEG;
+  const bboxMidLat = bbox ? (bbox.minLat + bbox.maxLat) / 2 : 0;
+  const bboxMidLng = bbox ? (bbox.minLng + bbox.maxLng) / 2 : 0;
+
+  // Local / metro: nearest to pan center. Country-scale: bias toward bbox edges so SQL
+  // returns candidates across regions, then spreadPickMapRows evens the grid.
+  let orderClause: string;
+  if (spreadViewport && bbox) {
+    orderClause = `ORDER BY (
+         ABS(AVG(j.location_lat) - ${bboxMidLat}) +
+         ABS(AVG(j.location_lng) - ${bboxMidLng})
+       ) DESC,
+       COUNT(j.id) DESC,
+       c.id ASC`;
+  } else if (center) {
+    orderClause = `ORDER BY (AVG(j.location_lat) - ${center.lat}) * (AVG(j.location_lat) - ${center.lat}) +
+                (AVG(j.location_lng) - ${center.lng}) * (AVG(j.location_lng) - ${center.lng}) ASC`;
+  } else {
+    orderClause = `ORDER BY job_count DESC`;
+  }
+
+  const sqlLimit = spreadViewport
+    ? Math.min(Math.max(limit * 8, 700), 2000)
+    : Math.min(limit * 3, 500);
 
   const { results } = await db
     .prepare(
@@ -2055,7 +2149,7 @@ export async function listJobsForMap(
                 ROUND(j.location_lat, 1),
                 ROUND(j.location_lng, 1)
        ${orderClause}
-       LIMIT ${Math.min(limit * 3, 500)}`
+       LIMIT ${sqlLimit}`
     )
     .bind(...bindings)
     .all<MapCompanyRow>();
@@ -2069,7 +2163,9 @@ export async function listJobsForMap(
     employment_type,
     seniority_level
   );
-  if (center) {
+  if (spreadViewport && bbox) {
+    rows = spreadPickMapRows(rows, bbox, limit);
+  } else if (center) {
     const cLat = center.lat;
     const cLng = center.lng;
     rows.sort((a, b) => {
@@ -2151,9 +2247,10 @@ async function expandMapRowsWithSecondaryLocations(
 
   const bindings: unknown[] = [since];
   let qClause = "";
-  if (q && q.trim()) {
-    qClause = `AND j.title LIKE ?`;
-    bindings.push(`%${q.trim()}%`);
+  const titleLikeSecondary = mapSqlJobTitleLikeFromQ(q);
+  if (titleLikeSecondary) {
+    qClause = titleLikeSecondary.sql;
+    bindings.push(...titleLikeSecondary.patterns);
   }
   let typeClause = "";
   const etMap = employmentTypeCondition(employment_type);
@@ -2449,15 +2546,25 @@ export async function listJobsNear(
       bindings.push(`%${t}%`);
     }
   } else if (q && q.trim()) {
-    const raw = q.trim();
-    const pattern = `%${raw}%`;
-    const slug = companySlugFromSearchQuery(raw);
-    if (slug.length >= 2) {
-      conditions.push("(j.title LIKE ? OR c.slug = ?)");
-      bindings.push(pattern, slug);
-    } else {
-      conditions.push("j.title LIKE ?");
-      bindings.push(pattern);
+    const phrases = jobSearchPhrasesFromQ(q);
+    if (phrases.length === 1) {
+      const raw = phrases[0];
+      const pattern = `%${raw}%`;
+      const slug = companySlugFromSearchQuery(raw);
+      if (slug.length >= 2) {
+        conditions.push("(j.title LIKE ? OR c.slug = ?)");
+        bindings.push(pattern, slug);
+      } else {
+        conditions.push("j.title LIKE ?");
+        bindings.push(pattern);
+      }
+    } else if (phrases.length > 1) {
+      const orParts: string[] = [];
+      for (const raw of phrases) {
+        orParts.push("j.title LIKE ?");
+        bindings.push(`%${raw}%`);
+      }
+      conditions.push(`(${orParts.join(" OR ")})`);
     }
   }
   if (exclude_ids && exclude_ids.length > 0) {

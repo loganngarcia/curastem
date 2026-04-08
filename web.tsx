@@ -314,6 +314,83 @@ const DEFAULT_DOC_CONTENT = `
 <p>You can start typing or ask Curastem to write resumes, make study guides, draft messages, and anything you can imagine </p>
 `.trim()
 
+/** One saved document in a chat — multiple allowed per thread. */
+interface ChatDocEntry {
+    id: string
+    content: string
+    docType: "doc" | "resume" | "cover_letter"
+    docCompany?: string
+    lastEdited: number
+}
+
+function generateChatDocId(): string {
+    return `cdoc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 11)}`
+}
+
+function migrateLegacyChatDocs(chat: ChatSession): {
+    docs: ChatDocEntry[]
+    activeDocId: string | null
+} {
+    if (chat.docs && chat.docs.length > 0) {
+        const sorted = [...chat.docs].sort((a, b) => b.lastEdited - a.lastEdited)
+        let active = chat.activeDocId ?? null
+        if (!active || !chat.docs.some((d) => d.id === active)) {
+            active = sorted[0]?.id ?? null
+        }
+        return { docs: chat.docs, activeDocId: active }
+    }
+    const notes = chat.notes?.trim() ?? ""
+    if (!notes || notes === DEFAULT_DOC_CONTENT.trim()) {
+        return { docs: [], activeDocId: null }
+    }
+    const id = generateChatDocId()
+    return {
+        docs: [
+            {
+                id,
+                content: chat.notes,
+                docType: chat.docType || "doc",
+                docCompany: chat.docCompany,
+                lastEdited:
+                    chat.docEditorLastEdited || chat.timestamp || Date.now(),
+            },
+        ],
+        activeDocId: id,
+    }
+}
+
+function pickMostRecentDocEntry(docs: ChatDocEntry[]): ChatDocEntry | null {
+    if (!docs.length) return null
+    return [...docs].sort((a, b) => b.lastEdited - a.lastEdited)[0]
+}
+
+function messageShowsDocToolChip(msg: Message): boolean {
+    if (msg.role !== "model") return false
+    if (
+        msg.toolUsed === "doc" ||
+        msg.toolUsed === "resume" ||
+        msg.toolUsed === "cover_letter"
+    )
+        return true
+    const n = msg.functionCall?.name
+    return (
+        n === "update_doc" ||
+        n === "create_resume" ||
+        n === "create_cover_letter"
+    )
+}
+
+function docCallTypeFromMessage(msg: Message): "doc" | "resume" | "cover_letter" {
+    if (msg.toolUsed === "resume" || msg.functionCall?.name === "create_resume")
+        return "resume"
+    if (
+        msg.toolUsed === "cover_letter" ||
+        msg.functionCall?.name === "create_cover_letter"
+    )
+        return "cover_letter"
+    return "doc"
+}
+
 const DEFAULT_APP_CODE = `<h1>Welcome to Apps</h1>
 <p>Ask Curastem to build presentations, quizzes, portfolios, and anything you can imagine</p>`
 
@@ -326,6 +403,9 @@ interface ChatSession {
     docType?: "doc" | "resume" | "cover_letter"
     /** Job company when doc is resume/cover letter — used for sidebar title and exports. */
     docCompany?: string
+    /** Multiple docs per chat; when absent, `notes` is migrated into one entry. */
+    docs?: ChatDocEntry[]
+    activeDocId?: string
     whiteboard: any
     app?: { code: string; mode: "editor" | "player" }
     isPinned?: boolean
@@ -1835,6 +1915,23 @@ function extractFunctionCallFromGeminiResponse(
     return null
 }
 
+/** Shortens huge `content` fields so Tools debug logs stay readable. */
+function summarizeToolArgsForDebug(
+    args: Record<string, unknown>,
+    maxSlice = 200
+): string {
+    try {
+        const copy: Record<string, unknown> = { ...args }
+        const content = copy.content
+        if (typeof content === "string" && content.length > maxSlice) {
+            copy.content = `${content.slice(0, maxSlice)}… (${content.length} chars)`
+        }
+        return JSON.stringify(copy)
+    } catch {
+        return "(unserializable)"
+    }
+}
+
 // Substrings like "AI" must not match case-insensitively inside "email", etc.
 const KEYWORDS_REQUIRE_EXACT_CASE = new Set<string>(["AI"])
 
@@ -2213,6 +2310,8 @@ interface Message {
      * calls so renderChatSection can show the correct tag badge in both cases.
      */
     toolUsed?: "app" | "doc" | "resume" | "cover_letter"
+    /** Stable id of the chat doc row this tool output created or updated (multi-doc chats). */
+    docId?: string
     /** Jobs list from a search_jobs tool call, rendered as cards in chat. */
     jobs?: JobSnippet[]
     /** Job context chip — shown above user message bubble when sent with job details open. */
@@ -3664,6 +3763,555 @@ function docBlockExportSizePx(key: DocBlockKey): number {
     return o?.fontSizePx ?? 16
 }
 
+/**
+ * One-page ATS-style PDF from resume/cover HTML (same pipeline as DocEditor PDF export).
+ */
+async function docHtmlToOnePagePdfBytes(
+    htmlFragment: string,
+    isCoverLetter: boolean
+): Promise<Uint8Array> {
+
+                        // ATS-safe text-based PDF: selectable text, Standard Type 1 fonts (no embedding needed).
+                        const PAGE_W_PT = 612
+                        const PAGE_H_PT = 792
+                        const MARGIN_PT = 36
+                        const CONTENT_W_PT = PAGE_W_PT - MARGIN_PT * 2
+                        const CONTENT_H_PT = PAGE_H_PT - MARGIN_PT * 2
+                        const DOC_PX_BODY = docBlockExportSizePx("p")
+                        const DOC_PX_TITLE = docBlockExportSizePx("title")
+                        const DOC_PX_SECTION = docBlockExportSizePx("section")
+
+                        // Spacing constants — cover letter gets slightly more air.
+                        const bodyLineMult = isCoverLetter ? 1.46 : 1.45
+                        const gapAfterParagraph = (pt: number) => pt * 0.2
+                        const gapAfterListItem = (pt: number) =>
+                            isCoverLetter ? pt * 0.35 : pt * 0.15
+                        // Small gap before the first bullet of each list / nested list.
+                        const listFirstBulletGap = (pt: number) =>
+                            isCoverLetter ? pt * 0.32 : 0
+
+                        // --- Parse HTML → flat block list ---
+                        type Run = {
+                            text: string
+                            bold: boolean
+                            italic: boolean
+                        }
+                        type Block =
+                            | { kind: "h1"; text: string }
+                            | { kind: "h2"; text: string }
+                            | { kind: "p"; runs: Run[] }
+                            | { kind: "li"; runs: Run[]; indent: number }
+                            | { kind: "rule" }
+
+                        const parseHTML = (): Block[] => {
+                            const tmp = document.createElement("div")
+                            tmp.innerHTML = htmlFragment
+                            const out: Block[] = []
+
+                            // Collect inline text runs, stopping at nested list children.
+                            const inlineRuns = (
+                                el: Element,
+                                b = false,
+                                i = false
+                            ): Run[] => {
+                                const runs: Run[] = []
+                                const walk = (
+                                    node: Node,
+                                    b: boolean,
+                                    i: boolean
+                                ) => {
+                                    if (node.nodeType === Node.TEXT_NODE) {
+                                        const t = node.textContent || ""
+                                        if (t)
+                                            runs.push({
+                                                text: t,
+                                                bold: b,
+                                                italic: i,
+                                            })
+                                    } else if (
+                                        node.nodeType === Node.ELEMENT_NODE
+                                    ) {
+                                        const tag = (
+                                            node as Element
+                                        ).tagName.toLowerCase()
+                                        if (tag === "ul" || tag === "ol") return
+                                        const nb =
+                                            b || tag === "b" || tag === "strong"
+                                        const ni =
+                                            i || tag === "i" || tag === "em"
+                                        node.childNodes.forEach((c) =>
+                                            walk(c, nb, ni)
+                                        )
+                                    }
+                                }
+                                // Walk children, not el itself (b/i already passed in)
+                                el.childNodes.forEach((c) => walk(c, b, i))
+                                return runs
+                            }
+
+                            const processLi = (
+                                liEl: Element,
+                                indent: number
+                            ) => {
+                                const runs = inlineRuns(liEl)
+                                if (runs.some((r) => r.text.trim()))
+                                    out.push({ kind: "li", runs, indent })
+                                liEl.childNodes.forEach((child) => {
+                                    if (child.nodeType === Node.ELEMENT_NODE) {
+                                        const tag = (
+                                            child as Element
+                                        ).tagName.toLowerCase()
+                                        if (tag === "ul" || tag === "ol")
+                                            processNode(child, indent + 1)
+                                    }
+                                })
+                            }
+
+                            const processNode = (
+                                node: Node,
+                                listIndent = 0
+                            ) => {
+                                if (node.nodeType !== Node.ELEMENT_NODE) return
+                                const el = node as Element
+                                const tag = el.tagName.toLowerCase()
+                                if (tag === "h1") {
+                                    if (
+                                        el.classList.contains(
+                                            DOC_BLOCK_SECTION_CLASS
+                                        )
+                                    ) {
+                                        out.push({ kind: "rule" })
+                                        out.push({
+                                            kind: "h2",
+                                            text:
+                                                el.textContent?.trim() || "",
+                                        })
+                                    } else {
+                                        out.push({
+                                            kind: "h1",
+                                            text:
+                                                el.textContent?.trim() || "",
+                                        })
+                                    }
+                                } else if (tag === "h2") {
+                                    out.push({ kind: "rule" })
+                                    out.push({
+                                        kind: "h2",
+                                        text: el.textContent?.trim() || "",
+                                    })
+                                } else if (tag === "h3" || tag === "h4") {
+                                    const runs = inlineRuns(el)
+                                    if (runs.some((r) => r.text.trim()))
+                                        out.push({ kind: "p", runs })
+                                } else if (tag === "p") {
+                                    const runs = inlineRuns(el)
+                                    if (runs.some((r) => r.text.trim()))
+                                        out.push({ kind: "p", runs })
+                                } else if (tag === "ul" || tag === "ol") {
+                                    el.childNodes.forEach((child) => {
+                                        if (
+                                            (
+                                                child as Element
+                                            ).tagName?.toLowerCase() === "li"
+                                        )
+                                            processLi(
+                                                child as Element,
+                                                listIndent
+                                            )
+                                    })
+                                } else if (tag === "li") {
+                                    processLi(el, listIndent)
+                                } else if (tag !== "br") {
+                                    el.childNodes.forEach((c) =>
+                                        processNode(c, listIndent)
+                                    )
+                                }
+                            }
+
+                            tmp.childNodes.forEach((c) => processNode(c))
+                            return out
+                        }
+
+                        const blocks = parseHTML()
+
+                        // --- Load pdf-lib and embed fonts ---
+                        const { PDFDocument, rgb, StandardFonts } =
+                            await import("https://esm.sh/pdf-lib@1.17.1")
+
+                        const pdfDoc = await PDFDocument.create()
+                        const page = pdfDoc.addPage([PAGE_W_PT, PAGE_H_PT])
+
+                        const [helReg, helBold, helItalic, helBoldIt] =
+                            await Promise.all([
+                                pdfDoc.embedFont(StandardFonts.Helvetica),
+                                pdfDoc.embedFont(StandardFonts.HelveticaBold),
+                                pdfDoc.embedFont(StandardFonts.HelveticaOblique),
+                                pdfDoc.embedFont(
+                                    StandardFonts.HelveticaBoldOblique
+                                ),
+                            ])
+
+                        const black = rgb(0.07, 0.07, 0.07)
+                        const gray = rgb(0.2, 0.2, 0.2)
+
+                        // Sanitize to WinAnsi-safe characters (Standard Type 1 fonts use Latin-1 encoding).
+                        const sanitize = (s: string) =>
+                            s
+                                .replace(/[\u2018\u2019]/g, "'")
+                                .replace(/[\u201C\u201D]/g, '"')
+                                .replace(/[\u2013\u2014]/g, "-")
+                                .replace(/[\u2022\u25CF]/g, "*")
+                                .replace(/\u25E6/g, "-")
+                                .replace(/\u2026/g, "...")
+                                .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
+
+                        const pickFont = (bold: boolean, italic: boolean) =>
+                            bold && italic
+                                ? helBoldIt
+                                : bold
+                                  ? helBold
+                                  : italic
+                                    ? helItalic
+                                    : helReg
+
+                        // Word-wrap styled runs using real font metrics. Returns lines of runs.
+                        const wrapRuns = (
+                            runs: Run[],
+                            maxW: number,
+                            fontSize: number
+                        ): Run[][] => {
+                            type Word = Run & { space: boolean }
+                            const words: Word[] = []
+                            for (const run of runs) {
+                                const parts = sanitize(run.text).split(/(\s+)/)
+                                for (const p of parts) {
+                                    if (!p) continue
+                                    if (/^\s+$/.test(p)) {
+                                        if (words.length)
+                                            words[words.length - 1].space = true
+                                    } else {
+                                        words.push({
+                                            text: p,
+                                            bold: run.bold,
+                                            italic: run.italic,
+                                            space: false,
+                                        })
+                                    }
+                                }
+                            }
+
+                            const lines: Run[][] = []
+                            let curLine: Word[] = []
+                            let curW = 0
+
+                            const flush = () => {
+                                if (!curLine.length) return
+                                const lineRuns: Run[] = []
+                                curLine.forEach((w, wi) => {
+                                    const needSpace = wi > 0
+                                    const last = lineRuns[lineRuns.length - 1]
+                                    if (
+                                        last &&
+                                        last.bold === w.bold &&
+                                        last.italic === w.italic
+                                    ) {
+                                        last.text +=
+                                            (needSpace ? " " : "") + w.text
+                                    } else {
+                                        lineRuns.push({
+                                            text:
+                                                (needSpace && last ? " " : "") +
+                                                w.text,
+                                            bold: w.bold,
+                                            italic: w.italic,
+                                        })
+                                    }
+                                })
+                                lines.push(lineRuns)
+                                curLine = []
+                                curW = 0
+                            }
+
+                            for (const word of words) {
+                                const f = pickFont(word.bold, word.italic)
+                                const spW = f.widthOfTextAtSize(" ", fontSize)
+                                const wW = f.widthOfTextAtSize(
+                                    word.text,
+                                    fontSize
+                                )
+                                const addW = curLine.length ? spW + wW : wW
+                                if (curLine.length && curW + addW > maxW) {
+                                    flush()
+                                    curLine = [word]
+                                    curW = wW
+                                } else {
+                                    curLine.push(word)
+                                    curW += addW
+                                }
+                            }
+                            flush()
+                            return lines.length
+                                ? lines
+                                : [[{ text: "", bold: false, italic: false }]]
+                        }
+
+                        // Draw a line of styled runs, returning the x position after the last character.
+                        const drawRuns = (
+                            runs: Run[],
+                            x: number,
+                            y: number,
+                            fontSize: number,
+                            color: typeof black
+                        ) => {
+                            let cx = x
+                            for (const run of runs) {
+                                const t = sanitize(run.text)
+                                if (!t) continue
+                                const f = pickFont(run.bold, run.italic)
+                                page.drawText(t, {
+                                    x: cx,
+                                    y,
+                                    font: f,
+                                    size: fontSize,
+                                    color,
+                                })
+                                cx += f.widthOfTextAtSize(t, fontSize)
+                            }
+                            return cx
+                        }
+
+                        // Measure total layout height at a given base font size using real font metrics.
+                        // This is the same logic as the draw pass, just without the draw calls.
+                        const measureHeight = (basePt: number): number => {
+                            const px = (n: number) =>
+                                basePt * (n / DOC_PX_BODY)
+                            const h1Pt = px(DOC_PX_TITLE)
+                            const h2Pt = px(DOC_PX_SECTION)
+                            const lineH = basePt * bodyLineMult
+                            const h1LineH = h1Pt * 1.3
+                            const h2LineH = h2Pt * 1.35
+                            let totalH = 0
+                            let firstP = true
+                            let prev: Block | null = null
+                            for (const block of blocks) {
+                                if (block.kind === "h1") {
+                                    totalH +=
+                                        wrapRuns(
+                                            [
+                                                {
+                                                    text: block.text,
+                                                    bold: true,
+                                                    italic: false,
+                                                },
+                                            ],
+                                            CONTENT_W_PT,
+                                            h1Pt
+                                        ).length *
+                                            h1LineH +
+                                        basePt * 0.4
+                                } else if (block.kind === "rule") {
+                                    totalH += basePt * 0.5
+                                } else if (block.kind === "h2") {
+                                    totalH +=
+                                        wrapRuns(
+                                            [
+                                                {
+                                                    text: block.text,
+                                                    bold: true,
+                                                    italic: false,
+                                                },
+                                            ],
+                                            CONTENT_W_PT,
+                                            h2Pt
+                                        ).length *
+                                            h2LineH +
+                                        basePt * 0.8
+                                } else if (block.kind === "p") {
+                                    if (isCoverLetter && !firstP)
+                                        totalH += basePt * bodyLineMult
+                                    totalH +=
+                                        wrapRuns(
+                                            block.runs,
+                                            CONTENT_W_PT,
+                                            basePt
+                                        ).length *
+                                            lineH +
+                                        gapAfterParagraph(basePt)
+                                    firstP = false
+                                } else if (block.kind === "li") {
+                                    const newList =
+                                        prev == null ||
+                                        prev.kind !== "li" ||
+                                        block.indent >
+                                            (prev as { indent: number }).indent
+                                    if (isCoverLetter && newList)
+                                        totalH += listFirstBulletGap(basePt)
+                                    const bulletW =
+                                        basePt * 1.4 * (block.indent + 1)
+                                    totalH +=
+                                        wrapRuns(
+                                            block.runs,
+                                            CONTENT_W_PT - bulletW,
+                                            basePt
+                                        ).length *
+                                            lineH +
+                                        gapAfterListItem(basePt)
+                                }
+                                prev = block
+                            }
+                            return totalH
+                        }
+
+                        // Binary-search for the largest body pt that fits on one page (headings scale with DOC_BLOCK_OPTIONS px).
+                        let lo = 6,
+                            hi = 20,
+                            bestPt = 10
+                        for (let i = 0; i < 12; i++) {
+                            const mid = (lo + hi) / 2
+                            if (measureHeight(mid) <= CONTENT_H_PT) {
+                                bestPt = mid
+                                lo = mid
+                            } else hi = mid
+                        }
+
+                        const px = (n: number) => bestPt * (n / DOC_PX_BODY)
+                        const h1Pt = px(DOC_PX_TITLE)
+                        const h2Pt = px(DOC_PX_SECTION)
+                        const baseBodyLineH = bestPt * bodyLineMult
+                        const h1LineH = h1Pt * 1.3
+                        const h2LineH = h2Pt * 1.35
+
+                        // Draw all blocks onto the page.
+                        let y = PAGE_H_PT - MARGIN_PT
+                        let firstP = true
+                        let prev: Block | null = null
+                        for (const block of blocks) {
+                            if (block.kind === "h1") {
+                                for (const line of wrapRuns(
+                                    [
+                                        {
+                                            text: sanitize(block.text),
+                                            bold: true,
+                                            italic: false,
+                                        },
+                                    ],
+                                    CONTENT_W_PT,
+                                    h1Pt
+                                )) {
+                                    y -= h1LineH
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT,
+                                        y,
+                                        h1Pt,
+                                        black
+                                    )
+                                }
+                                y -= bestPt * 0.4
+                            } else if (block.kind === "rule") {
+                                y -= bestPt * 0.5
+                            } else if (block.kind === "h2") {
+                                page.drawLine({
+                                    start: {
+                                        x: MARGIN_PT,
+                                        y: y - bestPt * 0.2,
+                                    },
+                                    end: {
+                                        x: PAGE_W_PT - MARGIN_PT,
+                                        y: y - bestPt * 0.2,
+                                    },
+                                    thickness: 0.5,
+                                    color: gray,
+                                })
+                                for (const line of wrapRuns(
+                                    [
+                                        {
+                                            text: sanitize(block.text),
+                                            bold: true,
+                                            italic: false,
+                                        },
+                                    ],
+                                    CONTENT_W_PT,
+                                    h2Pt
+                                )) {
+                                    y -= h2LineH
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT,
+                                        y,
+                                        h2Pt,
+                                        black
+                                    )
+                                }
+                                y -= bestPt * 0.5
+                            } else if (block.kind === "p") {
+                                if (isCoverLetter && !firstP)
+                                    y -= bestPt * bodyLineMult
+                                for (const line of wrapRuns(
+                                    block.runs,
+                                    CONTENT_W_PT,
+                                    bestPt
+                                )) {
+                                    y -= baseBodyLineH
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT,
+                                        y,
+                                        bestPt,
+                                        black
+                                    )
+                                }
+                                y -= gapAfterParagraph(bestPt)
+                                firstP = false
+                            } else if (block.kind === "li") {
+                                const newList =
+                                    prev == null ||
+                                    prev.kind !== "li" ||
+                                    block.indent >
+                                        (prev as { indent: number }).indent
+                                if (isCoverLetter && newList)
+                                    y -= listFirstBulletGap(bestPt)
+                                const bulletIndent =
+                                    bestPt * 1.4 * (block.indent + 1)
+                                let isFirst = true
+                                for (const line of wrapRuns(
+                                    block.runs,
+                                    CONTENT_W_PT - bulletIndent,
+                                    bestPt
+                                )) {
+                                    y -= baseBodyLineH
+                                    if (isFirst) {
+                                        const r =
+                                            block.indent === 0
+                                                ? bestPt * 0.11
+                                                : bestPt * 0.085
+                                        page.drawCircle({
+                                            x:
+                                                MARGIN_PT +
+                                                bulletIndent -
+                                                bestPt * 0.52,
+                                            y: y + bestPt * 0.32,
+                                            size: r,
+                                            color: black,
+                                        })
+                                        isFirst = false
+                                    }
+                                    drawRuns(
+                                        line,
+                                        MARGIN_PT + bulletIndent,
+                                        y,
+                                        bestPt,
+                                        black
+                                    )
+                                }
+                                y -= gapAfterListItem(bestPt)
+                            }
+                            prev = block
+                        }
+
+                        return await pdfDoc.save()
+}
+
 function applyDocBlockClasses(el: HTMLElement, blockKey: DocBlockKey) {
     if (blockKey === "p") {
         el.classList.remove(DOC_BLOCK_TITLE_CLASS, DOC_BLOCK_SECTION_CLASS)
@@ -4046,6 +4694,130 @@ function buildResumeCoverSidebarTitle(
     if (name) parts.push(name)
     return parts.join(" ")
 }
+
+/** Title case for profile name from resume extraction (e.g. Logan Garcia). */
+function formatResumeProfileName(name: string): string {
+    const t = name.trim()
+    if (!t) return ""
+    return t
+        .split(/\s+/)
+        .map((w) => {
+            if (!w) return w
+            return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+        })
+        .join(" ")
+}
+
+/** Title case per word for job title labels on the profile. */
+function formatResumeJobTitleLabel(title: string): string {
+    const t = title.trim()
+    if (!t) return ""
+    return t
+        .split(/\s+/)
+        .map((w) => {
+            if (!w) return w
+            return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+        })
+        .join(" ")
+}
+
+/** Dedupe, cap length, join for homepage `q=` (comma-separated multi-role search). */
+function formatProfileJobTitlesFromExtraction(titles: string[]): string {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const raw of titles) {
+        const label = formatResumeJobTitleLabel(raw)
+        if (!label) continue
+        const key = label.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(label)
+        if (out.length >= 6) break
+    }
+    return out.join(", ")
+}
+
+/** Collapse whitespace and newlines for homepage job search; trim. Empty if only spaces. */
+function normalizeYouWorkForHomepageQuery(s: string): string {
+    return s.replace(/\s+/g, " ").trim()
+}
+
+/** Dedupe tools-debug lines for GET /jobs/map (center + bbox bucket + filters — zoom changes bbox). */
+function mapJobsQueryDedupKey(fullUrl: string): string {
+    try {
+        const u = new URL(fullUrl)
+        const p = u.searchParams
+        const lat = parseFloat(p.get("center_lat") ?? "NaN")
+        const lng = parseFloat(p.get("center_lng") ?? "NaN")
+        const r = (n: number) =>
+            Number.isFinite(n) ? String(Math.round(n * 100) / 100) : ""
+        const rb = (s: string | null) => {
+            const n = parseFloat(s ?? "")
+            return Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : ""
+        }
+        return [
+            p.get("since") ?? "",
+            p.get("q") ?? "",
+            p.get("employment_type") ?? "",
+            p.get("seniority_level") ?? "",
+            r(lat),
+            r(lng),
+            rb(p.get("min_lat")),
+            rb(p.get("max_lat")),
+            rb(p.get("min_lng")),
+            rb(p.get("max_lng")),
+        ].join("|")
+    } catch {
+        return fullUrl
+    }
+}
+
+function formatMapJobsQueryLogLine(url: string, chipCount: number): string {
+    try {
+        const u = new URL(url)
+        const p = u.searchParams
+        const bits: string[] = []
+        const clat = p.get("center_lat")
+        const clng = p.get("center_lng")
+        if (clat && clng)
+            bits.push(`center≈${clat.slice(0, 10)},${clng.slice(0, 11)}`)
+        const qv = p.get("q")
+        if (qv)
+            bits.push(
+                `q="${qv.length > 80 ? `${qv.slice(0, 80)}…` : qv}"`
+            )
+        const et = p.get("employment_type")
+        if (et) bits.push(`employment_type=${et}`)
+        const sl = p.get("seniority_level")
+        if (sl) bits.push(`seniority=${sl}`)
+        const since = p.get("since")
+        if (since) bits.push(`since=${since}`)
+        const mn = parseFloat(p.get("min_lat") ?? "")
+        const mx = parseFloat(p.get("max_lat") ?? "")
+        const mw = parseFloat(p.get("min_lng") ?? "")
+        const me = parseFloat(p.get("max_lng") ?? "")
+        if (
+            Number.isFinite(mn) &&
+            Number.isFinite(mx) &&
+            Number.isFinite(mw) &&
+            Number.isFinite(me)
+        ) {
+            const latKm = Math.max(0, (mx - mn) * 111)
+            const midLat = (mn + mx) / 2
+            const lngKm = Math.max(0, (me - mw) * 111 * Math.cos((midLat * Math.PI) / 180))
+            bits.push(
+                `view≈${latKm.toFixed(0)}×${lngKm.toFixed(0)}km`
+            )
+        }
+        const summary = bits.join(" ")
+        return `[jobs map] ${chipCount} chips${summary ? ` ${summary}` : ""}`
+    } catch {
+        return `[jobs map] ${chipCount} chips ${url.slice(0, 200)}`
+    }
+}
+
+/** Wait after last keystroke before homepage jobs refetch from profile job title. */
+const HOMEPAGE_JOB_TITLE_DEBOUNCE_MS = 700
 
 function chatMatchesSidebarSearch(
     chat: ChatSession,
@@ -4883,547 +5655,10 @@ const DocEditor = React.memo(function DocEditor({
 
                 if (isOnePage) {
                     try {
-                        const isCoverLetter = docType === "cover_letter"
-
-                        // ATS-safe text-based PDF: selectable text, Standard Type 1 fonts (no embedding needed).
-                        const PAGE_W_PT = 612
-                        const PAGE_H_PT = 792
-                        const MARGIN_PT = 36
-                        const CONTENT_W_PT = PAGE_W_PT - MARGIN_PT * 2
-                        const CONTENT_H_PT = PAGE_H_PT - MARGIN_PT * 2
-                        const DOC_PX_BODY = docBlockExportSizePx("p")
-                        const DOC_PX_TITLE = docBlockExportSizePx("title")
-                        const DOC_PX_SECTION = docBlockExportSizePx("section")
-
-                        // Spacing constants — cover letter gets slightly more air.
-                        const bodyLineMult = isCoverLetter ? 1.46 : 1.45
-                        const gapAfterParagraph = (pt: number) => pt * 0.2
-                        const gapAfterListItem = (pt: number) =>
-                            isCoverLetter ? pt * 0.35 : pt * 0.15
-                        // Small gap before the first bullet of each list / nested list.
-                        const listFirstBulletGap = (pt: number) =>
-                            isCoverLetter ? pt * 0.32 : 0
-
-                        // --- Parse HTML → flat block list ---
-                        type Run = {
-                            text: string
-                            bold: boolean
-                            italic: boolean
-                        }
-                        type Block =
-                            | { kind: "h1"; text: string }
-                            | { kind: "h2"; text: string }
-                            | { kind: "p"; runs: Run[] }
-                            | { kind: "li"; runs: Run[]; indent: number }
-                            | { kind: "rule" }
-
-                        const parseHTML = (): Block[] => {
-                            const tmp = document.createElement("div")
-                            tmp.innerHTML = content
-                            const out: Block[] = []
-
-                            // Collect inline text runs, stopping at nested list children.
-                            const inlineRuns = (
-                                el: Element,
-                                b = false,
-                                i = false
-                            ): Run[] => {
-                                const runs: Run[] = []
-                                const walk = (
-                                    node: Node,
-                                    b: boolean,
-                                    i: boolean
-                                ) => {
-                                    if (node.nodeType === Node.TEXT_NODE) {
-                                        const t = node.textContent || ""
-                                        if (t)
-                                            runs.push({
-                                                text: t,
-                                                bold: b,
-                                                italic: i,
-                                            })
-                                    } else if (
-                                        node.nodeType === Node.ELEMENT_NODE
-                                    ) {
-                                        const tag = (
-                                            node as Element
-                                        ).tagName.toLowerCase()
-                                        if (tag === "ul" || tag === "ol") return
-                                        const nb =
-                                            b || tag === "b" || tag === "strong"
-                                        const ni =
-                                            i || tag === "i" || tag === "em"
-                                        node.childNodes.forEach((c) =>
-                                            walk(c, nb, ni)
-                                        )
-                                    }
-                                }
-                                // Walk children, not el itself (b/i already passed in)
-                                el.childNodes.forEach((c) => walk(c, b, i))
-                                return runs
-                            }
-
-                            const processLi = (
-                                liEl: Element,
-                                indent: number
-                            ) => {
-                                const runs = inlineRuns(liEl)
-                                if (runs.some((r) => r.text.trim()))
-                                    out.push({ kind: "li", runs, indent })
-                                liEl.childNodes.forEach((child) => {
-                                    if (child.nodeType === Node.ELEMENT_NODE) {
-                                        const tag = (
-                                            child as Element
-                                        ).tagName.toLowerCase()
-                                        if (tag === "ul" || tag === "ol")
-                                            processNode(child, indent + 1)
-                                    }
-                                })
-                            }
-
-                            const processNode = (
-                                node: Node,
-                                listIndent = 0
-                            ) => {
-                                if (node.nodeType !== Node.ELEMENT_NODE) return
-                                const el = node as Element
-                                const tag = el.tagName.toLowerCase()
-                                if (tag === "h1") {
-                                    if (
-                                        el.classList.contains(
-                                            DOC_BLOCK_SECTION_CLASS
-                                        )
-                                    ) {
-                                        out.push({ kind: "rule" })
-                                        out.push({
-                                            kind: "h2",
-                                            text:
-                                                el.textContent?.trim() || "",
-                                        })
-                                    } else {
-                                        out.push({
-                                            kind: "h1",
-                                            text:
-                                                el.textContent?.trim() || "",
-                                        })
-                                    }
-                                } else if (tag === "h2") {
-                                    out.push({ kind: "rule" })
-                                    out.push({
-                                        kind: "h2",
-                                        text: el.textContent?.trim() || "",
-                                    })
-                                } else if (tag === "h3" || tag === "h4") {
-                                    const runs = inlineRuns(el)
-                                    if (runs.some((r) => r.text.trim()))
-                                        out.push({ kind: "p", runs })
-                                } else if (tag === "p") {
-                                    const runs = inlineRuns(el)
-                                    if (runs.some((r) => r.text.trim()))
-                                        out.push({ kind: "p", runs })
-                                } else if (tag === "ul" || tag === "ol") {
-                                    el.childNodes.forEach((child) => {
-                                        if (
-                                            (
-                                                child as Element
-                                            ).tagName?.toLowerCase() === "li"
-                                        )
-                                            processLi(
-                                                child as Element,
-                                                listIndent
-                                            )
-                                    })
-                                } else if (tag === "li") {
-                                    processLi(el, listIndent)
-                                } else if (tag !== "br") {
-                                    el.childNodes.forEach((c) =>
-                                        processNode(c, listIndent)
-                                    )
-                                }
-                            }
-
-                            tmp.childNodes.forEach((c) => processNode(c))
-                            return out
-                        }
-
-                        const blocks = parseHTML()
-
-                        // --- Load pdf-lib and embed fonts ---
-                        const { PDFDocument, rgb, StandardFonts } =
-                            await import("https://esm.sh/pdf-lib@1.17.1")
-
-                        const pdfDoc = await PDFDocument.create()
-                        const page = pdfDoc.addPage([PAGE_W_PT, PAGE_H_PT])
-
-                        const [helReg, helBold, helItalic, helBoldIt] =
-                            await Promise.all([
-                                pdfDoc.embedFont(StandardFonts.Helvetica),
-                                pdfDoc.embedFont(StandardFonts.HelveticaBold),
-                                pdfDoc.embedFont(StandardFonts.HelveticaOblique),
-                                pdfDoc.embedFont(
-                                    StandardFonts.HelveticaBoldOblique
-                                ),
-                            ])
-
-                        const black = rgb(0.07, 0.07, 0.07)
-                        const gray = rgb(0.2, 0.2, 0.2)
-
-                        // Sanitize to WinAnsi-safe characters (Standard Type 1 fonts use Latin-1 encoding).
-                        const sanitize = (s: string) =>
-                            s
-                                .replace(/[\u2018\u2019]/g, "'")
-                                .replace(/[\u201C\u201D]/g, '"')
-                                .replace(/[\u2013\u2014]/g, "-")
-                                .replace(/[\u2022\u25CF]/g, "*")
-                                .replace(/\u25E6/g, "-")
-                                .replace(/\u2026/g, "...")
-                                .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
-
-                        const pickFont = (bold: boolean, italic: boolean) =>
-                            bold && italic
-                                ? helBoldIt
-                                : bold
-                                  ? helBold
-                                  : italic
-                                    ? helItalic
-                                    : helReg
-
-                        // Word-wrap styled runs using real font metrics. Returns lines of runs.
-                        const wrapRuns = (
-                            runs: Run[],
-                            maxW: number,
-                            fontSize: number
-                        ): Run[][] => {
-                            type Word = Run & { space: boolean }
-                            const words: Word[] = []
-                            for (const run of runs) {
-                                const parts = sanitize(run.text).split(/(\s+)/)
-                                for (const p of parts) {
-                                    if (!p) continue
-                                    if (/^\s+$/.test(p)) {
-                                        if (words.length)
-                                            words[words.length - 1].space = true
-                                    } else {
-                                        words.push({
-                                            text: p,
-                                            bold: run.bold,
-                                            italic: run.italic,
-                                            space: false,
-                                        })
-                                    }
-                                }
-                            }
-
-                            const lines: Run[][] = []
-                            let curLine: Word[] = []
-                            let curW = 0
-
-                            const flush = () => {
-                                if (!curLine.length) return
-                                const lineRuns: Run[] = []
-                                curLine.forEach((w, wi) => {
-                                    const needSpace = wi > 0
-                                    const last = lineRuns[lineRuns.length - 1]
-                                    if (
-                                        last &&
-                                        last.bold === w.bold &&
-                                        last.italic === w.italic
-                                    ) {
-                                        last.text +=
-                                            (needSpace ? " " : "") + w.text
-                                    } else {
-                                        lineRuns.push({
-                                            text:
-                                                (needSpace && last ? " " : "") +
-                                                w.text,
-                                            bold: w.bold,
-                                            italic: w.italic,
-                                        })
-                                    }
-                                })
-                                lines.push(lineRuns)
-                                curLine = []
-                                curW = 0
-                            }
-
-                            for (const word of words) {
-                                const f = pickFont(word.bold, word.italic)
-                                const spW = f.widthOfTextAtSize(" ", fontSize)
-                                const wW = f.widthOfTextAtSize(
-                                    word.text,
-                                    fontSize
-                                )
-                                const addW = curLine.length ? spW + wW : wW
-                                if (curLine.length && curW + addW > maxW) {
-                                    flush()
-                                    curLine = [word]
-                                    curW = wW
-                                } else {
-                                    curLine.push(word)
-                                    curW += addW
-                                }
-                            }
-                            flush()
-                            return lines.length
-                                ? lines
-                                : [[{ text: "", bold: false, italic: false }]]
-                        }
-
-                        // Draw a line of styled runs, returning the x position after the last character.
-                        const drawRuns = (
-                            runs: Run[],
-                            x: number,
-                            y: number,
-                            fontSize: number,
-                            color: typeof black
-                        ) => {
-                            let cx = x
-                            for (const run of runs) {
-                                const t = sanitize(run.text)
-                                if (!t) continue
-                                const f = pickFont(run.bold, run.italic)
-                                page.drawText(t, {
-                                    x: cx,
-                                    y,
-                                    font: f,
-                                    size: fontSize,
-                                    color,
-                                })
-                                cx += f.widthOfTextAtSize(t, fontSize)
-                            }
-                            return cx
-                        }
-
-                        // Measure total layout height at a given base font size using real font metrics.
-                        // This is the same logic as the draw pass, just without the draw calls.
-                        const measureHeight = (basePt: number): number => {
-                            const px = (n: number) =>
-                                basePt * (n / DOC_PX_BODY)
-                            const h1Pt = px(DOC_PX_TITLE)
-                            const h2Pt = px(DOC_PX_SECTION)
-                            const lineH = basePt * bodyLineMult
-                            const h1LineH = h1Pt * 1.3
-                            const h2LineH = h2Pt * 1.35
-                            let totalH = 0
-                            let firstP = true
-                            let prev: Block | null = null
-                            for (const block of blocks) {
-                                if (block.kind === "h1") {
-                                    totalH +=
-                                        wrapRuns(
-                                            [
-                                                {
-                                                    text: block.text,
-                                                    bold: true,
-                                                    italic: false,
-                                                },
-                                            ],
-                                            CONTENT_W_PT,
-                                            h1Pt
-                                        ).length *
-                                            h1LineH +
-                                        basePt * 0.4
-                                } else if (block.kind === "rule") {
-                                    totalH += basePt * 0.5
-                                } else if (block.kind === "h2") {
-                                    totalH +=
-                                        wrapRuns(
-                                            [
-                                                {
-                                                    text: block.text,
-                                                    bold: true,
-                                                    italic: false,
-                                                },
-                                            ],
-                                            CONTENT_W_PT,
-                                            h2Pt
-                                        ).length *
-                                            h2LineH +
-                                        basePt * 0.8
-                                } else if (block.kind === "p") {
-                                    if (isCoverLetter && !firstP)
-                                        totalH += basePt * bodyLineMult
-                                    totalH +=
-                                        wrapRuns(
-                                            block.runs,
-                                            CONTENT_W_PT,
-                                            basePt
-                                        ).length *
-                                            lineH +
-                                        gapAfterParagraph(basePt)
-                                    firstP = false
-                                } else if (block.kind === "li") {
-                                    const newList =
-                                        prev == null ||
-                                        prev.kind !== "li" ||
-                                        block.indent >
-                                            (prev as { indent: number }).indent
-                                    if (isCoverLetter && newList)
-                                        totalH += listFirstBulletGap(basePt)
-                                    const bulletW =
-                                        basePt * 1.4 * (block.indent + 1)
-                                    totalH +=
-                                        wrapRuns(
-                                            block.runs,
-                                            CONTENT_W_PT - bulletW,
-                                            basePt
-                                        ).length *
-                                            lineH +
-                                        gapAfterListItem(basePt)
-                                }
-                                prev = block
-                            }
-                            return totalH
-                        }
-
-                        // Binary-search for the largest body pt that fits on one page (headings scale with DOC_BLOCK_OPTIONS px).
-                        let lo = 6,
-                            hi = 20,
-                            bestPt = 10
-                        for (let i = 0; i < 12; i++) {
-                            const mid = (lo + hi) / 2
-                            if (measureHeight(mid) <= CONTENT_H_PT) {
-                                bestPt = mid
-                                lo = mid
-                            } else hi = mid
-                        }
-
-                        const px = (n: number) => bestPt * (n / DOC_PX_BODY)
-                        const h1Pt = px(DOC_PX_TITLE)
-                        const h2Pt = px(DOC_PX_SECTION)
-                        const baseBodyLineH = bestPt * bodyLineMult
-                        const h1LineH = h1Pt * 1.3
-                        const h2LineH = h2Pt * 1.35
-
-                        // Draw all blocks onto the page.
-                        let y = PAGE_H_PT - MARGIN_PT
-                        let firstP = true
-                        let prev: Block | null = null
-                        for (const block of blocks) {
-                            if (block.kind === "h1") {
-                                for (const line of wrapRuns(
-                                    [
-                                        {
-                                            text: sanitize(block.text),
-                                            bold: true,
-                                            italic: false,
-                                        },
-                                    ],
-                                    CONTENT_W_PT,
-                                    h1Pt
-                                )) {
-                                    y -= h1LineH
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT,
-                                        y,
-                                        h1Pt,
-                                        black
-                                    )
-                                }
-                                y -= bestPt * 0.4
-                            } else if (block.kind === "rule") {
-                                y -= bestPt * 0.5
-                            } else if (block.kind === "h2") {
-                                page.drawLine({
-                                    start: {
-                                        x: MARGIN_PT,
-                                        y: y - bestPt * 0.2,
-                                    },
-                                    end: {
-                                        x: PAGE_W_PT - MARGIN_PT,
-                                        y: y - bestPt * 0.2,
-                                    },
-                                    thickness: 0.5,
-                                    color: gray,
-                                })
-                                for (const line of wrapRuns(
-                                    [
-                                        {
-                                            text: sanitize(block.text),
-                                            bold: true,
-                                            italic: false,
-                                        },
-                                    ],
-                                    CONTENT_W_PT,
-                                    h2Pt
-                                )) {
-                                    y -= h2LineH
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT,
-                                        y,
-                                        h2Pt,
-                                        black
-                                    )
-                                }
-                                y -= bestPt * 0.5
-                            } else if (block.kind === "p") {
-                                if (isCoverLetter && !firstP)
-                                    y -= bestPt * bodyLineMult
-                                for (const line of wrapRuns(
-                                    block.runs,
-                                    CONTENT_W_PT,
-                                    bestPt
-                                )) {
-                                    y -= baseBodyLineH
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT,
-                                        y,
-                                        bestPt,
-                                        black
-                                    )
-                                }
-                                y -= gapAfterParagraph(bestPt)
-                                firstP = false
-                            } else if (block.kind === "li") {
-                                const newList =
-                                    prev == null ||
-                                    prev.kind !== "li" ||
-                                    block.indent >
-                                        (prev as { indent: number }).indent
-                                if (isCoverLetter && newList)
-                                    y -= listFirstBulletGap(bestPt)
-                                const bulletIndent =
-                                    bestPt * 1.4 * (block.indent + 1)
-                                let isFirst = true
-                                for (const line of wrapRuns(
-                                    block.runs,
-                                    CONTENT_W_PT - bulletIndent,
-                                    bestPt
-                                )) {
-                                    y -= baseBodyLineH
-                                    if (isFirst) {
-                                        const r =
-                                            block.indent === 0
-                                                ? bestPt * 0.11
-                                                : bestPt * 0.085
-                                        page.drawCircle({
-                                            x:
-                                                MARGIN_PT +
-                                                bulletIndent -
-                                                bestPt * 0.52,
-                                            y: y + bestPt * 0.32,
-                                            size: r,
-                                            color: black,
-                                        })
-                                        isFirst = false
-                                    }
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT + bulletIndent,
-                                        y,
-                                        bestPt,
-                                        black
-                                    )
-                                }
-                                y -= gapAfterListItem(bestPt)
-                            }
-                            prev = block
-                        }
-
-                        const pdfBytes = await pdfDoc.save()
+                        const pdfBytes = await docHtmlToOnePagePdfBytes(
+                            content,
+                            docType === "cover_letter"
+                        )
                         const blobUrl = URL.createObjectURL(
                             new Blob([pdfBytes], { type: "application/pdf" })
                         )
@@ -5435,18 +5670,11 @@ const DocEditor = React.memo(function DocEditor({
                                       userDisplayName,
                                       docCompany
                                   )
-                                : docType === "resume"
-                                  ? `${profileNameStem(userDisplayName) || "resume"}${docCompany ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}` : ""}`
-                                  : (
-                                        blocks.find((b) => b.kind === "h1") as {
-                                            text?: string
-                                        }
-                                    )?.text
-                                        ?.replace(/\s+/g, "_")
-                                        .slice(0, 40) || "document"
+                                : `${profileNameStem(userDisplayName) || "resume"}${docCompany ? `_${docCompany.replace(/\s+/g, "_").slice(0, 30)}` : ""}`
                         }.pdf`
                         link.click()
                         setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+
                     } catch (pdfErr) {
                         console.error(
                             "pdf-lib failed, falling back to print:",
@@ -12843,11 +13071,9 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     const hasCachedDetail = readJobDetailCache(job.id, jobsApiUrl) !== null
     const showLazyDetailBody = !loadingDesc && (fetchEnabled || hasCachedDetail)
 
-    const highlightedPhrases = React.useRef(new Set<string>())
-    React.useEffect(() => {
-        highlightedPhrases.current.clear()
-    }, [job.id])
-    const highlightText = (text: string) => {
+    /** Bold every keyword match. A ref that deduped "first occurrence only" broke
+     *  (1) bullets after the first in the same job and (2) reopening the same job without job.id change. */
+    const highlightText = React.useCallback((text: string) => {
         if (!text || !apiKeywords.length) return text
         const sorted = [...apiKeywords].sort((a, b) => b.length - a.length)
         const regex = new RegExp(
@@ -12859,9 +13085,6 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                 (p) => p.toLowerCase() === part.toLowerCase()
             )
             if (matched) {
-                const key = matched.toLowerCase()
-                if (highlightedPhrases.current.has(key)) return part
-                highlightedPhrases.current.add(key)
                 return (
                     <span
                         key={i}
@@ -12874,7 +13097,7 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
             }
             return part
         })
-    }
+    }, [apiKeywords])
 
     const fmtPlace = (t: string | null) =>
         t
@@ -14651,33 +14874,307 @@ function sortNearbyJobsByDistanceThenPosted(
     })
 }
 
-/** Nearby: distance then recency. Anywhere: remote (recency), then non-remote (distance then recency). */
+/** Stronger score = better title match to the active search (used only for reordering, not filtering). */
+function companyJobTitleMatchScore(job: HomepageJob, q: string): number {
+    const title = (job.title ?? "").toLowerCase()
+    const t = q.trim().toLowerCase()
+    if (!t) return 0
+    let score = 0
+    if (title.includes(t)) score += 50 + Math.min(t.length, 40)
+    for (const part of t.split(/[\s,]+/)) {
+        if (part.length < 2) continue
+        if (title.includes(part)) score += part.length
+    }
+    return score
+}
+
+/** Nearby: distance then recency. Anywhere: remote (recency), then non-remote (distance then recency).
+ *  When `queryBoost` is set, jobs with stronger title matches sort first within each segment. */
 function sortChipCompanyFeed(
     nearby: HomepageJob[],
     anywhere: HomepageJob[],
     refLat: number,
-    refLng: number
+    refLng: number,
+    queryBoost?: string
 ): HomepageJob[] {
-    const sortedNearby = sortNearbyJobsByDistanceThenPosted(
-        nearby,
-        refLat,
-        refLng
+    const q = queryBoost?.trim() ?? ""
+
+    const sortSegment = <J extends HomepageJob>(
+        arr: J[],
+        baseCompare: (a: J, b: J) => number
+    ): J[] => {
+        if (!q) return [...arr].sort(baseCompare)
+        return [...arr]
+            .map((job, idx) => ({ job, idx }))
+            .sort((A, B) => {
+                const sa = companyJobTitleMatchScore(A.job, q)
+                const sb = companyJobTitleMatchScore(B.job, q)
+                if (sb !== sa) return sb - sa
+                const c = baseCompare(A.job, B.job)
+                if (c !== 0) return c
+                return A.idx - B.idx
+            })
+            .map((x) => x.job)
+    }
+
+    const sortedNearby = sortSegment(nearby, (a, b) => {
+        const da = jobDistKmFromRef(a, refLat, refLng)
+        const db = jobDistKmFromRef(b, refLat, refLng)
+        if (da !== db) return da - db
+        return jobPostedTsMs(b) - jobPostedTsMs(a)
+    })
+    const remote = anywhere.filter((j) => j.workplace_type === "remote")
+    const sortedRemote = sortSegment(remote, (a, b) =>
+        jobPostedTsMs(b) - jobPostedTsMs(a)
     )
-    const remote = anywhere
-        .filter((j) => j.workplace_type === "remote")
-        .sort((a, b) => jobPostedTsMs(b) - jobPostedTsMs(a))
-    const nonRemote = anywhere
-        .filter((j) => j.workplace_type !== "remote")
-        .sort((a, b) => {
-            const da = jobDistKmFromRef(a, refLat, refLng)
-            const db = jobDistKmFromRef(b, refLat, refLng)
-            if (da !== db) return da - db
-            return jobPostedTsMs(b) - jobPostedTsMs(a)
-        })
-    return [...sortedNearby, ...remote, ...nonRemote]
+    const nonRemote = anywhere.filter((j) => j.workplace_type !== "remote")
+    const sortedNonRemote = sortSegment(nonRemote, (a, b) => {
+        const da = jobDistKmFromRef(a, refLat, refLng)
+        const db = jobDistKmFromRef(b, refLat, refLng)
+        if (da !== db) return da - db
+        return jobPostedTsMs(b) - jobPostedTsMs(a)
+    })
+    return [...sortedNearby, ...sortedRemote, ...sortedNonRemote]
 }
 
 const FIFTY_MILES_KM = 80.47
+
+// ─── Map + homepage: prefer device location when geolocation permission is granted ─
+const CURASTEM_MAP_GPS_STORAGE_KEY = "curastem_map_gps_loc_v1"
+const MAP_GPS_PERSIST_MAX_MS = 7 * 24 * 60 * 60 * 1000
+
+type PersistedMapGps = { lat: number; lng: number; savedAt: number }
+
+function readPersistedMapGps(): PersistedMapGps | null {
+    if (typeof window === "undefined") return null
+    try {
+        const raw = window.localStorage?.getItem(CURASTEM_MAP_GPS_STORAGE_KEY)
+        if (!raw) return null
+        const o = JSON.parse(raw) as PersistedMapGps
+        if (
+            typeof o.lat !== "number" ||
+            typeof o.lng !== "number" ||
+            typeof o.savedAt !== "number"
+        )
+            return null
+        if (Date.now() - o.savedAt > MAP_GPS_PERSIST_MAX_MS) return null
+        if (o.lat < -90 || o.lat > 90 || o.lng < -180 || o.lng > 180)
+            return null
+        return o
+    } catch {
+        return null
+    }
+}
+
+function writePersistedMapGps(lat: number, lng: number): void {
+    if (typeof window === "undefined") return
+    try {
+        window.localStorage?.setItem(
+            CURASTEM_MAP_GPS_STORAGE_KEY,
+            JSON.stringify({ lat, lng, savedAt: Date.now() })
+        )
+    } catch {
+        /* quota / private mode */
+    }
+}
+
+function getCurrentPositionPromise(
+    options: PositionOptions
+): Promise<GeolocationPosition | null> {
+    return new Promise((resolve) => {
+        if (typeof navigator === "undefined" || !navigator.geolocation) {
+            resolve(null)
+            return
+        }
+        navigator.geolocation.getCurrentPosition(
+            (pos) => resolve(pos),
+            () => resolve(null),
+            options
+        )
+    })
+}
+
+async function fetchGeoFromJobsApi(
+    jobsApiUrl: string,
+    signal?: AbortSignal
+): Promise<{ lat: number; lng: number; country: string | null } | null> {
+    try {
+        const r = await fetch(`${jobsApiUrl}/geo`, { signal })
+        if (!r.ok) return null
+        const d = (await r.json()) as {
+            lat?: unknown
+            lng?: unknown
+            country?: unknown
+        }
+        const lat = Number(d.lat)
+        const lng = Number(d.lng)
+        if (
+            !Number.isFinite(lat) ||
+            !Number.isFinite(lng) ||
+            lat < -90 ||
+            lat > 90 ||
+            lng < -180 ||
+            lng > 180
+        )
+            return null
+        const country =
+            typeof d.country === "string" ? d.country.toUpperCase() : null
+        return { lat, lng, country }
+    } catch {
+        return null
+    }
+}
+
+type ResolvedMapUserLocation = {
+    lat: number
+    lng: number
+    country: string | null
+    /** Device GPS, or persisted GPS from a prior session grant (Safari-friendly). */
+    fromGps: boolean
+}
+
+const DEFAULT_MAP_USER_CENTER = { lat: 37.7749, lng: -122.4194 }
+
+/**
+ * When Permissions API says geolocation is granted, read coords (no prompt). Otherwise
+ * use recent persisted GPS if any, else GET /geo. Never calls getCurrentPosition on
+ * "prompt" so the homepage does not show a permission dialog on load.
+ */
+async function resolveBestMapUserLocation(
+    jobsApiUrl: string,
+    signal?: AbortSignal
+): Promise<ResolvedMapUserLocation> {
+    const geoPromise = fetchGeoFromJobsApi(jobsApiUrl, signal)
+
+    if (typeof window === "undefined" || !jobsApiUrl) {
+        const g = await geoPromise
+        return g
+            ? {
+                  lat: g.lat,
+                  lng: g.lng,
+                  country: g.country,
+                  fromGps: false,
+              }
+            : {
+                  lat: DEFAULT_MAP_USER_CENTER.lat,
+                  lng: DEFAULT_MAP_USER_CENTER.lng,
+                  country: null,
+                  fromGps: false,
+              }
+    }
+
+    if (!navigator.geolocation) {
+        const g = await geoPromise
+        return g
+            ? {
+                  lat: g.lat,
+                  lng: g.lng,
+                  country: g.country,
+                  fromGps: false,
+              }
+            : {
+                  lat: DEFAULT_MAP_USER_CENTER.lat,
+                  lng: DEFAULT_MAP_USER_CENTER.lng,
+                  country: null,
+                  fromGps: false,
+              }
+    }
+
+    let permissionState: PermissionState | "unsupported" = "unsupported"
+    try {
+        const status = await navigator.permissions.query({
+            name: "geolocation" as PermissionName,
+        })
+        permissionState = status.state
+    } catch {
+        permissionState = "unsupported"
+    }
+
+    if (permissionState === "denied") {
+        const g = await geoPromise
+        return g
+            ? {
+                  lat: g.lat,
+                  lng: g.lng,
+                  country: g.country,
+                  fromGps: false,
+              }
+            : {
+                  lat: DEFAULT_MAP_USER_CENTER.lat,
+                  lng: DEFAULT_MAP_USER_CENTER.lng,
+                  country: null,
+                  fromGps: false,
+              }
+    }
+
+    if (permissionState === "granted") {
+        const [pos, g] = await Promise.all([
+            getCurrentPositionPromise({
+                maximumAge: 300000,
+                timeout: 12000,
+                enableHighAccuracy: false,
+            }),
+            geoPromise,
+        ])
+        if (pos) {
+            const lat = pos.coords.latitude
+            const lng = pos.coords.longitude
+            writePersistedMapGps(lat, lng)
+            return {
+                lat,
+                lng,
+                country: g?.country ?? null,
+                fromGps: true,
+            }
+        }
+        const persisted = readPersistedMapGps()
+        if (persisted) {
+            return {
+                lat: persisted.lat,
+                lng: persisted.lng,
+                country: g?.country ?? null,
+                fromGps: true,
+            }
+        }
+        return g
+            ? {
+                  lat: g.lat,
+                  lng: g.lng,
+                  country: g.country,
+                  fromGps: false,
+              }
+            : {
+                  lat: DEFAULT_MAP_USER_CENTER.lat,
+                  lng: DEFAULT_MAP_USER_CENTER.lng,
+                  country: null,
+                  fromGps: false,
+              }
+    }
+
+    const g = await geoPromise
+    const persisted = readPersistedMapGps()
+    if (persisted) {
+        return {
+            lat: persisted.lat,
+            lng: persisted.lng,
+            country: g?.country ?? null,
+            fromGps: true,
+        }
+    }
+    return g
+        ? {
+              lat: g.lat,
+              lng: g.lng,
+              country: g.country,
+              fromGps: false,
+          }
+        : {
+              lat: DEFAULT_MAP_USER_CENTER.lat,
+              lng: DEFAULT_MAP_USER_CENTER.lng,
+              country: null,
+              fromGps: false,
+          }
+}
 
 // Minimal dark roadmap style — avoids needing a cloud-based map ID.
 // Map is always light mode.
@@ -14720,6 +15217,142 @@ function loadGoogleMapsScript(apiKey: string): void {
     document.head.appendChild(s)
 }
 
+/** Keep aligned with MAP_SPREAD_VIEWPORT_MAX_SPAN_DEG in curastem-jobs-api `listJobsForMap`. */
+const MAP_SPREAD_VIEWPORT_DEG = 4.2
+
+/**
+ * Same company/office: API bucket centroids can drift across zoom. Match to closest
+ * prior slot within this radius (metro-scale, not block-scale).
+ */
+const CHIP_OFFICE_MATCH_KM = 150
+
+function approxKm(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number
+): number {
+    const dLat = (lat2 - lat1) * 111
+    const dLng =
+        (lng2 - lng1) *
+        111 *
+        Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180))
+    return Math.hypot(dLat, dLng)
+}
+
+/**
+ * Stable map key + chip_lat/chip_lng for one employer location. Reuses a prior dot
+ * when the new response is nearby (avoids chips jumping on zoom refetch).
+ */
+function resolveStableOfficePosition(
+    e: MapCompanyEntry,
+    stickyLock: Map<string, { lat: number; lng: number }>
+): { accKey: string; lat: number; lng: number } {
+    const cid = e.company_id
+    const plat = e.chip_lat
+    const plng = e.chip_lng
+    let bestId: string | null = null
+    let bestKm = Infinity
+    for (const [id, pos] of stickyLock) {
+        if (!id.startsWith(`${cid}|`)) continue
+        const km = approxKm(plat, plng, pos.lat, pos.lng)
+        if (km < bestKm) {
+            bestKm = km
+            bestId = id
+        }
+    }
+    if (bestId != null && bestKm <= CHIP_OFFICE_MATCH_KM) {
+        const pos = stickyLock.get(bestId)!
+        return { accKey: bestId, lat: pos.lat, lng: pos.lng }
+    }
+    const accKey = `${cid}|${plat.toFixed(4)}|${plng.toFixed(4)}`
+    stickyLock.set(accKey, { lat: plat, lng: plng })
+    return { accKey, lat: plat, lng: plng }
+}
+
+/** Metro zoom: nearest chips to center. Continental zoom: grid round-robin so markers span the view. */
+function pickMapChipsForView(
+    entries: MapCompanyEntry[],
+    bbox: {
+        minLat: number
+        maxLat: number
+        minLng: number
+        maxLng: number
+    },
+    centerLat: number,
+    centerLng: number,
+    maxChips: number,
+    spreadMode: boolean
+): MapCompanyEntry[] {
+    const withCoords = entries.filter(
+        (e) => e.chip_lat != null && e.chip_lng != null
+    )
+    if (!spreadMode) {
+        return withCoords
+            .map((e) => ({
+                e,
+                d:
+                    (e.chip_lat - centerLat) ** 2 +
+                    (e.chip_lng - centerLng) ** 2,
+            }))
+            .sort((a, b) => a.d - b.d)
+            .slice(0, maxChips)
+            .map((x) => x.e)
+    }
+    if (withCoords.length <= maxChips) return withCoords
+    const spanLat = Math.max(bbox.maxLat - bbox.minLat, 1e-9)
+    const spanLng = Math.max(bbox.maxLng - bbox.minLng, 1e-9)
+    const gridN = Math.min(
+        18,
+        Math.max(6, Math.round(Math.sqrt(maxChips * 1.2)))
+    )
+    const buckets = new Map<string, MapCompanyEntry[]>()
+    for (const r of withCoords) {
+        const gx = Math.min(
+            gridN - 1,
+            Math.max(
+                0,
+                Math.floor(((r.chip_lat - bbox.minLat) / spanLat) * gridN)
+            )
+        )
+        const gy = Math.min(
+            gridN - 1,
+            Math.max(
+                0,
+                Math.floor(((r.chip_lng - bbox.minLng) / spanLng) * gridN)
+            )
+        )
+        const key = `${gx},${gy}`
+        if (!buckets.has(key)) buckets.set(key, [])
+        buckets.get(key)!.push(r)
+    }
+    for (const arr of buckets.values()) {
+        arr.sort((a, b) => b.job_count - a.job_count)
+    }
+    const keys = Array.from(buckets.keys()).sort((a, b) => {
+        const [ax, ay] = a.split(",").map(Number)
+        const [bx, by] = b.split(",").map(Number)
+        return ax - bx || ay - by
+    })
+    const out: MapCompanyEntry[] = []
+    let round = 0
+    while (out.length < maxChips && keys.length > 0) {
+        let added = false
+        for (const k of keys) {
+            const arr = buckets.get(k)!
+            if (arr.length > round) {
+                out.push(arr[round])
+                added = true
+                if (out.length >= maxChips) break
+            }
+        }
+        if (!added) break
+        round++
+        if (round > 250) break
+    }
+    return out.slice(0, maxChips)
+}
+
 const MapAgentPanel = React.memo(function MapAgentPanel({
     jobsApiUrl,
     googleMapsApiKey,
@@ -14735,6 +15368,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     defaultSearch = "",
     searchFocusRef,
     coordMergeJob = null,
+    onMapJobsQuery,
 }: {
     jobsApiUrl: string
     googleMapsApiKey: string
@@ -14758,6 +15392,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     searchFocusRef?: React.RefObject<(() => void) | null>
     /** When job detail is open over the map, use this copy for coords (GET /jobs/:id enrichment). */
     coordMergeJob?: HomepageJob | null
+    /** Tools debug: log deduped GET /jobs/map fetches (chip count + short summary). */
+    onMapJobsQuery?: (url: string, chipCount: number) => void
 }) {
     const isStatic = useIsStaticRenderer()
     const mapContainerRef = React.useRef<HTMLDivElement>(null)
@@ -14772,16 +15408,28 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const [totalJobCount, setTotalJobCount] = React.useState(0)
     // Accumulates chips across viewport moves — never discards already-loaded chips
     const accJobsRef = React.useRef(new Map<string, MapCompanyEntry>())
-    // Center of the last /jobs/map fetch; skip re-fetch if still within ~50km
-    const lastFetchCenterRef = React.useRef<{
+    /** Locked chip_lat/chip_lng per office slot — cleared with accJobsRef on search/filter change. */
+    const chipOfficeStickyRef = React.useRef(
+        new Map<string, { lat: number; lng: number }>()
+    )
+    // Last /jobs/map viewport: re-fetch when center moves (~50km), zoom changes visible extent,
+    // or search/filters change (must not skip on viewport alone — stale q otherwise).
+    const lastFetchViewportRef = React.useRef<{
         lat: number
         lng: number
+        latSpan: number
+        lngSpan: number
+        querySig: string
     } | null>(null)
     // Stable ref to jobsApiUrl so the idle listener closure stays fresh
     const jobsApiUrlRef = React.useRef(jobsApiUrl)
     React.useEffect(() => {
         jobsApiUrlRef.current = jobsApiUrl
     }, [jobsApiUrl])
+    const onMapJobsQueryRef = React.useRef(onMapJobsQuery)
+    React.useEffect(() => {
+        onMapJobsQueryRef.current = onMapJobsQuery
+    }, [onMapJobsQuery])
     // Stable refs for filter values so chip click handler (imperative) reads current values
     const filterDaysRef = React.useRef<"1d" | "3d" | "7d" | "30d">("7d")
     const filterTypeRef = React.useRef("")
@@ -15025,6 +15673,10 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         )
         return () => clearTimeout(t)
     }, [mapSearchQuery])
+    const debouncedMapSearchQueryRef = React.useRef(debouncedMapSearchQuery)
+    React.useEffect(() => {
+        debouncedMapSearchQueryRef.current = debouncedMapSearchQuery
+    }, [debouncedMapSearchQuery])
     const mapSearchInputRef = React.useRef<HTMLInputElement>(null)
     // Auto-focus the search bar on desktop when the panel first mounts
     React.useEffect(() => {
@@ -15050,6 +15702,14 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         lat: number
         lng: number
     } | null>(null)
+    /** Raw company chip fetch buckets — kept so debounced search can re-sort without refetching. */
+    const companyFeedBucketsRef = React.useRef<{
+        nearby: HomepageJob[]
+        anywhere: HomepageJob[]
+        refLat: number
+        refLng: number
+    } | null>(null)
+    const companyFeedFetchGenRef = React.useRef(0)
     // Infinite scroll state for the overlay
     const [overlayNextCursor, setOverlayNextCursor] = React.useState<
         string | null
@@ -15169,36 +15829,25 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         // If already loading, callback registered above will fire
     }, [googleMapsApiKey, isStatic])
 
-    // Fetch IP-based geo for initial map centering only — job chips are loaded
-    // on-demand per viewport from the idle listener attached in the map init effect.
+    // Initial map center: device GPS when permission is already granted, else persisted
+    // GPS (Safari), else GET /geo. Does not prompt for geolocation on panel open.
     React.useEffect(() => {
         if (!jobsApiUrl || isStatic) return
         let cancelled = false
-        fetch(`${jobsApiUrl}/geo`)
-            .then((r) => (r.ok ? r.json() : {}))
-            .then(
-                ({
-                    lat,
-                    lng,
-                }: {
-                    lat?: number | null
-                    lng?: number | null
-                }) => {
-                    if (cancelled) return
-                    if (
-                        typeof lat === "number" &&
-                        typeof lng === "number" &&
-                        !isNaN(lat) &&
-                        !isNaN(lng)
-                    ) {
-                        setUserLoc({ lat, lng })
-                        setAtPreciseLocation(true)
-                    }
+        const ctrl = new AbortController()
+        resolveBestMapUserLocation(jobsApiUrl, ctrl.signal)
+            .then((r) => {
+                if (cancelled) return
+                setUserLoc({ lat: r.lat, lng: r.lng })
+                setAtPreciseLocation(true)
+                if (r.fromGps) {
+                    preciseLocRef.current = { lat: r.lat, lng: r.lng }
                 }
-            )
+            })
             .catch(() => {})
         return () => {
             cancelled = true
+            ctrl.abort()
         }
     }, [jobsApiUrl, isStatic])
 
@@ -15225,9 +15874,16 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
 
         // Fetch /jobs/map for the current viewport bbox, then merge into the
         // accumulated cache so chips are never discarded as the user pans around.
-        // Re-fetch only when the center has moved more than ~50km (0.45°) so
-        // small pans within the same neighborhood don't trigger extra requests.
+        // Re-fetch when the center moves more than ~50km (0.45°), or when zoom
+        // changes the visible area enough (same center, different span).
         const MAX_CHIPS = 100
+        /** Relative span change that counts as a zoom change (10%). */
+        const ZOOM_SPAN_THRESHOLD = 0.1
+        /**
+         * Past ~0.11° (~12 km) across the view, /jobs/map is usually already capped at
+         * MAX_CHIPS — further zoom-in only magnifies; skip redundant network calls.
+         */
+        const DEEP_ZOOM_MAX_SPAN_DEG = 0.11
 
         const fetchViewport = () => {
             const apiUrl = jobsApiUrlRef.current
@@ -15238,20 +15894,98 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const mapCenter = map.getCenter()
             const cLat = mapCenter.lat()
             const cLng = mapCenter.lng()
-            const last = lastFetchCenterRef.current
-            if (
-                last &&
-                Math.abs(cLat - last.lat) < 0.45 &&
-                Math.abs(cLng - last.lng) < 0.45
-            )
-                return
-
-            lastFetchCenterRef.current = { lat: cLat, lng: cLng }
-
             const ne = bounds.getNorthEast()
             const sw = bounds.getSouthWest()
             const latSpan = ne.lat() - sw.lat()
             const lngSpan = ne.lng() - sw.lng()
+            const eps = 1e-9
+            const querySig = [
+                mapSearchQueryRef.current.trim(),
+                filterDaysRef.current,
+                filterTypeRef.current,
+                filterSeniorityRef.current,
+            ].join("\u0001")
+
+            const recomputeJobsFromAccumulator = () => {
+                const all = Array.from(accJobsRef.current.values())
+                const spreadMode =
+                    Math.max(latSpan, lngSpan) >= MAP_SPREAD_VIEWPORT_DEG
+                const nearest = pickMapChipsForView(
+                    all,
+                    {
+                        minLat: sw.lat(),
+                        maxLat: ne.lat(),
+                        minLng: sw.lng(),
+                        maxLng: ne.lng(),
+                    },
+                    cLat,
+                    cLng,
+                    MAX_CHIPS,
+                    spreadMode
+                )
+                setTotalJobCount(
+                    all.reduce((sum, e) => sum + e.job_count, 0)
+                )
+                setJobs(nearest)
+            }
+
+            const last = lastFetchViewportRef.current
+            if (last) {
+                const centerMoved =
+                    Math.abs(cLat - last.lat) >= 0.45 ||
+                    Math.abs(cLng - last.lng) >= 0.45
+                const latSpanDelta =
+                    Math.abs(latSpan - last.latSpan) /
+                    Math.max(last.latSpan, eps)
+                const lngSpanDelta =
+                    Math.abs(lngSpan - last.lngSpan) /
+                    Math.max(last.lngSpan, eps)
+                const viewportZoomChanged =
+                    Math.max(latSpanDelta, lngSpanDelta) >= ZOOM_SPAN_THRESHOLD
+                const queryOrFiltersChanged = last.querySig !== querySig
+                if (
+                    !centerMoved &&
+                    !viewportZoomChanged &&
+                    !queryOrFiltersChanged
+                ) {
+                    return
+                }
+                if (queryOrFiltersChanged) {
+                    accJobsRef.current.clear()
+                    chipOfficeStickyRef.current.clear()
+                }
+
+                const zoomingIn =
+                    latSpan < last.latSpan - 1e-6 &&
+                    lngSpan < last.lngSpan - 1e-6
+                const spanNow = Math.max(latSpan, lngSpan)
+                const skipDeepZoomNetworkFetch =
+                    !queryOrFiltersChanged &&
+                    !centerMoved &&
+                    viewportZoomChanged &&
+                    zoomingIn &&
+                    spanNow <= DEEP_ZOOM_MAX_SPAN_DEG
+
+                if (skipDeepZoomNetworkFetch) {
+                    lastFetchViewportRef.current = {
+                        lat: cLat,
+                        lng: cLng,
+                        latSpan,
+                        lngSpan,
+                        querySig,
+                    }
+                    recomputeJobsFromAccumulator()
+                    return
+                }
+            }
+
+            lastFetchViewportRef.current = {
+                lat: cLat,
+                lng: cLng,
+                latSpan,
+                lngSpan,
+                querySig,
+            }
             const minLat = sw.lat() - latSpan * 0.6
             const maxLat = ne.lat() + latSpan * 0.6
             const minLng = sw.lng() - lngSpan * 0.6
@@ -15284,51 +16018,61 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             if (filterSeniorityRef.current)
                 params.set("seniority_level", filterSeniorityRef.current)
 
-            fetch(`${apiUrl}/jobs/map?${params}`)
+            const mapFetchUrl = `${apiUrl}/jobs/map?${params}`
+            fetch(mapFetchUrl)
                 .then((r) => (r.ok ? r.json() : { data: [] }))
                 .then(({ data }: { data: MapCompanyEntry[] }) => {
                     const entries: MapCompanyEntry[] = Array.isArray(data)
                         ? data
                         : []
+                    onMapJobsQueryRef.current?.(
+                        mapFetchUrl,
+                        entries.length
+                    )
                     entries
                         .filter((e) => e.chip_lat != null && e.chip_lng != null)
                         .forEach((e) => {
-                            const key = `${e.company_id}|${e.chip_lat.toFixed(3)}|${e.chip_lng.toFixed(3)}`
-                            accJobsRef.current.set(key, e)
+                            const { accKey, lat, lng } =
+                                resolveStableOfficePosition(
+                                    e,
+                                    chipOfficeStickyRef.current
+                                )
+                            accJobsRef.current.set(accKey, {
+                                ...e,
+                                chip_lat: lat,
+                                chip_lng: lng,
+                            })
                         })
-                    // Re-rank the full accumulator by distance to current center,
-                    // then keep only the closest MAX_CHIPS to render
-                    const all = Array.from(accJobsRef.current.values())
-                    const nearest = all
-                        .map((e) => ({
-                            e,
-                            d:
-                                (e.chip_lat - cLat) ** 2 +
-                                (e.chip_lng - cLng) ** 2,
-                        }))
-                        .sort((a, b) => a.d - b.d)
-                        .slice(0, MAX_CHIPS)
-                        .map((x) => x.e)
-                    setTotalJobCount(
-                        all.reduce((sum, e) => sum + e.job_count, 0)
-                    )
-                    setJobs(nearest)
+                    recomputeJobsFromAccumulator()
                 })
                 .catch(() => {})
+        }
+
+        // Maps fires idle often while opening (layout, panTo user, tiles). Debounce so we
+        // do not issue a /jobs/map request per intermediate bounds tick.
+        const IDLE_MAP_FETCH_MS = 220
+        let idleDebounceTimer: ReturnType<typeof setTimeout> | null = null
+        const scheduleFetchViewport = () => {
+            if (idleDebounceTimer) clearTimeout(idleDebounceTimer)
+            idleDebounceTimer = setTimeout(() => {
+                idleDebounceTimer = null
+                fetchViewport()
+            }, IDLE_MAP_FETCH_MS)
         }
 
         let cancelled = false
         google.maps.event.addListenerOnce(map, "idle", () => {
             if (cancelled) return
             setMapHasIdle(true)
-            fetchViewport()
+            scheduleFetchViewport()
         })
         map.addListener("idle", () => {
-            if (!cancelled) fetchViewport()
+            if (!cancelled) scheduleFetchViewport()
         })
 
         return () => {
             cancelled = true
+            if (idleDebounceTimer) clearTimeout(idleDebounceTimer)
             mapInstanceRef.current = null
             setMapHasIdle(false)
         }
@@ -15358,7 +16102,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         filterSeniorityRef.current = filterSeniority
         if (!mapInstanceRef.current) return
         accJobsRef.current.clear()
-        lastFetchCenterRef.current = null
+        chipOfficeStickyRef.current.clear()
+        lastFetchViewportRef.current = null
         google.maps.event.trigger(mapInstanceRef.current, "idle")
     }, [debouncedMapSearchQuery, filterDays, filterType, filterSeniority]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -15374,7 +16119,6 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         const sinceTs =
             Math.floor(Date.now() / 1000) -
             (daysMap[filterDays] ?? 7) * 24 * 60 * 60
-        setSelectedJobs([])
         setOverlayNextCursor(null)
         overlayFetchCoordsRef.current = userLoc
         const p = new URLSearchParams({
@@ -15404,7 +16148,6 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 setIsLoadingOverlay(false)
             })
             .catch(() => {
-                setSelectedJobs([])
                 setIsLoadingOverlay(false)
             })
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -15416,6 +16159,110 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         selectedChipEntry,
         debouncedMapSearchQuery,
     ])
+
+    React.useEffect(() => {
+        companyFeedBucketsRef.current = null
+    }, [selectedChipEntry])
+
+    // Company chip panel: load full lists (no `q` — search reorders matches to the top client-side).
+    React.useEffect(() => {
+        if (!selectedChipEntry || !jobsApiUrl) return
+        const entry = selectedChipEntry
+        const chipLat = entry.chip_lat
+        const chipLng = entry.chip_lng
+        overlayFetchCoordsRef.current = { lat: chipLat, lng: chipLng }
+
+        const gen = ++companyFeedFetchGenRef.current
+        setSelectedJobs([])
+        setNearbyJobCount(null)
+
+        const daysMap: Record<string, number> = {
+            "1d": 1,
+            "3d": 3,
+            "7d": 7,
+            "30d": 30,
+        }
+        const sinceTs =
+            Math.floor(Date.now() / 1000) -
+            (daysMap[filterDays] ?? 7) * 24 * 60 * 60
+
+        const nearbyParams = new URLSearchParams({
+            company: entry.company_slug,
+            near_lat: String(chipLat),
+            near_lng: String(chipLng),
+            radius_km: "50",
+            since: String(sinceTs),
+            limit: "50",
+        })
+        const allParams = new URLSearchParams({
+            company: entry.company_slug,
+            since: String(sinceTs),
+            limit: "50",
+        })
+        if (filterType) {
+            nearbyParams.set("employment_type", filterType)
+            allParams.set("employment_type", filterType)
+        }
+        if (filterSeniority) {
+            nearbyParams.set("seniority_level", filterSeniority)
+            allParams.set("seniority_level", filterSeniority)
+        }
+
+        Promise.all([
+            fetch(`${jobsApiUrl}/jobs?${nearbyParams}`).then((r) =>
+                r.ok ? r.json() : { data: [] }
+            ),
+            fetch(`${jobsApiUrl}/jobs?${allParams}`).then((r) =>
+                r.ok ? r.json() : { data: [] }
+            ),
+        ])
+            .then(([nearbyRes, allRes]) => {
+                if (gen !== companyFeedFetchGenRef.current) return
+                const nearby: HomepageJob[] = Array.isArray(nearbyRes.data)
+                    ? nearbyRes.data
+                    : []
+                const all: HomepageJob[] = Array.isArray(allRes.data)
+                    ? allRes.data
+                    : []
+                const nearbyIds = new Set(nearby.map((j) => j.id))
+                const anywhere = all.filter((j) => !nearbyIds.has(j.id))
+                companyFeedBucketsRef.current = {
+                    nearby,
+                    anywhere,
+                    refLat: chipLat,
+                    refLng: chipLng,
+                }
+                const q = debouncedMapSearchQueryRef.current.trim()
+                setNearbyJobCount(nearby.length)
+                setSelectedJobs(
+                    sortChipCompanyFeed(
+                        nearby,
+                        anywhere,
+                        chipLat,
+                        chipLng,
+                        q
+                    )
+                )
+                setOverlayNextCursor(null)
+            })
+            .catch(() => {
+                if (gen !== companyFeedFetchGenRef.current) return
+                companyFeedBucketsRef.current = null
+                setSelectedJobs([])
+                setNearbyJobCount(null)
+            })
+    }, [selectedChipEntry, filterDays, filterType, filterSeniority, jobsApiUrl])
+
+    // Reorder company list when the debounced search changes (same fetched rows).
+    React.useEffect(() => {
+        if (!selectedChipEntry) return
+        const b = companyFeedBucketsRef.current
+        if (!b) return
+        const q = debouncedMapSearchQuery.trim()
+        setSelectedJobs(
+            sortChipCompanyFeed(b.nearby, b.anywhere, b.refLat, b.refLng, q)
+        )
+    }, [debouncedMapSearchQuery, selectedChipEntry])
 
     // Place / refresh company chips whenever jobs or map changes
     React.useEffect(() => {
@@ -15477,103 +16324,50 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const map = mapInstanceRef.current
             if (!map || !gm.OverlayView) return
             const chip = buildChip(entry)
-            chip.addEventListener("click", (e) => {
-                e.stopPropagation()
-                haptic.light()
-                const chipLat = entry.chip_lat
-                const chipLng = entry.chip_lng
-                setSelectedChipEntry(entry)
-                setSelectedJobs([])
-                setNearbyJobCount(null)
-                setTravelTimes({})
-                setOverlayNextCursor(null)
-                overlayFetchCoordsRef.current = { lat: chipLat, lng: chipLng }
-                if (isMobile) snapMobileFeed(false)
-
-                // Mirror whatever filters are active on the map — chips already respect all filters,
-                // so if a chip is visible there are matching jobs within this window.
-                const daysMap: Record<string, number> = {
-                    "1d": 1,
-                    "3d": 3,
-                    "7d": 7,
-                    "30d": 30,
+            /** Pans on the map often start on a chip — only open the panel on a tap, not a drag. */
+            const CHIP_DRAG_THRESHOLD_PX = 10
+            chip.addEventListener("pointerdown", (e) => {
+                if (e.pointerType === "mouse" && e.button !== 0) return
+                const sx = e.clientX
+                const sy = e.clientY
+                const startId = e.pointerId
+                let dragged = false
+                const onMove = (ev: PointerEvent) => {
+                    if (ev.pointerId !== startId) return
+                    if (
+                        Math.hypot(ev.clientX - sx, ev.clientY - sy) >
+                        CHIP_DRAG_THRESHOLD_PX
+                    ) {
+                        dragged = true
+                    }
                 }
-                const sinceTs =
-                    Math.floor(Date.now() / 1000) -
-                    (daysMap[filterDaysRef.current] ?? 7) * 24 * 60 * 60
-
-                // Company view: fetch nearby (geocoded within 50km) + all jobs globally in parallel
-                const nearbyParams = new URLSearchParams({
-                    company: entry.company_slug,
-                    near_lat: String(chipLat),
-                    near_lng: String(chipLng),
-                    radius_km: "50",
-                    since: String(sinceTs),
-                    limit: "50",
+                const cleanup = () => {
+                    document.removeEventListener("pointermove", onMove)
+                    document.removeEventListener("pointerup", onEnd)
+                    document.removeEventListener("pointercancel", onEnd)
+                }
+                const onEnd = (ev: PointerEvent) => {
+                    if (ev.pointerId !== startId) return
+                    cleanup()
+                    if (dragged) return
+                    e.stopPropagation()
+                    haptic.light()
+                    const chipLat = entry.chip_lat
+                    const chipLng = entry.chip_lng
+                    setSelectedChipEntry(entry)
+                    setSelectedJobs([])
+                    setNearbyJobCount(null)
+                    setTravelTimes({})
+                    setOverlayNextCursor(null)
+                    overlayFetchCoordsRef.current = { lat: chipLat, lng: chipLng }
+                    if (isMobile) snapMobileFeed(false)
+                    // Dual /jobs fetch + search reorder run in the selectedChipEntry effect.
+                }
+                document.addEventListener("pointermove", onMove, {
+                    passive: true,
                 })
-                const allParams = new URLSearchParams({
-                    company: entry.company_slug,
-                    since: String(sinceTs),
-                    limit: "50",
-                })
-                const q = mapSearchQueryRef.current.trim()
-                if (q) {
-                    nearbyParams.set("q", q)
-                    allParams.set("q", q)
-                }
-                const et = filterTypeRef.current
-                if (et) {
-                    nearbyParams.set("employment_type", et)
-                    allParams.set("employment_type", et)
-                }
-                const sl = filterSeniorityRef.current
-                if (sl) {
-                    nearbyParams.set("seniority_level", sl)
-                    allParams.set("seniority_level", sl)
-                }
-
-                Promise.all([
-                    fetch(`${jobsApiUrl}/jobs?${nearbyParams}`).then((r) =>
-                        r.ok ? r.json() : { data: [] }
-                    ),
-                    fetch(`${jobsApiUrl}/jobs?${allParams}`).then((r) =>
-                        r.ok ? r.json() : { data: [] }
-                    ),
-                ])
-                    .then(
-                        ([nearbyRes, allRes]: [
-                            { data: HomepageJob[] },
-                            { data: HomepageJob[] },
-                        ]) => {
-                            const nearby: HomepageJob[] = Array.isArray(
-                                nearbyRes.data
-                            )
-                                ? nearbyRes.data
-                                : []
-                            const all: HomepageJob[] = Array.isArray(
-                                allRes.data
-                            )
-                                ? allRes.data
-                                : []
-                            const nearbyIds = new Set(nearby.map((j) => j.id))
-                            const anywhere = all.filter(
-                                (j) => !nearbyIds.has(j.id)
-                            )
-                            const combined = sortChipCompanyFeed(
-                                nearby,
-                                anywhere,
-                                chipLat,
-                                chipLng
-                            )
-                            setNearbyJobCount(nearby.length)
-                            setSelectedJobs(combined)
-                            setOverlayNextCursor(null)
-                        }
-                    )
-                    .catch(() => {
-                        setSelectedJobs([])
-                        setNearbyJobCount(null)
-                    })
+                document.addEventListener("pointerup", onEnd)
+                document.addEventListener("pointercancel", onEnd)
             })
 
             // OverlayView: custom HTML on raster map without needing a mapId
@@ -15611,11 +16405,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             return h
         }
 
-        // At zoom 13, chips are ~60px wide and 1° ≈ 5800px, so two chips within
-        // ~0.010° (~1.1km) can visually overlap. We use 0.008° as the cluster
-        // threshold to catch same-block and same-neighborhood stacking in dense cities.
-        // SCATTER_BASE ≈ 150m keeps chips close to their real address.
-        const CLUSTER_THRESHOLD = 0.008
+        // Small deterministic jitter per chip so nearby employers do not sit on identical
+        // pixels. Seed is company + lat/lng only — never neighbor set or zoom — so dots
+        // do not jump when clustering membership used to change across zoom levels.
         const SCATTER_BASE = 0.0013
 
         const pts: Array<{ entry: MapCompanyEntry; lat: number; lng: number }> =
@@ -15624,44 +16416,18 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             pts.push({ entry, lat: entry.chip_lat, lng: entry.chip_lng })
         }
 
-        // Greedy single-pass clustering — O(n²), n ≤ ~600, runs in < 1ms
-        const used = new Array(pts.length).fill(false)
-        for (let i = 0; i < pts.length; i++) {
-            if (used[i]) continue
-            const cluster: typeof pts = [pts[i]]
-            used[i] = true
-            for (let j = i + 1; j < pts.length; j++) {
-                if (used[j]) continue
-                if (
-                    Math.abs(pts[j].lat - pts[i].lat) < CLUSTER_THRESHOLD &&
-                    Math.abs(pts[j].lng - pts[i].lng) < CLUSTER_THRESHOLD
-                ) {
-                    cluster.push(pts[j])
-                    used[j] = true
-                }
-            }
-            if (cluster.length === 1) {
-                placeChip(cluster[0].entry, cluster[0].lat, cluster[0].lng)
-            } else {
-                // Each company gets a unique angle and radius wobble from its ID hash
-                // so the layout looks organic rather than a geometric pattern.
-                // Chips drift at most ~SCATTER_BASE * sqrt(n) * 1.3 from their original
-                // coords — enough to separate visually, small enough to stay on land.
-                const cosLat = Math.cos((pts[i].lat * Math.PI) / 180)
-                for (let k = 0; k < cluster.length; k++) {
-                    const id = cluster[k].entry.company_id
-                    const angle = ((fnv(id) % 100000) / 100000) * Math.PI * 2
-                    const r =
-                        SCATTER_BASE *
-                        Math.sqrt(k + 1) *
-                        (0.7 + ((fnv(id, 1) % 1000) / 1000) * 0.6)
-                    placeChip(
-                        cluster[k].entry,
-                        cluster[k].lat + r * Math.cos(angle),
-                        cluster[k].lng + (r * Math.sin(angle)) / cosLat
-                    )
-                }
-            }
+        for (const { entry, lat, lng } of pts) {
+            const cosLat = Math.cos((lat * Math.PI) / 180)
+            const seed = `${entry.company_id}|${lat.toFixed(5)}|${lng.toFixed(5)}`
+            const angle = ((fnv(seed) % 100000) / 100000) * Math.PI * 2
+            const r =
+                SCATTER_BASE *
+                (0.7 + ((fnv(seed, 1) % 1000) / 1000) * 0.6)
+            placeChip(
+                entry,
+                lat + r * Math.cos(angle),
+                lng + (r * Math.sin(angle)) / cosLat
+            )
         }
     }, [jobs, mapsReady, mapHasIdle, isStatic])
 
@@ -15719,43 +16485,101 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         }
     }, [selectedJobs, userLoc, isStatic, coordMergeJob])
 
+    /** Street-level zoom when jumping to “my location” — applied whenever zoom differs. */
+    const CURRENT_LOCATION_MAP_ZOOM = 13
+
     const handleCurrentLocation = React.useCallback(() => {
         haptic.light()
-        const panTo = (loc: { lat: number; lng: number }) => {
+        const map = mapInstanceRef.current
+        const applyLocationOnMap = (loc: { lat: number; lng: number }) => {
             setAtPreciseLocation(true)
-            setUserLoc(loc) // triggers the re-center useEffect which calls panTo
-            mapInstanceRef.current?.setZoom(13)
+            setUserLoc(loc)
+            if (map) {
+                const z = map.getZoom?.()
+                const needZoomChange =
+                    z == null ||
+                    Math.abs(z - CURRENT_LOCATION_MAP_ZOOM) > 0.01
+                if (needZoomChange && typeof map.moveCamera === "function") {
+                    map.moveCamera({
+                        center: { lat: loc.lat, lng: loc.lng },
+                        zoom: CURRENT_LOCATION_MAP_ZOOM,
+                    })
+                } else if (needZoomChange) {
+                    map.setZoom(CURRENT_LOCATION_MAP_ZOOM)
+                    map.panTo({ lat: loc.lat, lng: loc.lng })
+                } else {
+                    map.panTo({ lat: loc.lat, lng: loc.lng })
+                }
+            }
         }
 
-        // If we already have a precise location cached, go straight there — no network call needed
-        if (preciseLocRef.current) {
-            panTo(preciseLocRef.current)
-            return
-        }
+        const validGeo = (d: unknown): d is { lat: number; lng: number } =>
+            typeof d === "object" &&
+            d !== null &&
+            typeof (d as { lat?: unknown }).lat === "number" &&
+            typeof (d as { lng?: unknown }).lng === "number" &&
+            !isNaN((d as { lat: number }).lat) &&
+            !isNaN((d as { lng: number }).lng)
 
-        // Hit /geo immediately so the map moves without waiting on GPS permission
-        fetch(`${jobsApiUrl}/geo`)
-            .then((r) => r.json())
-            .then((d) => {
-                if (d?.lat && d?.lng) panTo({ lat: d.lat, lng: d.lng })
+        /** True once device coords were applied — do not let /geo overwrite GPS. */
+        let gpsApplied = false
+
+        const maybeApplyIpGeo = (d: unknown) => {
+            if (gpsApplied || !validGeo(d)) return
+            applyLocationOnMap({
+                lat: (d as { lat: number }).lat,
+                lng: (d as { lng: number }).lng,
             })
+        }
+
+        // Always request IP geo in parallel so the map moves immediately while GPS resolves
+        // (or alone when permission is denied / geolocation unavailable).
+        fetch(`${jobsApiUrl}/geo`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => maybeApplyIpGeo(d))
             .catch(() => {})
 
-        // Then try GPS — cache and upgrade to precise coords if available
-        if (typeof navigator !== "undefined" && navigator.geolocation) {
+        const runGps = () => {
+            if (typeof navigator === "undefined" || !navigator.geolocation)
+                return
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     const loc = {
                         lat: pos.coords.latitude,
                         lng: pos.coords.longitude,
                     }
+                    gpsApplied = true
                     preciseLocRef.current = loc
-                    panTo(loc)
+                    writePersistedMapGps(loc.lat, loc.lng)
+                    applyLocationOnMap(loc)
                 },
-                () => {}, // /geo already handled the fallback
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+                () => {
+                    if (gpsApplied) return
+                    /* GET /geo already in flight — applies as soon as it returns */
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0,
+                }
             )
         }
+
+        if (typeof navigator === "undefined" || !navigator.geolocation) {
+            /* Instant center from /geo only — request already in flight above */
+            return
+        }
+
+        navigator.permissions
+            ?.query({ name: "geolocation" as PermissionName })
+            .then((st) => {
+                if (st.state === "denied") {
+                    /* /geo only — already in flight; no getCurrentPosition */
+                    return
+                }
+                runGps()
+            })
+            .catch(() => runGps())
     }, [jobsApiUrl])
 
     const tbBg = isDark ? "#333333" : "#ffffff"
@@ -17660,7 +18484,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     ) : selectedChipEntry &&
                                       nearbyJobCount !== null &&
                                       selectedJobs.length === 0 ? (
-                                        // Company feed loaded — no results
+                                        // Company feed loaded — no rows from API
                                         <div
                                             style={{
                                                 paddingLeft: 4,
@@ -17674,9 +18498,78 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             No search results found
                                         </div>
                                     ) : !selectedChipEntry &&
+                                      isLoadingOverlay &&
+                                      selectedJobs.length === 0 ? (
+                                        // Regular feed loading (search / location / filters) — keep prior rows when non-empty
+                                        Array.from({ length: 4 }).map(
+                                            (_, i) => (
+                                                <div
+                                                    key={`map-feed-sk-${i}`}
+                                                    style={{
+                                                        background: cardBg,
+                                                        borderRadius: 28,
+                                                        padding: "16px 20px",
+                                                        flexShrink: 0,
+                                                    }}
+                                                >
+                                                    <div
+                                                        style={{
+                                                            height: 18,
+                                                            width: "65%",
+                                                            background:
+                                                                themeColors
+                                                                    .hover
+                                                                    .default,
+                                                            borderRadius: 6,
+                                                            marginBottom: 10,
+                                                            animation:
+                                                                "homepageSkeleton 1.4s ease-in-out infinite",
+                                                        }}
+                                                    />
+                                                    <div
+                                                        style={{
+                                                            display: "flex",
+                                                            gap: 8,
+                                                            alignItems:
+                                                                "center",
+                                                        }}
+                                                    >
+                                                        <div
+                                                            style={{
+                                                                width: 16,
+                                                                height: 16,
+                                                                borderRadius: 8,
+                                                                background:
+                                                                    themeColors
+                                                                        .hover
+                                                                        .default,
+                                                                flexShrink: 0,
+                                                                animation:
+                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
+                                                            }}
+                                                        />
+                                                        <div
+                                                            style={{
+                                                                height: 13,
+                                                                width: "40%",
+                                                                background:
+                                                                    themeColors
+                                                                        .hover
+                                                                        .default,
+                                                                borderRadius: 6,
+                                                                animation:
+                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
+                                                            }}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            )
+                                        )
+                                    ) : !selectedChipEntry &&
                                       selectedJobs.length === 0 &&
-                                      mapSearchQuery.trim() ? (
-                                        // Regular feed — search returned no results
+                                      mapSearchQuery.trim() &&
+                                      !isLoadingOverlay ? (
+                                        // Regular feed — API returned no rows (not mid-load)
                                         <div
                                             style={{
                                                 paddingLeft: 4,
@@ -18277,7 +19170,8 @@ const HomepageJobs = React.memo(function HomepageJobs({
     } | null>(null)
     const topPicksTriggered = true
 
-    // Geo is IP-based — fetch once per jobsApiUrl, cache in a ref so query changes don't re-hit /geo
+    // One resolve per jobsApiUrl: GPS when permission already granted (or persisted GPS),
+    // else GET /geo — shared with full map panel (see resolveBestMapUserLocation).
     const geoCacheRef = React.useRef<
         { lat: number; lng: number; country: string | null } | null | "pending"
     >(null)
@@ -18307,45 +19201,30 @@ const HomepageJobs = React.memo(function HomepageJobs({
         }
         geoCacheRef.current = "pending"
         const ctrl = new AbortController()
-        const timer = setTimeout(() => ctrl.abort(), 4000)
-        return fetch(`${jobsApiUrl}/geo`, { signal: ctrl.signal })
+        const timer = setTimeout(() => ctrl.abort(), 15000)
+        return resolveBestMapUserLocation(jobsApiUrl, ctrl.signal)
             .finally(() => clearTimeout(timer))
-            .then((r) => (r.ok ? r.json() : {}))
-            .then(
-                ({
-                    lat,
-                    lng,
-                    country,
-                }: {
-                    lat?: number | null
-                    lng?: number | null
-                    country?: string | null
-                }) => {
-                    const valid =
-                        typeof lat === "number" &&
-                        typeof lng === "number" &&
-                        !isNaN(lat) &&
-                        !isNaN(lng) &&
-                        lat >= -90 &&
-                        lat <= 90 &&
-                        lng >= -180 &&
-                        lng <= 180
-                    const result = valid
-                        ? {
-                              lat: lat as number,
-                              lng: lng as number,
-                              country:
-                                  typeof country === "string"
-                                      ? country.toUpperCase()
-                                      : null,
-                          }
-                        : null
-                    geoCacheRef.current = result
-                    geoResolversRef.current.forEach((res) => res(result))
-                    geoResolversRef.current = []
-                    return result
+            .then((r) => {
+                const result = {
+                    lat: r.lat,
+                    lng: r.lng,
+                    country: r.country,
                 }
-            )
+                const valid =
+                    typeof result.lat === "number" &&
+                    typeof result.lng === "number" &&
+                    !isNaN(result.lat) &&
+                    !isNaN(result.lng) &&
+                    result.lat >= -90 &&
+                    result.lat <= 90 &&
+                    result.lng >= -180 &&
+                    result.lng <= 180
+                const out = valid ? result : null
+                geoCacheRef.current = out
+                geoResolversRef.current.forEach((res) => res(out))
+                geoResolversRef.current = []
+                return out
+            })
             .catch(() => {
                 geoCacheRef.current = null
                 geoResolversRef.current.forEach((res) => res(null))
@@ -20611,7 +21490,7 @@ const MessageBubble = React.memo(
         onToggleDoc,
         onToggleWhiteboard,
         onToggleApp,
-        isDocOpen,
+        isThisDocChipActive,
         isWhiteboardOpen,
         isAppOpen,
         docCallType,
@@ -20633,7 +21512,8 @@ const MessageBubble = React.memo(
         onToggleDoc?: () => void
         onToggleWhiteboard?: () => void
         onToggleApp?: () => void
-        isDocOpen?: boolean
+        /** True when the docs panel is open on this message's doc (shows Close). */
+        isThisDocChipActive?: boolean
         isWhiteboardOpen?: boolean
         isAppOpen?: boolean
         docCallType?: "doc" | "resume" | "cover_letter"
@@ -21892,7 +22772,7 @@ const MessageBubble = React.memo(
                                         >
                                             <path
                                                 d={
-                                                    isDocOpen
+                                                    isThisDocChipActive
                                                         ? "M14 2L2 14M2 2L14 14"
                                                         : "M0.75 13.2011L8.63044 13.2007M0.75 7.84243H15.25M0.75 2.79895H15.25"
                                                 }
@@ -21919,7 +22799,7 @@ const MessageBubble = React.memo(
                                             wordWrap: "break-word",
                                         }}
                                     >
-                                        {isDocOpen
+                                        {isThisDocChipActive
                                             ? "Close"
                                             : docCallType === "resume"
                                               ? "Resume"
@@ -24095,9 +24975,21 @@ export default function OmegleMentorshipUI(props: Props) {
         }
         return ""
     })
-    const [debouncedYouWork, setDebouncedYouWork] = React.useState(youWork)
+    const [debouncedYouWork, setDebouncedYouWork] = React.useState(() => {
+        if (typeof window !== "undefined") {
+            return normalizeYouWorkForHomepageQuery(
+                localStorage.getItem("you_work") || ""
+            )
+        }
+        return ""
+    })
     React.useEffect(() => {
-        const t = setTimeout(() => setDebouncedYouWork(youWork), 400)
+        const t = setTimeout(() => {
+            setDebouncedYouWork((prev) => {
+                const next = normalizeYouWorkForHomepageQuery(youWork)
+                return prev === next ? prev : next
+            })
+        }, HOMEPAGE_JOB_TITLE_DEBOUNCE_MS)
         return () => clearTimeout(t)
     }, [youWork])
     const [youInterests, setYouInterests] = React.useState(() => {
@@ -24152,6 +25044,9 @@ export default function OmegleMentorshipUI(props: Props) {
     const nameRedoStack = React.useRef<string[]>([])
     const workUndoStack = React.useRef<string[]>([])
     const workRedoStack = React.useRef<string[]>([])
+    /** Profile job title field: same vertical padding as "Your favorite things" (12px); max height 132px. */
+    const jobTitleTextareaRef = React.useRef<HTMLTextAreaElement>(null)
+    const JOB_TITLE_TEXTAREA_MAX_PX = 132
     const schoolUndoStack = React.useRef<string[]>([])
     const schoolRedoStack = React.useRef<string[]>([])
 
@@ -24188,6 +25083,16 @@ export default function OmegleMentorshipUI(props: Props) {
             setValue(transformed ?? e.target.value)
         },
     })
+
+    React.useLayoutEffect(() => {
+        const el = jobTitleTextareaRef.current
+        if (!el) return
+        el.style.height = "auto"
+        const sh = el.scrollHeight
+        el.style.height = `${Math.min(sh, JOB_TITLE_TEXTAREA_MAX_PX)}px`
+        el.style.overflowY = sh > JOB_TITLE_TEXTAREA_MAX_PX ? "auto" : "hidden"
+    }, [youWork, showYouSettings])
+
     const [isSettingsCloseHovered, setIsSettingsCloseHovered] =
         React.useState(false)
 
@@ -24255,13 +25160,19 @@ export default function OmegleMentorshipUI(props: Props) {
                 const extractionPrompt = `You are parsing a resume. Return ONLY valid JSON, no markdown, no explanation.
 Extract this structure:
 {
-  "fullName": "First Last or empty string",
+  "fullName": "person name in Title Case (e.g. Logan Garcia) or empty string",
   "school": "most recent school/university or empty string",
-  "work": "current or most recent job title or empty string",
+  "profileJobTitles": ["1–6 short professional job titles for this person's career search"],
   "interests": ["array of skills, hobbies, interests found — max 10 concise phrases"],
   "resumeText": "the full plain-text content of the resume",
   "seniorityLevel": "one of: intern | new_grad | entry | mid | senior | staff | manager | director | executive — infer from years of total professional experience, job titles, and education. Use intern for students/no experience, new_grad for <1yr, entry for 1-2yr, mid for 3-5yr, senior for 6-9yr, staff for 10+yr individual contributors, manager/director/executive for leadership roles."
 }
+
+profileJobTitles rules:
+- These are search targets for their NEXT job, not a transcript of every past title. Use Title Case and common industry wording.
+- Ground the list in their experience, then optionally, only if relevant to experience, add 0–2 inferred roles they are suited for from skills and trajectory (even if not written verbatim on the resume). Each inferred title must be a different role, not a seniority variant of something already listed (e.g. if "Product Manager" is in the list, do not also add "Senior Product Manager" or "Technical Product Manager" — including "Product Manager" once is already enough. Same for other industries and titles.
+- Short-term, student, or side roles (internships, student researcher, teaching or lab assistant, campus jobs, and similar) are usually not the headline roles someone will job-hunt under. Infer career-facing titles those experiences support (engineer, scientist, product manager, designer, etc.) when you can. If the resume is only that kind of work, use the clearest generic labels that still help search.
+- Shorten noisy or internal titles into plain market phrases; dedupe overlapping titles; prefer recognizable titles over jargon; strongest fit first; max 6 strings.
 
 Keep emails, phones, and URLs in resumeText exactly as printed in the document.`
 
@@ -24316,6 +25227,7 @@ Keep emails, phones, and URLs in resumeText exactly as printed in the document.`
                     fullName?: string
                     school?: string
                     work?: string
+                    profileJobTitles?: string[]
                     interests?: string[]
                     resumeText?: string
                     seniorityLevel?: string
@@ -24374,11 +25286,25 @@ Keep emails, phones, and URLs in resumeText exactly as printed in the document.`
 
                 // Auto-fill only empty profile fields
                 if (extracted.fullName && !youName.trim())
-                    setYouName(extracted.fullName.trim())
+                    setYouName(
+                        formatResumeProfileName(extracted.fullName.trim())
+                    )
                 if (extracted.school && !youSchool.trim())
                     setYouSchool(extracted.school.trim())
-                if (extracted.work && !youWork.trim())
-                    setYouWork(extracted.work.trim())
+                if (!youWork.trim()) {
+                    const fromTitles =
+                        extracted.profileJobTitles &&
+                        extracted.profileJobTitles.length > 0
+                            ? formatProfileJobTitlesFromExtraction(
+                                  extracted.profileJobTitles
+                              )
+                            : ""
+                    const fromLegacy =
+                        extracted.work?.trim() &&
+                        formatResumeJobTitleLabel(extracted.work.trim())
+                    if (fromTitles) setYouWork(fromTitles)
+                    else if (fromLegacy) setYouWork(fromLegacy)
+                }
 
                 // Append interests that aren't already in the textarea (case-insensitive dedup)
                 if (extracted.interests?.length) {
@@ -24480,22 +25406,26 @@ ${extracted.resumeText.trim()}`
         [geminiProxyUrl, youName, youSchool, youWork]
     )
 
-    const handleResumeDownload = React.useCallback(() => {
+    const handleResumeDownload = React.useCallback(async () => {
         haptic.light()
         const html = getProfileResumeDocHtml()?.trim()
         if (html) {
-            const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Resume</title></head><body>${html}</body></html>`
-            const blob = new Blob([doc], { type: "text/html;charset=utf-8" })
-            const url = URL.createObjectURL(blob)
-            const link = document.createElement("a")
-            link.href = url
-            const base =
-                resumeFile?.name.replace(/\.[^.]+$/, "").trim() || "Resume"
-            link.download = `${base}.html`
-            document.body.appendChild(link)
-            link.click()
-            document.body.removeChild(link)
-            setTimeout(() => URL.revokeObjectURL(url), 5000)
+            try {
+                const pdfBytes = await docHtmlToOnePagePdfBytes(html, false)
+                const blob = new Blob([pdfBytes], { type: "application/pdf" })
+                const url = URL.createObjectURL(blob)
+                const link = document.createElement("a")
+                link.href = url
+                const base =
+                    resumeFile?.name.replace(/\.[^.]+$/, "").trim() || "Resume"
+                link.download = `${base}.pdf`
+                document.body.appendChild(link)
+                link.click()
+                document.body.removeChild(link)
+                setTimeout(() => URL.revokeObjectURL(url), 5000)
+            } catch (e) {
+                console.error("resume PDF export failed:", e)
+            }
             setResumeMenuOpen(false)
             return
         }
@@ -25013,6 +25943,8 @@ ${extracted.resumeText.trim()}`
     >("doc")
     /** Company for job-scoped resume/cover — restored from chat; live job overrides in DocEditor. */
     const [docCompany, setDocCompany] = React.useState("")
+    const [chatDocs, setChatDocs] = React.useState<ChatDocEntry[]>([])
+    const [activeDocId, setActiveDocId] = React.useState<string | null>(null)
     const [remoteCursors, setRemoteCursors] = React.useState<
         Map<string, { x: number; y: number; color: string }>
     >(new Map())
@@ -25217,6 +26149,141 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
     React.useEffect(() => {
         docCompanyRef.current = docCompany
     }, [docCompany])
+
+    const chatDocsRef = React.useRef<ChatDocEntry[]>([])
+    React.useEffect(() => {
+        chatDocsRef.current = chatDocs
+    }, [chatDocs])
+
+    const activeDocIdRef = React.useRef<string | null>(null)
+    React.useEffect(() => {
+        activeDocIdRef.current = activeDocId
+    }, [activeDocId])
+
+    const applyChatDocHydration = React.useCallback((chat: ChatSession) => {
+        const { docs, activeDocId: nextActive } = migrateLegacyChatDocs(chat)
+        setChatDocs(docs)
+        setActiveDocId(nextActive)
+        const active = nextActive
+            ? docs.find((d) => d.id === nextActive)
+            : pickMostRecentDocEntry(docs)
+        if (active) {
+            setDocContent(active.content)
+            setDocType(active.docType)
+            setDocCompany(active.docCompany ?? "")
+        } else {
+            setDocContent(DEFAULT_DOC_CONTENT)
+            setDocType("doc")
+            setDocCompany("")
+        }
+    }, [])
+
+    const switchToDoc = React.useCallback((docId: string) => {
+        const doc = chatDocsRef.current.find((d) => d.id === docId)
+        if (!doc) return
+        setActiveDocId(docId)
+        setDocContent(doc.content)
+        setDocType(doc.docType)
+        setDocCompany(doc.docCompany ?? "")
+    }, [])
+
+    /** Ensures opening Docs focuses the most recently edited document in this chat. */
+    const openMostRecentDoc = React.useCallback(() => {
+        const docs = chatDocsRef.current
+        if (docs.length === 0) {
+            const id = generateChatDocId()
+            const html = docContentRef.current || DEFAULT_DOC_CONTENT
+            setChatDocs([
+                {
+                    id,
+                    content: html,
+                    docType: docTypeRef.current,
+                    docCompany: docCompanyRef.current?.trim() || undefined,
+                    lastEdited: Date.now(),
+                },
+            ])
+            setActiveDocId(id)
+            return
+        }
+        const pick = pickMostRecentDocEntry(docs)
+        if (pick) switchToDoc(pick.id)
+    }, [switchToDoc])
+
+    /**
+     * Registers HTML into the multi-doc list. Use mode "new" for create_resume / cover;
+     * "update" for update_doc (mutates active doc, or creates one if none).
+     */
+    const upsertDocForTool = React.useCallback(
+        (
+            mode: "new" | "update",
+            html: string,
+            dType: "doc" | "resume" | "cover_letter",
+            company: string,
+            opts?: { targetDocId?: string | null }
+        ): string => {
+            const now = Date.now()
+            const co = company?.trim() ?? ""
+            if (mode === "new") {
+                const id = generateChatDocId()
+                setChatDocs((prev) => [
+                    ...prev,
+                    {
+                        id,
+                        content: html,
+                        docType: dType,
+                        docCompany: co || undefined,
+                        lastEdited: now,
+                    },
+                ])
+                setActiveDocId(id)
+                setDocContent(html)
+                setDocType(dType)
+                setDocCompany(co)
+                return id
+            }
+            const tid = opts?.targetDocId ?? activeDocIdRef.current
+            if (
+                !tid ||
+                !chatDocsRef.current.some((d) => d.id === tid)
+            ) {
+                const id = generateChatDocId()
+                setChatDocs((prev) => [
+                    ...prev,
+                    {
+                        id,
+                        content: html,
+                        docType: dType,
+                        docCompany: co || undefined,
+                        lastEdited: now,
+                    },
+                ])
+                setActiveDocId(id)
+                setDocContent(html)
+                setDocType(dType)
+                setDocCompany(co)
+                return id
+            }
+            setActiveDocId(tid)
+            setChatDocs((prev) =>
+                prev.map((d) =>
+                    d.id === tid
+                        ? {
+                              ...d,
+                              content: html,
+                              docType: dType,
+                              docCompany: co || undefined,
+                              lastEdited: now,
+                          }
+                        : d
+                )
+            )
+            setDocContent(html)
+            setDocType(dType)
+            setDocCompany(co)
+            return tid
+        },
+        []
+    )
 
     const appCodeRef = React.useRef(appCode)
     React.useEffect(() => {
@@ -27134,6 +28201,21 @@ Do not include markdown formatting or explanations.`
         )
     }, [])
 
+    /** Tools panel: GET /jobs/map — deduped by center+filters (not full bbox) to avoid idle spam. */
+    const mapJobsQueryLoggedRef = React.useRef<Set<string>>(new Set())
+    React.useEffect(() => {
+        mapJobsQueryLoggedRef.current.clear()
+    }, [jobsApiUrl, isMapOpen])
+    const emitMapJobsQuery = React.useCallback((url: string, chipCount: number) => {
+        const key = mapJobsQueryDedupKey(url)
+        if (mapJobsQueryLoggedRef.current.has(key)) return
+        mapJobsQueryLoggedRef.current.add(key)
+        logRefForHomepageJobs.current(
+            formatMapJobsQueryLogLine(url, chipCount),
+            "tools"
+        )
+    }, [])
+
     // (Role state moved to top of component to fix scoping for system prompt)
 
     // --- REFS: DOM & PERSISTENT OBJECTS ---
@@ -27342,6 +28424,10 @@ Do not include markdown formatting or explanations.`
     const [menuOpenToolType, setMenuOpenToolType] = React.useState<
         "miniide" | "doceditor" | "whiteboard" | "jobs" | null
     >(null)
+    /** When the stuff-item menu targets one doc in a multi-doc chat. */
+    const [menuOpenDocId, setMenuOpenDocId] = React.useState<string | null>(
+        null
+    )
     const [menuPosition, setMenuPosition] = React.useState<{
         top: number
         left: number
@@ -27829,6 +28915,38 @@ Do not include markdown formatting or explanations.`
                     attachments: undefined,
                 }))
 
+                const now = Date.now()
+                const aid = activeDocIdRef.current
+                let mergedDocs: ChatDocEntry[] = chatDocsRef.current.map(
+                    (d) => ({ ...d })
+                )
+                if (aid) {
+                    const ix = mergedDocs.findIndex((d) => d.id === aid)
+                    if (ix >= 0) {
+                        const co =
+                            docTypeRef.current === "resume" ||
+                            docTypeRef.current === "cover_letter"
+                                ? selectedJobRef.current?.company?.name?.trim() ||
+                                  docCompanyRef.current ||
+                                  ""
+                                : docCompanyRef.current || ""
+                        const prev = mergedDocs[ix]
+                        const contentChanged =
+                            prev.content !== docContentRef.current
+                        const typeChanged = prev.docType !== docTypeRef.current
+                        mergedDocs[ix] = {
+                            ...prev,
+                            content: docContentRef.current,
+                            docType: docTypeRef.current,
+                            docCompany: co || undefined,
+                            lastEdited:
+                                contentChanged || typeChanged
+                                    ? now
+                                    : prev.lastEdited,
+                        }
+                    }
+                }
+
                 let hasContentChanges = false
                 let hasDocChanges = false
                 let hasWhiteboardChanges = false
@@ -27864,8 +28982,15 @@ Do not include markdown formatting or explanations.`
                         }
                     }
 
-                    // Check for notes/docContent changes
+                    // Check for notes/docContent changes (active doc) or multi-doc list changes
                     if (existing.notes !== docContentRef.current) {
+                        hasContentChanges = true
+                        hasDocChanges = true
+                    }
+                    if (
+                        JSON.stringify(existing.docs ?? null) !==
+                        JSON.stringify(mergedDocs)
+                    ) {
                         hasContentChanges = true
                         hasDocChanges = true
                     }
@@ -27909,16 +29034,16 @@ Do not include markdown formatting or explanations.`
                 // Update specific tool timestamps.
                 // Timestamps are cleared (→ undefined) when content is blank/default so
                 // the item disappears from "Your Stuff" — no empty cards shown to users.
-                const now = Date.now()
-
-                const isDocBlank =
-                    !docContentRef.current?.trim() ||
-                    docContentRef.current.trim() === DEFAULT_DOC_CONTENT
-                const docEditorLastEdited: number | undefined = isDocBlank
-                    ? undefined // blank/default doc → don't list in Your Stuff
-                    : hasDocChanges
-                      ? now
-                      : existing?.docEditorLastEdited
+                const anyDocForSidebar = mergedDocs.some(
+                    (d) =>
+                        d.content?.trim() &&
+                        d.content.trim() !== DEFAULT_DOC_CONTENT
+                )
+                const docEditorLastEdited: number | undefined = anyDocForSidebar
+                    ? hasDocChanges
+                        ? now
+                        : existing?.docEditorLastEdited
+                    : undefined
 
                 const whiteboardLastEdited = hasWhiteboardChanges
                     ? now
@@ -27933,20 +29058,28 @@ Do not include markdown formatting or explanations.`
                       ? now
                       : existing?.miniIdeLastEdited
 
+                const activeForNotes = aid
+                    ? mergedDocs.find((d) => d.id === aid)
+                    : pickMostRecentDocEntry(mergedDocs)
                 const sessionToSave: ChatSession = {
                     id: currentChatId,
                     title: titleToUse,
                     timestamp: timestampToUse,
                     messages: currentMessages,
-                    notes: docContentRef.current,
-                    docType: docTypeRef.current,
+                    notes: activeForNotes?.content ?? docContentRef.current,
+                    docType: activeForNotes?.docType ?? docTypeRef.current,
                     docCompany:
-                        docTypeRef.current === "resume" ||
-                        docTypeRef.current === "cover_letter"
+                        (activeForNotes?.docType ?? docTypeRef.current) ===
+                            "resume" ||
+                        (activeForNotes?.docType ?? docTypeRef.current) ===
+                            "cover_letter"
                             ? selectedJobRef.current?.company?.name?.trim() ||
                               docCompanyRef.current ||
+                              activeForNotes?.docCompany ||
                               ""
-                            : undefined,
+                            : activeForNotes?.docCompany,
+                    docs: mergedDocs.length > 0 ? mergedDocs : undefined,
+                    activeDocId: aid ?? activeForNotes?.id,
                     whiteboard: whiteboardData,
                     app: appCodeRef.current
                         ? { code: appCodeRef.current, mode: appModeRef.current }
@@ -28019,10 +29152,7 @@ Do not include markdown formatting or explanations.`
             if (savedChats.length > 0 && currentChatId) {
                 const chat = savedChats.find((c) => c.id === currentChatId)
                 if (chat) {
-                    if (chat.notes) setDocContent(chat.notes)
-                    if (chat.docType) setDocType(chat.docType)
-                    else setDocType("doc")
-                    setDocCompany(chat.docCompany ?? "")
+                    applyChatDocHydration(chat)
                     if (chat.app) {
                         setAppCode(chat.app.code)
                         setAppMode(chat.app.mode)
@@ -28044,6 +29174,9 @@ Do not include markdown formatting or explanations.`
                     // Chat not found in savedChats (likely a New Chat).
                     // We should NOT fall back to legacy storage (which mirrors previous chat).
                     // Just mark as loaded and reset to defaults.
+                    setChatDocs([])
+                    setActiveDocId(null)
+                    setDocContent(DEFAULT_DOC_CONTENT)
                     setDocType("doc")
                     setDocCompany("")
                     loadedChatIdRef.current = currentChatId
@@ -28111,7 +29244,7 @@ Do not include markdown formatting or explanations.`
                 }
             }
         }
-    }, [role, savedChats, currentChatId])
+    }, [role, savedChats, currentChatId, applyChatDocHydration])
 
     // Save student / no-role / volunteer-pre-connect data
     React.useEffect(() => {
@@ -29275,6 +30408,7 @@ Do not include markdown formatting or explanations.`
             }
 
             if (willBeOpen) {
+                openMostRecentDoc()
                 if (isWhiteboardOpen) {
                     setIsWhiteboardOpen(false)
                     // Notify peer to close whiteboard
@@ -29300,6 +30434,7 @@ Do not include markdown formatting or explanations.`
         isScreenSharing,
         stopLocalScreenShare,
         isMobileLayout,
+        openMostRecentDoc,
     ])
 
     const toggleWhiteboard = React.useCallback(() => {
@@ -30084,6 +31219,17 @@ Do not include markdown formatting or explanations.`
 
     const handleDocChange = React.useCallback((content: string) => {
         setDocContent(content)
+        const aid = activeDocIdRef.current
+        if (aid) {
+            const now = Date.now()
+            setChatDocs((prev) =>
+                prev.map((d) =>
+                    d.id === aid
+                        ? { ...d, content, lastEdited: now }
+                        : d
+                )
+            )
+        }
 
         if (profileResumeSyncRef.current) {
             profileResumeLastHtmlRef.current = content
@@ -30141,12 +31287,17 @@ Do not include markdown formatting or explanations.`
                 ? storedHtml
                 : plainTextToResumeDocHtml(plain)
         profileResumeLastHtmlRef.current = initialHtml
-        setDocContent(initialHtml)
-        setDocType("resume")
-        setDocCompany("")
+        const resumeRow = chatDocsRef.current.find((d) => d.docType === "resume")
+        if (resumeRow) {
+            upsertDocForTool("update", initialHtml, "resume", "", {
+                targetDocId: resumeRow.id,
+            })
+        } else {
+            upsertDocForTool("new", initialHtml, "resume", "")
+        }
         setIsDocOpen(true)
         isDocOpenRef.current = true
-    }, [])
+    }, [upsertDocForTool])
 
     const handleDocPointerMove = React.useCallback((x: number, y: number) => {
         // If no active connections, skip
@@ -30326,6 +31477,8 @@ Do not include markdown formatting or explanations.`
         setIsAppOpen(false)
         setIsWhiteboardOpen(false)
         setDocContent(DEFAULT_DOC_CONTENT)
+        setChatDocs([])
+        setActiveDocId(null)
         setDocType("doc")
         setDocCompany("")
         setAppCode(DEFAULT_APP_CODE)
@@ -30404,7 +31557,11 @@ Do not include markdown formatting or explanations.`
     )
 
     const deleteToolContent = React.useCallback(
-        (chatId: string, toolType: "miniide" | "doceditor" | "whiteboard") => {
+        (
+            chatId: string,
+            toolType: "miniide" | "doceditor" | "whiteboard",
+            targetDocId?: string
+        ) => {
             setSavedChats((prev) => {
                 return prev.map((c) => {
                     if (c.id !== chatId) return c
@@ -30414,8 +31571,42 @@ Do not include markdown formatting or explanations.`
                         updated.app = undefined
                         updated.miniIdeLastEdited = undefined
                     } else if (toolType === "doceditor") {
-                        updated.notes = ""
-                        updated.docEditorLastEdited = undefined
+                        if (targetDocId && c.docs && c.docs.length > 0) {
+                            const nextDocs = c.docs.filter(
+                                (d) => d.id !== targetDocId
+                            )
+                            updated.docs =
+                                nextDocs.length > 0 ? nextDocs : undefined
+                            if (nextDocs.length === 0) {
+                                updated.notes = ""
+                                updated.docEditorLastEdited = undefined
+                                updated.activeDocId = undefined
+                                updated.docType = undefined
+                                updated.docCompany = undefined
+                            } else {
+                                let nextActive = c.activeDocId
+                                if (nextActive === targetDocId) {
+                                    nextActive =
+                                        pickMostRecentDocEntry(nextDocs)?.id
+                                }
+                                updated.activeDocId = nextActive
+                                const active = nextDocs.find(
+                                    (d) => d.id === nextActive
+                                )
+                                if (active) {
+                                    updated.notes = active.content
+                                    updated.docType = active.docType
+                                    updated.docCompany = active.docCompany
+                                }
+                            }
+                        } else {
+                            updated.notes = ""
+                            updated.docs = undefined
+                            updated.activeDocId = undefined
+                            updated.docEditorLastEdited = undefined
+                            updated.docType = undefined
+                            updated.docCompany = undefined
+                        }
                     } else if (toolType === "whiteboard") {
                         updated.whiteboard = null
                         updated.whiteboardLastEdited = undefined
@@ -30424,14 +31615,35 @@ Do not include markdown formatting or explanations.`
                 })
             })
 
-            // If we are currently in this chat and this tool is open, we might want to close it or clear it?
-            // The user didn't specify, but clearing the content in the current view would be good.
             if (currentChatId === chatId) {
                 if (toolType === "miniide") {
                     setAppCode("")
                     setAppMode("editor")
                 } else if (toolType === "doceditor") {
-                    setDocContent("")
+                    if (targetDocId) {
+                        const next = chatDocsRef.current.filter(
+                            (d) => d.id !== targetDocId
+                        )
+                        setChatDocs(next)
+                        if (activeDocIdRef.current === targetDocId) {
+                            const fb = pickMostRecentDocEntry(next)
+                            if (fb) {
+                                setActiveDocId(fb.id)
+                                setDocContent(fb.content)
+                                setDocType(fb.docType)
+                                setDocCompany(fb.docCompany ?? "")
+                            } else {
+                                setActiveDocId(null)
+                                setDocContent(DEFAULT_DOC_CONTENT)
+                                setDocType("doc")
+                                setDocCompany("")
+                            }
+                        }
+                    } else {
+                        setChatDocs([])
+                        setActiveDocId(null)
+                        setDocContent("")
+                    }
                 } else if (toolType === "whiteboard") {
                     if (editorRef.current) {
                         try {
@@ -30443,6 +31655,7 @@ Do not include markdown formatting or explanations.`
 
             setMenuOpenChatId(null)
             setMenuOpenToolType(null)
+            setMenuOpenDocId(null)
             setMenuPosition(null)
             setHoveredActionId(null)
         },
@@ -33327,8 +34540,12 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     } else if (accumulatedFunctionCall.name === "update_doc") {
                         const newContent =
                             (accumulatedFunctionCall.args as any)?.content || ""
-                        setDocContent(newContent)
-                        setDocType("doc")
+                        const docIdForUpdateMsg = upsertDocForTool(
+                            "update",
+                            newContent,
+                            "doc",
+                            ""
+                        )
                         if (!isDocOpen) setIsDocOpen(true)
                         if (
                             !isMobileLayout &&
@@ -33405,6 +34622,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                 "Document created successfully.",
                                         },
                                     },
+                                    toolUsed: "doc",
+                                    docId: docIdForUpdateMsg,
                                 }
                             }
                             return newArr
@@ -33555,6 +34774,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     } else if (
                         accumulatedFunctionCall.name === "retrieve_resume"
                     ) {
+                        let docIdForResumeRetrieveMsg: string | undefined
                         const resume = getResume()
                         const resumeContent = resume || "No resume saved yet."
                         const modelPart = {
@@ -33583,11 +34803,29 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 },
                             ],
                             tools,
+                            toolConfig: {
+                                functionCallingConfig: {
+                                    mode: "AUTO",
+                                },
+                            },
                             generationConfig: payload.generationConfig,
                             ...(getSystemPromptWithContext().trim() && {
                                 systemInstruction: payload.systemInstruction,
                             }),
                         }
+                        const introTextRetrieve = computeDisplayText(
+                            accumulatedText
+                        )
+                        let displayFunctionCallRetrieve: any =
+                            accumulatedFunctionCall
+                        let displayFunctionResponseRetrieve: any = {
+                            name: "retrieve_resume",
+                            response: { content: resumeContent },
+                        }
+                        let displayToolUsedRetrieve:
+                            | "resume"
+                            | "cover_letter"
+                            | undefined
                         try {
                             const res = await fetch(
                                 `${geminiProxyUrl(model, "generateContent")}`,
@@ -33601,14 +34839,196 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 }
                             )
                             const data = await res.json().catch(() => ({}))
-                            const followUpText = res.ok
+                            const followUpTextRaw = res.ok
                                 ? extractTextFromGeminiResponse(data)
                                 : ""
-                            accumulatedText =
-                                computeDisplayText(followUpText) ||
-                                accumulatedText ||
-                                ""
-                            parseSuggestionsFrom(followUpText)
+                            const chainedFcRetrieve =
+                                extractFunctionCallFromGeminiResponse(data)
+
+                            if (
+                                chainedFcRetrieve &&
+                                (chainedFcRetrieve.name ===
+                                    "create_resume" ||
+                                    chainedFcRetrieve.name ===
+                                        "create_cover_letter")
+                            ) {
+                                const toolName = chainedFcRetrieve.name
+                                if (debugPanelRef.current === "tools") {
+                                    try {
+                                        log(
+                                            `[tool] ${toolName} (chained after retrieve_resume) args=${summarizeToolArgsForDebug(chainedFcRetrieve.args)}`,
+                                            "tools"
+                                        )
+                                    } catch {
+                                        log(
+                                            `[tool] ${toolName} (chained after retrieve_resume) (args not JSON-serializable)`,
+                                            "tools"
+                                        )
+                                    }
+                                }
+                                displayFunctionCallRetrieve = {
+                                    name: toolName,
+                                    args: chainedFcRetrieve.args,
+                                }
+                                displayFunctionResponseRetrieve = {
+                                    name: toolName,
+                                    response: {
+                                        content: "Created successfully.",
+                                    },
+                                }
+                                displayToolUsedRetrieve =
+                                    toolName === "create_resume"
+                                        ? "resume"
+                                        : "cover_letter"
+                                const newContent =
+                                    (chainedFcRetrieve.args as any)?.content ||
+                                    ""
+                                const company =
+                                    selectedJobRef.current?.company?.name?.trim() ||
+                                    docCompanyRef.current ||
+                                    ""
+                                let displayHtml = newContent
+                                if (
+                                    toolName === "create_resume" &&
+                                    resumeAnimPhaseRef.current !== "idle" &&
+                                    resumeAnimPhaseRef.current !== "done"
+                                ) {
+                                    const used = capturedOrbitWordsInHtml(
+                                        newContent,
+                                        resumeCapturedItemsRef.current.map(
+                                            (c) => c.word
+                                        )
+                                    )
+                                    displayHtml = markKeywordsInHtml(
+                                        newContent,
+                                        used
+                                    )
+                                    setResumeUsedKeywords(used)
+                                    setResumeAnimPhase("landing")
+                                    if (dataConnectionsRef.current.size > 0) {
+                                        broadcastData({
+                                            type: "resume-anim-land",
+                                            payload: {
+                                                markedContent: displayHtml,
+                                                usedKeywords: used,
+                                            },
+                                        })
+                                    }
+                                }
+
+                                docIdForResumeRetrieveMsg = upsertDocForTool(
+                                    "new",
+                                    displayHtml,
+                                    toolName === "create_resume"
+                                        ? "resume"
+                                        : "cover_letter",
+                                    company
+                                )
+
+                                if (!isDocOpen) setIsDocOpen(true)
+                                isDocOpenRef.current = true
+
+                                if (
+                                    toolName === "create_resume" &&
+                                    newContent &&
+                                    resumeJobIdRef.current
+                                ) {
+                                    resumeCache.current.set(
+                                        resumeJobIdRef.current,
+                                        newContent
+                                    )
+                                }
+                                if (dataConnectionsRef.current.size > 0) {
+                                    broadcastData({
+                                        type: "doc-update",
+                                        payload: displayHtml,
+                                    })
+                                    broadcastData({
+                                        type: "doc-start",
+                                        payload: {
+                                            docType:
+                                                toolName === "create_resume"
+                                                    ? "resume"
+                                                    : "cover_letter",
+                                        },
+                                    })
+                                }
+                                const isResume = toolName === "create_resume"
+                                let ackCombinedRetrieve = followUpTextRaw
+                                parseSuggestionsFrom(followUpTextRaw)
+                                try {
+                                    const followUpRes = await fetch(
+                                        `${geminiProxyUrl(model, "generateContent")}`,
+                                        {
+                                            method: "POST",
+                                            headers: {
+                                                "Content-Type":
+                                                    "application/json",
+                                            },
+                                            body: JSON.stringify({
+                                                contents: [
+                                                    {
+                                                        role: "user",
+                                                        parts: [
+                                                            {
+                                                                text: `The user asked you to write a ${isResume ? "resume" : "cover letter"}: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.`,
+                                                            },
+                                                        ],
+                                                    },
+                                                ],
+                                                generationConfig: {
+                                                    temperature: 1.0,
+                                                    maxOutputTokens: 100,
+                                                    thinkingConfig: {
+                                                        thinkingBudget: 0,
+                                                    },
+                                                },
+                                            }),
+                                            signal: controller.signal,
+                                        }
+                                    )
+                                    const followUpData = await followUpRes
+                                        .json()
+                                        .catch(() => ({}))
+                                    const ack = followUpRes.ok
+                                        ? extractTextFromGeminiResponse(
+                                              followUpData
+                                          )
+                                        : ""
+                                    ackCombinedRetrieve =
+                                        computeDisplayText(ack) ||
+                                        followUpTextRaw ||
+                                        (isResume
+                                            ? "Here's your resume!"
+                                            : "Here's your cover letter!")
+                                    parseSuggestionsFrom(ack)
+                                } catch (err) {
+                                    if ((err as Error).name !== "AbortError")
+                                        console.error(
+                                            `${toolName} post-retrieve_resume follow-up:`,
+                                            err
+                                        )
+                                    ackCombinedRetrieve =
+                                        followUpTextRaw ||
+                                        (isResume
+                                            ? "Here's your resume!"
+                                            : "Here's your cover letter!")
+                                }
+                                const followUpDisplayRetrieve =
+                                    computeDisplayText(ackCombinedRetrieve)
+                                accumulatedText = introTextRetrieve
+                                    ? `${introTextRetrieve}\n\n${followUpDisplayRetrieve}`
+                                    : followUpDisplayRetrieve
+                            } else {
+                                const followUpDisplayOnly =
+                                    computeDisplayText(followUpTextRaw)
+                                accumulatedText = introTextRetrieve
+                                    ? `${introTextRetrieve}\n\n${followUpDisplayOnly}`
+                                    : followUpDisplayOnly ||
+                                      accumulatedText ||
+                                      ""
+                                parseSuggestionsFrom(followUpTextRaw)
+                            }
                         } catch (err) {
                             if ((err as Error).name !== "AbortError")
                                 console.error("retrieve_resume follow-up:", err)
@@ -33622,15 +35042,20 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 newArr[newArr.length - 1] = {
                                     ...newArr[newArr.length - 1],
                                     text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "retrieve_resume",
-                                        response: { content: resumeContent },
-                                    },
+                                    functionCall: displayFunctionCallRetrieve,
+                                    functionResponse:
+                                        displayFunctionResponseRetrieve,
+                                    ...(displayToolUsedRetrieve && {
+                                        toolUsed: displayToolUsedRetrieve,
+                                    }),
+                                    ...(docIdForResumeRetrieveMsg && {
+                                        docId: docIdForResumeRetrieveMsg,
+                                    }),
                                 }
                             }
                             return newArr
                         })
+                        accumulatedFunctionCall = displayFunctionCallRetrieve
                     } else if (
                         accumulatedFunctionCall.name === "create_resume" ||
                         accumulatedFunctionCall.name === "create_cover_letter"
@@ -33638,18 +35063,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         const toolName = accumulatedFunctionCall.name
                         const newContent =
                             (accumulatedFunctionCall.args as any)?.content || ""
-                        setDocType(
-                            toolName === "create_resume"
-                                ? "resume"
-                                : "cover_letter"
-                        )
-                        if (!isDocOpen) setIsDocOpen(true)
-                        isDocOpenRef.current = true
-
-                        // Resume keyword animation: transition orbiting → landing.
-                        // Inject data-keyword-land markers into the HTML so the
-                        // landing scan can use a direct DOM query instead of
-                        // fragile TreeWalker + Range offset arithmetic.
+                        const company =
+                            selectedJobRef.current?.company?.name?.trim() ||
+                            docCompanyRef.current ||
+                            ""
+                        let displayHtml = newContent
                         if (
                             toolName === "create_resume" &&
                             resumeAnimPhaseRef.current !== "idle" &&
@@ -33661,29 +35079,31 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     (c) => c.word
                                 )
                             )
-                            // Mark keyword positions in the HTML before setting
-                            // content so getBoundingClientRect on the markers is
-                            // pixel-perfect once the browser paints.
-                            const markedContent = markKeywordsInHtml(
-                                newContent,
-                                used
-                            )
-                            setDocContent(markedContent)
+                            displayHtml = markKeywordsInHtml(newContent, used)
                             setResumeUsedKeywords(used)
                             setResumeAnimPhase("landing")
-                            // Relay landing data to peers so they run the same animation
                             if (dataConnectionsRef.current.size > 0) {
                                 broadcastData({
                                     type: "resume-anim-land",
                                     payload: {
-                                        markedContent,
+                                        markedContent: displayHtml,
                                         usedKeywords: used,
                                     },
                                 })
                             }
-                        } else {
-                            setDocContent(newContent)
                         }
+
+                        const docIdForCreateMsg = upsertDocForTool(
+                            "new",
+                            displayHtml,
+                            toolName === "create_resume"
+                                ? "resume"
+                                : "cover_letter",
+                            company
+                        )
+
+                        if (!isDocOpen) setIsDocOpen(true)
+                        isDocOpenRef.current = true
 
                         // Cache the original (unmarked) HTML so repeat clicks
                         // replay the animation with fresh markers each time.
@@ -33700,9 +35120,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         if (dataConnectionsRef.current.size > 0) {
                             broadcastData({
                                 type: "doc-update",
-                                payload: newContent,
+                                payload: displayHtml,
                             })
-                            // Send docType so the peer renders the correct editor variant
                             broadcastData({
                                 type: "doc-start",
                                 payload: {
@@ -33786,6 +35205,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                 "create_cover_letter"
                                               ? "cover_letter"
                                               : "doc",
+                                    docId: docIdForCreateMsg,
                                 }
                             }
                             return newArr
@@ -34500,6 +35920,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             | "resume"
                             | "cover_letter"
                             | undefined
+                        let docIdForJobDetailChain: string | undefined
                         try {
                             const res = await fetch(
                                 `${geminiProxyUrl(model, "generateContent")}`,
@@ -34525,6 +35946,19 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     chainedFc.name === "create_resume")
                             ) {
                                 const toolName = chainedFc.name
+                                if (debugPanelRef.current === "tools") {
+                                    try {
+                                        log(
+                                            `[tool] ${toolName} (chained after get_job_details) args=${summarizeToolArgsForDebug(chainedFc.args)}`,
+                                            "tools"
+                                        )
+                                    } catch {
+                                        log(
+                                            `[tool] ${toolName} (chained after get_job_details) (args not JSON-serializable)`,
+                                            "tools"
+                                        )
+                                    }
+                                }
                                 displayFunctionCall = {
                                     name: toolName,
                                     args: chainedFc.args,
@@ -34541,14 +35975,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         : "cover_letter"
                                 const newContent =
                                     (chainedFc.args as any)?.content || ""
-                                setDocType(
-                                    toolName === "create_resume"
-                                        ? "resume"
-                                        : "cover_letter"
-                                )
-                                if (!isDocOpen) setIsDocOpen(true)
-                                isDocOpenRef.current = true
-
+                                const company =
+                                    selectedJobRef.current?.company?.name?.trim() ||
+                                    docCompanyRef.current ||
+                                    ""
+                                let displayHtml = newContent
                                 if (
                                     toolName === "create_resume" &&
                                     resumeAnimPhaseRef.current !== "idle" &&
@@ -34560,25 +35991,34 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             (c) => c.word
                                         )
                                     )
-                                    const markedContent = markKeywordsInHtml(
+                                    displayHtml = markKeywordsInHtml(
                                         newContent,
                                         used
                                     )
-                                    setDocContent(markedContent)
                                     setResumeUsedKeywords(used)
                                     setResumeAnimPhase("landing")
                                     if (dataConnectionsRef.current.size > 0) {
                                         broadcastData({
                                             type: "resume-anim-land",
                                             payload: {
-                                                markedContent,
+                                                markedContent: displayHtml,
                                                 usedKeywords: used,
                                             },
                                         })
                                     }
-                                } else {
-                                    setDocContent(newContent)
                                 }
+
+                                docIdForJobDetailChain = upsertDocForTool(
+                                    "new",
+                                    displayHtml,
+                                    toolName === "create_resume"
+                                        ? "resume"
+                                        : "cover_letter",
+                                    company
+                                )
+
+                                if (!isDocOpen) setIsDocOpen(true)
+                                isDocOpenRef.current = true
 
                                 if (
                                     toolName === "create_resume" &&
@@ -34593,7 +36033,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 if (dataConnectionsRef.current.size > 0) {
                                     broadcastData({
                                         type: "doc-update",
-                                        payload: newContent,
+                                        payload: displayHtml,
                                     })
                                     broadcastData({
                                         type: "doc-start",
@@ -34700,6 +36140,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     ...(displayToolUsed && {
                                         toolUsed: displayToolUsed,
                                     }),
+                                    ...(docIdForJobDetailChain && {
+                                        docId: docIdForJobDetailChain,
+                                    }),
                                 }
                             }
                             return newArr
@@ -34780,6 +36223,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             geminiProxyUrl,
             isDocOpen,
             getSystemPromptWithContext,
+            upsertDocForTool,
         ]
     )
 
@@ -36554,6 +37998,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             coordMergeJob={
                                 isJobOpen && selectedJob ? selectedJob : null
                             }
+                            onMapJobsQuery={
+                                debugPanel === "tools"
+                                    ? emitMapJobsQuery
+                                    : undefined
+                            }
                         />
                         {/* Desktop only — slides in from the right over the map, same animation as the tool panel */}
                         <AnimatePresence>
@@ -37428,27 +38877,12 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
 
     // 2. Chat Renderer
     const renderChatSection = (isSidebar: boolean) => {
-        // --- Calculate Last Tool Calls ---
-        let lastDocCallIdx = -1
+        // --- Calculate Last Tool Calls (whiteboard / app — doc chips are per-message) ---
         let lastWhiteboardCallIdx = -1
         let lastAppCallIdx = -1
-        let lastDocCallType: "doc" | "resume" | "cover_letter" = "doc"
 
         messages.forEach((msg, idx) => {
             if (msg.functionCall) {
-                if (
-                    msg.functionCall.name === "update_doc" ||
-                    msg.functionCall.name === "create_resume" ||
-                    msg.functionCall.name === "create_cover_letter"
-                ) {
-                    lastDocCallIdx = idx
-                    lastDocCallType =
-                        msg.functionCall.name === "create_resume"
-                            ? "resume"
-                            : msg.functionCall.name === "create_cover_letter"
-                              ? "cover_letter"
-                              : "doc"
-                }
                 if (
                     msg.functionCall.name === "draw_whiteboard" ||
                     msg.functionCall.name === "edit_whiteboard" ||
@@ -37460,22 +38894,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     lastAppCallIdx = idx
                 }
             }
-            // Delimiter-streamed tools don't produce a functionCall, so we check
-            // the toolUsed field that is stamped on the message post-stream.
             if (msg.toolUsed === "app") lastAppCallIdx = idx
-            if (
-                msg.toolUsed === "doc" ||
-                msg.toolUsed === "resume" ||
-                msg.toolUsed === "cover_letter"
-            ) {
-                lastDocCallIdx = idx
-                lastDocCallType =
-                    msg.toolUsed === "resume"
-                        ? "resume"
-                        : msg.toolUsed === "cover_letter"
-                          ? "cover_letter"
-                          : "doc"
-            }
         })
 
         // Use a memoized set of indices where ads should appear to ensure stability during renders
@@ -37581,28 +39000,41 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     }
                                     copiedMessageId={copiedMessageId}
                                     onCopy={handleCopyMessage}
-                                    showDocButton={idx === lastDocCallIdx}
+                                    showDocButton={messageShowsDocToolChip(msg)}
                                     showWhiteboardButton={
                                         idx === lastWhiteboardCallIdx
                                     }
                                     showAppButton={idx === lastAppCallIdx}
                                     docCallType={
-                                        idx === lastDocCallIdx
-                                            ? lastDocCallType
+                                        messageShowsDocToolChip(msg)
+                                            ? docCallTypeFromMessage(msg)
                                             : undefined
                                     }
                                     onToggleDoc={() => {
-                                        setIsDocOpen((prev) => {
-                                            if (!prev)
-                                                setDocType(lastDocCallType)
-                                            return !prev
-                                        })
+                                        if (
+                                            isDocOpen &&
+                                            msg.docId &&
+                                            activeDocId === msg.docId
+                                        ) {
+                                            toggleDoc()
+                                            return
+                                        }
+                                        if (msg.docId) switchToDoc(msg.docId)
+                                        else openMostRecentDoc()
+                                        if (!isDocOpen) toggleDoc()
                                     }}
                                     onToggleWhiteboard={() =>
                                         setIsWhiteboardOpen((prev) => !prev)
                                     }
                                     onToggleApp={() => toggleApp && toggleApp()}
-                                    isDocOpen={isDocOpen}
+                                    isThisDocChipActive={
+                                        isDocOpen &&
+                                        (msg.docId
+                                            ? activeDocId === msg.docId
+                                            : chatDocs.length === 1 &&
+                                              !!activeDocId &&
+                                              chatDocs[0]?.id === activeDocId)
+                                    }
                                     isWhiteboardOpen={isWhiteboardOpen}
                                     isAppOpen={isAppOpen}
                                     onJobClick={(job) =>
@@ -39013,6 +40445,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     chat: ChatSession
                                     type: "miniide" | "doceditor" | "whiteboard"
                                     timestamp: number
+                                    /** Which doc row when type is doceditor (multi-doc chats). */
+                                    docId?: string
                                 }[] = []
 
                                 savedChats.forEach((chat) => {
@@ -39039,12 +40473,28 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             timestamp: chat.miniIdeLastEdited,
                                         })
                                     }
-                                    // Only show docs that have non-blank, non-default content
                                     const docNotes = chat.notes?.trim() ?? ""
-                                    if (
-                                        chat.docEditorLastEdited &&
+                                    const legacyDocOk =
                                         docNotes &&
                                         docNotes !== DEFAULT_DOC_CONTENT
+                                    if (chat.docs && chat.docs.length > 0) {
+                                        for (const d of chat.docs) {
+                                            const c = d.content?.trim() ?? ""
+                                            if (
+                                                !c ||
+                                                c === DEFAULT_DOC_CONTENT
+                                            )
+                                                continue
+                                            stuffItems.push({
+                                                chat,
+                                                type: "doceditor",
+                                                docId: d.id,
+                                                timestamp: d.lastEdited,
+                                            })
+                                        }
+                                    } else if (
+                                        chat.docEditorLastEdited &&
+                                        legacyDocOk
                                     ) {
                                         stuffItems.push({
                                             chat,
@@ -39212,7 +40662,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
 
                                         {sortedItems.map((item, stuffIndex) => {
                                             const { chat, type } = item
-                                            const uniqueId = `stuff-${chat.id}-${type}`
+                                            const uniqueId = `stuff-${chat.id}-${type}-${item.docId ?? "0"}`
 
                                             let displayTitle = chat.title // Fallback
 
@@ -39247,19 +40697,34 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                             words.join(" ")
                                                     }
                                                 }
-                                            } else if (
-                                                type === "doceditor" &&
-                                                chat.notes
-                                            ) {
+                                            } else if (type === "doceditor") {
+                                                const docRow =
+                                                    item.docId &&
+                                                    chat.docs?.length
+                                                        ? chat.docs.find(
+                                                              (d) =>
+                                                                  d.id ===
+                                                                  item.docId
+                                                          )
+                                                        : null
+                                                const dType =
+                                                    docRow?.docType ??
+                                                    chat.docType ??
+                                                    "doc"
+                                                const dCo =
+                                                    docRow?.docCompany ??
+                                                    chat.docCompany
+                                                const htmlSrc =
+                                                    docRow?.content ??
+                                                    chat.notes
                                                 if (
-                                                    chat.docType === "resume" ||
-                                                    chat.docType ===
-                                                        "cover_letter"
+                                                    dType === "resume" ||
+                                                    dType === "cover_letter"
                                                 ) {
                                                     const jobTitle =
                                                         buildResumeCoverSidebarTitle(
-                                                            chat.docType,
-                                                            chat.docCompany,
+                                                            dType,
+                                                            dCo,
                                                             youName
                                                         )
                                                     displayTitle =
@@ -39270,8 +40735,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                               ) + "..."
                                                             : jobTitle
                                                 } else {
-                                                    // First line of document, stripping HTML using regex for SSR safety
-                                                    const text = chat.notes
+                                                    const text = htmlSrc
                                                         .replace(
                                                             /<[^>]*>/g,
                                                             " "
@@ -39281,9 +40745,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                     const firstLine = text
                                                         .split(". ")[0]
                                                         .split("\n")[0]
-                                                        .trim() // Try to get first sentence or line
+                                                        .trim()
                                                     if (firstLine) {
-                                                        // Limit length just in case
                                                         displayTitle =
                                                             firstLine.length >
                                                             40
@@ -39320,9 +40783,16 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                         setMessages(
                                                             chat.messages
                                                         )
-                                                        setDocContent(
-                                                            chat.notes || ""
+                                                        applyChatDocHydration(
+                                                            chat
                                                         )
+                                                        if (item.docId) {
+                                                            switchToDoc(
+                                                                item.docId
+                                                            )
+                                                        } else {
+                                                            openMostRecentDoc()
+                                                        }
                                                         setAiGeneratedSuggestions(
                                                             chat.suggestions ||
                                                                 []
@@ -39459,7 +40929,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                         (menuOpenChatId ===
                                                             chat.id &&
                                                             menuOpenToolType ===
-                                                                type) ||
+                                                                type &&
+                                                            (type !==
+                                                                "doceditor" ||
+                                                                (menuOpenDocId ??
+                                                                    null) ===
+                                                                    (item.docId ??
+                                                                        null))) ||
                                                         isMobileLayout) && (
                                                         <div
                                                             aria-label={`Open menu for ${displayTitle}`}
@@ -39469,12 +40945,21 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                                     menuOpenChatId ===
                                                                         chat.id &&
                                                                     menuOpenToolType ===
-                                                                        type
+                                                                        type &&
+                                                                    (type !==
+                                                                        "doceditor" ||
+                                                                        (menuOpenDocId ??
+                                                                            null) ===
+                                                                            (item.docId ??
+                                                                                null))
                                                                 ) {
                                                                     setMenuOpenChatId(
                                                                         null
                                                                     )
                                                                     setMenuOpenToolType(
+                                                                        null
+                                                                    )
+                                                                    setMenuOpenDocId(
                                                                         null
                                                                     )
                                                                     setMenuPosition(
@@ -39488,6 +40973,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                                     )
                                                                     setMenuOpenToolType(
                                                                         type
+                                                                    )
+                                                                    setMenuOpenDocId(
+                                                                        item.docId ??
+                                                                            null
                                                                     )
                                                                     setMenuPosition(
                                                                         {
@@ -39752,7 +41241,20 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                 let itemCount = 0
                                                 if (c.miniIdeLastEdited)
                                                     itemCount++
-                                                if (c.docEditorLastEdited)
+                                                if (c.docs && c.docs.length > 0) {
+                                                    itemCount += c.docs.filter(
+                                                        (d) => {
+                                                            const t =
+                                                                d.content?.trim() ??
+                                                                ""
+                                                            return (
+                                                                t &&
+                                                                t !==
+                                                                    DEFAULT_DOC_CONTENT
+                                                            )
+                                                        }
+                                                    ).length
+                                                } else if (c.docEditorLastEdited)
                                                     itemCount++
                                                 if (c.whiteboardLastEdited)
                                                     itemCount++
@@ -39780,9 +41282,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                         return
                                                     setCurrentChatId(chat.id)
                                                     setMessages(chat.messages)
-                                                    setDocContent(
-                                                        chat.notes || ""
-                                                    )
+                                                    applyChatDocHydration(chat)
                                                     setAiGeneratedSuggestions(
                                                         chat.suggestions || []
                                                     )
@@ -41358,8 +42858,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         <div
                             style={{
                                 alignSelf: "stretch",
-                                height: 44,
-                                padding: "0 16px",
+                                minHeight: 44,
+                                maxHeight: 132,
                                 background:
                                     themeColors.background ===
                                     lightColors.background
@@ -41372,14 +42872,17 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         : "none",
                                 borderRadius: 28,
                                 display: "flex",
-                                alignItems: "center",
+                                alignItems: "flex-start",
+                                boxSizing: "border-box",
+                                overflow: "hidden",
                             }}
                         >
-                            <input
+                            <textarea
+                                ref={jobTitleTextareaRef}
                                 className="SettingsInput"
-                                type="text"
                                 aria-label="Your job title"
                                 placeholder="Add your dream job"
+                                rows={1}
                                 value={youWork}
                                 {...makeUndoHandlers(
                                     () => youWork,
@@ -41395,6 +42898,12 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     fontSize: iosSafariInputFontPx(),
                                     outline: "none",
                                     fontFamily: "Inter",
+                                    lineHeight: 1.35,
+                                    resize: "none",
+                                    boxSizing: "border-box",
+                                    padding: "12px 16px",
+                                    margin: 0,
+                                    verticalAlign: "top",
                                 }}
                             />
                         </div>
@@ -42647,7 +44156,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                             if (menuOpenToolType) {
                                                 deleteToolContent(
                                                     chat.id,
-                                                    menuOpenToolType
+                                                    menuOpenToolType,
+                                                    menuOpenDocId ?? undefined
                                                 )
                                             } else {
                                                 handleDeleteChat(chat.id)
