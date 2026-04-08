@@ -32,6 +32,7 @@
   //                           Free tier: 500 req/day — brandfetch.com/developers
   //   USAJOBS_API_KEY       — USAJOBS API key for federal jobs (free at developer.usajobs.gov)
   //   LOGO_DEV_TOKEN        — Logo.dev sk_ (Search API) or pk_ (img CDN); Google favicon if unset / no match
+  //   MAPBOX_ACCESS_TOKEN   — Mapbox Geocoding v6 (major-metro company+city); temporary tier + D1 cache
   "vars": {},
 
   // Vectorize index for semantic job search (768-dimensional cosine similarity)

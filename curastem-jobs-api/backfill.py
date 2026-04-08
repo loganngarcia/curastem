@@ -90,6 +90,7 @@ JIBE_SOURCES = [
 EIGHTFOLD_SOURCES = [
     ("br-starbucks", "starbucks", "Starbucks", "https://starbucks.eightfold.ai/careers?domain=starbucks.com"),
     ("ef-microsoft", "microsoft", "Microsoft", "https://apply.careers.microsoft.com/careers?domain=microsoft.com"),
+    ("ef-sephora", "sephora", "Sephora", "https://join.sephora.com/careers?domain=sephora.com"),
 ]
 
 # Radancy TalentBrew sites — server-rendered HTML with ?p=N pagination.
@@ -1276,74 +1277,8 @@ def fetch_source(source_id: str, company_handle: str, display_name: str,
 #
 # Usage:  python3 backfill.py --geocode [--maps-key=AIza...]
 #
-# Routing rules (mirrors retailGeocode.ts exactly):
-#   1. Company slug in RETAIL_SLUGS → Photon (free, city-level)
-#   2. Sample job title matches RETAIL_TITLE_RE → Photon
-#   3. Everything else → Google Maps Places API with fallback to Photon
-#
-# Places API cost: $0.032/req.  Cap = 8 125 calls ≈ $260.
-# Photon: unlimited, no key required.
-
-RETAIL_SLUGS: set[str] = {
-    # Coffee / fast food
-    "starbucks", "mcdonalds", "mcdonald", "dominos-pizza", "dominos",
-    "dunkin", "dunkin-donuts", "subway", "chick-fil-a", "taco-bell",
-    "burger-king", "wendys", "chipotle", "panera-bread", "papa-johns",
-    "pizza-hut", "kfc", "sonic", "popeyes", "jack-in-the-box", "arbys",
-    "dairy-queen", "whataburger", "five-guys", "shake-shack", "wingstop",
-    "raising-canes", "culvers", "firehouse-subs", "jersey-mikes",
-    "jimmy-johns", "buffalo-wild-wings", "red-robin", "dennys", "waffle-house",
-    "cracker-barrel", "ihop", "olive-garden", "applebees", "chilis",
-    "tgi-fridays", "outback-steakhouse",
-    # Grocery / convenience
-    "kroger", "albertsons", "sprouts-farmers-market", "heb", "meijer",
-    "aldi", "aldi-usa", "whole-foods", "publix", "safeway", "giant-eagle",
-    "wawa", "sheetz", "7-eleven", "caseys", "circle-k", "rutters",
-    # Big box / department
-    "walmart", "target", "costco", "home-depot", "lowes", "jcpenney",
-    "kohls", "macys", "nordstrom",
-    "tjx-companies", "tj-maxx", "tjx", "marshalls",  # tjx-companies = actual DB slug
-    "ross", "ross-dress-for-less", "burlington", "sears", "jcrew",
-    "staples", "primark",
-    # Drug / dollar
-    "cvs-health", "cvs-pharmacy", "walgreens", "rite-aid",
-    "dollar-general", "dollar-tree", "family-dollar",
-    "dollar-tree-family-dollar", "five-below",
-    # Specialty retail
-    "ulta-beauty", "bath-and-body-works", "victoria-secret",
-    "american-eagle", "gap", "old-navy", "banana-republic",
-    "hm-group", "h-and-m",   # hm-group = actual DB slug for H&M Group
-    "zara", "uniqlo", "forever-21", "express", "hollister",
-    "abercrombie-fitch", "hot-topic", "foot-locker", "michaels", "alo-yoga",
-    # Auto / gas
-    "autozone", "oreilly-auto-parts", "advance-auto-parts",
-    "napa-auto-parts", "jiffy-lube", "firestone", "goodyear",
-    "valvoline", "pepboys", "pep-boys", "midas", "safelite",
-    # Pet / outdoor / sporting
-    "petco", "petsmart", "rei", "bass-pro-shops", "cabelas",
-    "dicks-sporting-goods", "academy-sports",
-    # Logistics
-    "fedex", "ups", "usps", "amazon",
-    # Home improvement / hardware
-    "ace-hardware", "menards", "fastenal",
-    # Healthcare — high-volume distributed clinics
-    "davita",
-    "kaiser-permanente",
-    "hca",
-    "unitedhealthgroup",
-    # Staffing / security services
-    "pulse", "securitas",
-    # Mixed retail brands
-    "nike", "vf-corp-tnfvanstimberland", "comcast", "labcorp",
-    # Government / military
-    "national-park-service", "army-national-guard-units",
-    "transportation-security-administration",
-    "bureau-of-prisonsfederal-prison-system", "us-army-reserve-command",
-    # Distribution / food / manufacturing at scale
-    "sysco", "pepsico", "rtx-raytheon",
-    # Automotive retail
-    "carvana",
-}
+# Pass 0: full street addresses → Google Geocoding API (or Nominatim if no key).
+# Pass 1: city-only strings → Photon (free). New ingestion uses Mapbox/Places in major metros (Worker).
 
 _TITLE_ADDR_RE = re.compile(
     r'\(\d{2,6}\)\s*[-\u2013]?\s*(?:[A-Za-z][\w\s]*?[-\u2013]\s*)?'
@@ -1365,28 +1300,6 @@ def _extract_title_street_address(title: str) -> Optional[str]:
     """
     m = _TITLE_ADDR_RE.search(title)
     return m.group(1).strip() if m else None
-
-_RETAIL_TITLE_RE = re.compile(
-    r'\b(?:delivery\s+driver|barista|cashier'
-    r'|store\s+(?:manager|associate|clerk|supervisor)'
-    r'|crew\s+(?:member|worker|trainer)'
-    r'|shift\s+(?:supervisor|leader|manager)'
-    r'|team\s+member|sales\s+associate|retail\s+associate'
-    r'|grocery\s+(?:clerk|associate)|restaurant\s+(?:manager|supervisor)'
-    r'|assistant\s+(?:store\s+)?manager|guest\s+advocate|food\s+service'
-    r'|cake\s+decorator|stocker|stock\s+(?:clerk|associate)'
-    r'|warehouse\s+associate|package\s+handler|delivery\s+associate'
-    r'|pharmacy\s+(?:tech|technician)|courtesy\s+clerk|fuel\s+attendant'
-    r'|line\s+cook|dishwasher|drive.thru|meat\s+(?:cutter|clerk)'
-    r'|floral\s+(?:designer|associate)|lube\s+tech(?:nician)?'
-    r'|tire\s+tech(?:nician)?|optical\s+(?:sales\s+)?associate|optician'
-    r'|deli\s+(?:clerk|associate)|produce\s+(?:clerk|associate)'
-    r'|bakery\s+(?:clerk|associate)|service\s+deli|key\s+holder'
-    r'|beauty\s+advisor|automotive\s+(?:technician|advisor|sales)'
-    r'|kennel\s+(?:attendant|tech)|pet\s+care\s+(?:specialist|associate)'
-    r')\b',
-    re.I,
-)
 
 def _normalize_location_for_geocode(loc: str) -> str:
     """Port of normalizeLocationForGeocode from placesGeocode.ts."""
@@ -1465,58 +1378,28 @@ def _geocode_address(address: str, maps_key: Optional[str]) -> Optional[tuple[fl
     time.sleep(1.2)  # Nominatim ToS: max 1 req/sec
     return result
 
-def _places_geocode(query: str, api_key: str) -> Optional[tuple[float, float]]:
-    """Google Maps Places API (New) Text Search — precise building/office coords."""
-    url = "https://places.googleapis.com/v1/places:searchText"
-    payload = json.dumps({"textQuery": query, "maxResultCount": 1}).encode()
-    try:
-        req = urllib.request.Request(
-            url, data=payload, method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "X-Goog-Api-Key": api_key,
-                "X-Goog-FieldMask": "places.location",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=12) as r:
-            resp = json.loads(r.read())
-        place = (resp.get("places") or [{}])[0]
-        loc = place.get("location", {})
-        lat = loc.get("latitude")
-        lng = loc.get("longitude")
-        if lat is not None and lng is not None:
-            return (float(lat), float(lng))
-    except Exception as e:
-        print(f"    [places] error for {query!r}: {e}", flush=True)
-    return None
-
 def run_geocode_backfill(maps_key: Optional[str] = None, dry_run: bool = False):
     """
     Geocode all jobs that have a location string but no lat/lng.
 
-    Two-tier routing:
-      - Retail slug or retail job title → Photon (free, city-level)
-      - Professional company           → Places API with Photon fallback
+    Pass 0: street addresses via Geocoding API. Pass 1: city strings via Photon only
+    (ingestion Worker uses Mapbox + Places for major metros on new data).
 
     D1 is updated by (company_slug, locations_json) so one query covers all
     jobs at a given company in a given city in a single UPDATE.
     """
-    PLACES_CAP = 3_000  # ~$96 hard cap — Photon handles most city-level strings for free
 
     photon_cache: dict[str, Optional[tuple[float, float]]] = {}
-    places_cache: dict[str, Optional[tuple[float, float]]] = {}
 
     total_updated = 0
     total_photon  = 0
-    total_places  = 0
     total_failed  = 0
-    places_calls  = 0
     page          = 0
     PAGE_SIZE     = 300
 
-    print(f"\n── Geocode backfill (Places cap={PLACES_CAP} calls ≈ ${PLACES_CAP * 0.032:.0f}) ──")
+    print(f"\n── Geocode backfill (Pass 1: Photon city-level) ──")
     if not maps_key:
-        print("  No --maps-key provided — all locations will use Photon (city-level).\n")
+        print("  No --maps-key: Pass 0 address geocoding uses Nominatim; Pass 1 unchanged.\n")
 
     # ── Pass 0: Address-level geocoding (precise) ─────────────────────────────
     # Two cases handled here:
@@ -1616,12 +1499,11 @@ def run_geocode_backfill(maps_key: Optional[str] = None, dry_run: bool = False):
         + "\n"
     )
 
-    # ── Pass 1: City-level geocoding (Photon for retail, Places for professional) ─
+    # ── Pass 1: City-level geocoding (Photon) ──────────────────────────────────
     while True:
         rows = d1_query(
             f"""
-            SELECT c.slug, c.name, j.locations, COUNT(*) AS cnt,
-                   MAX(j.title) AS sample_title
+            SELECT c.slug, c.name, j.locations, COUNT(*) AS cnt
             FROM jobs j
             JOIN companies c ON j.company_id = c.id
             WHERE j.location_lat IS NULL
@@ -1639,9 +1521,7 @@ def run_geocode_backfill(maps_key: Optional[str] = None, dry_run: bool = False):
 
         for row in rows:
             slug         = row.get("slug") or ""
-            company_name = row.get("name") or slug
             locs_json    = row.get("locations") or "[]"
-            sample_title = row.get("sample_title") or ""
 
             # Parse the stored JSON location array
             try:
@@ -1660,52 +1540,14 @@ def run_geocode_backfill(maps_key: Optional[str] = None, dry_run: bool = False):
             if not location_key or len(location_key) < 3:
                 continue
 
-            # Routing decision
-            use_retail = (slug in RETAIL_SLUGS) or bool(_RETAIL_TITLE_RE.search(sample_title))
-
             lat_lng: Optional[tuple[float, float]] = None
 
-            if use_retail or not maps_key:
-                # Photon — free, city-level, no API key needed
-                if location_key not in photon_cache:
-                    photon_cache[location_key] = _photon_geocode(location_key)
-                    time.sleep(0.06)  # 60 ms between Photon calls (polite)
-                lat_lng = photon_cache[location_key]
-                if lat_lng:
-                    total_photon += 1
-            else:
-                # Places API — precise coords for professional/corporate jobs
-                places_query = f"{company_name} {location_key}"
-                cache_key    = places_query.lower()
-
-                if places_calls >= PLACES_CAP:
-                    # Budget exhausted — fall back to Photon for remainder
-                    if location_key not in photon_cache:
-                        photon_cache[location_key] = _photon_geocode(location_key)
-                        time.sleep(0.06)
-                    lat_lng = photon_cache[location_key]
-                    if lat_lng:
-                        total_photon += 1
-                elif cache_key in places_cache:
-                    lat_lng = places_cache[cache_key]
-                    if lat_lng:
-                        total_places += 1
-                else:
-                    result = _places_geocode(places_query, maps_key)
-                    places_calls += 1
-                    places_cache[cache_key] = result
-                    if result:
-                        lat_lng = result
-                        total_places += 1
-                    else:
-                        # Places API miss — Photon fallback
-                        if location_key not in photon_cache:
-                            photon_cache[location_key] = _photon_geocode(location_key)
-                            time.sleep(0.06)
-                        lat_lng = photon_cache[location_key]
-                        if lat_lng:
-                            total_photon += 1
-                    time.sleep(0.06)
+            if location_key not in photon_cache:
+                photon_cache[location_key] = _photon_geocode(location_key)
+                time.sleep(0.06)  # polite delay between Photon calls
+            lat_lng = photon_cache[location_key]
+            if lat_lng:
+                total_photon += 1
 
             if lat_lng:
                 lat, lng = lat_lng
@@ -1726,11 +1568,7 @@ def run_geocode_backfill(maps_key: Optional[str] = None, dry_run: bool = False):
             for i in range(0, len(updates), BATCH):
                 run_d1("\n".join(updates[i:i + BATCH]), label=f"geocode page {page} batch {i // BATCH}")
 
-        tier_label = (
-            f"photon={total_photon}"
-            + (f" | places={total_places} (${places_calls * 0.032:.2f})" if maps_key else "")
-            + f" | failed={total_failed}"
-        )
+        tier_label = f"photon={total_photon} | failed={total_failed}"
         print(
             f"  Page {page}: {len(rows)} locations → {len(updates)} updates | {tier_label}",
             flush=True,
@@ -1743,8 +1581,6 @@ def run_geocode_backfill(maps_key: Optional[str] = None, dry_run: bool = False):
     print(f"\n── Geocode complete ──────────────────────────────────────")
     print(f"  Jobs updated  : {total_updated:,}")
     print(f"  Photon (free) : {total_photon:,}")
-    if maps_key:
-        print(f"  Places API    : {total_places:,}  (cost ≈ ${places_calls * 0.032:.2f})")
     print(f"  Failed/skipped: {total_failed:,}")
 
 # ── Main ──────────────────────────────────────────────────────────────────────

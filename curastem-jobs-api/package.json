@@ -12,6 +12,7 @@
     "type-check": "tsc --noEmit",
     "test:desc-address": "npx tsx scripts/test-desc-address-extraction.ts",
     "analyze:locations": "npx tsx scripts/analyze-location-normalization.ts",
+    "analyze:metro-footprint": "npx tsx scripts/metro-location-footprint.ts",
     "verify:a16z": "npx tsx scripts/verify-seed-sources-job-count.ts --only cn-a16z-portfolio --timeout-ms 180000 --concurrency 1"
   },
   "devDependencies": {

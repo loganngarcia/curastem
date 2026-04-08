@@ -73,7 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_companies_slug ON companies (slug);
 CREATE TABLE IF NOT EXISTS sources (
   id              TEXT PRIMARY KEY,   -- UUID v4
   name            TEXT NOT NULL,      -- human-readable, e.g. "Stripe (Greenhouse)"
-  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "activate_careers" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "workday" | "smartrecruiters" | "consider" | "getro" | "rss" | ...
+  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "lvmh_algolia" | "successfactors_rmk" | "symphony_mcloud" | "adp_cx" | "activate_careers" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "workday" | "smartrecruiters" | "consider" | "getro" | "rss" | ...
   company_handle  TEXT NOT NULL,      -- ATS-specific company slug / board name
   base_url        TEXT NOT NULL,      -- canonical API or job-board URL for this source
   enabled         INTEGER NOT NULL DEFAULT 1,    -- 0 = disabled, skip in cron
@@ -207,7 +207,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_visa_sponsorship
 -- company_location_geocodes
 -- Persistent cache: (company, city-string) → precise lat/lng + address.
 -- Populated by the per-job geocoding path during ingestion.
--- A cache hit avoids a Places API call for every subsequent job at that location.
+-- Same location_key may be copied from another company’s row only after Mapbox/Places miss (city fallback).
 -- ──────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS company_location_geocodes (
   company_id   TEXT    NOT NULL REFERENCES companies(id) ON DELETE CASCADE,

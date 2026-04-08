@@ -2,12 +2,14 @@
  * Two geocoding functions:
  *
  * geocode(location) — city/region strings (e.g. "Dallas, TX")
- *   1. Photon (no rate limit, no key, OSM-based) — primary
- *   2. Nominatim (1 req/sec, OSM-based)           — fallback
+ *   1. majorMetros.ts centroid when the string names a listed city — no HTTP
+ *   2. Photon (OSM) — only when not in our table
+ *   3. Nominatim (1 req/sec)                      — last resort
  *
  * geocodeAddress(address, apiKey?) — full street addresses (e.g. "3275 Henry St, Muskegon, MI")
  *   1. Google Geocoding API ($0.005/req)            — primary when key is present
  *   2. Nominatim                                    — fallback (free, accurate for US streets)
+ *   3. geocode() — majorMetros, else Photon/Nominatim — when 1–2 miss odd formats
  *
  * Both functions cache results in KV for 1 year. geocodeAddress uses a separate
  * "addr:" prefix so city-level and address-level caches don't overlap.
@@ -15,6 +17,8 @@
  * Deduplication note: callers should group jobs by address before calling
  * geocodeAddress so that multiple jobs at the same store share one API call.
  */
+
+import { findMetroForLocation } from "./majorMetros.ts";
 
 const PHOTON_URL    = "https://photon.komoot.io/api/";
 const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
@@ -38,7 +42,7 @@ const REMOTE_RE = /^remote(\s*[\(\-/]|$)/i;
 
 /**
  * Geocode a location string. Returns null for empty, remote-only, or unresolvable strings.
- * Tries Photon first (no rate limit), falls back to Nominatim on failure.
+ * Uses majorMetros when the city is listed, then Photon, then Nominatim.
  * Results are KV-cached so each unique location is fetched at most once.
  */
 export async function geocode(
@@ -58,7 +62,13 @@ export async function geocode(
     }
   }
 
-  // ── 1. Photon (primary — no rate limit) ────────────────────────────────────
+  const metroHit = findMetroForLocation(trimmed);
+  if (metroHit) {
+    if (kv) await kv.put(cacheKey, `${metroHit.lat},${metroHit.lng}`, { expirationTtl: CACHE_TTL });
+    return { lat: metroHit.lat, lng: metroHit.lng, fromCache: false, usedNominatim: false };
+  }
+
+  // ── 2. Photon — cities not in majorMetros (or spelling outside our normalization) ──
   try {
     const params = new URLSearchParams({ q: trimmed, limit: "1" });
     const res = await fetch(`${PHOTON_URL}?${params}`, {
@@ -79,7 +89,7 @@ export async function geocode(
     // fall through to Nominatim
   }
 
-  // ── 2. Nominatim (fallback — 1 req/sec, caller must throttle) ──────────────
+  // ── 3. Nominatim (fallback — 1 req/sec, caller must throttle) ───────────────
   try {
     const params = new URLSearchParams({ q: trimmed, format: "json", limit: "1" });
     const res = await fetch(`${NOMINATIM_URL}?${params}`, {
@@ -104,7 +114,7 @@ export async function geocode(
  *
  * Uses Google Geocoding API ($0.005/req) when an API key is provided —
  * much cheaper than Places API ($0.032) and the right tool for a known address.
- * Falls back to Nominatim (free, accurate for US streets) when no key or on failure.
+ * Then Nominatim, then the same Photon path as city geocode — not Google Places search.
  *
  * Results are KV-cached under "addr:" prefix for 1 year.
  * Callers MUST deduplicate by address before calling so that multiple jobs at the
@@ -157,16 +167,32 @@ export async function geocodeAddress(
     const res = await fetch(`${NOMINATIM_URL}?${params}`, {
       headers: { "User-Agent": "CurastemJobs/1.0 (https://curastem.org; address geocoding)" },
     });
-    if (!res.ok) return null;
-    const data = (await res.json()) as Array<{ lat?: string; lon?: string }>;
-    if (!Array.isArray(data) || data.length === 0) return null;
-    const first = data[0];
-    const lat = parseFloat(first?.lat ?? "");
-    const lng = parseFloat(first?.lon ?? "");
-    if (isNaN(lat) || isNaN(lng)) return null;
-    if (kv) await kv.put(cacheKey, `${lat},${lng}`, { expirationTtl: CACHE_TTL });
-    return { lat, lng, fromCache: false, usedNominatim: true };
+    if (res.ok) {
+      const data = (await res.json()) as Array<{ lat?: string; lon?: string }>;
+      if (Array.isArray(data) && data.length > 0) {
+        const first = data[0];
+        const lat = parseFloat(first?.lat ?? "");
+        const lng = parseFloat(first?.lon ?? "");
+        if (!isNaN(lat) && !isNaN(lng)) {
+          if (kv) await kv.put(cacheKey, `${lat},${lng}`, { expirationTtl: CACHE_TTL });
+          return { lat, lng, fromCache: false, usedNominatim: true };
+        }
+      }
+    }
   } catch {
-    return null;
+    // fall through to Photon
   }
+
+  // ── 3. Photon (+ Nominatim inside geocode) — same query pipeline as city strings ──
+  const loose = await geocode(trimmed, kv);
+  if (loose) {
+    if (kv) await kv.put(cacheKey, `${loose.lat},${loose.lng}`, { expirationTtl: CACHE_TTL });
+    return {
+      lat: loose.lat,
+      lng: loose.lng,
+      fromCache: false,
+      usedNominatim: loose.usedNominatim,
+    };
+  }
+  return null;
 }

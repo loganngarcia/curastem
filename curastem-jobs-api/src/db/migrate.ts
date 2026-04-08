@@ -104,6 +104,10 @@ export const SEED_SOURCES: SeedSource[] = [
   // University / events board (distinct from main godaddy board); embed e.g. job-boards.greenhouse.io/embed/job_app?for=eventsandinterns&token=…
   { id: "gh-eventsandinterns", name: "GoDaddy Events & University (Greenhouse)", source_type: "greenhouse", company_handle: "eventsandinterns", base_url: "https://boards-api.greenhouse.io/v1/boards/eventsandinterns/jobs" },
   { id: "gh-oura",          name: "Oura (Greenhouse)",          source_type: "greenhouse", company_handle: "oura",          base_url: "https://boards-api.greenhouse.io/v1/boards/oura/jobs" },
+  { id: "gh-rhodeskin",     name: "Rhode Skin (Greenhouse)",    source_type: "greenhouse", company_handle: "rhodeskin",     base_url: "https://boards-api.greenhouse.io/v1/boards/rhodeskin/jobs" },
+  { id: "gh-soldejaneiro",  name: "Sol de Janeiro (Greenhouse)", source_type: "greenhouse", company_handle: "soldejaneiro", base_url: "https://boards-api.greenhouse.io/v1/boards/soldejaneiro/jobs" },
+  { id: "gh-starfaceworld", name: "Starface (Greenhouse)",      source_type: "greenhouse", company_handle: "starfaceworld", base_url: "https://boards-api.greenhouse.io/v1/boards/starfaceworld/jobs" },
+  { id: "gh-liquidiv",      name: "Liquid I.V. (Greenhouse)",   source_type: "greenhouse", company_handle: "liquidiv",      base_url: "https://boards-api.greenhouse.io/v1/boards/liquidiv/jobs" },
   { id: "gh-fashionnova",   name: "Fashion Nova (Greenhouse)", source_type: "greenhouse", company_handle: "fashionnova",   base_url: "https://boards-api.greenhouse.io/v1/boards/fashionnova/jobs" },
   { id: "gh-shein",         name: "SHEIN (Greenhouse)",         source_type: "greenhouse", company_handle: "shein",         base_url: "https://boards-api.greenhouse.io/v1/boards/shein/jobs" },
   { id: "gh-oscar",      name: "Oscar Health (Greenhouse)", source_type: "greenhouse", company_handle: "oscar",    base_url: "https://boards-api.greenhouse.io/v1/boards/oscar/jobs" },
@@ -179,6 +183,10 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "av-delta", name: "Delta Air Lines (Avature RSS)", source_type: "avature", company_handle: "delta", base_url: "https://delta.avature.net/careers/SearchJobs/feed/" },
   // Epic Systems (healthcare EHR) — careers.epic.com → epic.avature.net; not Epic Games (gh-epicgames)
   { id: "av-epic", name: "Epic Systems (Avature RSS)", source_type: "avature", company_handle: "epic", base_url: "https://epic.avature.net/careers/SearchJobs/feed/" },
+  // Lululemon — custom domain Avature; `SearchJobs/feed/` RSS (replaces br-lululemon browser placeholder)
+  { id: "av-lululemon", name: "lululemon (Avature RSS)", source_type: "avature", company_handle: "lululemon", base_url: "https://careers.lululemon.com/en_US/careers/SearchJobs/feed/" },
+  // L'Oréal — global Avature portal (public RSS; same pattern as av-delta)
+  { id: "av-loreal", name: "L'Oréal (Avature RSS)", source_type: "avature", company_handle: "loreal", base_url: "https://careers.loreal.com/en_US/careers/SearchJobs/feed/" },
   // Best Buy — ServiceNow SEO sitemap API (see jobs.bestbuy.com robots.txt); per-job SSR meta
   { id: "sn-bestbuy", name: "Best Buy (ServiceNow SEO)", source_type: "servicenow_seo", company_handle: "bestbuy", base_url: "https://bestbuy.service-now.com/api/93622/seo/sitemap" },
   { id: "gh-lyft",    name: "Lyft (Greenhouse)",    source_type: "greenhouse", company_handle: "lyft",         base_url: "https://boards-api.greenhouse.io/v1/boards/lyft/jobs" },
@@ -647,6 +655,9 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wb-curology",    name: "Curology (Workable)",       source_type: "workable", company_handle: "curology",        base_url: "https://apply.workable.com/api/v1/widget/accounts/curology" },
   { id: "wb-bask-health", name: "Bask Health (Workable)",   source_type: "workable", company_handle: "bask-health-1",   base_url: "https://apply.workable.com/api/v1/widget/accounts/bask-health-1" },
   { id: "wb-authorium", name: "Authorium (Workable)", source_type: "workable", company_handle: "authorium", base_url: "https://apply.workable.com/api/v1/widget/accounts/authorium" },
+  { id: "wb-theouai", name: "OUAI (Workable)", source_type: "workable", company_handle: "theouai", base_url: "https://apply.workable.com/api/v1/widget/accounts/theouai" },
+  { id: "wb-charlotte-tilbury", name: "Charlotte Tilbury (Workable)", source_type: "workable", company_handle: "charlotte-tilbury", base_url: "https://apply.workable.com/api/v1/widget/accounts/charlotte-tilbury" },
+  { id: "wb-tarte", name: "Tarte Cosmetics (Workable)", source_type: "workable", company_handle: "tarte-inc", base_url: "https://apply.workable.com/api/v1/widget/accounts/tarte-inc" },
 
   // ─── Jobright (native) ────────────────────────────────────────────────
   // Next.js data route per job id; buildId scraped from homepage. Append ids to
@@ -668,6 +679,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "rp-vouch-inc", name: "Vouch (Rippling)", source_type: "rippling", company_handle: "vouch-inc", base_url: "https://ats.rippling.com/vouch-inc/jobs" },
   { id: "rp-partnerco", name: "PartnerCo (Rippling)", source_type: "rippling", company_handle: "partnerco", base_url: "https://ats.rippling.com/partnerco/jobs" },
   { id: "rp-rippling", name: "Rippling (Rippling)", source_type: "rippling", company_handle: "rippling", base_url: "https://ats.rippling.com/rippling/jobs" },
+  { id: "rp-amika", name: "amika (Rippling)", source_type: "rippling", company_handle: "amika", base_url: "https://ats.rippling.com/amika-careers/jobs" },
 
   // ─── Brillio (WordPress listing HTML — see brillio.ts) ───────────────────
   { id: "br-brillio", name: "Brillio (Careers)", source_type: "brillio", company_handle: "brillio", base_url: "https://careers.brillio.com/job-listing/" },
@@ -738,6 +750,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "pp-dazn",         name: "DAZN (Pinpoint)",           source_type: "pinpoint",  company_handle: "dazn",          base_url: "https://dazn.pinpointhq.com/postings.json" },
   { id: "pp-tabby",        name: "Tabby (Pinpoint)",          source_type: "pinpoint",  company_handle: "tabby",         base_url: "https://tabby.pinpointhq.com/postings.json" },
   { id: "pp-kempinski",    name: "Kempinski Hotels (Pinpoint)", source_type: "pinpoint", company_handle: "kempinski",    base_url: "https://kempinski.pinpointhq.com/postings.json" },
+  { id: "pp-skims",        name: "SKIMS (Pinpoint)",          source_type: "pinpoint",  company_handle: "skims",         base_url: "https://skims.pinpointhq.com/postings.json" },
 
   // ─── SmartRecruiters ──────────────────────────────────────────────────
   // Public postings API: https://api.smartrecruiters.com/v1/companies/{handle}/postings
@@ -751,6 +764,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "sr-asos",         name: "ASOS",                 source_type: "smartrecruiters", company_handle: "ASOS",           base_url: "https://api.smartrecruiters.com/v1/companies/ASOS/postings" },
   { id: "sr-primark",      name: "Primark",              source_type: "smartrecruiters", company_handle: "Primark",        base_url: "https://api.smartrecruiters.com/v1/companies/Primark/postings" },
   { id: "sr-lvmh",         name: "LVMH",                 source_type: "smartrecruiters", company_handle: "LVMH",           base_url: "https://api.smartrecruiters.com/v1/companies/LVMH/postings" },
+  // LVMH flagship multi-brand hub (Algolia) — ~6k roles across maisons; distinct from sr-lvmh SmartRecruiters API
+  { id: "lvmh-jobhub", name: "LVMH (Job Hub)", source_type: "lvmh_algolia", company_handle: "lvmh-group", base_url: "https://www.lvmh.com/en/join-us/our-job-offers" },
   { id: "sr-cottonon",         name: "Cotton On",         source_type: "smartrecruiters", company_handle: "CottonOn",       base_url: "https://api.smartrecruiters.com/v1/companies/CottonOn/postings" },
   { id: "sr-abbvie",           name: "AbbVie",                 source_type: "smartrecruiters", company_handle: "AbbVie",                 base_url: "https://api.smartrecruiters.com/v1/companies/AbbVie/postings" },
   { id: "sr-cencora",          name: "Cencora",                source_type: "smartrecruiters", company_handle: "Cencora",                base_url: "https://api.smartrecruiters.com/v1/companies/Cencora/postings" },
@@ -813,9 +828,14 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wd-cocacola",    name: "Coca-Cola",        source_type: "workday", company_handle: "coke",           base_url: "https://coke.wd1.myworkdayjobs.com/wday/cxs/coke/coca-cola-careers/jobs" },
   { id: "wd-pg",          name: "Procter & Gamble", source_type: "workday", company_handle: "pg",             base_url: "https://pg.wd5.myworkdayjobs.com/wday/cxs/pg/1000/jobs" },
   { id: "wd-mondelez",    name: "Mondelez",         source_type: "workday", company_handle: "mdlz",           base_url: "https://mdlz.wd3.myworkdayjobs.com/wday/cxs/mdlz/external/jobs" },
+  // careers.unilever.com is a front site; listings + apply live on Workday (tenant Unilever_Experienced_Professionals).
+  { id: "wd-unilever",    name: "Unilever (Workday)", source_type: "workday", company_handle: "unilever",     base_url: "https://unilever.wd3.myworkdayjobs.com/wday/cxs/unilever/Unilever_Experienced_Professionals/jobs" },
   { id: "wd-motorolasolutions", name: "Motorola Solutions", source_type: "workday", company_handle: "motorolasolutions", base_url: "https://motorolasolutions.wd5.myworkdayjobs.com/wday/cxs/motorolasolutions/Careers/jobs" },
   { id: "wd-tyson",       name: "Tyson Foods",      source_type: "workday", company_handle: "tysonfoods",     base_url: "https://tysonfoods.wd5.myworkdayjobs.com/wday/cxs/tysonfoods/TSN/jobs" },
   { id: "wd-nike",        name: "Nike",             source_type: "workday", company_handle: "nike",           base_url: "https://nike.wd1.myworkdayjobs.com/wday/cxs/nike/nke/jobs" },
+  // careers.nike.com is a marketing shell; apply + data are on the Workday tenant above.
+  { id: "wd-tapestry",    name: "Tapestry (Coach, Kate Spade, Stuart Weitzman)", source_type: "workday", company_handle: "tapestry", base_url: "https://tapestry.wd108.myworkdayjobs.com/wday/cxs/tapestry/Tapestry_Careers/jobs" },
+  { id: "wd-capri",       name: "Capri Holdings (Michael Kors)", source_type: "workday", company_handle: "capri", base_url: "https://capri.wd1.myworkdayjobs.com/wday/cxs/capri/Michael_Kors/jobs" },
   { id: "wd-gap",         name: "Gap Inc",          source_type: "workday", company_handle: "gapinc",         base_url: "https://gapinc.wd1.myworkdayjobs.com/wday/cxs/gapinc/GAPINC/jobs" },
   { id: "wd-tjx",         name: "TJX Companies",    source_type: "workday", company_handle: "tjx",            base_url: "https://tjx.wd1.myworkdayjobs.com/wday/cxs/tjx/TJX_EXTERNAL/jobs" },
   // Tenant Tencent_Careers — e.g. https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/…/Product-Manager-Intern---Data-Agent_R107221
@@ -879,6 +899,24 @@ export const SEED_SOURCES: SeedSource[] = [
 
   // ─── Eightfold PCS (Microsoft uses apply.careers.microsoft.com, not *.eightfold.ai) ───
   { id: "ef-microsoft",    name: "Microsoft",                 source_type: "eightfold", company_handle: "microsoft",   base_url: "https://apply.careers.microsoft.com/careers?domain=microsoft.com" },
+  // Sephora: vanity host; /api/pcsx/search is disabled for anonymous callers — ingestion uses /careers/sitemap.xml + position_details.
+  { id: "ef-sephora",      name: "Sephora",                   source_type: "eightfold", company_handle: "sephora",     base_url: "https://join.sephora.com/careers?domain=sephora.com" },
+  // careers.elcompanies.com — Eightfold PCS (`domain=elcompanies.com`); not Phenom despite locale-style paths.
+  { id: "ef-elcompanies", name: "Estée Lauder Companies (Eightfold)", source_type: "eightfold", company_handle: "elcompanies", base_url: "https://careers.elcompanies.com/careers?domain=elcompanies.com" },
+  // Coty — SAP SuccessFactors RMK (`/sitemap.xml` → `/job/.../{reqId}/`, microdata + `span.jobdescription`)
+  { id: "sf-coty", name: "Coty (SuccessFactors RMK)", source_type: "successfactors_rmk", company_handle: "coty", base_url: "https://careers.coty.com/sitemap.xml" },
+  { id: "sf-shiseido", name: "Shiseido (SuccessFactors RMK)", source_type: "successfactors_rmk", company_handle: "shiseido", base_url: "https://careers.shiseido.com/sitemap.xml" },
+  // Listings on careers.adidas-group.com link to jobs.adidas-group.com (same RMK tenant; sitemap lives on jobs host)
+  { id: "sf-adidas", name: "adidas (SuccessFactors RMK)", source_type: "successfactors_rmk", company_handle: "adidas", base_url: "https://jobs.adidas-group.com/sitemap.xml" },
+  // Bath & Body Works — Symphony Talent CWS + SmartPost (`cws_opts.org` / Taleo; list API is m-cloud)
+  {
+    id: "mcloud-bbw",
+    name: "Bath & Body Works (Symphony m-cloud)",
+    source_type: "symphony_mcloud",
+    company_handle: "bath-body-works",
+    base_url:
+      "https://careers.bathandbodyworks.com/en/job-search-results/?mcloud_org=1107&job_path=/en/job&mcloud_company_name=Bath%20%26%20Body%20Works",
+  },
 
   // ─── Workday (Samsung CXS) ────────────────────────────────────────────
   { id: "wd-samsung",      name: "Samsung",                   source_type: "workday",   company_handle: "samsung",       base_url: "https://sec.wd3.myworkdayjobs.com/wday/cxs/sec/Samsung_Careers/jobs" },
@@ -1302,6 +1340,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "br-fedex",       name: "FedEx (Browser)",           source_type: "browser", company_handle: "fedex",           base_url: "https://careers.fedex.com/jobs" },
   { id: "br-starbucks",   name: "Starbucks (Eightfold)",      source_type: "eightfold", company_handle: "starbucks",     base_url: "https://starbucks.eightfold.ai/careers?domain=starbucks.com" },
   { id: "br-marriott",    name: "Marriott (Browser)",        source_type: "browser", company_handle: "marriott",        base_url: "https://careers.marriott.com/jobs" },
+  // Superseded by av-lululemon (Avature RSS). Row kept for FK continuity; disabled in DISABLED_SOURCE_IDS.
   { id: "br-lululemon",   name: "Lululemon (Browser)",       source_type: "browser", company_handle: "lululemon",       base_url: "https://careers.lululemon.com/en_US/careers" },
   { id: "br-pepsico",     name: "PepsiCo (Browser)",         source_type: "browser", company_handle: "pepsico",         base_url: "https://www.pepsicojobs.com/main/jobs" },
   { id: "br-jpmorgan",    name: "JPMorgan Chase (Browser)",  source_type: "browser", company_handle: "jpmorgan",        base_url: "https://careers.jpmorgan.com/us/en/jobs" },
@@ -1363,6 +1402,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "br-goldmansachs",name: "Goldman Sachs (Browser)",    source_type: "browser", company_handle: "goldmansachs",    base_url: "https://higher.gs.com/roles" },
   { id: "br-progressive", name: "Progressive (Browser)",      source_type: "browser", company_handle: "progressive",     base_url: "https://progressive.com/careers/search" },
   { id: "br-adp",         name: "ADP (Browser)",              source_type: "browser", company_handle: "adp",             base_url: "https://careers.adp.com/job-search-results" },
+  { id: "ac-kendo",       name: "Kendo Brands (ADP CX)",      source_type: "adp_cx",  company_handle: "kendo",           base_url: "https://myjobs.adp.com/kendo?c=1178815&d=Kendo" },
+  { id: "ac-benefit",     name: "Benefit Cosmetics (ADP CX)", source_type: "adp_cx",  company_handle: "benefit",         base_url: "https://myjobs.adp.com/benefit?c=1178815&d=ExternalCareerSite" },
   { id: "br-qualcomm",    name: "Qualcomm (Browser)",         source_type: "browser", company_handle: "qualcomm",        base_url: "https://careers.qualcomm.com/careers/search" },
   { id: "br-hp",          name: "HP Inc (Browser)",           source_type: "browser", company_handle: "hp",              base_url: "https://jobs.hp.com/search-jobs" },
 
@@ -1701,6 +1742,17 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "br-starbucks", hours: 48 },
   // ~2.6k roles + detail fetches — ease first-run cron load
   { id: "ef-microsoft", hours: 48 },
+  { id: "ef-sephora", hours: 48 },
+  { id: "ef-elcompanies", hours: 48 },
+  // Coty RMK — ~300 sitemap URLs + parallel HTML (detail fetches per run)
+  { id: "sf-coty", hours: 12 },
+  { id: "sf-shiseido", hours: 12 },
+  { id: "sf-adidas", hours: 12 },
+  { id: "mcloud-bbw", hours: 12 },
+  { id: "wd-tapestry", hours: 24 },
+  { id: "wd-capri", hours: 24 },
+  // LVMH Algolia — ~6k jobs in 6 paginated requests; ease cron load on first full sync
+  { id: "lvmh-jobhub", hours: 24 },
   { id: "mc-meta", hours: 48 },
   // TalentBrew — hundreds of per-job HTML fetches per employer
   { id: "tb-schwab", hours: 12 },
@@ -1737,6 +1789,8 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "jibe-pepsico", hours: 12 },
   { id: "ph-united", hours: 12 },
   { id: "av-delta", hours: 12 },
+  { id: "av-lululemon", hours: 12 },
+  { id: "av-loreal", hours: 12 },
   { id: "av-epic", hours: 12 },
   { id: "sn-bestbuy", hours: 24 },
   { id: "wd-dsg", hours: 48 },
@@ -1769,6 +1823,16 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "ab-zettabyte-space", hours: 12 },
   { id: "lv-penumbrainc", hours: 12 },
   { id: "wb-authorium", hours: 12 },
+  { id: "wb-theouai", hours: 12 },
+  { id: "wb-charlotte-tilbury", hours: 12 },
+  { id: "wb-tarte", hours: 12 },
+  { id: "wd-unilever", hours: 12 },
+  { id: "ac-benefit", hours: 12 },
+  { id: "rp-amika", hours: 12 },
+  { id: "gh-rhodeskin", hours: 12 },
+  { id: "gh-soldejaneiro", hours: 12 },
+  { id: "gh-starfaceworld", hours: 12 },
+  { id: "gh-liquidiv", hours: 12 },
   { id: "wd-synnex-hyve", hours: 24 },
   // ~300 roles + per-job HTML — ease hourly cron load
   { id: "rf-recruitingfromscratch", hours: 24 },
@@ -1869,6 +1933,8 @@ const ENABLED_REPLACEMENT_SOURCE_IDS = [
   "jibe-pepsico",
   "ph-united",
   "av-delta",
+  "av-lululemon",
+  "av-loreal",
   "sn-bestbuy",
   "wd-hp",
   "wd-bofa",

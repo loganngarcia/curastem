@@ -78,13 +78,16 @@ export interface Env {
    */
   LOGO_DEV_TOKEN?: string;
   /**
-   * Google Maps Platform API key — used for Places API (New) geocoding.
-   * Required for company HQ auto-geocoding and per-job geocoding for
-   * retail/franchise companies (CVS, Dollar Tree, etc.).
-   * Needs: Places API (New), Maps JavaScript API.
+   * Google Maps Platform API key — Places API (New) for HQ geocoding and fallback
+   * when Mapbox monthly soft cap is hit or Mapbox returns no result in major metros.
    * Set via: wrangler secret put GOOGLE_MAPS_API_KEY
    */
   GOOGLE_MAPS_API_KEY?: string;
+  /**
+   * Mapbox access token — Geocoding v6 forward (temporary tier) for major-metro
+   * company+city geocoding. Set via: wrangler secret put MAPBOX_ACCESS_TOKEN
+   */
+  MAPBOX_ACCESS_TOKEN?: string;
   /**
    * Producer: hourly scheduler sends one message per enabled source id.
    * Consumer: runs full `processSource` with inline embeddings (isolated CPU/subrequest budget).
@@ -324,9 +327,10 @@ export type SourceType =
    */
   | "talentbrew"
   /**
-   * Eightfold PCS career sites (`{company}.eightfold.ai`). Unauthenticated
-   * `GET /api/pcsx/search` + `GET /api/pcsx/position_details`. `base_url` must be a
-   * careers URL with `?domain=` (tenant id, e.g. `starbucks.com`). See eightfold.ts.
+   * Eightfold PCS career sites (`{company}.eightfold.ai`, `apply.careers.microsoft.com`,
+   * `join.sephora.com`, etc.). Uses `GET /api/pcsx/search` + `GET /api/pcsx/position_details`
+   * when search is public; some hosts disable search and we fall back to `/careers/sitemap.xml`.
+   * `base_url` must include `?domain=` (tenant id, e.g. `sephora.com`). See eightfold.ts.
    */
   | "eightfold"
   /**
@@ -361,7 +365,7 @@ export type SourceType =
   | "activate_careers"
   /**
    * Avature career sites — public `SearchJobs/feed/` RSS (`<item>` title/link/pubDate).
-   * `base_url` is the feed URL (see avature.ts).
+   * `base_url` is the feed URL; locale-prefixed hosts are OK (see avature.ts).
    */
   | "avature"
   /**
@@ -409,7 +413,29 @@ export type SourceType =
    * `base_url` = https://lifeattiktok.com/search  (no location_codes = all global jobs)
    * Add ?location_codes=CT_94,CT_114 to restrict to specific city codes.
    */
-  | "tiktok";
+  | "tiktok"
+  /**
+   * LVMH Group careers — Algolia multi-query on index `PRD-en-us-timestamp-desc`
+   * (`filters=category:job`). Public search key from the Next.js client; not routed via `lvmh.com`
+   * `/api/search` (Akamai). See lvmh_algolia.ts.
+   */
+  | "lvmh_algolia"
+  /**
+   * SAP SuccessFactors Recruitment Marketing (RMK) — `sitemap.xml` lists `/job/{slug}/{reqId}/`;
+   * detail HTML uses schema.org JobPosting microdata + `span.jobdescription`. See successfactors_rmk.ts.
+   */
+  | "successfactors_rmk"
+  /**
+   * Symphony Talent SmartPost — `GET https://jobsapi-internal.m-cloud.io/api/job?Organization=…`
+   * (WordPress CWS widget / JSONP in browser; plain JSON without `callback`). `base_url` must
+   * include `mcloud_org=` on the public careers site origin. See symphony_mcloud.ts.
+   */
+  | "symphony_mcloud"
+  /**
+   * ADP RM Candidate Experience (MyJobs public API). `base_url` must be under
+   * `https://myjobs.adp.com/{domain}/…` (optional `?c=` / `?d=`). See adp_cx.ts.
+   */
+  | "adp_cx";
 
 export type EmploymentType =
   | "full_time"

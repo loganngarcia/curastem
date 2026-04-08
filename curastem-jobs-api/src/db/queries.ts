@@ -2410,6 +2410,38 @@ export async function batchGetCompanyLocationCoords(
 }
 
 /**
+ * One row per location_key from peers — any company that already geocoded this city string.
+ * Used so a new company reuses lat/lng without another Mapbox/Photon round-trip.
+ */
+export async function getGeocodeByLocationKeyFromAnyCompany(
+  db: D1Database,
+  locationKeys: string[]
+): Promise<Map<string, { lat: number; lng: number; address: string | null }>> {
+  const out = new Map<string, { lat: number; lng: number; address: string | null }>();
+  if (locationKeys.length === 0) return out;
+  const CHUNK = 80;
+  for (let i = 0; i < locationKeys.length; i += CHUNK) {
+    const chunk = [...new Set(locationKeys.slice(i, i + CHUNK))];
+    if (chunk.length === 0) continue;
+    const placeholders = chunk.map(() => "?").join(",");
+    const { results } = await db
+      .prepare(
+        `SELECT location_key, lat, lng, address
+         FROM company_location_geocodes
+         WHERE location_key IN (${placeholders})`
+      )
+      .bind(...chunk)
+      .all<{ location_key: string; lat: number; lng: number; address: string | null }>();
+    for (const row of results ?? []) {
+      if (!out.has(row.location_key)) {
+        out.set(row.location_key, { lat: row.lat, lng: row.lng, address: row.address });
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Upsert geocoded coords for a (company, location) pair.
  * ON CONFLICT DO NOTHING — first geocode wins; stale updates ignored to avoid
  * unnecessary D1 writes if the cache is already warm.

@@ -6,11 +6,8 @@
  * hq_geocode_failed_at timestamp is set so the company is never retried —
  * unless its hq_city/hq_country/hq_address is later updated (which clears the flag).
  *
- * Per-job geocoding is handled inline during ingestion (runner.ts Phase 4b)
- * using two-tier routing from retailGeocode.ts:
- *   - Retail/franchise company slugs + retail job titles → Photon (free, city-level)
- *   - Title-embedded street addresses (Dominos-style) → Nominatim (free, precise)
- *   - Professional companies → Places API ($0.032/req, precise)
+ * Per-job geocoding is handled inline during ingestion (runner.ts Phase 4b):
+ * major metros → Mapbox Geocoding v6 then Places fallback; else Photon.
  *
  * Cost reference: $0.032 per Places API (New) Text Search request (2025).
  *   Company pass: only new companies without coords, so volume is always small.

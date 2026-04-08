@@ -548,11 +548,8 @@ async function handleRequest(
     }
   }
 
-  // POST /admin/job-geocode — backfill location_lat/lng for whitelisted retail companies
-  // Geocode unresolved job locations for a specific company slug.
-  // Routing mirrors the inline ingestion logic in runner.ts Phase 4b:
-  //   retail slug or retail title → Photon (free, city-level)
-  //   professional company        → Places API ($0.032/req)
+  // POST /admin/job-geocode — backfill location_lat/lng for a company slug.
+  // Major metro → Mapbox then Places unless company is retail-blacklisted (Photon only).
   // Requires ?company_slug=<slug>. ?limit= controls max jobs (default 50).
   if (path === "/admin/job-geocode" && method === "POST") {
     const slugParam = url.searchParams.get("company_slug");
@@ -562,6 +559,8 @@ async function handleRequest(
       });
     }
     try {
+      const { findMetroForLocation } = await import("./utils/majorMetros.ts");
+      const { mapboxGeocode } = await import("./utils/mapboxGeocode.ts");
       const { RETAIL_GEOCODE_SLUGS } = await import("./utils/retailGeocode.ts");
       const { listJobsNeedingPlacesGeocode, updateJobsWithCoords } = await import("./db/queries.ts");
       const { placesGeocode } = await import("./utils/placesGeocode.ts");
@@ -569,7 +568,7 @@ async function handleRequest(
 
       const limitParam = url.searchParams.get("limit");
       const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
-      const isRetail = RETAIL_GEOCODE_SLUGS.has(slugParam);
+      const skipPremiumGeocode = RETAIL_GEOCODE_SLUGS.has(slugParam);
 
       const jobs = await listJobsNeedingPlacesGeocode(env.JOBS_DB, [slugParam], limit);
       const seen = new Map<string, { lat: number; lng: number } | null>();
@@ -578,27 +577,43 @@ async function handleRequest(
       for (const job of jobs) {
         const cacheKey = `${job.company_name}|${job.location_primary}`;
         if (!seen.has(cacheKey)) {
-          if (isRetail || !env.GOOGLE_MAPS_API_KEY) {
-            // Retail → free city-level Photon
-            const result = await geocode(job.location_primary, env.RATE_LIMIT_KV);
-            seen.set(cacheKey, result ? { lat: result.lat, lng: result.lng } : null);
-          } else {
-            // Professional → Places API for precise office/facility coords
-            const result = await placesGeocode(`${job.company_name} ${job.location_primary}`, env.GOOGLE_MAPS_API_KEY, env.RATE_LIMIT_KV);
-            seen.set(cacheKey, result ? { lat: result.lat, lng: result.lng } : null);
+          const metro = findMetroForLocation(job.location_primary);
+          let coords: { lat: number; lng: number } | null = null;
+          if (!skipPremiumGeocode) {
+            if (metro && env.MAPBOX_ACCESS_TOKEN) {
+              const mb = await mapboxGeocode(
+                `${job.company_name} ${job.location_primary}`,
+                metro,
+                env.MAPBOX_ACCESS_TOKEN,
+                env.RATE_LIMIT_KV,
+              );
+              if (mb) coords = { lat: mb.lat, lng: mb.lng };
+            }
+            if (!coords && metro && env.GOOGLE_MAPS_API_KEY) {
+              const pl = await placesGeocode(
+                `${job.company_name} ${job.location_primary}`,
+                env.GOOGLE_MAPS_API_KEY,
+                env.RATE_LIMIT_KV,
+              );
+              if (pl) coords = { lat: pl.lat, lng: pl.lng };
+            }
           }
+          if (!coords) {
+            const result = await geocode(job.location_primary, env.RATE_LIMIT_KV);
+            coords = result ? { lat: result.lat, lng: result.lng } : null;
+          }
+          seen.set(cacheKey, coords);
           await new Promise((r) => setTimeout(r, 50));
         }
-        const coords = seen.get(cacheKey);
-        if (coords) {
-          jobsUpdated += await updateJobsWithCoords(env.JOBS_DB, job.location_primary, coords.lat, coords.lng);
+        const c = seen.get(cacheKey);
+        if (c) {
+          jobsUpdated += await updateJobsWithCoords(env.JOBS_DB, job.location_primary, c.lat, c.lng);
         }
       }
 
       return jsonOk({
         status: "completed",
         company_slug: slugParam,
-        tier: isRetail ? "photon" : "places_api",
         unique_locations_queried: seen.size,
         jobs_updated: jobsUpdated,
       });

@@ -57,6 +57,10 @@ import { netflixFetcher } from "./sources/netflix.ts";
 import { tiktokFetcher } from "./sources/tiktok.ts";
 import { hcaCareersFetcher } from "./sources/hcaCareers.ts";
 import { aramarkCareersFetcher } from "./sources/aramark_careers.ts";
+import { adpCxFetcher } from "./sources/adp_cx.ts";
+import { lvmhAlgoliaFetcher } from "./sources/lvmh_algolia.ts";
+import { successfactorsRmkFetcher } from "./sources/successfactors_rmk.ts";
+import { symphonyMcloudFetcher } from "./sources/symphony_mcloud.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -104,6 +108,10 @@ const REGISTRY: Record<SourceType, JobSource> = {
   tiktok: tiktokFetcher,
   hca_careers: hcaCareersFetcher,
   aramark_careers: aramarkCareersFetcher,
+  adp_cx: adpCxFetcher,
+  lvmh_algolia: lvmhAlgoliaFetcher,
+  successfactors_rmk: successfactorsRmkFetcher,
+  symphony_mcloud: symphonyMcloudFetcher,
 };
 
 /**
@@ -203,6 +211,14 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   tiktok: 90,
   // Aramark — employer WordPress JSON (official careers domain)
   aramark_careers: 82,
+  // ADP RM MyJobs — employer’s own requisitions + HTML descriptions from public CX API
+  adp_cx: 95,
+  // LVMH multi-brand Algolia hub — official listings; syndicated apply URLs (many maison ATS)
+  lvmh_algolia: 87,
+  // SAP SF RMK — employer HTML + microdata; same trust model as Phenom/TalentBrew detail pages
+  successfactors_rmk: 82,
+  // Symphony Talent m-cloud job API — employer WordPress marketing site; apply via Taleo-backed flows
+  symphony_mcloud: 82,
 };
 
 export function getSourcePriority(sourceType: string): number {

@@ -25,7 +25,7 @@ High-level context for AI agents. Use this for orientation and principles; disco
 **Jobs API**
 - Use Cloudflare MCP for any Cloudflare interactions and operations, when available
 - Always deploy any Cloudflare changes without asking
-- When adding companies, always make sure each properly return jobs and job descriptions. Say the count in chat for each company added.
+- When adding or verifying a company or source, **always report two numbers in chat**: (1) how many **jobs** the ingest path returns (list size or API `total`), and (2) how many of those have a **substantive description at ingest time** (`description_raw` non-null after the fetcher runs — not “pending AI enrichment”). If the source only returns titles or one-line snippets until enrichment, say so explicitly.
 - **D1 schema changes** — one PR should update `curastem-jobs-api/schema.sql`, matching `*Row` types in `types.ts`, and any `ensure*Columns` / `ensureJobIndexes` guards in `src/db/queries.ts` so cold databases and docs stay aligned.
 - Job URLs should point directly to the posting page, not a search or filtered list.
 - Locations should be normalized to a consistent format (e.g., "City, ST" for US, "City, Country" for international, or "Remote").
@@ -50,6 +50,7 @@ High-level context for AI agents. Use this for orientation and principles; disco
 
 ## Learned Preferences
 
+- When discussing any company’s ingestion, include **job count** and **description coverage** (how many roles get real text at fetch time vs thin or null). Same when validating a new source in chat.
 - Always respond in English. This rule overrides any other rules.
 - Code comments: concise, senior-engineer style — explain the **why**, not the what. No timestamps or obvious restatements.
 - Markdown: use markdown tables, not ASCII tables.

@@ -25,6 +25,7 @@ import {
   batchMarkJobsEmbedded,
   batchUpsertJobs,
   batchGetCompanyLocationCoords,
+  getGeocodeByLocationKeyFromAnyCompany,
   upsertCompanyLocationGeocode,
   getJobsNeedingEmbedding,
   getLocationsNeedingGeocode,
@@ -44,7 +45,14 @@ import { runCompanyPlacesGeocode } from "../enrichment/placesGeocodeCompanies.ts
 import { runCompanyWebsiteProbeBatch } from "../enrichment/websiteProbe.ts";
 import { getFetcher, getSourcePriority, SOURCE_PRIORITY } from "./registry.ts";
 import { geocode, geocodeAddress } from "../utils/geocode.ts";
-import { placesGeocode, hasGeocodeableCity, normalizeLocationForGeocode } from "../utils/placesGeocode.ts";
+import { findMetroForLocation } from "../utils/majorMetros.ts";
+import { mapboxGeocode } from "../utils/mapboxGeocode.ts";
+import {
+  placesGeocode,
+  hasGeocodeableCity,
+  normalizeLocationForGeocode,
+  type PlacesGeocodeResult,
+} from "../utils/placesGeocode.ts";
 import { RETAIL_GEOCODE_SLUGS, RETAIL_TITLE_RE } from "../utils/retailGeocode.ts";
 import type { Env, IngestionResult, SourceRow } from "../types.ts";
 import {
@@ -315,17 +323,12 @@ async function processSource(
 
   // ── Phase 4b: Inline geocode unique primary locations ──────────────────────
   // Strategy:
-  //   0. If job has a full street address (extracted from title or AI-enriched body)
-  //      + city + state → Nominatim address geocode (free, precise).
-  //      Franchise ATSes like Dominos embed the store address in the title
-  //      ("Dishwasher (01272) - 3275 Henry St") while `locations` has the city.
-  //      Combining them gives exact store coords at zero cost.
-  //   1. Check company_location_geocodes D1 table — free, instant, persistent cache.
-  //   2. Cache miss, professional company → Places API "{Company} {City, ST}" ($0.032/req).
-  //      Retail/franchise companies route directly to step 3 (city-level is sufficient).
-  //   3. Photon/Nominatim fallback — free, city-level accuracy.
-  // 500 per source run — each result is cached in D1 forever so the billing is one-time.
-  // Cron runs are fast after the initial backfill because all known locations hit the D1 cache.
+  //   0. Full street address + city → geocodeAddress() (Google Geocoding $0.005 or Nominatim).
+  //   1. company_location_geocodes D1 cache.
+  //   2. Cache miss in a major metro → Mapbox Geocoding v6 temporary, then Google Places
+  //      (skip for retail blacklisted slugs / retail job titles — Photon is enough).
+  //   3. Otherwise → geocode(): majorMetros first (no HTTP), then Photon/Nominatim.
+  // 500 premium calls per source run; D1/KV cache keeps repeat work cheap.
   const INLINE_GEOCODE_CAP = 500;
 
   // Step 0: Precise address geocoding for jobs that have a full street address.
@@ -383,12 +386,10 @@ async function processSource(
     if (coords) jobAddressCoords.set(jobId, coords);
   }
 
-  // Build unique (companyId, normalizedLocation) pairs for this run.
-  // Also track whether any job at each pair matches the retail profile so we
-  // can route cheaply to Photon instead of burning a Places API credit.
+  // Build unique (companyId, normalizedLocation) pairs; flag retail-like pairs so we
+  // skip Mapbox/Places and use Photon (city-level) — saves quota for Dominos-type volume.
   const pairsToCheck: Array<{ company_id: string; location_key: string; company_name: string }> = [];
   const seenPairKeys = new Set<string>();
-  // pairKey → true if any job at that (company, location) is a retail role
   const pairIsRetail = new Map<string, boolean>();
   for (const m of nonDupMetas) {
     const slug =
@@ -401,9 +402,9 @@ async function processSource(
       seenPairKeys.add(pairKey);
       pairsToCheck.push({ company_id: m.companyId, location_key: locationKey, company_name: m.normalized.company_name });
     }
-    // Mark pair as retail if company is blacklisted OR job title signals a retail role
     if (!pairIsRetail.get(pairKey)) {
-      const isRetail = RETAIL_GEOCODE_SLUGS.has(slug) || RETAIL_TITLE_RE.test(m.normalized.title ?? "");
+      const isRetail =
+        RETAIL_GEOCODE_SLUGS.has(slug) || RETAIL_TITLE_RE.test(m.normalized.title ?? "");
       if (isRetail) pairIsRetail.set(pairKey, true);
     }
   }
@@ -428,50 +429,101 @@ async function processSource(
     if (cached) locationToCoords.set(location_key, { lat: cached.lat, lng: cached.lng });
   }
 
-  // Split cache misses into two tiers:
-  //   professionalMisses → Google Maps Places API (precise building coords)
-  //   retailMisses       → Photon/Nominatim (free city-level, sufficient for franchise listings)
-  //
-  // Routing logic (in priority order):
-  //   1. Company slug in RETAIL_GEOCODE_SLUGS → Photon
-  //   2. Any job at this (company, location) matches RETAIL_TITLE_RE → Photon
-  //   3. Otherwise → Places API (capped at INLINE_GEOCODE_CAP per source run)
+  // Major-metro cache misses → Mapbox (temporary tier) then Places fallback; cap per run.
+  // Exclude retail/blacklisted (company, location) pairs — they go to Photon below.
   const allMisses = pairsToCheck.filter(
     (p) => !cachedCoords.has(`${p.company_id}|${p.location_key}`) && hasGeocodeableCity(p.location_key)
   );
-  const professionalMisses = allMisses
-    .filter((p) => !pairIsRetail.get(`${p.company_id}|${p.location_key}`))
+  const metroMisses = allMisses
+    .filter(
+      (p) =>
+        findMetroForLocation(p.location_key) &&
+        !pairIsRetail.get(`${p.company_id}|${p.location_key}`),
+    )
     .slice(0, INLINE_GEOCODE_CAP);
 
+  let mapboxApiCalls = 0;
   let placesApiCalls = 0;
-  if (env.GOOGLE_MAPS_API_KEY) {
-    for (const { company_id, location_key, company_name } of professionalMisses) {
-      if (locationToCoords.has(location_key)) continue; // already resolved by earlier pair
-      try {
-        const result = await placesGeocode(
+  /** location_key values where Mapbox/Places ran and returned no usable hit — peer city fallback applies */
+  const placeSearchMissKeys = new Set<string>();
+  for (const { company_id, location_key, company_name } of metroMisses) {
+    if (locationToCoords.has(location_key)) continue;
+    const metro = findMetroForLocation(location_key)!;
+
+    let result: PlacesGeocodeResult | null = null;
+    let placeSearchAttempted = false;
+    try {
+      if (env.MAPBOX_ACCESS_TOKEN) {
+        placeSearchAttempted = true;
+        result = await mapboxGeocode(
+          `${company_name} ${location_key}`,
+          metro,
+          env.MAPBOX_ACCESS_TOKEN,
+          env.RATE_LIMIT_KV,
+        );
+        if (result) mapboxApiCalls++;
+      }
+      if (!result && env.GOOGLE_MAPS_API_KEY) {
+        placeSearchAttempted = true;
+        result = await placesGeocode(
           `${company_name} ${location_key}`,
           env.GOOGLE_MAPS_API_KEY,
           env.RATE_LIMIT_KV,
         );
-        if (result) {
-          locationToCoords.set(location_key, { lat: result.lat, lng: result.lng });
-          // Persist to D1 so future jobs for this (company, city) skip the API call
-          await upsertCompanyLocationGeocode(db, {
-            company_id,
-            location_key,
-            lat: result.lat,
-            lng: result.lng,
-            address: result.formattedAddress,
-          });
-          placesApiCalls++;
-        }
+        if (result) placesApiCalls++;
+      }
+      if (result) {
+        locationToCoords.set(location_key, { lat: result.lat, lng: result.lng });
+        await upsertCompanyLocationGeocode(db, {
+          company_id,
+          location_key,
+          lat: result.lat,
+          lng: result.lng,
+          address: result.formattedAddress,
+        });
+      } else if (placeSearchAttempted) {
+        placeSearchMissKeys.add(location_key);
+      }
+    } catch (err) {
+      logger.warn("metro_geocode_inline_failed", { company_name, location_key, error: String(err) });
+      if (placeSearchAttempted) placeSearchMissKeys.add(location_key);
+    }
+  }
+
+  // After place search misses: reuse another company’s city-level coords for the same location string (D1).
+  const peerKeys = [...placeSearchMissKeys].filter((k) => !locationToCoords.has(k));
+  if (peerKeys.length > 0) {
+    let peerCoords: Map<string, { lat: number; lng: number; address: string | null }>;
+    try {
+      peerCoords = await getGeocodeByLocationKeyFromAnyCompany(db, peerKeys);
+    } catch (err) {
+      logger.warn("geocode_peer_lookup_failed", { source_id: source.id, error: String(err) });
+      peerCoords = new Map();
+    }
+    const peerKeySet = new Set(peerKeys);
+    for (const p of pairsToCheck) {
+      if (!peerKeySet.has(p.location_key)) continue;
+      if (cachedCoords.has(`${p.company_id}|${p.location_key}`)) continue;
+      const hit = peerCoords.get(p.location_key);
+      if (!hit) continue;
+      if (!locationToCoords.has(p.location_key)) {
+        locationToCoords.set(p.location_key, { lat: hit.lat, lng: hit.lng });
+      }
+      try {
+        await upsertCompanyLocationGeocode(db, {
+          company_id: p.company_id,
+          location_key: p.location_key,
+          lat: hit.lat,
+          lng: hit.lng,
+          address: hit.address,
+        });
       } catch (err) {
-        logger.warn("places_geocode_inline_failed", { company_name, location_key, error: String(err) });
+        logger.warn("geocode_peer_upsert_failed", { source_id: source.id, error: String(err) });
       }
     }
   }
 
-  // Photon/Nominatim for: retail pairs (by design) + professional failures + no-API-key fallback.
+  // Photon/Nominatim for non-metro and metro failures.
   // Build a reverse lookup so Photon results can also be persisted to D1 —
   // this ensures the batch D1 cache (batchGetCompanyLocationCoords) serves
   // these on the next cron run instead of always falling through to KV.
@@ -510,8 +562,12 @@ async function processSource(
     }
   }
 
-  if (placesApiCalls > 0) {
-    logger.info("inline_geocode_places_calls", { source_id: source.id, calls: placesApiCalls });
+  if (mapboxApiCalls > 0 || placesApiCalls > 0) {
+    logger.info("inline_geocode_metro_calls", {
+      source_id: source.id,
+      mapbox: mapboxApiCalls,
+      places: placesApiCalls,
+    });
   }
 
   // ── Phase 5: Batch INSERT new + UPDATE existing — 2 D1 subrequests total ──

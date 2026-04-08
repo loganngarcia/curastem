@@ -17,6 +17,11 @@
  *   https://starbucks.eightfold.ai/careers?domain=starbucks.com
  * Microsoft hosts PCS on a custom origin (same API paths):
  *   https://apply.careers.microsoft.com/careers?domain=microsoft.com
+ *
+ * Some vanity hosts (e.g. join.sephora.com) disable unauthenticated `/api/pcsx/search`
+ * ("PCSX is not enabled for this user"), sometimes as HTTP 403 with the same JSON body.
+ * In that case we discover job ids from `{origin}/careers/sitemap.xml` and load
+ * descriptions via `/api/pcsx/position_details` (which remains public).
  */
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
@@ -93,10 +98,11 @@ function parseEightfoldCareersUrl(baseUrl: string): { origin: string; groupDomai
   const hostOk =
     u.hostname.endsWith(".eightfold.ai") ||
     u.hostname === "eightfold.ai" ||
-    u.hostname === "apply.careers.microsoft.com";
+    u.hostname === "apply.careers.microsoft.com" ||
+    u.hostname === "join.sephora.com";
   if (!hostOk) {
     throw new Error(
-      `eightfold: expected *.eightfold.ai or apply.careers.microsoft.com, got ${u.hostname}`
+      `eightfold: expected *.eightfold.ai, apply.careers.microsoft.com, or join.sephora.com, got ${u.hostname}`
     );
   }
   return { origin: u.origin, groupDomain };
@@ -123,13 +129,13 @@ function workplaceFromEightfold(
 }
 
 /**
- * Detail responses normally include `publicUrl`. When missing or detail fetch fails,
- * many PCS tenants use `https://apply.{domain}/careers/job/{id}` (same `domain` query param).
+ * Detail responses normally include `publicUrl`. When missing, use the same host as the
+ * careers site (`origin`), e.g. join.sephora.com (not apply.sephora.com, which may not exist).
  */
-function applyUrlForPosition(groupDomain: string, positionId: number, publicUrl: string | null | undefined): string {
+function applyUrlForPosition(origin: string, positionId: number, publicUrl: string | null | undefined): string {
   const direct = (publicUrl ?? "").trim();
   if (direct) return direct;
-  return `https://apply.${groupDomain}/careers/job/${positionId}`;
+  return `${origin}/careers/job/${positionId}`;
 }
 
 function firstPayHint(p: EightfoldPositionDetail): string | null {
@@ -148,11 +154,15 @@ function firstPayHint(p: EightfoldPositionDetail): string | null {
   return null;
 }
 
-async function fetchSearchPage(
+function isPcsxSearchDisabledMessage(msg: string | undefined): boolean {
+  return Boolean(msg && msg.includes("PCSX is not enabled"));
+}
+
+async function fetchSearchPageMaybeDisabled(
   origin: string,
   groupDomain: string,
   start: number
-): Promise<EightfoldSearchInner> {
+): Promise<EightfoldSearchInner | "pcsx_disabled"> {
   const q = new URLSearchParams({
     domain: groupDomain,
     query: "",
@@ -161,10 +171,20 @@ async function fetchSearchPage(
   });
   const url = `${origin}/api/pcsx/search?${q.toString()}`;
   const res = await fetch(url, { headers: HEADERS });
+  // Sephora and some tenants return 403 with the same JSON body as 200 ("PCSX is not enabled…").
+  const text = await res.text();
+  let json: { data?: EightfoldSearchInner; message?: string };
+  try {
+    json = JSON.parse(text) as { data?: EightfoldSearchInner; message?: string };
+  } catch {
+    throw new Error(`eightfold search ${res.status} non-JSON for ${url}`);
+  }
+  if (isPcsxSearchDisabledMessage(json.message)) {
+    return "pcsx_disabled";
+  }
   if (!res.ok) {
     throw new Error(`eightfold search ${res.status} for ${url}`);
   }
-  const json = (await res.json()) as { data?: EightfoldSearchInner; message?: string };
   if (json.message && json.message.includes("Too many")) {
     throw new Error(`eightfold: unexpected page_size error at start=${start}`);
   }
@@ -173,6 +193,37 @@ async function fetchSearchPage(
     throw new Error(`eightfold: invalid search response for ${url}`);
   }
   return data;
+}
+
+async function fetchSearchPage(
+  origin: string,
+  groupDomain: string,
+  start: number
+): Promise<EightfoldSearchInner> {
+  const page = await fetchSearchPageMaybeDisabled(origin, groupDomain, start);
+  if (page === "pcsx_disabled") {
+    throw new Error(`eightfold: PCSX search disabled at start=${start} (${origin})`);
+  }
+  return page;
+}
+
+/** When `/api/pcsx/search` is disabled, Eightfold still publishes job URLs on this sitemap. */
+async function fetchPositionIdsFromCareersSitemap(origin: string): Promise<number[]> {
+  const url = `${origin}/careers/sitemap.xml`;
+  const res = await fetch(url, { headers: { ...HEADERS, Accept: "application/xml, text/xml;q=0.9, */*;q=0.8" } });
+  if (!res.ok) {
+    throw new Error(`eightfold: sitemap ${res.status} for ${url}`);
+  }
+  const xml = await res.text();
+  const ids = new Set<number>();
+  const re = /<loc>\s*([^<\s]+)\s*<\/loc>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) {
+    const loc = m[1];
+    const idMatch = loc.match(/\/careers\/job\/(\d+)/);
+    if (idMatch) ids.add(Number(idMatch[1]));
+  }
+  return Array.from(ids);
 }
 
 async function fetchPositionDetail(
@@ -216,27 +267,42 @@ export const eightfoldFetcher: JobSource = {
     const companyName = companyLabelFromSource(source);
 
     // Fetch first page to learn total count, then fan out remaining pages in parallel.
-    const firstPage = await fetchSearchPage(origin, groupDomain, 0);
-    const total = firstPage.count;
-    const listPositions: EightfoldListPosition[] = [...firstPage.positions];
+    // Vanity PCS hosts may disable `/api/pcsx/search`; fall back to careers sitemap + details.
+    const firstMaybe = await fetchSearchPageMaybeDisabled(origin, groupDomain, 0);
+    let listPositions: EightfoldListPosition[];
 
-    if (total > PAGE_SIZE && firstPage.positions.length === PAGE_SIZE) {
-      const cap = Math.min(total, MAX_POSITIONS_PER_RUN);
-      const offsets: number[] = [];
-      for (let s = PAGE_SIZE; s < cap; s += PAGE_SIZE) offsets.push(s);
+    if (firstMaybe === "pcsx_disabled") {
+      const ids = await fetchPositionIdsFromCareersSitemap(origin);
+      const cap = Math.min(ids.length, MAX_POSITIONS_PER_RUN);
+      listPositions = ids.slice(0, cap).map((id) => ({ id, name: "" }));
+      if (listPositions.length === 0) {
+        throw new Error(
+          `eightfold: PCSX search disabled and no /careers/sitemap.xml job URLs (${source.company_handle}, ${origin})`
+        );
+      }
+    } else {
+      const firstPage = firstMaybe;
+      const total = firstPage.count;
+      listPositions = [...firstPage.positions];
 
-      const extraPages = await parallelMap(offsets, LIST_CONCURRENCY, async (start) => {
-        // One retry on transient failures (rate-limit blips).
-        try {
-          return await fetchSearchPage(origin, groupDomain, start);
-        } catch {
-          await new Promise((r) => setTimeout(r, 1000));
-          return fetchSearchPage(origin, groupDomain, start).catch(() => null);
+      if (total > PAGE_SIZE && firstPage.positions.length === PAGE_SIZE) {
+        const cap = Math.min(total, MAX_POSITIONS_PER_RUN);
+        const offsets: number[] = [];
+        for (let s = PAGE_SIZE; s < cap; s += PAGE_SIZE) offsets.push(s);
+
+        const extraPages = await parallelMap(offsets, LIST_CONCURRENCY, async (start) => {
+          // One retry on transient failures (rate-limit blips).
+          try {
+            return await fetchSearchPage(origin, groupDomain, start);
+          } catch {
+            await new Promise((r) => setTimeout(r, 1000));
+            return fetchSearchPage(origin, groupDomain, start).catch(() => null);
+          }
+        });
+        for (const page of extraPages) {
+          if (!page) continue;
+          listPositions.push(...page.positions);
         }
-      });
-      for (const page of extraPages) {
-        if (!page) continue;
-        listPositions.push(...page.positions);
       }
     }
 
@@ -257,7 +323,7 @@ export const eightfoldFetcher: JobSource = {
       const locHint = primaryLocation(detail ?? listPos);
       const workplace = workplaceFromEightfold(detail?.workLocationOption ?? listPos.workLocationOption, locHint);
 
-      const applyUrl = applyUrlForPosition(groupDomain, listPos.id, detail?.publicUrl);
+      const applyUrl = applyUrlForPosition(origin, listPos.id, detail?.publicUrl);
 
       const sourcePath = listPos.positionUrl ?? detail?.positionUrl;
       const source_url = sourcePath
