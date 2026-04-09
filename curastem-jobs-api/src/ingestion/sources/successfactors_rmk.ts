@@ -1,6 +1,7 @@
 /**
  * SAP SuccessFactors Recruitment Marketing Cloud (RMK) — career sites on `*.successfactors.com`
- * customer hosts (e.g. careers.coty.com). Jobs are listed in `/sitemap.xml` as `/job/{slug}/{reqId}/`.
+ * and custom hosts (e.g. careers.coty.com, burberrycareers.com). Jobs are listed in `/sitemap.xml`
+ * as `/job/{slug}/{reqId}/`.
  * Detail pages expose schema.org JobPosting microdata (`itemprop` title/description) plus
  * `span.jobdescription` HTML (full JD). Apply links are `/talentcommunity/apply/{reqId}/`.
  *
@@ -17,7 +18,9 @@ import {
 } from "../../utils/normalize.ts";
 import { logger } from "../../utils/logger.ts";
 
-const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
+/** Match Workday/Jibe — some RMK tenants sit behind CDNs that throttle non-browser UAs. */
+const BROWSER_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const FETCH_ATTEMPTS = 3;
 const FETCH_CONCURRENCY = 12;
 const SECOND_PASS_ATTEMPTS = 5;
@@ -27,14 +30,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function refererForRequest(url: string): string {
+  try {
+    return `${new URL(url).origin}/`;
+  } catch {
+    return "";
+  }
+}
+
 async function fetchText(url: string, accept: string, attempts: number): Promise<string | null> {
+  const referer = refererForRequest(url);
   for (let a = 0; a < attempts; a++) {
     try {
       const res = await fetch(url, {
         headers: {
-          "User-Agent": USER_AGENT,
+          "User-Agent": BROWSER_UA,
           Accept: accept,
           "Accept-Language": "en-US,en;q=0.9",
+          ...(referer ? { Referer: referer } : {}),
         },
         redirect: "follow",
       });
@@ -100,13 +113,15 @@ async function collectJobUrlsFromSitemap(sitemapUrl: string, depth: number): Pro
 }
 
 /**
- * Extract inner HTML of `<span class="jobdescription">` by balancing `<span` / `</span>`.
+ * Extract inner HTML of the job-description span by balancing `<span` / `</span>`.
+ * Class name is matched case-insensitively; some tenants vary attribute order or casing.
  */
 function extractJobDescriptionInnerHtml(html: string): string | null {
-  const marker = '<span class="jobdescription">';
-  const start = html.indexOf(marker);
-  if (start === -1) return null;
-  let pos = start + marker.length;
+  const openRe = /<span[^>]*\bclass\s*=\s*["'][^"']*\bjobdescription\b[^"']*["'][^>]*>/i;
+  const openMatch = html.match(openRe);
+  if (!openMatch || openMatch.index === undefined) return null;
+  const innerStart = openMatch.index + openMatch[0].length;
+  let pos = innerStart;
   let depth = 1;
   while (pos < html.length && depth > 0) {
     const open = html.toLowerCase().indexOf("<span", pos);
@@ -121,7 +136,7 @@ function extractJobDescriptionInnerHtml(html: string): string | null {
     }
   }
   const contentEnd = pos - 7;
-  return html.slice(start + marker.length, contentEnd);
+  return html.slice(innerStart, contentEnd);
 }
 
 function metaContent(html: string, itemprop: string): string | null {

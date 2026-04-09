@@ -12,7 +12,7 @@
  *   [ id, title, signin_url, [null, desc1], [null, desc2], ..., [loc_str,...], ...,
  *     [posted_epoch_sec, ns], ... ]
  *
- * Pagination: `?q=&hl=en_US&page_size=20&start={offset}`
+ * Pagination: `?hl=en_US&page_size=20&page={n}` (1-based page index).
  * Google returns ~20 results per page regardless of page_size.
  *
  * `base_url` must be a careers.google.com search URL, e.g.
@@ -82,10 +82,13 @@ function extractFirstLocation(entryRest: string): string | null {
   return m ? m[1].trim() : null;
 }
 
-function extractPostedAt(entryRest: string): string | null {
+function extractPostedAt(entryRest: string): number | null {
+  EPOCH_RE.lastIndex = 0;
   const m = EPOCH_RE.exec(entryRest);
   if (!m) return null;
-  return parseEpochSeconds(m[1]);
+  const sec = Number(m[1]);
+  if (!Number.isFinite(sec)) return null;
+  return parseEpochSeconds(sec);
 }
 
 function titleToSlug(title: string): string {
@@ -112,7 +115,7 @@ async function fetchPage(baseUrl: string, page: number): Promise<string> {
     },
   });
   if (!res.ok) {
-    throw new Error(`google: search page ${res.status} at start=${start}`);
+    throw new Error(`google: search page ${res.status} at page=${page}`);
   }
   return res.text();
 }

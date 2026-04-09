@@ -34,9 +34,9 @@ import {
   companySlugFromSearchQuery,
   companySlugsFromFilterParam,
   jobSearchPhrasesFromQ,
-  mapSqlJobTitleLikeFromQ,
   titleSearchTokensForSql,
 } from "../utils/jobSearchQuery.ts";
+import { encodeGeohash, geohashesInBoundingBox } from "../utils/geohash.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // companies
@@ -598,6 +598,7 @@ export async function ensureJobIndexes(db: D1Database): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_jobs_job_country ON jobs (job_country, posted_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_jobs_salary_min ON jobs (salary_min, posted_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_jobs_visa_sponsorship ON jobs (visa_sponsorship, posted_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_jobs_map_viewport ON jobs (location_lat, location_lng, company_id, first_seen_at) WHERE location_lat IS NOT NULL AND location_lng IS NOT NULL AND (workplace_type IS NULL OR workplace_type != 'remote')`,
     `CREATE INDEX IF NOT EXISTS idx_api_keys_active_hash ON api_keys (key_hash) WHERE active = 1`,
   ];
   for (const sql of stmts) {
@@ -1607,6 +1608,10 @@ export interface ListJobsFilter {
   country?: string;      // ISO 3166-1 alpha-2 — filter to jobs in this country (or remote)
   /** When set, only jobs with this explicit AI-extracted visa_sponsorship value. */
   visa_sponsorship?: import("../types.ts").VisaSponsorship;
+  /** When true, exclude `workplace_type = 'remote'` (same rule as listJobsNear). */
+  exclude_remote?: boolean;
+  /** When true, require geocoded primary coords and a non-empty `locations` JSON (listJobsNear parity). */
+  require_job_geo?: boolean;
   limit: number;
   cursor?: string; // opaque cursor = base64(last posted_at:id)
 }
@@ -1891,6 +1896,14 @@ export async function listJobs(
     conditions.push("j.visa_sponsorship = ?");
     bindings.push(filter.visa_sponsorship);
   }
+  if (filter.exclude_remote) {
+    conditions.push("(j.workplace_type IS NULL OR j.workplace_type != 'remote')");
+  }
+  if (filter.require_job_geo) {
+    conditions.push("j.location_lat IS NOT NULL");
+    conditions.push("j.location_lng IS NOT NULL");
+    conditions.push("j.locations IS NOT NULL");
+  }
 
   // Cursor decoding: cursor encodes the last row's sort key so we can do
   // keyset pagination without page offsets (stable even as new rows arrive).
@@ -1992,7 +2005,19 @@ export interface MapCenter {
  * instead bias candidates toward geographic spread, then grid-pick below.
  * Keep in sync with `MAP_SPREAD_VIEWPORT_DEG` in web.tsx MapAgentPanel.
  */
-const MAP_SPREAD_VIEWPORT_MAX_SPAN_DEG = 4.2;
+export const MAP_SPREAD_VIEWPORT_MAX_SPAN_DEG = 4.2;
+
+/** Weekly buckets (epoch seconds / 604800) for job_map_cells `week_bucket`. */
+const WEEK_SEC = 604800;
+
+/** Only jobs with first_seen_at >= now - window are aggregated into job_map_cells (rebuild). */
+const JOB_MAP_CELLS_MIN_FIRST_SEEN_WINDOW_SEC = 550 * 24 * 3600;
+
+export function mapBboxIsSpreadViewport(bbox: MapBbox): boolean {
+  const spanLat = bbox.maxLat - bbox.minLat;
+  const spanLng = bbox.maxLng - bbox.minLng;
+  return Math.max(spanLat, spanLng) >= MAP_SPREAD_VIEWPORT_MAX_SPAN_DEG;
+}
 
 /** Round-robin one chip per grid cell so continental zoom shows coasts and interior, not only near map center. */
 function spreadPickMapRows(
@@ -2045,34 +2070,59 @@ function spreadPickMapRows(
   return out.slice(0, limit);
 }
 
+/** Same title / company-slug rules as GET /jobs ?q= — used to filter map chips when `q` is set. */
+function appendMapJobsTitleQFilters(
+  sqlPieces: string[],
+  bindings: unknown[],
+  q: string | undefined
+): void {
+  const trimmed = q?.trim();
+  if (!trimmed) return;
+  const phrases = jobSearchPhrasesFromQ(trimmed);
+  if (phrases.length === 1) {
+    const raw = phrases[0]!;
+    const pattern = `%${raw}%`;
+    const slug = companySlugFromSearchQuery(raw);
+    if (slug.length >= 2) {
+      sqlPieces.push("(j.title LIKE ? OR c.slug = ?)");
+      bindings.push(pattern, slug);
+    } else {
+      sqlPieces.push("j.title LIKE ?");
+      bindings.push(pattern);
+    }
+  } else if (phrases.length > 1) {
+    const orParts: string[] = [];
+    for (const raw of phrases) {
+      orParts.push("j.title LIKE ?");
+      bindings.push(`%${raw}%`);
+    }
+    sqlPieces.push(`(${orParts.join(" OR ")})`);
+  }
+}
+
 export async function listJobsForMap(
   db: D1Database,
   since: number,
   bbox?: MapBbox,
   center?: MapCenter,
   limit = 100,
-  q?: string,
   employment_type?: string,
-  seniority_level?: string
+  seniority_level?: string,
+  /** When set, only jobs matching GET /jobs ?q= title rules are aggregated into chips. */
+  q?: string
 ): Promise<MapCompanyRow[]> {
   // Filter on the job's effective location (per-job coords when geocoded, HQ otherwise)
   // so chips that are visually outside the viewport are excluded — not just those
   // whose company HQ happens to fall inside it.
+  // Optional `q` narrows chips to employers with at least one matching job (same SQL as listJobs q).
+  // `since` matches GET /jobs `posted_since`: COALESCE(posted_at, first_seen_at) — not
+  // first_seen alone — so re-ingested rows cannot appear on the map but vanish from the drawer.
   const bboxClause = bbox
     ? `AND j.location_lat BETWEEN ${bbox.minLat} AND ${bbox.maxLat}
          AND j.location_lng BETWEEN ${bbox.minLng} AND ${bbox.maxLng}`
     : "";
 
   const bindings: unknown[] = [since];
-  let qClause = "";
-  const titleLike = mapSqlJobTitleLikeFromQ(q);
-  if (titleLike) {
-    // Title-only match for map chips — company-name matching causes false-positive chips
-    // (e.g. "Descript" appearing for the query "design" with zero matching job titles).
-    // Comma-separated q matches any phrase (same as GET /jobs SQL).
-    qClause = titleLike.sql;
-    bindings.push(...titleLike.patterns);
-  }
   let typeClause = "";
   const etMap = employmentTypeCondition(employment_type);
   if (etMap) {
@@ -2090,6 +2140,11 @@ export async function listJobsForMap(
       bindings.push(...levels);
     }
   }
+
+  const mapQPieces: string[] = [];
+  appendMapJobsTitleQFilters(mapQPieces, bindings, q);
+  const mapQClause =
+    mapQPieces.length > 0 ? `AND ${mapQPieces.join(" AND ")}` : "";
 
   const spanLat = bbox ? bbox.maxLat - bbox.minLat : 0;
   const spanLng = bbox ? bbox.maxLng - bbox.minLng : 0;
@@ -2115,9 +2170,12 @@ export async function listJobsForMap(
     orderClause = `ORDER BY job_count DESC`;
   }
 
+  // Spread queries are expensive (big GROUP BY). Cap lower than before; continental
+  // views skip secondary-location expansion below so we do not chain hundreds of
+  // sequential D1 calls after the main query.
   const sqlLimit = spreadViewport
-    ? Math.min(Math.max(limit * 8, 700), 2000)
-    : Math.min(limit * 3, 500);
+    ? Math.min(Math.max(limit * 2, 250), 400)
+    : Math.min(limit * 2, 250);
 
   const { results } = await db
     .prepare(
@@ -2142,9 +2200,9 @@ export async function listJobsForMap(
          AND j.location_lat IS NOT NULL
          AND j.location_lng IS NOT NULL
          ${bboxClause}
-         ${qClause}
          ${typeClause}
          ${seniorityClause}
+         ${mapQClause}
        GROUP BY c.id,
                 ROUND(j.location_lat, 1),
                 ROUND(j.location_lng, 1)
@@ -2154,15 +2212,20 @@ export async function listJobsForMap(
     .bind(...bindings)
     .all<MapCompanyRow>();
   let rows = results ?? [];
-  rows = await expandMapRowsWithSecondaryLocations(
-    db,
-    since,
-    bbox,
-    rows,
-    q,
-    employment_type,
-    seniority_level
-  );
+  // Multi-city expansion runs one resolve pass per job — fine for metro bbox; at
+  // country scale it was sequential N× and dominated latency (~20s). Spread view
+  // already gets diverse buckets from the main query; skip expansion there.
+  if (!(spreadViewport && bbox)) {
+    rows = await expandMapRowsWithSecondaryLocations(
+      db,
+      since,
+      bbox,
+      rows,
+      employment_type,
+      seniority_level,
+      q
+    );
+  }
   if (spreadViewport && bbox) {
     rows = spreadPickMapRows(rows, bbox, limit);
   } else if (center) {
@@ -2181,6 +2244,396 @@ export async function listJobsForMap(
     rows.sort((a, b) => b.job_count - a.job_count);
   }
   return rows.slice(0, limit);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /jobs/map — spread viewport via pre-aggregated job_map_cells (rebuildJobMapCells)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Create job_map_cells if missing (idempotent; matches schema.sql + migrations/018). */
+export async function ensureJobMapCellsTable(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS job_map_cells (
+        geohash           TEXT    NOT NULL,
+        precision         INTEGER NOT NULL,
+        etkey             TEXT    NOT NULL DEFAULT '',
+        slkey             TEXT    NOT NULL DEFAULT '',
+        week_bucket       INTEGER NOT NULL,
+        job_count         INTEGER NOT NULL,
+        chip_lat          REAL    NOT NULL,
+        chip_lng          REAL    NOT NULL,
+        company_id        TEXT    NOT NULL,
+        company_name      TEXT,
+        company_logo_url  TEXT,
+        company_slug      TEXT,
+        company_hq_lat    REAL,
+        company_hq_lng    REAL,
+        company_hq_city   TEXT,
+        company_hq_country TEXT,
+        company_hq_address TEXT,
+        PRIMARY KEY (geohash, precision, etkey, slkey, week_bucket)
+      )`
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_job_map_cells_lookup
+       ON job_map_cells (precision, etkey, slkey, week_bucket)`
+    )
+    .run();
+}
+
+type JobMapCellAgg = {
+  job_count: number;
+  sumLat: number;
+  sumLng: number;
+  byCompany: Map<
+    string,
+    {
+      n: number;
+      name: string;
+      logo: string | null;
+      slug: string;
+      hqLat: number | null;
+      hqLng: number | null;
+      hqCity: string | null;
+      hqCountry: string | null;
+      hqAddress: string | null;
+    }
+  >;
+};
+
+function jobMapCellKey(
+  precision: number,
+  geohash: string,
+  etkey: string,
+  slkey: string,
+  weekBucket: number
+): string {
+  return `${precision}\t${geohash}\t${etkey}\t${slkey}\t${weekBucket}`;
+}
+
+/**
+ * Full rebuild of job_map_cells from recent jobs (cron). Geohash buckets + weekly rollups.
+ */
+export async function rebuildJobMapCells(db: D1Database): Promise<{ rowsInserted: number }> {
+  await ensureJobMapCellsTable(db);
+  await db.prepare(`DELETE FROM job_map_cells`).run();
+
+  const minTs = Math.floor(Date.now() / 1000) - JOB_MAP_CELLS_MIN_FIRST_SEEN_WINDOW_SEC;
+  const merged = new Map<string, JobMapCellAgg>();
+
+  let lastId = "";
+  const pageSize = 2500;
+
+  for (;;) {
+    const { results } = await db
+      .prepare(
+        `SELECT j.id, j.location_lat, j.location_lng, j.first_seen_at, j.employment_type, j.seniority_level,
+                c.id AS company_id, c.name AS company_name, c.logo_url AS company_logo_url, c.slug AS company_slug,
+                c.hq_lat AS company_hq_lat, c.hq_lng AS company_hq_lng,
+                c.hq_city AS company_hq_city, c.hq_country AS company_hq_country, c.hq_address AS company_hq_address
+       FROM jobs j
+       INNER JOIN companies c ON c.id = j.company_id
+         WHERE j.location_lat IS NOT NULL
+           AND j.location_lng IS NOT NULL
+           AND (j.workplace_type IS NULL OR j.workplace_type != 'remote')
+           AND c.hq_lat IS NOT NULL
+           AND COALESCE(j.posted_at, j.first_seen_at) >= ?
+           AND j.id > ?
+         ORDER BY j.id
+         LIMIT ?`
+      )
+      .bind(minTs, lastId, pageSize)
+      .all<{
+        id: string;
+        location_lat: number;
+        location_lng: number;
+        first_seen_at: number;
+        employment_type: string | null;
+        seniority_level: string | null;
+        company_id: string;
+        company_name: string;
+        company_logo_url: string | null;
+        company_slug: string;
+        company_hq_lat: number | null;
+        company_hq_lng: number | null;
+        company_hq_city: string | null;
+        company_hq_country: string | null;
+        company_hq_address: string | null;
+      }>();
+
+    const batch = results ?? [];
+    if (batch.length === 0) break;
+
+    for (const row of batch) {
+      const lat = row.location_lat;
+      const lng = row.location_lng;
+      const wk = Math.floor(row.first_seen_at / WEEK_SEC);
+      const etRaw = row.employment_type?.trim() ?? "";
+      const slRaw = row.seniority_level?.trim() ?? "";
+
+      const filterPairs: [string, string][] = [["", ""]];
+      if (etRaw) filterPairs.push([etRaw, ""]);
+      if (slRaw) filterPairs.push(["", slRaw]);
+      if (etRaw && slRaw) filterPairs.push([etRaw, slRaw]);
+
+      const comp = {
+        n: 1,
+        name: row.company_name,
+        logo: row.company_logo_url,
+        slug: row.company_slug,
+        hqLat: row.company_hq_lat,
+        hqLng: row.company_hq_lng,
+        hqCity: row.company_hq_city,
+        hqCountry: row.company_hq_country,
+        hqAddress: row.company_hq_address,
+      };
+
+      for (const prec of [3, 4] as const) {
+        const gh = encodeGeohash(lat, lng, prec);
+        for (const [etkey, slkey] of filterPairs) {
+          const k = jobMapCellKey(prec, gh, etkey, slkey, wk);
+          let agg = merged.get(k);
+          if (!agg) {
+            agg = {
+              job_count: 0,
+              sumLat: 0,
+              sumLng: 0,
+              byCompany: new Map(),
+            };
+            merged.set(k, agg);
+          }
+          agg.job_count += 1;
+          agg.sumLat += lat;
+          agg.sumLng += lng;
+          const prev = agg.byCompany.get(row.company_id)?.n ?? 0;
+          agg.byCompany.set(row.company_id, {
+            ...comp,
+            n: prev + 1,
+          });
+        }
+      }
+    }
+
+    lastId = batch[batch.length - 1]!.id;
+  }
+
+  let rowsInserted = 0;
+  const batchRows: unknown[][] = [];
+  const flush = async () => {
+    if (batchRows.length === 0) return;
+    const placeholders = batchRows.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const flat = batchRows.flat();
+    await db
+      .prepare(
+        `INSERT INTO job_map_cells (
+           geohash, precision, etkey, slkey, week_bucket,
+           job_count, chip_lat, chip_lng,
+           company_id, company_name, company_logo_url, company_slug,
+           company_hq_lat, company_hq_lng, company_hq_city, company_hq_country, company_hq_address
+         ) VALUES ${placeholders}`
+      )
+      .bind(...flat)
+      .run();
+    rowsInserted += batchRows.length;
+    batchRows.length = 0;
+  };
+
+  for (const [key, agg] of merged) {
+    const parts = key.split("\t");
+    const precision = parseInt(parts[0]!, 10);
+    const gh = parts[1]!;
+    const etkey = parts[2]!;
+    const slkey = parts[3]!;
+    const weekBucket = parseInt(parts[4]!, 10);
+    let winnerId = "";
+    let winnerN = -1;
+    for (const [cid, info] of agg.byCompany) {
+      if (info.n > winnerN) {
+        winnerN = info.n;
+        winnerId = cid;
+      }
+    }
+    const win = agg.byCompany.get(winnerId);
+    if (!win) continue;
+    const jc = agg.job_count;
+    const chipLat = agg.sumLat / jc;
+    const chipLng = agg.sumLng / jc;
+    batchRows.push([
+      gh,
+      precision,
+      etkey,
+      slkey,
+      weekBucket,
+      jc,
+      chipLat,
+      chipLng,
+      winnerId,
+      win.name,
+      win.logo,
+      win.slug,
+      win.hqLat,
+      win.hqLng,
+      win.hqCity,
+      win.hqCountry,
+      win.hqAddress,
+    ]);
+    if (batchRows.length >= 80) await flush();
+  }
+  await flush();
+
+  return { rowsInserted };
+}
+
+/**
+ * Fast path using job_map_cells (not wired from GET /jobs/map until rebuild stores one row per
+ * company per bucket — the previous single-row-per-bucket design labeled the top employer but
+ * used the *total* bucket count, so chips were wrong.)
+ */
+export async function listJobsForMapFromCells(
+  db: D1Database,
+  since: number,
+  bbox: MapBbox,
+  _center: MapCenter | undefined,
+  limit: number,
+  employment_type?: string,
+  seniority_level?: string
+): Promise<MapCompanyRow[] | null> {
+  const hasCells = await db.prepare(`SELECT 1 AS x FROM job_map_cells LIMIT 1`).first<{ x: number }>();
+  if (!hasCells) return null;
+
+  const minDataTs =
+    Math.floor(Date.now() / 1000) - JOB_MAP_CELLS_MIN_FIRST_SEEN_WINDOW_SEC;
+  if (since < minDataTs) return null;
+
+  if (seniority_level) {
+    const levels = seniority_level.split(",").map((s) => s.trim()).filter(Boolean);
+    if (levels.length !== 1) return null;
+  }
+
+  const spanLat = bbox.maxLat - bbox.minLat;
+  const spanLng = bbox.maxLng - bbox.minLng;
+  const spanMax = Math.max(spanLat, spanLng);
+  const precision = spanMax >= 20 ? 3 : 4;
+
+  const etkey = employment_type?.trim() ?? "";
+  const slkey = seniority_level?.trim() ?? "";
+
+  const sinceWeek = Math.floor(since / WEEK_SEC);
+  const geohashes = geohashesInBoundingBox(
+    bbox.minLat,
+    bbox.maxLat,
+    bbox.minLng,
+    bbox.maxLng,
+    precision
+  );
+  if (geohashes.length === 0) return [];
+
+  const chunkSize = 72;
+  type CellRow = {
+    geohash: string;
+    job_count: number;
+    chip_lat: number;
+    chip_lng: number;
+    company_id: string;
+    company_name: string | null;
+    company_logo_url: string | null;
+    company_slug: string | null;
+    company_hq_lat: number | null;
+    company_hq_lng: number | null;
+    company_hq_city: string | null;
+    company_hq_country: string | null;
+    company_hq_address: string | null;
+  };
+
+  const all: CellRow[] = [];
+  for (let i = 0; i < geohashes.length; i += chunkSize) {
+    const chunk = geohashes.slice(i, i + chunkSize);
+    const inList = chunk.map(() => "?").join(", ");
+    const { results } = await db
+      .prepare(
+        `SELECT geohash, job_count, chip_lat, chip_lng,
+                company_id, company_name, company_logo_url, company_slug,
+                company_hq_lat, company_hq_lng, company_hq_city, company_hq_country, company_hq_address
+         FROM job_map_cells
+         WHERE precision = ?
+           AND etkey = ?
+           AND slkey = ?
+           AND week_bucket >= ?
+           AND geohash IN (${inList})`
+      )
+      .bind(precision, etkey, slkey, sinceWeek, ...chunk)
+      .all<CellRow>();
+    for (const r of results ?? []) all.push(r);
+  }
+
+  const byGh = new Map<
+    string,
+    {
+      job_count: number;
+      latW: number;
+      lngW: number;
+      byComp: Map<string, number>;
+    }
+  >();
+
+  for (const r of all) {
+    let m = byGh.get(r.geohash);
+    if (!m) {
+      m = {
+        job_count: 0,
+        latW: 0,
+        lngW: 0,
+        byComp: new Map(),
+      };
+      byGh.set(r.geohash, m);
+    }
+    m.job_count += r.job_count;
+    m.latW += r.chip_lat * r.job_count;
+    m.lngW += r.chip_lng * r.job_count;
+    m.byComp.set(
+      r.company_id,
+      (m.byComp.get(r.company_id) ?? 0) + r.job_count
+    );
+  }
+
+  const mergedRows: MapCompanyRow[] = [];
+  for (const [geohash, m] of byGh) {
+    const jc = m.job_count;
+    let winner = "";
+    let wn = -1;
+    for (const [cid, n] of m.byComp) {
+      if (n > wn) {
+        wn = n;
+        winner = cid;
+      }
+    }
+    const hqRow =
+      all.find((r) => r.geohash === geohash && r.company_id === winner) ??
+      all.find((r) => r.geohash === geohash);
+    if (!hqRow) continue;
+
+    mergedRows.push({
+      company_id: winner || hqRow.company_id,
+      company_name: hqRow.company_name ?? "",
+      company_logo_url: hqRow.company_logo_url,
+      company_slug: hqRow.company_slug ?? "",
+      chip_lat: m.latW / jc,
+      chip_lng: m.lngW / jc,
+      company_hq_lat: hqRow.company_hq_lat ?? 0,
+      company_hq_lng: hqRow.company_hq_lng ?? 0,
+      company_hq_city: hqRow.company_hq_city,
+      company_hq_country: hqRow.company_hq_country,
+      company_hq_address: hqRow.company_hq_address,
+      job_count: jc,
+    });
+  }
+
+  if (mergedRows.length === 0) return [];
+
+  return spreadPickMapRows(mergedRows, bbox, limit);
 }
 
 /**
@@ -2239,19 +2692,13 @@ async function expandMapRowsWithSecondaryLocations(
   since: number,
   bbox: MapBbox | undefined,
   rows: MapCompanyRow[],
-  q?: string,
   employment_type?: string,
-  seniority_level?: string
+  seniority_level?: string,
+  q?: string
 ): Promise<MapCompanyRow[]> {
   if (!bbox) return rows;
 
   const bindings: unknown[] = [since];
-  let qClause = "";
-  const titleLikeSecondary = mapSqlJobTitleLikeFromQ(q);
-  if (titleLikeSecondary) {
-    qClause = titleLikeSecondary.sql;
-    bindings.push(...titleLikeSecondary.patterns);
-  }
   let typeClause = "";
   const etMap = employmentTypeCondition(employment_type);
   if (etMap) {
@@ -2269,6 +2716,10 @@ async function expandMapRowsWithSecondaryLocations(
       bindings.push(...levels);
     }
   }
+  const mapQPieces: string[] = [];
+  appendMapJobsTitleQFilters(mapQPieces, bindings, q);
+  const mapQClause =
+    mapQPieces.length > 0 ? `AND ${mapQPieces.join(" AND ")}` : "";
 
   const bboxClause = `AND j.location_lat BETWEEN ${bbox.minLat} AND ${bbox.maxLat}
          AND j.location_lng BETWEEN ${bbox.minLng} AND ${bbox.maxLng}`;
@@ -2296,9 +2747,10 @@ async function expandMapRowsWithSecondaryLocations(
          AND j.location_lng IS NOT NULL
          AND json_array_length(COALESCE(j.locations, '[]')) > 1
          ${bboxClause}
-         ${qClause}
          ${typeClause}
-         ${seniorityClause}`
+         ${seniorityClause}
+         ${mapQClause}
+       LIMIT 400`
     )
     .bind(...bindings)
     .all<{
@@ -2327,32 +2779,41 @@ async function expandMapRowsWithSecondaryLocations(
 
   const extra: MapCompanyRow[] = [];
 
-  for (const job of multiJobs) {
-    const points = await resolveJobLocationPoints(
-      db,
-      job.company_id,
-      job.locations,
-      job.location_lat,
-      job.location_lng
+  const RESOLVE_CHUNK = 24;
+  for (let i = 0; i < multiJobs.length; i += RESOLVE_CHUNK) {
+    const chunk = multiJobs.slice(i, i + RESOLVE_CHUNK);
+    const resolved = await Promise.all(
+      chunk.map(async (job) => ({
+        job,
+        points: await resolveJobLocationPoints(
+          db,
+          job.company_id,
+          job.locations,
+          job.location_lat,
+          job.location_lng
+        ),
+      }))
     );
-    for (const pt of points) {
-      const key = `${job.company_id}|${pt.lat.toFixed(3)}|${pt.lng.toFixed(3)}`;
-      if (existingKeys.has(key)) continue;
-      existingKeys.add(key);
-      extra.push({
-        company_id: job.company_id,
-        company_name: job.company_name,
-        company_logo_url: job.company_logo_url,
-        company_slug: job.company_slug,
-        chip_lat: pt.lat,
-        chip_lng: pt.lng,
-        company_hq_lat: job.company_hq_lat,
-        company_hq_lng: job.company_hq_lng,
-        company_hq_city: job.company_hq_city,
-        company_hq_country: job.company_hq_country,
-        company_hq_address: job.company_hq_address,
-        job_count: 1,
-      });
+    for (const { job, points } of resolved) {
+      for (const pt of points) {
+        const key = `${job.company_id}|${pt.lat.toFixed(3)}|${pt.lng.toFixed(3)}`;
+        if (existingKeys.has(key)) continue;
+        existingKeys.add(key);
+        extra.push({
+          company_id: job.company_id,
+          company_name: job.company_name,
+          company_logo_url: job.company_logo_url,
+          company_slug: job.company_slug,
+          chip_lat: pt.lat,
+          chip_lng: pt.lng,
+          company_hq_lat: job.company_hq_lat,
+          company_hq_lng: job.company_hq_lng,
+          company_hq_city: job.company_hq_city,
+          company_hq_country: job.company_hq_country,
+          company_hq_address: job.company_hq_address,
+          job_count: 1,
+        });
+      }
     }
   }
 
@@ -2511,6 +2972,178 @@ export async function updateJobsWithCoords(
 /** Earth radius in km for Haversine. */
 const EARTH_RADIUS_KM = 6371;
 
+function haversineKmSqlite(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * Same points as {@link resolveJobLocationPoints} but uses a pre-fetched coord map
+ * (single batch round-trip) instead of one query per job.
+ */
+function jobLocationPointsFromRowWithCoordMap(
+  row: ListJobsRow,
+  coordMap: Map<string, { lat: number; lng: number; address: string | null }>
+): Array<{ lat: number; lng: number }> {
+  const out: Array<{ lat: number; lng: number }> = [];
+  const seen = new Set<string>();
+  const add = (lat: number, lng: number) => {
+    const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ lat, lng });
+  };
+
+  if (row.location_lat != null && row.location_lng != null) {
+    add(row.location_lat, row.location_lng);
+  }
+
+  let locs: string[] = [];
+  if (row.locations) {
+    try {
+      locs = JSON.parse(row.locations) as string[];
+    } catch {
+      locs = [];
+    }
+  }
+  if (locs.length <= 1) return out;
+
+  for (const loc of locs) {
+    const lk = normalizeLocationForGeocode(loc);
+    if (lk.trim().length === 0) continue;
+    const hit = coordMap.get(`${row.company_id}|${lk}`);
+    if (hit) add(hit.lat, hit.lng);
+  }
+  return out;
+}
+
+function collectPairsForCompanyLocationBatch(rows: ListJobsRow[]): Array<{
+  company_id: string;
+  location_key: string;
+}> {
+  const pairs: Array<{ company_id: string; location_key: string }> = [];
+  for (const row of rows) {
+    let locs: string[] = [];
+    if (row.locations) {
+      try {
+        locs = JSON.parse(row.locations) as string[];
+      } catch {
+        locs = [];
+      }
+    }
+    if (locs.length <= 1) continue;
+    for (const loc of locs) {
+      const lk = normalizeLocationForGeocode(loc);
+      if (lk.trim().length > 0) {
+        pairs.push({ company_id: row.company_id, location_key: lk });
+      }
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Map chips can sit on a secondary (store) geocode while `j.location_lat` is still
+ * the primary posting/HQ point. Distance for company + near_* must use the minimum
+ * distance to any resolved listed location, matching how chips are drawn.
+ */
+async function listJobsNearUsingAllListedLocations(
+  db: D1Database,
+  filter: {
+    lat: number;
+    lng: number;
+    radius_km: number;
+    exclude_remote: boolean;
+    limit: number;
+    exclude_ids?: string[];
+    title?: string;
+    q?: string;
+    posted_since?: number;
+    employment_type?: string;
+    workplace_type?: string;
+    seniority_level?: string;
+    description_language?: string;
+    salary_min?: number;
+    country?: string;
+    company?: string;
+    visa_sponsorship?: import("../types.ts").VisaSponsorship;
+  }
+): Promise<{ rows: ListJobsRow[] }> {
+  const {
+    lat,
+    lng,
+    radius_km,
+    exclude_remote,
+    limit,
+    title: titleNear,
+    q,
+    posted_since,
+    employment_type,
+    workplace_type,
+    seniority_level,
+    description_language,
+    salary_min,
+    country,
+    company,
+    visa_sponsorship,
+    exclude_ids,
+  } = filter;
+
+  const candidateLimit = Math.min(450, Math.max(limit * 10, 120));
+
+  const { rows: candidates } = await listJobs(db, {
+    title: titleNear?.trim() ? titleNear : undefined,
+    q: titleNear?.trim() ? undefined : q,
+    posted_since,
+    employment_type,
+    workplace_type,
+    seniority_level,
+    description_language,
+    salary_min,
+    country,
+    company,
+    visa_sponsorship,
+    exclude_ids,
+    exclude_remote,
+    require_job_geo: true,
+    limit: candidateLimit,
+  });
+
+  const pairs = collectPairsForCompanyLocationBatch(candidates);
+  const coordMap = await batchGetCompanyLocationCoords(db, pairs);
+
+  const scored: Array<{ row: ListJobsRow; km: number }> = [];
+  for (const row of candidates) {
+    const pts = jobLocationPointsFromRowWithCoordMap(row, coordMap);
+    let minKm = Infinity;
+    for (const p of pts) {
+      const d = haversineKmSqlite(lat, lng, p.lat, p.lng);
+      if (d < minKm) minKm = d;
+    }
+    if (minKm <= radius_km && Number.isFinite(minKm)) {
+      scored.push({ row, km: minKm });
+    }
+  }
+  scored.sort((a, b) => {
+    if (a.km !== b.km) return a.km - b.km;
+    const ta = a.row.posted_at ?? a.row.first_seen_at;
+    const tb = b.row.posted_at ?? b.row.first_seen_at;
+    return tb - ta;
+  });
+  return { rows: scored.slice(0, limit).map((s) => s.row) };
+}
+
 /**
  * Jobs near a point, ordered by distance (km). Excludes remote-only jobs.
  * Requires location_lat, location_lng to be populated (geocoding backfill).
@@ -2558,6 +3191,12 @@ export async function listJobsNear(
     company,
     visa_sponsorship,
   } = filter;
+  // Map company chips use primary + secondary geocodes; "nearby" for a chip must
+  // match the closest listed location, not only the primary lat/lng column.
+  if (company?.trim()) {
+    return listJobsNearUsingAllListedLocations(db, filter);
+  }
+
   const conditions: string[] = [
     "j.location_lat IS NOT NULL",
     "j.location_lng IS NOT NULL",

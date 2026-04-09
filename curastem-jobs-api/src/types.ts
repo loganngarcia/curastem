@@ -215,6 +215,27 @@ export interface JobRow {
   updated_at: number;
 }
 
+/** Pre-aggregated geohash buckets for GET /jobs/map spread viewport (rebuildJobMapCells). */
+export interface JobMapCellRow {
+  geohash: string;
+  precision: number;
+  etkey: string;
+  slkey: string;
+  week_bucket: number;
+  job_count: number;
+  chip_lat: number;
+  chip_lng: number;
+  company_id: string;
+  company_name: string | null;
+  company_logo_url: string | null;
+  company_slug: string | null;
+  company_hq_lat: number | null;
+  company_hq_lng: number | null;
+  company_hq_city: string | null;
+  company_hq_country: string | null;
+  company_hq_address: string | null;
+}
+
 export interface ApiKeyRow {
   id: string;
   key_hash: string;
@@ -352,6 +373,12 @@ export type SourceType =
    */
   | "jibe"
   /**
+   * iCIMS Talent Cloud hub search (`hub-*.icims.com/jobs/search?...`) — paginated HTML listing;
+   * job rows link to per-portal hosts. Detail: `?in_iframe=1` exposes `application/ld+json` JobPosting.
+   * `base_url` is the hub search URL (include `hashed=` if the tenant requires it). See icims_portal.ts.
+   */
+  | "icims_portal"
+  /**
    * Shopify marketing careers — Ashby-backed listings on shopify.com (public Ashby posting API off).
    * `base_url` is `https://www.shopify.com/careers`. See shopify_careers.ts.
    */
@@ -435,7 +462,19 @@ export type SourceType =
    * ADP RM Candidate Experience (MyJobs public API). `base_url` must be under
    * `https://myjobs.adp.com/{domain}/…` (optional `?c=` / `?d=`). See adp_cx.ts.
    */
-  | "adp_cx";
+  | "adp_cx"
+  /**
+   * ADP Workforce Now embedded career center (RAAS JSON). `base_url` is
+   * `…/mdf/recruitment/recruitment.html?cid=…&ccId=…` on `workforcenow*.adp.com`. See adp_wfn_recruitment.ts.
+   */
+  | "adp_wfn_recruitment"
+  /**
+   * IBM BrassRing Talent Gateway (`sjobs.brassring.com` TGnewUI). Session cookie + CSRF (`RFT`)
+   * then `POST /TgNewUI/Search/Ajax/PowerSearchJobs` returns `JobsCount` and full HTML descriptions.
+   * `base_url` is the search home with `partnerid` and `siteid`, e.g.
+   * `https://sjobs.brassring.com/TGnewUI/Search/Home/Home?partnerid=25813&siteid=5079`. See brassring.ts.
+   */
+  | "brassring";
 
 export type EmploymentType =
   | "full_time"

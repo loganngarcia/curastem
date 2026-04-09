@@ -17,7 +17,9 @@ import {
   ensureCompanyExaColumns,
   ensureCompanyWebsiteProbeColumns,
   ensureJobIndexes,
+  ensureJobMapCellsTable,
   ensureNewJobColumns,
+  rebuildJobMapCells,
 } from "./db/queries.ts";
 import { enqueueIngestionSources, runBackfillPipelineBody } from "./ingestion/runner.ts";
 import type { Env } from "./types.ts";
@@ -78,6 +80,11 @@ export async function runSchedulerPipeline(
     } catch (indexErr) {
       logger.warn("ensure_job_indexes_failed", { error: String(indexErr) });
     }
+    try {
+      await ensureJobMapCellsTable(env.JOBS_DB);
+    } catch (cellTableErr) {
+      logger.warn("ensure_job_map_cells_table_failed", { error: String(cellTableErr) });
+    }
     await stage("seed_company_websites");
     await seedCompanyWebsites(env.JOBS_DB);
     await stage("metadata_corrections");
@@ -110,6 +117,13 @@ export async function runBackfillPipeline(env: Env): Promise<void> {
       await backfillLocationPrimary(env.JOBS_DB);
     } catch (bfErr) {
       logger.warn("backfill_location_primary_failed", { error: String(bfErr) });
+    }
+    try {
+      await ensureJobMapCellsTable(env.JOBS_DB);
+      const { rowsInserted } = await rebuildJobMapCells(env.JOBS_DB);
+      logger.info("job_map_cells_rebuilt", { rowsInserted });
+    } catch (cellErr) {
+      logger.warn("rebuild_job_map_cells_failed", { error: String(cellErr) });
     }
     await runBackfillPipelineBody(env);
     await stage("backfill_done");

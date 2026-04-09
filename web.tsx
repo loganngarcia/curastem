@@ -332,7 +332,9 @@ function migrateLegacyChatDocs(chat: ChatSession): {
     activeDocId: string | null
 } {
     if (chat.docs && chat.docs.length > 0) {
-        const sorted = [...chat.docs].sort((a, b) => b.lastEdited - a.lastEdited)
+        const sorted = [...chat.docs].sort(
+            (a, b) => b.lastEdited - a.lastEdited
+        )
         let active = chat.activeDocId ?? null
         if (!active || !chat.docs.some((d) => d.id === active)) {
             active = sorted[0]?.id ?? null
@@ -380,7 +382,9 @@ function messageShowsDocToolChip(msg: Message): boolean {
     )
 }
 
-function docCallTypeFromMessage(msg: Message): "doc" | "resume" | "cover_letter" {
+function docCallTypeFromMessage(
+    msg: Message
+): "doc" | "resume" | "cover_letter" {
     if (msg.toolUsed === "resume" || msg.functionCall?.name === "create_resume")
         return "resume"
     if (
@@ -3770,546 +3774,439 @@ async function docHtmlToOnePagePdfBytes(
     htmlFragment: string,
     isCoverLetter: boolean
 ): Promise<Uint8Array> {
+    // ATS-safe text-based PDF: selectable text, Standard Type 1 fonts (no embedding needed).
+    const PAGE_W_PT = 612
+    const PAGE_H_PT = 792
+    const MARGIN_PT = 36
+    const CONTENT_W_PT = PAGE_W_PT - MARGIN_PT * 2
+    const CONTENT_H_PT = PAGE_H_PT - MARGIN_PT * 2
+    const DOC_PX_BODY = docBlockExportSizePx("p")
+    const DOC_PX_TITLE = docBlockExportSizePx("title")
+    const DOC_PX_SECTION = docBlockExportSizePx("section")
 
-                        // ATS-safe text-based PDF: selectable text, Standard Type 1 fonts (no embedding needed).
-                        const PAGE_W_PT = 612
-                        const PAGE_H_PT = 792
-                        const MARGIN_PT = 36
-                        const CONTENT_W_PT = PAGE_W_PT - MARGIN_PT * 2
-                        const CONTENT_H_PT = PAGE_H_PT - MARGIN_PT * 2
-                        const DOC_PX_BODY = docBlockExportSizePx("p")
-                        const DOC_PX_TITLE = docBlockExportSizePx("title")
-                        const DOC_PX_SECTION = docBlockExportSizePx("section")
+    // Spacing constants — cover letter gets slightly more air.
+    const bodyLineMult = isCoverLetter ? 1.46 : 1.45
+    const gapAfterParagraph = (pt: number) => pt * 0.2
+    const gapAfterListItem = (pt: number) =>
+        isCoverLetter ? pt * 0.35 : pt * 0.15
+    // Small gap before the first bullet of each list / nested list.
+    const listFirstBulletGap = (pt: number) => (isCoverLetter ? pt * 0.32 : 0)
 
-                        // Spacing constants — cover letter gets slightly more air.
-                        const bodyLineMult = isCoverLetter ? 1.46 : 1.45
-                        const gapAfterParagraph = (pt: number) => pt * 0.2
-                        const gapAfterListItem = (pt: number) =>
-                            isCoverLetter ? pt * 0.35 : pt * 0.15
-                        // Small gap before the first bullet of each list / nested list.
-                        const listFirstBulletGap = (pt: number) =>
-                            isCoverLetter ? pt * 0.32 : 0
+    // --- Parse HTML → flat block list ---
+    type Run = {
+        text: string
+        bold: boolean
+        italic: boolean
+    }
+    type Block =
+        | { kind: "h1"; text: string }
+        | { kind: "h2"; text: string }
+        | { kind: "p"; runs: Run[] }
+        | { kind: "li"; runs: Run[]; indent: number }
+        | { kind: "rule" }
 
-                        // --- Parse HTML → flat block list ---
-                        type Run = {
-                            text: string
-                            bold: boolean
-                            italic: boolean
-                        }
-                        type Block =
-                            | { kind: "h1"; text: string }
-                            | { kind: "h2"; text: string }
-                            | { kind: "p"; runs: Run[] }
-                            | { kind: "li"; runs: Run[]; indent: number }
-                            | { kind: "rule" }
+    const parseHTML = (): Block[] => {
+        const tmp = document.createElement("div")
+        tmp.innerHTML = htmlFragment
+        const out: Block[] = []
 
-                        const parseHTML = (): Block[] => {
-                            const tmp = document.createElement("div")
-                            tmp.innerHTML = htmlFragment
-                            const out: Block[] = []
+        // Collect inline text runs, stopping at nested list children.
+        const inlineRuns = (el: Element, b = false, i = false): Run[] => {
+            const runs: Run[] = []
+            const walk = (node: Node, b: boolean, i: boolean) => {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const t = node.textContent || ""
+                    if (t)
+                        runs.push({
+                            text: t,
+                            bold: b,
+                            italic: i,
+                        })
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    const tag = (node as Element).tagName.toLowerCase()
+                    if (tag === "ul" || tag === "ol") return
+                    const nb = b || tag === "b" || tag === "strong"
+                    const ni = i || tag === "i" || tag === "em"
+                    node.childNodes.forEach((c) => walk(c, nb, ni))
+                }
+            }
+            // Walk children, not el itself (b/i already passed in)
+            el.childNodes.forEach((c) => walk(c, b, i))
+            return runs
+        }
 
-                            // Collect inline text runs, stopping at nested list children.
-                            const inlineRuns = (
-                                el: Element,
-                                b = false,
-                                i = false
-                            ): Run[] => {
-                                const runs: Run[] = []
-                                const walk = (
-                                    node: Node,
-                                    b: boolean,
-                                    i: boolean
-                                ) => {
-                                    if (node.nodeType === Node.TEXT_NODE) {
-                                        const t = node.textContent || ""
-                                        if (t)
-                                            runs.push({
-                                                text: t,
-                                                bold: b,
-                                                italic: i,
-                                            })
-                                    } else if (
-                                        node.nodeType === Node.ELEMENT_NODE
-                                    ) {
-                                        const tag = (
-                                            node as Element
-                                        ).tagName.toLowerCase()
-                                        if (tag === "ul" || tag === "ol") return
-                                        const nb =
-                                            b || tag === "b" || tag === "strong"
-                                        const ni =
-                                            i || tag === "i" || tag === "em"
-                                        node.childNodes.forEach((c) =>
-                                            walk(c, nb, ni)
-                                        )
-                                    }
-                                }
-                                // Walk children, not el itself (b/i already passed in)
-                                el.childNodes.forEach((c) => walk(c, b, i))
-                                return runs
-                            }
+        const processLi = (liEl: Element, indent: number) => {
+            const runs = inlineRuns(liEl)
+            if (runs.some((r) => r.text.trim()))
+                out.push({ kind: "li", runs, indent })
+            liEl.childNodes.forEach((child) => {
+                if (child.nodeType === Node.ELEMENT_NODE) {
+                    const tag = (child as Element).tagName.toLowerCase()
+                    if (tag === "ul" || tag === "ol")
+                        processNode(child, indent + 1)
+                }
+            })
+        }
 
-                            const processLi = (
-                                liEl: Element,
-                                indent: number
-                            ) => {
-                                const runs = inlineRuns(liEl)
-                                if (runs.some((r) => r.text.trim()))
-                                    out.push({ kind: "li", runs, indent })
-                                liEl.childNodes.forEach((child) => {
-                                    if (child.nodeType === Node.ELEMENT_NODE) {
-                                        const tag = (
-                                            child as Element
-                                        ).tagName.toLowerCase()
-                                        if (tag === "ul" || tag === "ol")
-                                            processNode(child, indent + 1)
-                                    }
-                                })
-                            }
+        const processNode = (node: Node, listIndent = 0) => {
+            if (node.nodeType !== Node.ELEMENT_NODE) return
+            const el = node as Element
+            const tag = el.tagName.toLowerCase()
+            if (tag === "h1") {
+                if (el.classList.contains(DOC_BLOCK_SECTION_CLASS)) {
+                    out.push({ kind: "rule" })
+                    out.push({
+                        kind: "h2",
+                        text: el.textContent?.trim() || "",
+                    })
+                } else {
+                    out.push({
+                        kind: "h1",
+                        text: el.textContent?.trim() || "",
+                    })
+                }
+            } else if (tag === "h2") {
+                out.push({ kind: "rule" })
+                out.push({
+                    kind: "h2",
+                    text: el.textContent?.trim() || "",
+                })
+            } else if (tag === "h3" || tag === "h4") {
+                const runs = inlineRuns(el)
+                if (runs.some((r) => r.text.trim()))
+                    out.push({ kind: "p", runs })
+            } else if (tag === "p") {
+                const runs = inlineRuns(el)
+                if (runs.some((r) => r.text.trim()))
+                    out.push({ kind: "p", runs })
+            } else if (tag === "ul" || tag === "ol") {
+                el.childNodes.forEach((child) => {
+                    if ((child as Element).tagName?.toLowerCase() === "li")
+                        processLi(child as Element, listIndent)
+                })
+            } else if (tag === "li") {
+                processLi(el, listIndent)
+            } else if (tag !== "br") {
+                el.childNodes.forEach((c) => processNode(c, listIndent))
+            }
+        }
 
-                            const processNode = (
-                                node: Node,
-                                listIndent = 0
-                            ) => {
-                                if (node.nodeType !== Node.ELEMENT_NODE) return
-                                const el = node as Element
-                                const tag = el.tagName.toLowerCase()
-                                if (tag === "h1") {
-                                    if (
-                                        el.classList.contains(
-                                            DOC_BLOCK_SECTION_CLASS
-                                        )
-                                    ) {
-                                        out.push({ kind: "rule" })
-                                        out.push({
-                                            kind: "h2",
-                                            text:
-                                                el.textContent?.trim() || "",
-                                        })
-                                    } else {
-                                        out.push({
-                                            kind: "h1",
-                                            text:
-                                                el.textContent?.trim() || "",
-                                        })
-                                    }
-                                } else if (tag === "h2") {
-                                    out.push({ kind: "rule" })
-                                    out.push({
-                                        kind: "h2",
-                                        text: el.textContent?.trim() || "",
-                                    })
-                                } else if (tag === "h3" || tag === "h4") {
-                                    const runs = inlineRuns(el)
-                                    if (runs.some((r) => r.text.trim()))
-                                        out.push({ kind: "p", runs })
-                                } else if (tag === "p") {
-                                    const runs = inlineRuns(el)
-                                    if (runs.some((r) => r.text.trim()))
-                                        out.push({ kind: "p", runs })
-                                } else if (tag === "ul" || tag === "ol") {
-                                    el.childNodes.forEach((child) => {
-                                        if (
-                                            (
-                                                child as Element
-                                            ).tagName?.toLowerCase() === "li"
-                                        )
-                                            processLi(
-                                                child as Element,
-                                                listIndent
-                                            )
-                                    })
-                                } else if (tag === "li") {
-                                    processLi(el, listIndent)
-                                } else if (tag !== "br") {
-                                    el.childNodes.forEach((c) =>
-                                        processNode(c, listIndent)
-                                    )
-                                }
-                            }
+        tmp.childNodes.forEach((c) => processNode(c))
+        return out
+    }
 
-                            tmp.childNodes.forEach((c) => processNode(c))
-                            return out
-                        }
+    const blocks = parseHTML()
 
-                        const blocks = parseHTML()
+    // --- Load pdf-lib and embed fonts ---
+    const { PDFDocument, rgb, StandardFonts } = await import(
+        "https://esm.sh/pdf-lib@1.17.1"
+    )
 
-                        // --- Load pdf-lib and embed fonts ---
-                        const { PDFDocument, rgb, StandardFonts } =
-                            await import("https://esm.sh/pdf-lib@1.17.1")
+    const pdfDoc = await PDFDocument.create()
+    const page = pdfDoc.addPage([PAGE_W_PT, PAGE_H_PT])
 
-                        const pdfDoc = await PDFDocument.create()
-                        const page = pdfDoc.addPage([PAGE_W_PT, PAGE_H_PT])
+    const [helReg, helBold, helItalic, helBoldIt] = await Promise.all([
+        pdfDoc.embedFont(StandardFonts.Helvetica),
+        pdfDoc.embedFont(StandardFonts.HelveticaBold),
+        pdfDoc.embedFont(StandardFonts.HelveticaOblique),
+        pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique),
+    ])
 
-                        const [helReg, helBold, helItalic, helBoldIt] =
-                            await Promise.all([
-                                pdfDoc.embedFont(StandardFonts.Helvetica),
-                                pdfDoc.embedFont(StandardFonts.HelveticaBold),
-                                pdfDoc.embedFont(StandardFonts.HelveticaOblique),
-                                pdfDoc.embedFont(
-                                    StandardFonts.HelveticaBoldOblique
-                                ),
-                            ])
+    const black = rgb(0.07, 0.07, 0.07)
+    const gray = rgb(0.2, 0.2, 0.2)
 
-                        const black = rgb(0.07, 0.07, 0.07)
-                        const gray = rgb(0.2, 0.2, 0.2)
+    // Sanitize to WinAnsi-safe characters (Standard Type 1 fonts use Latin-1 encoding).
+    const sanitize = (s: string) =>
+        s
+            .replace(/[\u2018\u2019]/g, "'")
+            .replace(/[\u201C\u201D]/g, '"')
+            .replace(/[\u2013\u2014]/g, "-")
+            .replace(/[\u2022\u25CF]/g, "*")
+            .replace(/\u25E6/g, "-")
+            .replace(/\u2026/g, "...")
+            .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
 
-                        // Sanitize to WinAnsi-safe characters (Standard Type 1 fonts use Latin-1 encoding).
-                        const sanitize = (s: string) =>
-                            s
-                                .replace(/[\u2018\u2019]/g, "'")
-                                .replace(/[\u201C\u201D]/g, '"')
-                                .replace(/[\u2013\u2014]/g, "-")
-                                .replace(/[\u2022\u25CF]/g, "*")
-                                .replace(/\u25E6/g, "-")
-                                .replace(/\u2026/g, "...")
-                                .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
+    const pickFont = (bold: boolean, italic: boolean) =>
+        bold && italic
+            ? helBoldIt
+            : bold
+              ? helBold
+              : italic
+                ? helItalic
+                : helReg
 
-                        const pickFont = (bold: boolean, italic: boolean) =>
-                            bold && italic
-                                ? helBoldIt
-                                : bold
-                                  ? helBold
-                                  : italic
-                                    ? helItalic
-                                    : helReg
+    // Word-wrap styled runs using real font metrics. Returns lines of runs.
+    const wrapRuns = (runs: Run[], maxW: number, fontSize: number): Run[][] => {
+        type Word = Run & { space: boolean }
+        const words: Word[] = []
+        for (const run of runs) {
+            const parts = sanitize(run.text).split(/(\s+)/)
+            for (const p of parts) {
+                if (!p) continue
+                if (/^\s+$/.test(p)) {
+                    if (words.length) words[words.length - 1].space = true
+                } else {
+                    words.push({
+                        text: p,
+                        bold: run.bold,
+                        italic: run.italic,
+                        space: false,
+                    })
+                }
+            }
+        }
 
-                        // Word-wrap styled runs using real font metrics. Returns lines of runs.
-                        const wrapRuns = (
-                            runs: Run[],
-                            maxW: number,
-                            fontSize: number
-                        ): Run[][] => {
-                            type Word = Run & { space: boolean }
-                            const words: Word[] = []
-                            for (const run of runs) {
-                                const parts = sanitize(run.text).split(/(\s+)/)
-                                for (const p of parts) {
-                                    if (!p) continue
-                                    if (/^\s+$/.test(p)) {
-                                        if (words.length)
-                                            words[words.length - 1].space = true
-                                    } else {
-                                        words.push({
-                                            text: p,
-                                            bold: run.bold,
-                                            italic: run.italic,
-                                            space: false,
-                                        })
-                                    }
-                                }
-                            }
+        const lines: Run[][] = []
+        let curLine: Word[] = []
+        let curW = 0
 
-                            const lines: Run[][] = []
-                            let curLine: Word[] = []
-                            let curW = 0
+        const flush = () => {
+            if (!curLine.length) return
+            const lineRuns: Run[] = []
+            curLine.forEach((w, wi) => {
+                const needSpace = wi > 0
+                const last = lineRuns[lineRuns.length - 1]
+                if (last && last.bold === w.bold && last.italic === w.italic) {
+                    last.text += (needSpace ? " " : "") + w.text
+                } else {
+                    lineRuns.push({
+                        text: (needSpace && last ? " " : "") + w.text,
+                        bold: w.bold,
+                        italic: w.italic,
+                    })
+                }
+            })
+            lines.push(lineRuns)
+            curLine = []
+            curW = 0
+        }
 
-                            const flush = () => {
-                                if (!curLine.length) return
-                                const lineRuns: Run[] = []
-                                curLine.forEach((w, wi) => {
-                                    const needSpace = wi > 0
-                                    const last = lineRuns[lineRuns.length - 1]
-                                    if (
-                                        last &&
-                                        last.bold === w.bold &&
-                                        last.italic === w.italic
-                                    ) {
-                                        last.text +=
-                                            (needSpace ? " " : "") + w.text
-                                    } else {
-                                        lineRuns.push({
-                                            text:
-                                                (needSpace && last ? " " : "") +
-                                                w.text,
-                                            bold: w.bold,
-                                            italic: w.italic,
-                                        })
-                                    }
-                                })
-                                lines.push(lineRuns)
-                                curLine = []
-                                curW = 0
-                            }
+        for (const word of words) {
+            const f = pickFont(word.bold, word.italic)
+            const spW = f.widthOfTextAtSize(" ", fontSize)
+            const wW = f.widthOfTextAtSize(word.text, fontSize)
+            const addW = curLine.length ? spW + wW : wW
+            if (curLine.length && curW + addW > maxW) {
+                flush()
+                curLine = [word]
+                curW = wW
+            } else {
+                curLine.push(word)
+                curW += addW
+            }
+        }
+        flush()
+        return lines.length
+            ? lines
+            : [[{ text: "", bold: false, italic: false }]]
+    }
 
-                            for (const word of words) {
-                                const f = pickFont(word.bold, word.italic)
-                                const spW = f.widthOfTextAtSize(" ", fontSize)
-                                const wW = f.widthOfTextAtSize(
-                                    word.text,
-                                    fontSize
-                                )
-                                const addW = curLine.length ? spW + wW : wW
-                                if (curLine.length && curW + addW > maxW) {
-                                    flush()
-                                    curLine = [word]
-                                    curW = wW
-                                } else {
-                                    curLine.push(word)
-                                    curW += addW
-                                }
-                            }
-                            flush()
-                            return lines.length
-                                ? lines
-                                : [[{ text: "", bold: false, italic: false }]]
-                        }
+    // Draw a line of styled runs, returning the x position after the last character.
+    const drawRuns = (
+        runs: Run[],
+        x: number,
+        y: number,
+        fontSize: number,
+        color: typeof black
+    ) => {
+        let cx = x
+        for (const run of runs) {
+            const t = sanitize(run.text)
+            if (!t) continue
+            const f = pickFont(run.bold, run.italic)
+            page.drawText(t, {
+                x: cx,
+                y,
+                font: f,
+                size: fontSize,
+                color,
+            })
+            cx += f.widthOfTextAtSize(t, fontSize)
+        }
+        return cx
+    }
 
-                        // Draw a line of styled runs, returning the x position after the last character.
-                        const drawRuns = (
-                            runs: Run[],
-                            x: number,
-                            y: number,
-                            fontSize: number,
-                            color: typeof black
-                        ) => {
-                            let cx = x
-                            for (const run of runs) {
-                                const t = sanitize(run.text)
-                                if (!t) continue
-                                const f = pickFont(run.bold, run.italic)
-                                page.drawText(t, {
-                                    x: cx,
-                                    y,
-                                    font: f,
-                                    size: fontSize,
-                                    color,
-                                })
-                                cx += f.widthOfTextAtSize(t, fontSize)
-                            }
-                            return cx
-                        }
+    // Measure total layout height at a given base font size using real font metrics.
+    // This is the same logic as the draw pass, just without the draw calls.
+    const measureHeight = (basePt: number): number => {
+        const px = (n: number) => basePt * (n / DOC_PX_BODY)
+        const h1Pt = px(DOC_PX_TITLE)
+        const h2Pt = px(DOC_PX_SECTION)
+        const lineH = basePt * bodyLineMult
+        const h1LineH = h1Pt * 1.3
+        const h2LineH = h2Pt * 1.35
+        let totalH = 0
+        let firstP = true
+        let prev: Block | null = null
+        for (const block of blocks) {
+            if (block.kind === "h1") {
+                totalH +=
+                    wrapRuns(
+                        [
+                            {
+                                text: block.text,
+                                bold: true,
+                                italic: false,
+                            },
+                        ],
+                        CONTENT_W_PT,
+                        h1Pt
+                    ).length *
+                        h1LineH +
+                    basePt * 0.4
+            } else if (block.kind === "rule") {
+                totalH += basePt * 0.5
+            } else if (block.kind === "h2") {
+                totalH +=
+                    wrapRuns(
+                        [
+                            {
+                                text: block.text,
+                                bold: true,
+                                italic: false,
+                            },
+                        ],
+                        CONTENT_W_PT,
+                        h2Pt
+                    ).length *
+                        h2LineH +
+                    basePt * 0.8
+            } else if (block.kind === "p") {
+                if (isCoverLetter && !firstP) totalH += basePt * bodyLineMult
+                totalH +=
+                    wrapRuns(block.runs, CONTENT_W_PT, basePt).length * lineH +
+                    gapAfterParagraph(basePt)
+                firstP = false
+            } else if (block.kind === "li") {
+                const newList =
+                    prev == null ||
+                    prev.kind !== "li" ||
+                    block.indent > (prev as { indent: number }).indent
+                if (isCoverLetter && newList)
+                    totalH += listFirstBulletGap(basePt)
+                const bulletW = basePt * 1.4 * (block.indent + 1)
+                totalH +=
+                    wrapRuns(block.runs, CONTENT_W_PT - bulletW, basePt)
+                        .length *
+                        lineH +
+                    gapAfterListItem(basePt)
+            }
+            prev = block
+        }
+        return totalH
+    }
 
-                        // Measure total layout height at a given base font size using real font metrics.
-                        // This is the same logic as the draw pass, just without the draw calls.
-                        const measureHeight = (basePt: number): number => {
-                            const px = (n: number) =>
-                                basePt * (n / DOC_PX_BODY)
-                            const h1Pt = px(DOC_PX_TITLE)
-                            const h2Pt = px(DOC_PX_SECTION)
-                            const lineH = basePt * bodyLineMult
-                            const h1LineH = h1Pt * 1.3
-                            const h2LineH = h2Pt * 1.35
-                            let totalH = 0
-                            let firstP = true
-                            let prev: Block | null = null
-                            for (const block of blocks) {
-                                if (block.kind === "h1") {
-                                    totalH +=
-                                        wrapRuns(
-                                            [
-                                                {
-                                                    text: block.text,
-                                                    bold: true,
-                                                    italic: false,
-                                                },
-                                            ],
-                                            CONTENT_W_PT,
-                                            h1Pt
-                                        ).length *
-                                            h1LineH +
-                                        basePt * 0.4
-                                } else if (block.kind === "rule") {
-                                    totalH += basePt * 0.5
-                                } else if (block.kind === "h2") {
-                                    totalH +=
-                                        wrapRuns(
-                                            [
-                                                {
-                                                    text: block.text,
-                                                    bold: true,
-                                                    italic: false,
-                                                },
-                                            ],
-                                            CONTENT_W_PT,
-                                            h2Pt
-                                        ).length *
-                                            h2LineH +
-                                        basePt * 0.8
-                                } else if (block.kind === "p") {
-                                    if (isCoverLetter && !firstP)
-                                        totalH += basePt * bodyLineMult
-                                    totalH +=
-                                        wrapRuns(
-                                            block.runs,
-                                            CONTENT_W_PT,
-                                            basePt
-                                        ).length *
-                                            lineH +
-                                        gapAfterParagraph(basePt)
-                                    firstP = false
-                                } else if (block.kind === "li") {
-                                    const newList =
-                                        prev == null ||
-                                        prev.kind !== "li" ||
-                                        block.indent >
-                                            (prev as { indent: number }).indent
-                                    if (isCoverLetter && newList)
-                                        totalH += listFirstBulletGap(basePt)
-                                    const bulletW =
-                                        basePt * 1.4 * (block.indent + 1)
-                                    totalH +=
-                                        wrapRuns(
-                                            block.runs,
-                                            CONTENT_W_PT - bulletW,
-                                            basePt
-                                        ).length *
-                                            lineH +
-                                        gapAfterListItem(basePt)
-                                }
-                                prev = block
-                            }
-                            return totalH
-                        }
+    // Binary-search for the largest body pt that fits on one page (headings scale with DOC_BLOCK_OPTIONS px).
+    let lo = 6,
+        hi = 20,
+        bestPt = 10
+    for (let i = 0; i < 12; i++) {
+        const mid = (lo + hi) / 2
+        if (measureHeight(mid) <= CONTENT_H_PT) {
+            bestPt = mid
+            lo = mid
+        } else hi = mid
+    }
 
-                        // Binary-search for the largest body pt that fits on one page (headings scale with DOC_BLOCK_OPTIONS px).
-                        let lo = 6,
-                            hi = 20,
-                            bestPt = 10
-                        for (let i = 0; i < 12; i++) {
-                            const mid = (lo + hi) / 2
-                            if (measureHeight(mid) <= CONTENT_H_PT) {
-                                bestPt = mid
-                                lo = mid
-                            } else hi = mid
-                        }
+    const px = (n: number) => bestPt * (n / DOC_PX_BODY)
+    const h1Pt = px(DOC_PX_TITLE)
+    const h2Pt = px(DOC_PX_SECTION)
+    const baseBodyLineH = bestPt * bodyLineMult
+    const h1LineH = h1Pt * 1.3
+    const h2LineH = h2Pt * 1.35
 
-                        const px = (n: number) => bestPt * (n / DOC_PX_BODY)
-                        const h1Pt = px(DOC_PX_TITLE)
-                        const h2Pt = px(DOC_PX_SECTION)
-                        const baseBodyLineH = bestPt * bodyLineMult
-                        const h1LineH = h1Pt * 1.3
-                        const h2LineH = h2Pt * 1.35
+    // Draw all blocks onto the page.
+    let y = PAGE_H_PT - MARGIN_PT
+    let firstP = true
+    let prev: Block | null = null
+    for (const block of blocks) {
+        if (block.kind === "h1") {
+            for (const line of wrapRuns(
+                [
+                    {
+                        text: sanitize(block.text),
+                        bold: true,
+                        italic: false,
+                    },
+                ],
+                CONTENT_W_PT,
+                h1Pt
+            )) {
+                y -= h1LineH
+                drawRuns(line, MARGIN_PT, y, h1Pt, black)
+            }
+            y -= bestPt * 0.4
+        } else if (block.kind === "rule") {
+            y -= bestPt * 0.5
+        } else if (block.kind === "h2") {
+            page.drawLine({
+                start: {
+                    x: MARGIN_PT,
+                    y: y - bestPt * 0.2,
+                },
+                end: {
+                    x: PAGE_W_PT - MARGIN_PT,
+                    y: y - bestPt * 0.2,
+                },
+                thickness: 0.5,
+                color: gray,
+            })
+            for (const line of wrapRuns(
+                [
+                    {
+                        text: sanitize(block.text),
+                        bold: true,
+                        italic: false,
+                    },
+                ],
+                CONTENT_W_PT,
+                h2Pt
+            )) {
+                y -= h2LineH
+                drawRuns(line, MARGIN_PT, y, h2Pt, black)
+            }
+            y -= bestPt * 0.5
+        } else if (block.kind === "p") {
+            if (isCoverLetter && !firstP) y -= bestPt * bodyLineMult
+            for (const line of wrapRuns(block.runs, CONTENT_W_PT, bestPt)) {
+                y -= baseBodyLineH
+                drawRuns(line, MARGIN_PT, y, bestPt, black)
+            }
+            y -= gapAfterParagraph(bestPt)
+            firstP = false
+        } else if (block.kind === "li") {
+            const newList =
+                prev == null ||
+                prev.kind !== "li" ||
+                block.indent > (prev as { indent: number }).indent
+            if (isCoverLetter && newList) y -= listFirstBulletGap(bestPt)
+            const bulletIndent = bestPt * 1.4 * (block.indent + 1)
+            let isFirst = true
+            for (const line of wrapRuns(
+                block.runs,
+                CONTENT_W_PT - bulletIndent,
+                bestPt
+            )) {
+                y -= baseBodyLineH
+                if (isFirst) {
+                    const r =
+                        block.indent === 0 ? bestPt * 0.11 : bestPt * 0.085
+                    page.drawCircle({
+                        x: MARGIN_PT + bulletIndent - bestPt * 0.52,
+                        y: y + bestPt * 0.32,
+                        size: r,
+                        color: black,
+                    })
+                    isFirst = false
+                }
+                drawRuns(line, MARGIN_PT + bulletIndent, y, bestPt, black)
+            }
+            y -= gapAfterListItem(bestPt)
+        }
+        prev = block
+    }
 
-                        // Draw all blocks onto the page.
-                        let y = PAGE_H_PT - MARGIN_PT
-                        let firstP = true
-                        let prev: Block | null = null
-                        for (const block of blocks) {
-                            if (block.kind === "h1") {
-                                for (const line of wrapRuns(
-                                    [
-                                        {
-                                            text: sanitize(block.text),
-                                            bold: true,
-                                            italic: false,
-                                        },
-                                    ],
-                                    CONTENT_W_PT,
-                                    h1Pt
-                                )) {
-                                    y -= h1LineH
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT,
-                                        y,
-                                        h1Pt,
-                                        black
-                                    )
-                                }
-                                y -= bestPt * 0.4
-                            } else if (block.kind === "rule") {
-                                y -= bestPt * 0.5
-                            } else if (block.kind === "h2") {
-                                page.drawLine({
-                                    start: {
-                                        x: MARGIN_PT,
-                                        y: y - bestPt * 0.2,
-                                    },
-                                    end: {
-                                        x: PAGE_W_PT - MARGIN_PT,
-                                        y: y - bestPt * 0.2,
-                                    },
-                                    thickness: 0.5,
-                                    color: gray,
-                                })
-                                for (const line of wrapRuns(
-                                    [
-                                        {
-                                            text: sanitize(block.text),
-                                            bold: true,
-                                            italic: false,
-                                        },
-                                    ],
-                                    CONTENT_W_PT,
-                                    h2Pt
-                                )) {
-                                    y -= h2LineH
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT,
-                                        y,
-                                        h2Pt,
-                                        black
-                                    )
-                                }
-                                y -= bestPt * 0.5
-                            } else if (block.kind === "p") {
-                                if (isCoverLetter && !firstP)
-                                    y -= bestPt * bodyLineMult
-                                for (const line of wrapRuns(
-                                    block.runs,
-                                    CONTENT_W_PT,
-                                    bestPt
-                                )) {
-                                    y -= baseBodyLineH
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT,
-                                        y,
-                                        bestPt,
-                                        black
-                                    )
-                                }
-                                y -= gapAfterParagraph(bestPt)
-                                firstP = false
-                            } else if (block.kind === "li") {
-                                const newList =
-                                    prev == null ||
-                                    prev.kind !== "li" ||
-                                    block.indent >
-                                        (prev as { indent: number }).indent
-                                if (isCoverLetter && newList)
-                                    y -= listFirstBulletGap(bestPt)
-                                const bulletIndent =
-                                    bestPt * 1.4 * (block.indent + 1)
-                                let isFirst = true
-                                for (const line of wrapRuns(
-                                    block.runs,
-                                    CONTENT_W_PT - bulletIndent,
-                                    bestPt
-                                )) {
-                                    y -= baseBodyLineH
-                                    if (isFirst) {
-                                        const r =
-                                            block.indent === 0
-                                                ? bestPt * 0.11
-                                                : bestPt * 0.085
-                                        page.drawCircle({
-                                            x:
-                                                MARGIN_PT +
-                                                bulletIndent -
-                                                bestPt * 0.52,
-                                            y: y + bestPt * 0.32,
-                                            size: r,
-                                            color: black,
-                                        })
-                                        isFirst = false
-                                    }
-                                    drawRuns(
-                                        line,
-                                        MARGIN_PT + bulletIndent,
-                                        y,
-                                        bestPt,
-                                        black
-                                    )
-                                }
-                                y -= gapAfterListItem(bestPt)
-                            }
-                            prev = block
-                        }
-
-                        return await pdfDoc.save()
+    return await pdfDoc.save()
 }
 
 function applyDocBlockClasses(el: HTMLElement, blockKey: DocBlockKey) {
@@ -4742,50 +4639,12 @@ function normalizeYouWorkForHomepageQuery(s: string): string {
     return s.replace(/\s+/g, " ").trim()
 }
 
-/** Dedupe tools-debug lines for GET /jobs/map (center + bbox bucket + filters — zoom changes bbox). */
-function mapJobsQueryDedupKey(fullUrl: string): string {
-    try {
-        const u = new URL(fullUrl)
-        const p = u.searchParams
-        const lat = parseFloat(p.get("center_lat") ?? "NaN")
-        const lng = parseFloat(p.get("center_lng") ?? "NaN")
-        const r = (n: number) =>
-            Number.isFinite(n) ? String(Math.round(n * 100) / 100) : ""
-        const rb = (s: string | null) => {
-            const n = parseFloat(s ?? "")
-            return Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : ""
-        }
-        return [
-            p.get("since") ?? "",
-            p.get("q") ?? "",
-            p.get("employment_type") ?? "",
-            p.get("seniority_level") ?? "",
-            r(lat),
-            r(lng),
-            rb(p.get("min_lat")),
-            rb(p.get("max_lat")),
-            rb(p.get("min_lng")),
-            rb(p.get("max_lng")),
-        ].join("|")
-    } catch {
-        return fullUrl
-    }
-}
-
-function formatMapJobsQueryLogLine(url: string, chipCount: number): string {
+/** Trailing Tools debug for /jobs/map (view km, since, filters) — no center; search goes in the timing paren. */
+function mapJobsQueryDebugBits(url: string): string {
     try {
         const u = new URL(url)
         const p = u.searchParams
         const bits: string[] = []
-        const clat = p.get("center_lat")
-        const clng = p.get("center_lng")
-        if (clat && clng)
-            bits.push(`center≈${clat.slice(0, 10)},${clng.slice(0, 11)}`)
-        const qv = p.get("q")
-        if (qv)
-            bits.push(
-                `q="${qv.length > 80 ? `${qv.slice(0, 80)}…` : qv}"`
-            )
         const et = p.get("employment_type")
         if (et) bits.push(`employment_type=${et}`)
         const sl = p.get("seniority_level")
@@ -4804,15 +4663,15 @@ function formatMapJobsQueryLogLine(url: string, chipCount: number): string {
         ) {
             const latKm = Math.max(0, (mx - mn) * 111)
             const midLat = (mn + mx) / 2
-            const lngKm = Math.max(0, (me - mw) * 111 * Math.cos((midLat * Math.PI) / 180))
-            bits.push(
-                `view≈${latKm.toFixed(0)}×${lngKm.toFixed(0)}km`
+            const lngKm = Math.max(
+                0,
+                (me - mw) * 111 * Math.cos((midLat * Math.PI) / 180)
             )
+            bits.push(`view≈${latKm.toFixed(0)}×${lngKm.toFixed(0)}km`)
         }
-        const summary = bits.join(" ")
-        return `[jobs map] ${chipCount} chips${summary ? ` ${summary}` : ""}`
+        return bits.join(" ")
     } catch {
-        return `[jobs map] ${chipCount} chips ${url.slice(0, 200)}`
+        return url.slice(0, 200)
     }
 }
 
@@ -4993,8 +4852,7 @@ const DocEditor = React.memo(function DocEditor({
                     return "title"
                 }
                 if (tag === "H2") return "section"
-                if (["P", "LI", "DIV", "H3", "H4"].includes(tag))
-                    return "p"
+                if (["P", "LI", "DIV", "H3", "H4"].includes(tag)) return "p"
             }
             node = node.parentNode
         }
@@ -5165,9 +5023,7 @@ const DocEditor = React.memo(function DocEditor({
                 const tag = (blockElement as HTMLElement).tagName
                 if (
                     tag &&
-                    ["P", "DIV", "H1", "H2", "LI"].includes(
-                        tag.toUpperCase()
-                    )
+                    ["P", "DIV", "H1", "H2", "LI"].includes(tag.toUpperCase())
                 )
                     break
                 blockElement = blockElement.parentElement
@@ -5456,11 +5312,7 @@ const DocEditor = React.memo(function DocEditor({
         }
         document.addEventListener("keydown", handleKeyDown)
         return () => document.removeEventListener("keydown", handleKeyDown)
-    }, [
-        handleSmartFormat,
-        handleFormat,
-        handleInput,
-    ])
+    }, [handleSmartFormat, handleFormat, handleInput])
 
     // Outside Click for Link Dropdown
     React.useEffect(() => {
@@ -5674,7 +5526,6 @@ const DocEditor = React.memo(function DocEditor({
                         }.pdf`
                         link.click()
                         setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
-
                     } catch (pdfErr) {
                         console.error(
                             "pdf-lib failed, falling back to print:",
@@ -6372,7 +6223,8 @@ const DocEditor = React.memo(function DocEditor({
                                                         "space-between",
                                                     gap: 12,
                                                     width: "100%",
-                                                    minHeight: opt.rowMinHeightPx,
+                                                    minHeight:
+                                                        opt.rowMinHeightPx,
                                                     padding: "6px 12px",
                                                     borderRadius: 16,
                                                     border: "none",
@@ -6411,8 +6263,7 @@ const DocEditor = React.memo(function DocEditor({
                                                         <path
                                                             d="M13.5 4.5L6.5 11.5L3 8"
                                                             stroke={
-                                                                themeColors
-                                                                    .text
+                                                                themeColors.text
                                                                     .primary
                                                             }
                                                             strokeWidth="1.5"
@@ -13073,31 +12924,34 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
 
     /** Bold every keyword match. A ref that deduped "first occurrence only" broke
      *  (1) bullets after the first in the same job and (2) reopening the same job without job.id change. */
-    const highlightText = React.useCallback((text: string) => {
-        if (!text || !apiKeywords.length) return text
-        const sorted = [...apiKeywords].sort((a, b) => b.length - a.length)
-        const regex = new RegExp(
-            `(\\b(?:${sorted.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b)`,
-            "gi"
-        )
-        return text.split(regex).map((part, i) => {
-            const matched = sorted.find(
-                (p) => p.toLowerCase() === part.toLowerCase()
+    const highlightText = React.useCallback(
+        (text: string) => {
+            if (!text || !apiKeywords.length) return text
+            const sorted = [...apiKeywords].sort((a, b) => b.length - a.length)
+            const regex = new RegExp(
+                `(\\b(?:${sorted.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b)`,
+                "gi"
             )
-            if (matched) {
-                return (
-                    <span
-                        key={i}
-                        data-keyword={matched}
-                        style={{ fontWeight: 600 }}
-                    >
-                        {part}
-                    </span>
+            return text.split(regex).map((part, i) => {
+                const matched = sorted.find(
+                    (p) => p.toLowerCase() === part.toLowerCase()
                 )
-            }
-            return part
-        })
-    }, [apiKeywords])
+                if (matched) {
+                    return (
+                        <span
+                            key={i}
+                            data-keyword={matched}
+                            style={{ fontWeight: 600 }}
+                        >
+                            {part}
+                        </span>
+                    )
+                }
+                return part
+            })
+        },
+        [apiKeywords]
+    )
 
     const fmtPlace = (t: string | null) =>
         t
@@ -14924,8 +14778,9 @@ function sortChipCompanyFeed(
         return jobPostedTsMs(b) - jobPostedTsMs(a)
     })
     const remote = anywhere.filter((j) => j.workplace_type === "remote")
-    const sortedRemote = sortSegment(remote, (a, b) =>
-        jobPostedTsMs(b) - jobPostedTsMs(a)
+    const sortedRemote = sortSegment(
+        remote,
+        (a, b) => jobPostedTsMs(b) - jobPostedTsMs(a)
     )
     const nonRemote = anywhere.filter((j) => j.workplace_type !== "remote")
     const sortedNonRemote = sortSegment(nonRemote, (a, b) => {
@@ -15036,9 +14891,11 @@ type ResolvedMapUserLocation = {
 const DEFAULT_MAP_USER_CENTER = { lat: 37.7749, lng: -122.4194 }
 
 /**
- * When Permissions API says geolocation is granted, read coords (no prompt). Otherwise
- * use recent persisted GPS if any, else GET /geo. Never calls getCurrentPosition on
- * "prompt" so the homepage does not show a permission dialog on load.
+ * When Permissions API says geolocation is granted, read coords (no prompt). If
+ * permission is still "prompt", prefer GET /geo (IP region) over persisted GPS so the
+ * map tracks the user's current area instead of a stale saved point. Fall back to
+ * persisted GPS when /geo fails. Never calls getCurrentPosition on "prompt" so the
+ * homepage does not show a permission dialog on load.
  */
 async function resolveBestMapUserLocation(
     jobsApiUrl: string,
@@ -15152,28 +15009,29 @@ async function resolveBestMapUserLocation(
     }
 
     const g = await geoPromise
+    if (g) {
+        return {
+            lat: g.lat,
+            lng: g.lng,
+            country: g.country,
+            fromGps: false,
+        }
+    }
     const persisted = readPersistedMapGps()
     if (persisted) {
         return {
             lat: persisted.lat,
             lng: persisted.lng,
-            country: g?.country ?? null,
+            country: null,
             fromGps: true,
         }
     }
-    return g
-        ? {
-              lat: g.lat,
-              lng: g.lng,
-              country: g.country,
-              fromGps: false,
-          }
-        : {
-              lat: DEFAULT_MAP_USER_CENTER.lat,
-              lng: DEFAULT_MAP_USER_CENTER.lng,
-              country: null,
-              fromGps: false,
-          }
+    return {
+        lat: DEFAULT_MAP_USER_CENTER.lat,
+        lng: DEFAULT_MAP_USER_CENTER.lng,
+        country: null,
+        fromGps: false,
+    }
 }
 
 // Minimal dark roadmap style — avoids needing a cloud-based map ID.
@@ -15234,10 +15092,30 @@ function approxKm(
 ): number {
     const dLat = (lat2 - lat1) * 111
     const dLng =
-        (lng2 - lng1) *
-        111 *
-        Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180))
+        (lng2 - lng1) * 111 * Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180))
     return Math.hypot(dLat, dLng)
+}
+
+/**
+ * GET /jobs `radius_km` was historically fixed at 50, which hides almost everything when the
+ * map is zoomed out. Scale with the visible bbox (cap 500 — listJobsNear max), and bump
+ * `limit` slightly so the list can reflect a wide search area.
+ */
+function radiusKmForMapDrawerList(
+    latSpan: number,
+    lngSpan: number,
+    centerLat: number
+): { radiusKm: number; limit: number } {
+    const cos = Math.max(0.12, Math.abs(Math.cos((centerLat * Math.PI) / 180)))
+    const latKm = Math.max(latSpan, 1e-9) * 111
+    const lngKm = Math.max(lngSpan, 1e-9) * 111 * cos
+    const toCorner = Math.hypot(lngKm / 2, latKm / 2)
+    const cap = 500
+    const floor = 50
+    const radiusKm = Math.round(Math.min(cap, Math.max(floor, toCorner * 0.92)))
+    // GET /jobs caps limit at 50 (curastem-jobs-api MAX_LIMIT).
+    const limit = Math.min(50, Math.max(25, Math.round(18 + radiusKm / 12)))
+    return { radiusKm, limit }
 }
 
 /**
@@ -15368,6 +15246,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     defaultSearch = "",
     searchFocusRef,
     coordMergeJob = null,
+    onMapJobsQueryRequest,
+    onMapJobsQueryAbort,
     onMapJobsQuery,
 }: {
     jobsApiUrl: string
@@ -15392,8 +15272,30 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     searchFocusRef?: React.RefObject<(() => void) | null>
     /** When job detail is open over the map, use this copy for coords (GET /jobs/:id enrichment). */
     coordMergeJob?: HomepageJob | null
-    /** Tools debug: log deduped GET /jobs/map fetches (chip count + short summary). */
-    onMapJobsQuery?: (url: string, chipCount: number) => void
+    /** Tools debug: GET /jobs/map — pending request line (removed when superseded, aborted, or completed). */
+    onMapJobsQueryRequest?: (
+        reqId: number,
+        meta: {
+            url: string
+            zoom?: number
+            spanMaxDeg: number
+            searchQuery: string
+        }
+    ) => void
+    onMapJobsQueryAbort?: (reqId: number) => void
+    /** Tools debug: GET /jobs/map — one line when a fetch completes (row count, timing, cache, viewport, search). */
+    onMapJobsQuery?: (
+        url: string,
+        chipCount: number,
+        elapsedMs?: number,
+        extra?: {
+            cache: "HIT" | "MISS" | "?"
+            zoom?: number
+            spanMaxDeg?: number
+            searchQuery?: string
+            reqId?: number
+        }
+    ) => void
 }) {
     const isStatic = useIsStaticRenderer()
     const mapContainerRef = React.useRef<HTMLDivElement>(null)
@@ -15408,12 +15310,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const [totalJobCount, setTotalJobCount] = React.useState(0)
     // Accumulates chips across viewport moves — never discards already-loaded chips
     const accJobsRef = React.useRef(new Map<string, MapCompanyEntry>())
-    /** Locked chip_lat/chip_lng per office slot — cleared with accJobsRef on search/filter change. */
+    /** Locked chip_lat/chip_lng per office slot — cleared with accJobsRef on day/type/seniority change. */
     const chipOfficeStickyRef = React.useRef(
         new Map<string, { lat: number; lng: number }>()
     )
     // Last /jobs/map viewport: re-fetch when center moves (~50km), zoom changes visible extent,
-    // or search/filters change (must not skip on viewport alone — stale q otherwise).
+    // or day/type/seniority filters change (map query is not text-filtered).
     const lastFetchViewportRef = React.useRef<{
         lat: number
         lng: number
@@ -15430,6 +15332,15 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     React.useEffect(() => {
         onMapJobsQueryRef.current = onMapJobsQuery
     }, [onMapJobsQuery])
+    const onMapJobsQueryRequestRef = React.useRef(onMapJobsQueryRequest)
+    React.useEffect(() => {
+        onMapJobsQueryRequestRef.current = onMapJobsQueryRequest
+    }, [onMapJobsQueryRequest])
+    const onMapJobsQueryAbortRef = React.useRef(onMapJobsQueryAbort)
+    React.useEffect(() => {
+        onMapJobsQueryAbortRef.current = onMapJobsQueryAbort
+    }, [onMapJobsQueryAbort])
+    const mapJobsFetchSeqRef = React.useRef(0)
     // Stable refs for filter values so chip click handler (imperative) reads current values
     const filterDaysRef = React.useRef<"1d" | "3d" | "7d" | "30d">("7d")
     const filterTypeRef = React.useRef("")
@@ -15438,6 +15349,10 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const [selectedJobs, setSelectedJobs] = React.useState<
         HomepageJob[] | null
     >([])
+    const selectedJobsRef = React.useRef<HomepageJob[] | null>(selectedJobs)
+    React.useEffect(() => {
+        selectedJobsRef.current = selectedJobs
+    }, [selectedJobs])
     // Keep parent swipe deck in sync with the feed list so swipe-between-jobs works on mobile
     const onFeedJobsChangeRef = React.useRef(onFeedJobsChange)
     React.useEffect(() => {
@@ -15456,6 +15371,28 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     // Selected chip for the nearby jobs overlay
     const [selectedChipEntry, setSelectedChipEntry] =
         React.useState<MapCompanyEntry | null>(null)
+    const selectedChipEntryRef = React.useRef<MapCompanyEntry | null>(null)
+    React.useEffect(() => {
+        selectedChipEntryRef.current = selectedChipEntry
+    }, [selectedChipEntry])
+    /** Explore list before opening a company chip — restored on close so the drawer does not flash empty. */
+    const exploreDrawerJobsBackupRef = React.useRef<HomepageJob[] | null>(null)
+    /** After closing a chip with restore, skip the next global or nearby explore fetch so restored rows are not replaced immediately. */
+    const skipNextExploreFeedAfterChipCloseRef = React.useRef(false)
+    /** Map centroid for the jobs drawer — matches what the user sees; GPS is only a fallback before first idle. */
+    const [mapOverlayAnchor, setMapOverlayAnchor] = React.useState<{
+        lat: number
+        lng: number
+    } | null>(null)
+    /** Visible bounds (not the padded /jobs/map bbox) — drives drawer radius at each zoom. */
+    const [mapViewportVisibleSpan, setMapViewportVisibleSpan] = React.useState<{
+        latSpan: number
+        lngSpan: number
+    } | null>(null)
+    const lastMapOverlayAnchorEmitRef = React.useRef<{
+        lat: number
+        lng: number
+    } | null>(null)
     // Filters for the nearby jobs overlay
     const [filterDays, setFilterDays] = React.useState<
         "1d" | "3d" | "7d" | "30d"
@@ -15663,16 +15600,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     React.useEffect(() => {
         mapSearchQueryRef.current = mapSearchQuery
     }, [mapSearchQuery])
-    // Debounced value — API calls only fire 400ms after the user stops typing
+    // Debounced value — API calls fire shortly after typing stops (snappy map search)
     const [debouncedMapSearchQuery, setDebouncedMapSearchQuery] =
         React.useState(defaultSearch)
     React.useEffect(() => {
         const t = setTimeout(
             () => setDebouncedMapSearchQuery(mapSearchQuery),
-            400
+            120
         )
         return () => clearTimeout(t)
     }, [mapSearchQuery])
+
     const debouncedMapSearchQueryRef = React.useRef(debouncedMapSearchQuery)
     React.useEffect(() => {
         debouncedMapSearchQueryRef.current = debouncedMapSearchQuery
@@ -15873,9 +15811,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         map.addListener("dragstart", () => setAtPreciseLocation(false))
 
         // Fetch /jobs/map for the current viewport bbox, then merge into the
-        // accumulated cache so chips are never discarded as the user pans around.
-        // Re-fetch when the center moves more than ~50km (0.45°), or when zoom
-        // changes the visible area enough (same center, different span).
+        // accumulated cache. Re-fetch when the center moves a meaningful fraction
+        // of the view (pan), when zoom changes span enough, or when q/filters change.
         const MAX_CHIPS = 100
         /** Relative span change that counts as a zoom change (10%). */
         const ZOOM_SPAN_THRESHOLD = 0.1
@@ -15884,6 +15821,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
          * MAX_CHIPS — further zoom-in only magnifies; skip redundant network calls.
          */
         const DEEP_ZOOM_MAX_SPAN_DEG = 0.11
+
+        /** Abort stale /jobs/map when the user pans or zooms again — only the latest fetch should apply. */
+        let mapJobsMapAbort: AbortController | null = null
 
         const fetchViewport = () => {
             const apiUrl = jobsApiUrlRef.current
@@ -15899,12 +15839,39 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const latSpan = ne.lat() - sw.lat()
             const lngSpan = ne.lng() - sw.lng()
             const eps = 1e-9
+            setMapViewportVisibleSpan((prev) => {
+                if (
+                    prev &&
+                    Math.abs(prev.latSpan - latSpan) /
+                        Math.max(prev.latSpan, eps) <
+                        0.025 &&
+                    Math.abs(prev.lngSpan - lngSpan) /
+                        Math.max(prev.lngSpan, eps) <
+                        0.025
+                )
+                    return prev
+                return { latSpan, lngSpan }
+            })
             const querySig = [
-                mapSearchQueryRef.current.trim(),
                 filterDaysRef.current,
                 filterTypeRef.current,
                 filterSeniorityRef.current,
+                debouncedMapSearchQueryRef.current?.trim() ?? "",
             ].join("\u0001")
+
+            // Drawer list uses map centroid (not only device GPS) once the map has idled.
+            const emitMapOverlayAnchorFromMap = () => {
+                if (selectedChipEntryRef.current) return
+                const prev = lastMapOverlayAnchorEmitRef.current
+                if (!prev || approxKm(prev.lat, prev.lng, cLat, cLng) >= 1) {
+                    lastMapOverlayAnchorEmitRef.current = {
+                        lat: cLat,
+                        lng: cLng,
+                    }
+                    setMapOverlayAnchor({ lat: cLat, lng: cLng })
+                }
+            }
+            emitMapOverlayAnchorFromMap()
 
             const recomputeJobsFromAccumulator = () => {
                 const all = Array.from(accJobsRef.current.values())
@@ -15923,17 +15890,19 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                     MAX_CHIPS,
                     spreadMode
                 )
-                setTotalJobCount(
-                    all.reduce((sum, e) => sum + e.job_count, 0)
-                )
+                setTotalJobCount(all.reduce((sum, e) => sum + e.job_count, 0))
                 setJobs(nearest)
             }
 
             const last = lastFetchViewportRef.current
             if (last) {
+                const spanMax = Math.max(latSpan, lngSpan, eps)
+                const minMoveKm = Math.max(
+                    1.5,
+                    Math.min(90, spanMax * 111 * 0.07)
+                )
                 const centerMoved =
-                    Math.abs(cLat - last.lat) >= 0.45 ||
-                    Math.abs(cLng - last.lng) >= 0.45
+                    approxKm(cLat, cLng, last.lat, last.lng) >= minMoveKm
                 const latSpanDelta =
                     Math.abs(latSpan - last.latSpan) /
                     Math.max(last.latSpan, eps)
@@ -16011,23 +15980,65 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 center_lng: String(cLng),
                 limit: String(MAX_CHIPS),
             })
-            const q = mapSearchQueryRef.current.trim()
-            if (q) params.set("q", q)
             if (filterTypeRef.current)
                 params.set("employment_type", filterTypeRef.current)
             if (filterSeniorityRef.current)
                 params.set("seniority_level", filterSeniorityRef.current)
+            const mapQ = debouncedMapSearchQueryRef.current?.trim() ?? ""
+            if (mapQ) params.set("q", mapQ)
 
             const mapFetchUrl = `${apiUrl}/jobs/map?${params}`
-            fetch(mapFetchUrl)
-                .then((r) => (r.ok ? r.json() : { data: [] }))
-                .then(({ data }: { data: MapCompanyEntry[] }) => {
+            mapJobsMapAbort?.abort()
+            mapJobsMapAbort = new AbortController()
+            const { signal } = mapJobsMapAbort
+            const tReq =
+                typeof performance !== "undefined"
+                    ? performance.now()
+                    : Date.now()
+            const zoomRaw =
+                typeof map.getZoom === "function" ? map.getZoom() : NaN
+            const zoom = Number.isFinite(zoomRaw) ? zoomRaw : undefined
+            const spanMaxDeg = Math.max(latSpan, lngSpan)
+            const searchQ = mapSearchQueryRef.current.trim()
+            const reqId = ++mapJobsFetchSeqRef.current
+            onMapJobsQueryRequestRef.current?.(reqId, {
+                url: mapFetchUrl,
+                zoom,
+                spanMaxDeg,
+                searchQuery: searchQ,
+            })
+            fetch(mapFetchUrl, { signal })
+                .then(async (r) => {
+                    const cacheHdr = r.headers.get("X-Curastem-Jobs-Map-Cache")
+                    const cache: "HIT" | "MISS" | "?" =
+                        cacheHdr === "HIT" || cacheHdr === "MISS"
+                            ? cacheHdr
+                            : "?"
+                    const json = r.ok ? await r.json() : { data: [] }
+                    return {
+                        data: (json as { data?: MapCompanyEntry[] }).data,
+                        cache,
+                    }
+                })
+                .then(({ data, cache }) => {
                     const entries: MapCompanyEntry[] = Array.isArray(data)
                         ? data
                         : []
+                    const elapsedMs =
+                        typeof performance !== "undefined"
+                            ? Math.round(performance.now() - tReq)
+                            : undefined
                     onMapJobsQueryRef.current?.(
                         mapFetchUrl,
-                        entries.length
+                        entries.length,
+                        elapsedMs,
+                        {
+                            cache,
+                            zoom,
+                            spanMaxDeg,
+                            searchQuery: searchQ,
+                            reqId,
+                        }
                     )
                     entries
                         .filter((e) => e.chip_lat != null && e.chip_lng != null)
@@ -16045,19 +16056,36 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         })
                     recomputeJobsFromAccumulator()
                 })
-                .catch(() => {})
+                .catch((err: unknown) => {
+                    if (err instanceof Error && err.name === "AbortError") {
+                        onMapJobsQueryAbortRef.current?.(reqId)
+                        return
+                    }
+                })
         }
 
-        // Maps fires idle often while opening (layout, panTo user, tiles). Debounce so we
-        // do not issue a /jobs/map request per intermediate bounds tick.
-        const IDLE_MAP_FETCH_MS = 220
+        // Debounce coalesces bursts; tighter delay when zoomed out so /jobs/map tracks zoom faster.
+        // bounds_changed fires while the viewport updates (not only after full idle), so we start
+        // the timer earlier during pinch/zoom instead of waiting for the final idle alone.
+        const IDLE_MAP_FETCH_MS = 88
+        const IDLE_MAP_FETCH_REGION_MS = 48
+        const IDLE_MAP_FETCH_CONTINENT_MS = 24
         let idleDebounceTimer: ReturnType<typeof setTimeout> | null = null
         const scheduleFetchViewport = () => {
             if (idleDebounceTimer) clearTimeout(idleDebounceTimer)
+            const b = map.getBounds()
+            let delayMs = IDLE_MAP_FETCH_MS
+            if (b) {
+                const latS = b.getNorthEast().lat() - b.getSouthWest().lat()
+                const lngS = b.getNorthEast().lng() - b.getSouthWest().lng()
+                const spanMax = Math.max(latS, lngS)
+                if (spanMax > 7.5) delayMs = IDLE_MAP_FETCH_CONTINENT_MS
+                else if (spanMax > 2.2) delayMs = IDLE_MAP_FETCH_REGION_MS
+            }
             idleDebounceTimer = setTimeout(() => {
                 idleDebounceTimer = null
                 fetchViewport()
-            }, IDLE_MAP_FETCH_MS)
+            }, delayMs)
         }
 
         let cancelled = false
@@ -16069,9 +16097,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         map.addListener("idle", () => {
             if (!cancelled) scheduleFetchViewport()
         })
+        map.addListener("bounds_changed", () => {
+            if (!cancelled) scheduleFetchViewport()
+        })
 
         return () => {
             cancelled = true
+            mapJobsMapAbort?.abort()
             if (idleDebounceTimer) clearTimeout(idleDebounceTimer)
             mapInstanceRef.current = null
             setMapHasIdle(false)
@@ -16095,7 +16127,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         filterSeniorityRef.current = filterSeniority
     }, [filterSeniority])
 
-    // When debounced search query OR any filter changes, bust the chip cache and force a fresh viewport fetch
+    // When day/type/seniority filters change, bust the chip cache and force a fresh viewport fetch.
     React.useEffect(() => {
         filterDaysRef.current = filterDays
         filterTypeRef.current = filterType
@@ -16105,11 +16137,39 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         chipOfficeStickyRef.current.clear()
         lastFetchViewportRef.current = null
         google.maps.event.trigger(mapInstanceRef.current, "idle")
-    }, [debouncedMapSearchQuery, filterDays, filterType, filterSeniority]) // eslint-disable-line react-hooks/exhaustive-deps
+    }, [filterDays, filterType, filterSeniority]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Auto-fetch nearby jobs on both mobile and desktop whenever user location or filters change (skip when company chip is open)
+    // Debounced search text: refetch /jobs/map?…&q= so chips match the drawer query (skip first run — same initial state as filters).
+    const mapDebouncedSearchPrimedRef = React.useRef(false)
     React.useEffect(() => {
-        if (!userLoc || selectedChipEntry) return
+        if (!mapDebouncedSearchPrimedRef.current) {
+            mapDebouncedSearchPrimedRef.current = true
+            return
+        }
+        if (!mapInstanceRef.current) return
+        accJobsRef.current.clear()
+        chipOfficeStickyRef.current.clear()
+        lastFetchViewportRef.current = null
+        google.maps.event.trigger(mapInstanceRef.current, "idle")
+    }, [debouncedMapSearchQuery])
+
+    const mapExploreFeedGenRef = React.useRef(0)
+
+    // Text in the search bar: /jobs with near_lat/lng + q + radius (same footprint as empty-map list) so
+    // results match jobs on the map, not worldwide GET /jobs?q-only.
+    // While a company chip is selected, the company feed owns the drawer — do not run this.
+    React.useEffect(() => {
+        if (!jobsApiUrl) return
+        if (selectedChipEntry) return
+        const q = debouncedMapSearchQuery.trim()
+        if (!q) {
+            return
+        }
+        if (skipNextExploreFeedAfterChipCloseRef.current) {
+            skipNextExploreFeedAfterChipCloseRef.current = false
+            return
+        }
+
         const daysMap: Record<string, number> = {
             "1d": 1,
             "3d": 3,
@@ -16120,51 +16180,175 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             Math.floor(Date.now() / 1000) -
             (daysMap[filterDays] ?? 7) * 24 * 60 * 60
         setOverlayNextCursor(null)
-        overlayFetchCoordsRef.current = userLoc
+
+        const map = mapInstanceRef.current
+        const mapCenter =
+            map && typeof map.getCenter === "function" ? map.getCenter() : null
+        const anchor =
+            mapOverlayAnchor ??
+            userLoc ??
+            (mapCenter ? { lat: mapCenter.lat(), lng: mapCenter.lng() } : null)
+        if (!anchor) return
+
+        overlayFetchCoordsRef.current = anchor
+
+        const gen = ++mapExploreFeedGenRef.current
+        const ctrl = new AbortController()
+
+        const { radiusKm, limit } = mapViewportVisibleSpan
+            ? radiusKmForMapDrawerList(
+                  mapViewportVisibleSpan.latSpan,
+                  mapViewportVisibleSpan.lngSpan,
+                  anchor.lat
+              )
+            : { radiusKm: 50, limit: 30 }
         const p = new URLSearchParams({
-            near_lat: String(userLoc.lat),
-            near_lng: String(userLoc.lng),
-            radius_km: "50",
+            near_lat: String(anchor.lat),
+            near_lng: String(anchor.lng),
+            radius_km: String(radiusKm),
             since: String(sinceTs),
-            limit: "30",
+            limit: String(limit),
+            exclude_remote: "true",
+            q,
+        })
+        if (filterType) p.set("employment_type", filterType)
+        if (filterSeniority) p.set("seniority_level", filterSeniority)
+        setIsLoadingOverlay(true)
+        fetch(`${jobsApiUrl}/jobs?${p}`, { signal: ctrl.signal })
+            .then((r) => (r.ok ? r.json() : { data: [], meta: {} }))
+            .then(
+                (json: {
+                    data?: HomepageJob[]
+                    meta?: { next_cursor?: string | null }
+                }) => {
+                    if (gen !== mapExploreFeedGenRef.current) return
+                    const jobs = Array.isArray(json.data) ? json.data : []
+                    const sorted = sortNearbyJobsByDistanceThenPosted(
+                        jobs,
+                        anchor.lat,
+                        anchor.lng
+                    )
+                    setSelectedJobs(sorted)
+                    setOverlayNextCursor(json.meta?.next_cursor ?? null)
+                    setIsLoadingOverlay(false)
+                }
+            )
+            .catch((err) => {
+                if ((err as Error)?.name === "AbortError") return
+                if (gen !== mapExploreFeedGenRef.current) return
+                setIsLoadingOverlay(false)
+            })
+        return () => ctrl.abort()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        debouncedMapSearchQuery,
+        filterDays,
+        filterType,
+        filterSeniority,
+        selectedChipEntry,
+        jobsApiUrl,
+        mapOverlayAnchor,
+        mapViewportVisibleSpan,
+        userLoc,
+    ])
+
+    // Empty search: distance-sorted jobs near map center (viewport-scaled radius), not global.
+    React.useEffect(() => {
+        if (!jobsApiUrl) return
+        if (selectedChipEntry) return
+        if (debouncedMapSearchQuery.trim()) return
+        if (skipNextExploreFeedAfterChipCloseRef.current) {
+            skipNextExploreFeedAfterChipCloseRef.current = false
+            return
+        }
+
+        const map = mapInstanceRef.current
+        const mapCenter =
+            map && typeof map.getCenter === "function" ? map.getCenter() : null
+        const anchor =
+            mapOverlayAnchor ??
+            userLoc ??
+            (mapCenter ? { lat: mapCenter.lat(), lng: mapCenter.lng() } : null)
+        if (!anchor) return
+
+        const daysMap: Record<string, number> = {
+            "1d": 1,
+            "3d": 3,
+            "7d": 7,
+            "30d": 30,
+        }
+        const sinceTs =
+            Math.floor(Date.now() / 1000) -
+            (daysMap[filterDays] ?? 7) * 24 * 60 * 60
+        setOverlayNextCursor(null)
+        overlayFetchCoordsRef.current = anchor
+
+        const gen = ++mapExploreFeedGenRef.current
+        const ctrl = new AbortController()
+
+        const { radiusKm, limit } = mapViewportVisibleSpan
+            ? radiusKmForMapDrawerList(
+                  mapViewportVisibleSpan.latSpan,
+                  mapViewportVisibleSpan.lngSpan,
+                  anchor.lat
+              )
+            : { radiusKm: 50, limit: 30 }
+        const p = new URLSearchParams({
+            near_lat: String(anchor.lat),
+            near_lng: String(anchor.lng),
+            radius_km: String(radiusKm),
+            since: String(sinceTs),
+            limit: String(limit),
             exclude_remote: "true",
         })
         if (filterType) p.set("employment_type", filterType)
         if (filterSeniority) p.set("seniority_level", filterSeniority)
-        if (debouncedMapSearchQuery.trim())
-            p.set("q", debouncedMapSearchQuery.trim())
         setIsLoadingOverlay(true)
-        fetch(`${jobsApiUrl}/jobs?${p}`)
-            .then((r) => (r.ok ? r.json() : { data: [] }))
-            .then(({ data }: { data: HomepageJob[] }) => {
-                const jobs = Array.isArray(data) ? data : []
-                const sorted = sortNearbyJobsByDistanceThenPosted(
-                    jobs,
-                    userLoc.lat,
-                    userLoc.lng
-                )
-                setSelectedJobs(sorted)
-                setOverlayNextCursor(sorted.length >= 30 ? "more" : null)
+        fetch(`${jobsApiUrl}/jobs?${p}`, { signal: ctrl.signal })
+            .then((r) => (r.ok ? r.json() : { data: [], meta: {} }))
+            .then(
+                (json: {
+                    data?: HomepageJob[]
+                    meta?: { next_cursor?: string | null }
+                }) => {
+                    if (gen !== mapExploreFeedGenRef.current) return
+                    const jobs = Array.isArray(json.data) ? json.data : []
+                    const sorted = sortNearbyJobsByDistanceThenPosted(
+                        jobs,
+                        anchor.lat,
+                        anchor.lng
+                    )
+                    setSelectedJobs(sorted)
+                    setOverlayNextCursor(json.meta?.next_cursor ?? null)
+                    setIsLoadingOverlay(false)
+                }
+            )
+            .catch((err) => {
+                if ((err as Error)?.name === "AbortError") return
+                if (gen !== mapExploreFeedGenRef.current) return
                 setIsLoadingOverlay(false)
             })
-            .catch(() => {
-                setIsLoadingOverlay(false)
-            })
+        return () => ctrl.abort()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
+        mapOverlayAnchor,
+        mapViewportVisibleSpan,
         userLoc,
         filterDays,
         filterType,
         filterSeniority,
         selectedChipEntry,
         debouncedMapSearchQuery,
+        jobsApiUrl,
+        mapsReady,
+        mapHasIdle,
     ])
 
     React.useEffect(() => {
         companyFeedBucketsRef.current = null
     }, [selectedChipEntry])
 
-    // Company chip panel: load full lists (no `q` — search reorders matches to the top client-side).
+    // Company chip panel: dual /jobs fetch (nearby + company-wide). Search text filters/ranks within the company feed.
     React.useEffect(() => {
         if (!selectedChipEntry || !jobsApiUrl) return
         const entry = selectedChipEntry
@@ -16173,6 +16357,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         overlayFetchCoordsRef.current = { lat: chipLat, lng: chipLng }
 
         const gen = ++companyFeedFetchGenRef.current
+        companyFeedBucketsRef.current = null
         setSelectedJobs([])
         setNearbyJobCount(null)
 
@@ -16190,7 +16375,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             company: entry.company_slug,
             near_lat: String(chipLat),
             near_lng: String(chipLng),
-            radius_km: "50",
+            // Wider than 50km so NorCal roles (e.g. SF ↔ San Jose) stay "nearby" vs "anywhere".
+            radius_km: "95",
             since: String(sinceTs),
             limit: "50",
         })
@@ -16206,6 +16392,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         if (filterSeniority) {
             nearbyParams.set("seniority_level", filterSeniority)
             allParams.set("seniority_level", filterSeniority)
+        }
+        const qForApi = debouncedMapSearchQuery.trim()
+        if (qForApi) {
+            nearbyParams.set("q", qForApi)
+            allParams.set("q", qForApi)
         }
 
         Promise.all([
@@ -16240,7 +16431,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         anywhere,
                         chipLat,
                         chipLng,
-                        q
+                        qForApi ? q : undefined
                     )
                 )
                 setOverlayNextCursor(null)
@@ -16249,9 +16440,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 if (gen !== companyFeedFetchGenRef.current) return
                 companyFeedBucketsRef.current = null
                 setSelectedJobs([])
-                setNearbyJobCount(null)
+                // null would match the company skeleton branch forever after a failed fetch
+                setNearbyJobCount(0)
             })
-    }, [selectedChipEntry, filterDays, filterType, filterSeniority, jobsApiUrl])
+    }, [
+        selectedChipEntry,
+        filterDays,
+        filterType,
+        filterSeniority,
+        debouncedMapSearchQuery,
+        jobsApiUrl,
+    ])
 
     // Reorder company list when the debounced search changes (same fetched rows).
     React.useEffect(() => {
@@ -16271,12 +16470,14 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         const gm = (window as any).google?.maps
         if (!gm?.Map) return
 
-        // Always clear old chips first — if jobs is empty (e.g. filter returned no results in
-        // this viewport) we still need to remove stale chips from the previous unfiltered state.
-        markersRef.current.forEach((m) => {
-            if (typeof m.setMap === "function") m.setMap(null)
-        })
-        markersRef.current = []
+        const clearMarkers = () => {
+            markersRef.current.forEach((m) => {
+                if (typeof m.setMap === "function") m.setMap(null)
+            })
+            markersRef.current = []
+        }
+
+        clearMarkers()
 
         if (jobs.length === 0) return
 
@@ -16313,6 +16514,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             span.style.cssText =
                 "font-size:14px;font-weight:600;color:#000;line-height:21px;"
             chip.appendChild(span)
+            chip.style.opacity = "1"
             return chip
         }
 
@@ -16354,12 +16556,18 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                     haptic.light()
                     const chipLat = entry.chip_lat
                     const chipLng = entry.chip_lng
+                    const curJobs = selectedJobsRef.current
+                    exploreDrawerJobsBackupRef.current =
+                        curJobs && curJobs.length > 0 ? [...curJobs] : null
                     setSelectedChipEntry(entry)
                     setSelectedJobs([])
                     setNearbyJobCount(null)
                     setTravelTimes({})
                     setOverlayNextCursor(null)
-                    overlayFetchCoordsRef.current = { lat: chipLat, lng: chipLng }
+                    overlayFetchCoordsRef.current = {
+                        lat: chipLat,
+                        lng: chipLng,
+                    }
                     if (isMobile) snapMobileFeed(false)
                     // Dual /jobs fetch + search reorder run in the selectedChipEntry effect.
                 }
@@ -16421,13 +16629,16 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             const seed = `${entry.company_id}|${lat.toFixed(5)}|${lng.toFixed(5)}`
             const angle = ((fnv(seed) % 100000) / 100000) * Math.PI * 2
             const r =
-                SCATTER_BASE *
-                (0.7 + ((fnv(seed, 1) % 1000) / 1000) * 0.6)
+                SCATTER_BASE * (0.7 + ((fnv(seed, 1) % 1000) / 1000) * 0.6)
             placeChip(
                 entry,
                 lat + r * Math.cos(angle),
                 lng + (r * Math.sin(angle)) / cosLat
             )
+        }
+
+        return () => {
+            clearMarkers()
         }
     }, [jobs, mapsReady, mapHasIdle, isStatic])
 
@@ -16497,8 +16708,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
             if (map) {
                 const z = map.getZoom?.()
                 const needZoomChange =
-                    z == null ||
-                    Math.abs(z - CURRENT_LOCATION_MAP_ZOOM) > 0.01
+                    z == null || Math.abs(z - CURRENT_LOCATION_MAP_ZOOM) > 0.01
                 if (needZoomChange && typeof map.moveCamera === "function") {
                     map.moveCamera({
                         center: { lat: loc.lat, lng: loc.lng },
@@ -17346,9 +17556,20 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         aria-label="Close company view"
                                         onClick={() => {
                                             haptic.light()
+                                            const backup =
+                                                exploreDrawerJobsBackupRef.current
+                                            exploreDrawerJobsBackupRef.current =
+                                                null
                                             setSelectedChipEntry(null)
                                             setNearbyJobCount(null)
-                                            setSelectedJobs([])
+                                            if (backup && backup.length > 0) {
+                                                skipNextExploreFeedAfterChipCloseRef.current = true
+                                                mapExploreFeedGenRef.current++
+                                                setSelectedJobs(backup)
+                                                setIsLoadingOverlay(false)
+                                            } else {
+                                                setSelectedJobs([])
+                                            }
                                             if (isMobile) snapMobileFeed(false)
                                             // Desktop only — on mobile this would pop the keyboard unexpectedly
                                             if (!isMobile)
@@ -18498,9 +18719,85 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                             No search results found
                                         </div>
                                     ) : !selectedChipEntry &&
-                                      isLoadingOverlay &&
-                                      selectedJobs.length === 0 ? (
-                                        // Regular feed loading (search / location / filters) — keep prior rows when non-empty
+                                      mapSearchQuery.trim() !== "" &&
+                                      (mapSearchQuery.trim() !==
+                                          debouncedMapSearchQuery.trim() ||
+                                          (debouncedMapSearchQuery.trim() !==
+                                              "" &&
+                                              isLoadingOverlay)) ? (
+                                        // Global search: skeleton as soon as the box has text (ahead of debounce) or while /jobs?q is in flight — hide stale list rows.
+                                        Array.from({ length: 4 }).map(
+                                            (_, i) => (
+                                                <div
+                                                    key={`map-search-pending-sk-${i}`}
+                                                    style={{
+                                                        background: cardBg,
+                                                        borderRadius: 28,
+                                                        padding: "16px 20px",
+                                                        flexShrink: 0,
+                                                    }}
+                                                >
+                                                    <div
+                                                        style={{
+                                                            height: 18,
+                                                            width: "65%",
+                                                            background:
+                                                                themeColors
+                                                                    .hover
+                                                                    .default,
+                                                            borderRadius: 6,
+                                                            marginBottom: 10,
+                                                            animation:
+                                                                "homepageSkeleton 1.4s ease-in-out infinite",
+                                                        }}
+                                                    />
+                                                    <div
+                                                        style={{
+                                                            display: "flex",
+                                                            gap: 8,
+                                                            alignItems:
+                                                                "center",
+                                                        }}
+                                                    >
+                                                        <div
+                                                            style={{
+                                                                width: 16,
+                                                                height: 16,
+                                                                borderRadius: 8,
+                                                                background:
+                                                                    themeColors
+                                                                        .hover
+                                                                        .default,
+                                                                flexShrink: 0,
+                                                                animation:
+                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
+                                                            }}
+                                                        />
+                                                        <div
+                                                            style={{
+                                                                height: 13,
+                                                                width: "40%",
+                                                                background:
+                                                                    themeColors
+                                                                        .hover
+                                                                        .default,
+                                                                borderRadius: 6,
+                                                                animation:
+                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
+                                                            }}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            )
+                                        )
+                                    ) : !selectedChipEntry &&
+                                      selectedJobs.length === 0 &&
+                                      (isLoadingOverlay ||
+                                          (!debouncedMapSearchQuery.trim() &&
+                                              !mapOverlayAnchor &&
+                                              !userLoc)) ? (
+                                        // Regular feed loading; text search uses /jobs?q= and does not need map anchor.
+                                        // Without q, we wait for map idle (overlay anchor) or user geolocation for nearby list.
                                         Array.from({ length: 4 }).map(
                                             (_, i) => (
                                                 <div
@@ -18567,8 +18864,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         )
                                     ) : !selectedChipEntry &&
                                       selectedJobs.length === 0 &&
-                                      mapSearchQuery.trim() &&
-                                      !isLoadingOverlay ? (
+                                      debouncedMapSearchQuery.trim() &&
+                                      !isLoadingOverlay &&
+                                      (mapOverlayAnchor || userLoc) ? (
                                         // Regular feed — API returned no rows (not mid-load)
                                         <div
                                             style={{
@@ -18894,67 +19192,6 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                     </React.Fragment>
                                                 )
                                             })}
-                                            {isLoadingOverlay && (
-                                                <div
-                                                    style={{
-                                                        background: cardBg,
-                                                        borderRadius: 28,
-                                                        padding: "16px 20px",
-                                                        flexShrink: 0,
-                                                    }}
-                                                >
-                                                    <div
-                                                        style={{
-                                                            height: 18,
-                                                            width: "65%",
-                                                            background:
-                                                                themeColors
-                                                                    .hover
-                                                                    .default,
-                                                            borderRadius: 6,
-                                                            marginBottom: 10,
-                                                            animation:
-                                                                "homepageSkeleton 1.4s ease-in-out infinite",
-                                                        }}
-                                                    />
-                                                    <div
-                                                        style={{
-                                                            display: "flex",
-                                                            gap: 8,
-                                                            alignItems:
-                                                                "center",
-                                                        }}
-                                                    >
-                                                        <div
-                                                            style={{
-                                                                width: 16,
-                                                                height: 16,
-                                                                borderRadius: 8,
-                                                                background:
-                                                                    themeColors
-                                                                        .hover
-                                                                        .default,
-                                                                flexShrink: 0,
-                                                                animation:
-                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
-                                                            }}
-                                                        />
-                                                        <div
-                                                            style={{
-                                                                height: 13,
-                                                                width: "40%",
-                                                                background:
-                                                                    themeColors
-                                                                        .hover
-                                                                        .default,
-                                                                borderRadius: 6,
-                                                                animation:
-                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
-                                                            }}
-                                                        />
-                                                    </div>
-                                                </div>
-                                            )}
                                         </>
                                     )}
                                 </div>
@@ -19435,7 +19672,9 @@ const HomepageJobs = React.memo(function HomepageJobs({
             return fetchJ(urlStr)
                 .then((r) => (r.ok ? r.json() : { data: [] }))
                 .then(({ data }) => {
-                    const rows = (Array.isArray(data) ? data : []) as HomepageJob[]
+                    const rows = (
+                        Array.isArray(data) ? data : []
+                    ) as HomepageJob[]
                     emitJobsQuery(urlStr, rows.length)
                     return rows
                 })
@@ -19553,7 +19792,11 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 near = dedupeByCompany(byNewestJobs(pooled), 8)
             }
 
-            const topFromPool = topPicksFromPoolAfterNear(pooled, near, byNewestJobs)
+            const topFromPool = topPicksFromPoolAfterNear(
+                pooled,
+                near,
+                byNewestJobs
+            )
             if (!cancelled) {
                 setNearJobs(near)
                 setTopJobs(topFromPool)
@@ -19622,7 +19865,9 @@ const HomepageJobs = React.memo(function HomepageJobs({
             return fetchJ(urlStr)
                 .then((r) => (r.ok ? r.json() : { data: [] }))
                 .then(({ data }) => {
-                    const rows = (Array.isArray(data) ? data : []) as HomepageJob[]
+                    const rows = (
+                        Array.isArray(data) ? data : []
+                    ) as HomepageJob[]
                     emitJobsQuery(urlStr, rows.length)
                     return rows
                 })
@@ -19688,10 +19933,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 FALLBACK_QUERIES[
                     Math.floor(Math.random() * FALLBACK_QUERIES.length)
                 ]
-            const fallback = await api(
-                buildQParams(since7d, fb, true),
-                12
-            )
+            const fallback = await api(buildQParams(since7d, fb, true), 12)
             if (cancelled) return deduped
             const final = dedupeByCompany([...deduped, ...fallback], 10)
             if (!cancelled) {
@@ -25034,8 +25276,7 @@ export default function OmegleMentorshipUI(props: Props) {
     >(null)
     const [isProcessingResume, setIsProcessingResume] = React.useState(false)
     /** True while structured HTML (create_resume step) runs after extract; Edit/Download stay dimmed. */
-    const [isResumeHtmlPending, setIsResumeHtmlPending] =
-        React.useState(false)
+    const [isResumeHtmlPending, setIsResumeHtmlPending] = React.useState(false)
     const resumeFileInputRef = React.useRef<HTMLInputElement>(null)
     const interestsTextareaRef = React.useRef<HTMLTextAreaElement>(null)
     const interestsUndoStack = React.useRef<string[]>([])
@@ -26242,10 +26483,7 @@ Rules: always 3–5 suggestions, each under 5 words, specific to what you just s
                 return id
             }
             const tid = opts?.targetDocId ?? activeDocIdRef.current
-            if (
-                !tid ||
-                !chatDocsRef.current.some((d) => d.id === tid)
-            ) {
+            if (!tid || !chatDocsRef.current.some((d) => d.id === tid)) {
                 const id = generateChatDocId()
                 setChatDocs((prev) => [
                     ...prev,
@@ -28191,30 +28429,128 @@ Do not include markdown formatting or explanations.`
     React.useEffect(() => {
         debouncedYouWorkHomepageDebugRef.current = debouncedYouWork
     }, [debouncedYouWork])
-    const emitHomepageJobsQuery = React.useCallback((url: string, rowCount: number) => {
-        if (homepageJobsQueryLoggedRef.current.has(url)) return
-        homepageJobsQueryLoggedRef.current.add(url)
-        const t = debouncedYouWorkHomepageDebugRef.current.trim()
-        logRefForHomepageJobs.current(
-            `[jobs homepage]${t ? ` title="${t}"` : ""} ${rowCount} rows ${url}`,
-            "tools"
-        )
+    const emitHomepageJobsQuery = React.useCallback(
+        (url: string, rowCount: number) => {
+            if (homepageJobsQueryLoggedRef.current.has(url)) return
+            homepageJobsQueryLoggedRef.current.add(url)
+            const t = debouncedYouWorkHomepageDebugRef.current.trim()
+            logRefForHomepageJobs.current(
+                `[jobs homepage]${t ? ` title="${t}"` : ""} ${rowCount} rows ${url}`,
+                "tools"
+            )
+        },
+        []
+    )
+
+    /** GET /jobs/map Tools log: optional `[jobs map] → request` line per in-flight fetch; removed when superseded, aborted, or completed. */
+    const mapJobsPendingRequestRef = React.useRef<{
+        reqId: number
+        line: string
+    } | null>(null)
+
+    const emitMapJobsQueryRequest = React.useCallback(
+        (
+            reqId: number,
+            meta: {
+                url: string
+                zoom?: number
+                spanMaxDeg: number
+                searchQuery: string
+            }
+        ) => {
+            const prev = mapJobsPendingRequestRef.current
+            if (prev) {
+                setToolLogs((lo) => lo.filter((l) => l !== prev.line))
+                mapJobsPendingRequestRef.current = null
+            }
+            const inner: string[] = []
+            if (
+                meta.zoom != null &&
+                Number.isFinite(meta.zoom) &&
+                meta.zoom > 0
+            )
+                inner.push(`zoom=${meta.zoom}`)
+            if (
+                meta.spanMaxDeg != null &&
+                Number.isFinite(meta.spanMaxDeg) &&
+                meta.spanMaxDeg > 0
+            )
+                inner.push(`spanMax≈${meta.spanMaxDeg.toFixed(2)}°`)
+            const sq = (meta.searchQuery ?? "").trim()
+            if (sq)
+                inner.push(`q="${sq.length > 64 ? `${sq.slice(0, 64)}…` : sq}"`)
+            const paren = inner.length > 0 ? ` (${inner.join(", ")})` : ""
+            const body =
+                `[jobs map] → request${paren} ${mapJobsQueryDebugBits(meta.url)}`.trim()
+            const line = `[${new Date().toLocaleTimeString()}] ${body}`
+            mapJobsPendingRequestRef.current = { reqId, line }
+            setToolLogs((prev) => [...prev.slice(-198), line])
+            if (debugPanelRef.current === "tools")
+                console.log(`[Curastem tools] ${body}`)
+        },
+        []
+    )
+
+    const emitMapJobsQueryAbort = React.useCallback((reqId: number) => {
+        const p = mapJobsPendingRequestRef.current
+        if (p && p.reqId === reqId) {
+            setToolLogs((lo) => lo.filter((l) => l !== p.line))
+            mapJobsPendingRequestRef.current = null
+        }
     }, [])
 
-    /** Tools panel: GET /jobs/map — deduped by center+filters (not full bbox) to avoid idle spam. */
-    const mapJobsQueryLoggedRef = React.useRef<Set<string>>(new Set())
-    React.useEffect(() => {
-        mapJobsQueryLoggedRef.current.clear()
-    }, [jobsApiUrl, isMapOpen])
-    const emitMapJobsQuery = React.useCallback((url: string, chipCount: number) => {
-        const key = mapJobsQueryDedupKey(url)
-        if (mapJobsQueryLoggedRef.current.has(key)) return
-        mapJobsQueryLoggedRef.current.add(key)
-        logRefForHomepageJobs.current(
-            formatMapJobsQueryLogLine(url, chipCount),
-            "tools"
-        )
-    }, [])
+    const emitMapJobsQueryComplete = React.useCallback(
+        (
+            url: string,
+            chipCount: number,
+            elapsedMs?: number,
+            extra?: {
+                cache: "HIT" | "MISS" | "?"
+                zoom?: number
+                spanMaxDeg?: number
+                searchQuery?: string
+                reqId?: number
+            }
+        ) => {
+            const inner: string[] = []
+            if (elapsedMs != null && elapsedMs >= 0)
+                inner.push(`${elapsedMs}ms`)
+            if (extra?.cache === "HIT") inner.push("CACHED")
+            if (
+                extra?.zoom != null &&
+                Number.isFinite(extra.zoom) &&
+                extra.zoom > 0
+            )
+                inner.push(`zoom=${extra.zoom}`)
+            if (
+                extra?.spanMaxDeg != null &&
+                Number.isFinite(extra.spanMaxDeg) &&
+                extra.spanMaxDeg > 0
+            )
+                inner.push(`spanMax≈${extra.spanMaxDeg.toFixed(2)}°`)
+            const sq = (extra?.searchQuery ?? "").trim()
+            if (sq)
+                inner.push(`q="${sq.length > 64 ? `${sq.slice(0, 64)}…` : sq}"`)
+            const paren = inner.length > 0 ? ` (${inner.join(", ")})` : ""
+            const msgBody =
+                `[jobs map] ${chipCount} rows${paren} ${mapJobsQueryDebugBits(url)}`.trim()
+            const rid = extra?.reqId
+            const p = mapJobsPendingRequestRef.current
+            if (rid != null && p && p.reqId === rid) {
+                mapJobsPendingRequestRef.current = null
+                const line = `[${new Date().toLocaleTimeString()}] ${msgBody}`
+                setToolLogs((prev) => {
+                    const base = prev.filter((l) => l !== p.line)
+                    return [...base.slice(-198), line]
+                })
+                if (debugPanelRef.current === "tools")
+                    console.log(`[Curastem tools] ${msgBody}`)
+                return
+            }
+            logRefForHomepageJobs.current(msgBody, "tools")
+        },
+        []
+    )
 
     // (Role state moved to top of component to fix scoping for system prompt)
 
@@ -31224,9 +31560,7 @@ Do not include markdown formatting or explanations.`
             const now = Date.now()
             setChatDocs((prev) =>
                 prev.map((d) =>
-                    d.id === aid
-                        ? { ...d, content, lastEdited: now }
-                        : d
+                    d.id === aid ? { ...d, content, lastEdited: now } : d
                 )
             )
         }
@@ -31287,7 +31621,9 @@ Do not include markdown formatting or explanations.`
                 ? storedHtml
                 : plainTextToResumeDocHtml(plain)
         profileResumeLastHtmlRef.current = initialHtml
-        const resumeRow = chatDocsRef.current.find((d) => d.docType === "resume")
+        const resumeRow = chatDocsRef.current.find(
+            (d) => d.docType === "resume"
+        )
         if (resumeRow) {
             upsertDocForTool("update", initialHtml, "resume", "", {
                 targetDocId: resumeRow.id,
@@ -34813,9 +35149,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 systemInstruction: payload.systemInstruction,
                             }),
                         }
-                        const introTextRetrieve = computeDisplayText(
-                            accumulatedText
-                        )
+                        const introTextRetrieve =
+                            computeDisplayText(accumulatedText)
                         let displayFunctionCallRetrieve: any =
                             accumulatedFunctionCall
                         let displayFunctionResponseRetrieve: any = {
@@ -34847,8 +35182,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
 
                             if (
                                 chainedFcRetrieve &&
-                                (chainedFcRetrieve.name ===
-                                    "create_resume" ||
+                                (chainedFcRetrieve.name === "create_resume" ||
                                     chainedFcRetrieve.name ===
                                         "create_cover_letter")
                             ) {
@@ -37998,9 +38332,19 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             coordMergeJob={
                                 isJobOpen && selectedJob ? selectedJob : null
                             }
+                            onMapJobsQueryRequest={
+                                debugPanel === "tools"
+                                    ? emitMapJobsQueryRequest
+                                    : undefined
+                            }
+                            onMapJobsQueryAbort={
+                                debugPanel === "tools"
+                                    ? emitMapJobsQueryAbort
+                                    : undefined
+                            }
                             onMapJobsQuery={
                                 debugPanel === "tools"
-                                    ? emitMapJobsQuery
+                                    ? emitMapJobsQueryComplete
                                     : undefined
                             }
                         />
@@ -40480,10 +40824,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     if (chat.docs && chat.docs.length > 0) {
                                         for (const d of chat.docs) {
                                             const c = d.content?.trim() ?? ""
-                                            if (
-                                                !c ||
-                                                c === DEFAULT_DOC_CONTENT
-                                            )
+                                            if (!c || c === DEFAULT_DOC_CONTENT)
                                                 continue
                                             stuffItems.push({
                                                 chat,
@@ -41241,7 +41582,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                 let itemCount = 0
                                                 if (c.miniIdeLastEdited)
                                                     itemCount++
-                                                if (c.docs && c.docs.length > 0) {
+                                                if (
+                                                    c.docs &&
+                                                    c.docs.length > 0
+                                                ) {
                                                     itemCount += c.docs.filter(
                                                         (d) => {
                                                             const t =
@@ -41254,7 +41598,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                             )
                                                         }
                                                     ).length
-                                                } else if (c.docEditorLastEdited)
+                                                } else if (
+                                                    c.docEditorLastEdited
+                                                )
                                                     itemCount++
                                                 if (c.whiteboardLastEdited)
                                                     itemCount++
@@ -42532,8 +42878,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                         <path
                                                             d="M13.7466 6.61748L5.43491 14.9325C5.00818 15.3595 4.42939 15.5995 3.82574 15.6H0.601562V12.3967C0.601562 11.7933 0.841563 11.2142 1.26823 10.7875L10.7766 1.2683C10.988 1.05651 11.2392 0.888481 11.5156 0.77381C11.7921 0.659139 12.0884 0.600076 12.3877 0.599999C12.687 0.599921 12.9833 0.65883 13.2598 0.773358C13.5363 0.887886 13.7875 1.05579 13.9991 1.26746L14.9374 2.20663C15.3645 2.63375 15.6045 3.21303 15.6045 3.81705C15.6045 4.42108 15.3645 5.00036 14.9374 5.42747L13.7466 6.61748ZM13.7466 6.61748L9.58742 2.4583"
                                                             stroke={
-                                                                themeColors
-                                                                    .text
+                                                                themeColors.text
                                                                     .primary
                                                             }
                                                             strokeOpacity="0.95"
@@ -43353,10 +43698,20 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                     {jobsApiUrl}
                                 </div>
                             ) : null}
+                            <div
+                                style={{
+                                    fontSize: 10,
+                                    opacity: 0.7,
+                                    wordBreak: "break-word",
+                                }}
+                            >
+                                Map: <span style={{ opacity: 0.85 }}>→</span>{" "}
+                                fetch sent,{" "}
+                                <span style={{ opacity: 0.85 }}>←</span> rows +
+                                round-trip ms
+                            </div>
                             <div style={{ fontSize: 11, opacity: 0.85 }}>
-                                <span style={{ opacity: 0.7 }}>
-                                    🔑 Gemini:
-                                </span>{" "}
+                                <span style={{ opacity: 0.7 }}>🔑 Gemini:</span>{" "}
                                 proxied via {apiBaseUrl || "api.curastem.org"}
                             </div>
                             <div

@@ -45,6 +45,7 @@ import { eightfoldFetcher } from "./sources/eightfold.ts";
 import { uberSitesFetcher } from "./sources/uber_sites.ts";
 import { talentbrewFetcher } from "./sources/talentbrew.ts";
 import { jibeFetcher } from "./sources/jibe.ts";
+import { icimsPortalFetcher } from "./sources/icims_portal.ts";
 import { shopifyCareersFetcher } from "./sources/shopify_careers.ts";
 import { activateCareersFetcher } from "./sources/activate_careers.ts";
 import { avatureFetcher } from "./sources/avature.ts";
@@ -58,9 +59,11 @@ import { tiktokFetcher } from "./sources/tiktok.ts";
 import { hcaCareersFetcher } from "./sources/hcaCareers.ts";
 import { aramarkCareersFetcher } from "./sources/aramark_careers.ts";
 import { adpCxFetcher } from "./sources/adp_cx.ts";
+import { adpWfnRecruitmentFetcher } from "./sources/adp_wfn_recruitment.ts";
 import { lvmhAlgoliaFetcher } from "./sources/lvmh_algolia.ts";
 import { successfactorsRmkFetcher } from "./sources/successfactors_rmk.ts";
 import { symphonyMcloudFetcher } from "./sources/symphony_mcloud.ts";
+import { brassringFetcher } from "./sources/brassring.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -96,6 +99,7 @@ const REGISTRY: Record<SourceType, JobSource> = {
   uber_sites: uberSitesFetcher,
   talentbrew: talentbrewFetcher,
   jibe: jibeFetcher,
+  icims_portal: icimsPortalFetcher,
   shopify_careers: shopifyCareersFetcher,
   activate_careers: activateCareersFetcher,
   avature: avatureFetcher,
@@ -109,9 +113,11 @@ const REGISTRY: Record<SourceType, JobSource> = {
   hca_careers: hcaCareersFetcher,
   aramark_careers: aramarkCareersFetcher,
   adp_cx: adpCxFetcher,
+  adp_wfn_recruitment: adpWfnRecruitmentFetcher,
   lvmh_algolia: lvmhAlgoliaFetcher,
   successfactors_rmk: successfactorsRmkFetcher,
   symphony_mcloud: symphonyMcloudFetcher,
+  brassring: brassringFetcher,
 };
 
 /**
@@ -192,6 +198,8 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   uber_sites: 90,
   // iCIMS Jibe — employer-branded board; full descriptions in API
   jibe: 88,
+  // iCIMS hub search + JSON-LD on iframe job pages (multi-host retail portals)
+  icims_portal: 87,
   // Shopify careers — SSR HTML + per-job Ashby payload (same trust as employer-direct)
   shopify_careers: 82,
   // Oracle Activate + Taleo apply — structured list + HTML detail
@@ -213,12 +221,16 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   aramark_careers: 82,
   // ADP RM MyJobs — employer’s own requisitions + HTML descriptions from public CX API
   adp_cx: 95,
+  // ADP WFN RAAS — same trust as adp_cx (employer tenant JSON + per-req HTML descriptions)
+  adp_wfn_recruitment: 95,
   // LVMH multi-brand Algolia hub — official listings; syndicated apply URLs (many maison ATS)
   lvmh_algolia: 87,
   // SAP SF RMK — employer HTML + microdata; same trust model as Phenom/TalentBrew detail pages
   successfactors_rmk: 82,
   // Symphony Talent m-cloud job API — employer WordPress marketing site; apply via Taleo-backed flows
   symphony_mcloud: 82,
+  // BrassRing TG — employer-configured IBM gateway; structured JSON with full HTML descriptions
+  brassring: 88,
 };
 
 export function getSourcePriority(sourceType: string): number {

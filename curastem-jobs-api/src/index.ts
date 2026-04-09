@@ -54,9 +54,15 @@ import { checkRateLimit } from "./middleware/rateLimit.ts";
 import { handleGetStats } from "./routes/stats.ts";
 import { processSourceById, backfillEmbeddings, ingestSourceFromQueue } from "./ingestion/runner.ts";
 import { enrichCompanyById, runExaEnrichment, runCompanyEnrichment, runLogoOnlyEnrichment, runWordmarkUpgrade } from "./enrichment/company.ts";
-import { ensureCompanyExaColumns, listJobsForMap, type MapBbox, type MapCenter } from "./db/queries.ts";
+import {
+  ensureCompanyExaColumns,
+  listJobsForMap,
+  type MapBbox,
+  type MapCenter,
+} from "./db/queries.ts";
 import type { Env } from "./types.ts";
 import { Errors, jsonOk } from "./utils/errors.ts";
+import { jobsMapCacheKeyRequest } from "./utils/jobsMapCache.ts";
 import { logger } from "./utils/logger.ts";
 import { runBackfillPipeline, runSchedulerPipeline, runScheduledPipeline } from "./scheduledPipeline.ts";
 import { migrateRenameCrunchbaseSource, seedSources } from "./db/migrate.ts";
@@ -71,6 +77,8 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const JOB_ID_PATTERN = /^\/jobs\/([^/]+)$/;
+/** Response header: HIT (Worker Cache API) or MISS (D1 query). Exposed for Framer debug. */
+const JOBS_MAP_CACHE_HDR = "X-Curastem-Jobs-Map-Cache";
 
 async function handleRequest(
   request: Request,
@@ -149,6 +157,16 @@ async function handleRequest(
   // geocoded, company HQ otherwise).  headquarters is the company's canonical HQ
   // (used for address-precision check and fallback display).
   if (path === "/jobs/map" && method === "GET") {
+    const cacheReq = jobsMapCacheKeyRequest(url.searchParams);
+    const cached = await caches.default.match(cacheReq);
+    if (cached) {
+      const h = new Headers(cached.headers);
+      h.set("Access-Control-Allow-Origin", "*");
+      h.set(JOBS_MAP_CACHE_HDR, "HIT");
+      h.set("Access-Control-Expose-Headers", JOBS_MAP_CACHE_HDR);
+      return new Response(cached.body, { status: cached.status, headers: h });
+    }
+
     const auth = await authenticate(request, env.JOBS_DB);
     if (!auth.ok) return auth.response;
     const rateCheck = await checkRateLimit(env.RATE_LIMIT_KV, auth.key);
@@ -179,12 +197,26 @@ async function handleRequest(
     const limitRaw = parseInt(url.searchParams.get("limit") ?? "", 10);
     const limit = !isNaN(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
 
-    const q = url.searchParams.get("q") ?? undefined;
     const employment_type = url.searchParams.get("employment_type") ?? undefined;
     const seniority_level = url.searchParams.get("seniority_level") ?? undefined;
+    const qRaw = url.searchParams.get("q");
+    const q = qRaw?.trim() ? qRaw.trim() : undefined;
 
-    const rows = await listJobsForMap(env.JOBS_DB, since, bbox, center, limit, q, employment_type, seniority_level);
-    return jsonOk({
+    // Always use SQL listJobsForMap — one chip per (company × ~0.1° bucket) with COUNT = that employer only.
+    // The job_map_cells path attributed the *entire* bucket job_count to the single "winner" employer's
+    // slug/logo, so chips showed wrong companies and wrong numbers. Re-enable cells only after
+    // rebuild stores one row per (geohash, company_id) with that company's count and centroid.
+    const rows = await listJobsForMap(
+      env.JOBS_DB,
+      since,
+      bbox,
+      center,
+      limit,
+      employment_type,
+      seniority_level,
+      q
+    );
+    const resp = jsonOk({
       data: rows.map((r) => ({
         company_id: r.company_id,
         company_name: r.company_name,
@@ -202,6 +234,13 @@ async function handleRequest(
         job_count: r.job_count,
       })),
     });
+    // Short TTL so bad/stale chips clear quickly after API fixes; D1 query is bounded by bbox + limit.
+    resp.headers.set("Cache-Control", "public, max-age=300");
+    resp.headers.set("Access-Control-Allow-Origin", "*");
+    resp.headers.set(JOBS_MAP_CACHE_HDR, "MISS");
+    resp.headers.set("Access-Control-Expose-Headers", JOBS_MAP_CACHE_HDR);
+    ctx.waitUntil(caches.default.put(cacheReq, resp.clone()));
+    return resp;
   }
 
   // GET /jobs — list with filtering and cursor pagination

@@ -73,7 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_companies_slug ON companies (slug);
 CREATE TABLE IF NOT EXISTS sources (
   id              TEXT PRIMARY KEY,   -- UUID v4
   name            TEXT NOT NULL,      -- human-readable, e.g. "Stripe (Greenhouse)"
-  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "lvmh_algolia" | "successfactors_rmk" | "symphony_mcloud" | "adp_cx" | "activate_careers" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "workday" | "smartrecruiters" | "consider" | "getro" | "rss" | ...
+  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "brassring" | "icims_portal" | "lvmh_algolia" | "successfactors_rmk" | "symphony_mcloud" | "adp_cx" | "adp_wfn_recruitment" | "activate_careers" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "workday" | "smartrecruiters" | "consider" | "getro" | "rss" | ...
   company_handle  TEXT NOT NULL,      -- ATS-specific company slug / board name
   base_url        TEXT NOT NULL,      -- canonical API or job-board URL for this source
   enabled         INTEGER NOT NULL DEFAULT 1,    -- 0 = disabled, skip in cron
@@ -202,6 +202,38 @@ CREATE INDEX IF NOT EXISTS idx_jobs_salary_min
   ON jobs (salary_min, posted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_visa_sponsorship
   ON jobs (visa_sponsorship, posted_at DESC);
+
+-- GET /jobs/map: bbox + non-remote + recency — partial index keeps working set small
+CREATE INDEX IF NOT EXISTS idx_jobs_map_viewport
+  ON jobs (location_lat, location_lng, company_id, first_seen_at)
+  WHERE location_lat IS NOT NULL
+    AND location_lng IS NOT NULL
+    AND (workplace_type IS NULL OR workplace_type != 'remote');
+
+-- GET /jobs/map spread viewport: pre-aggregated geohash buckets (rebuilt by cron; see rebuildJobMapCells).
+CREATE TABLE IF NOT EXISTS job_map_cells (
+  geohash           TEXT    NOT NULL,
+  precision         INTEGER NOT NULL,
+  etkey             TEXT    NOT NULL DEFAULT '',
+  slkey             TEXT    NOT NULL DEFAULT '',
+  week_bucket       INTEGER NOT NULL,
+  job_count         INTEGER NOT NULL,
+  chip_lat          REAL    NOT NULL,
+  chip_lng          REAL    NOT NULL,
+  company_id        TEXT    NOT NULL,
+  company_name      TEXT,
+  company_logo_url  TEXT,
+  company_slug      TEXT,
+  company_hq_lat    REAL,
+  company_hq_lng    REAL,
+  company_hq_city   TEXT,
+  company_hq_country TEXT,
+  company_hq_address TEXT,
+  PRIMARY KEY (geohash, precision, etkey, slkey, week_bucket)
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_map_cells_lookup
+  ON job_map_cells (precision, etkey, slkey, week_bucket);
 
 -- ──────────────────────────────────────────────────────────────────────────────
 -- company_location_geocodes

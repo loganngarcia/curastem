@@ -26,9 +26,9 @@
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
 import {
+  normalizeEmploymentType,
   normalizeLocation,
   normalizeWorkplaceType,
-  stripHtml,
 } from "../../utils/normalize.ts";
 
 const API_BASE = "https://api.lifeattiktok.com/api/v1/public/supplier";
@@ -156,11 +156,12 @@ export const tiktokFetcher: JobSource = {
       const description = descParts.length > 0 ? descParts.join("\n\n") : null;
 
       const recruitType = post.recruit_type?.en_name?.toLowerCase() ?? "";
-      const employmentType = recruitType.includes("intern")
-        ? "Internship"
+      // Intern roles use seniority elsewhere; employment_type stays null (see normalize.ts).
+      const employment_type = recruitType.includes("intern")
+        ? null
         : recruitType.includes("part")
-        ? "Part-time"
-        : "Full-time";
+          ? normalizeEmploymentType("part time")
+          : normalizeEmploymentType("full time");
 
       const applyUrl = `${APPLY_BASE}${post.id}`;
 
@@ -168,7 +169,7 @@ export const tiktokFetcher: JobSource = {
         external_id: post.id,
         title: post.title.trim(),
         location,
-        employment_type: employmentType,
+        employment_type,
         workplace_type: workplace,
         apply_url: applyUrl,
         source_url: applyUrl,

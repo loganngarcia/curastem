@@ -13,6 +13,9 @@
  *   wrangler d1 execute curastem-jobs --remote --file=schema.sql
  *
  * Future: As schema evolves, numbered migration files can be added here.
+ *
+ * migrations/018_job_map_cells.sql — GET /jobs/map spread pre-aggregation; table also
+ * created at runtime via ensureJobMapCellsTable() in queries.ts.
  */
 
 import type { SourceType } from "../types.ts";
@@ -177,6 +180,14 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "jibe-heb", name: "H-E-B (iCIMS Jibe)", source_type: "jibe", company_handle: "heb", base_url: "https://careers.heb.com" },
   // PepsiCo — iCIMS Jibe (not Workday; wd-pepsico CXS 422). Public JSON at /api/jobs; job pages under /main/jobs/{req_id}.
   { id: "jibe-pepsico", name: "PepsiCo (iCIMS Jibe)", source_type: "jibe", company_handle: "pepsico", base_url: "https://www.pepsicojobs.com" },
+  // URBN — iCIMS hub search (multi-host job links); `hashed` identifies the portal config
+  {
+    id: "ic-urbn",
+    name: "URBN (iCIMS Portal)",
+    source_type: "icims_portal",
+    company_handle: "urbn",
+    base_url: "https://hub-urbn.icims.com/jobs/search?hashed=-625912878&in_iframe=1",
+  },
   // United — Phenom (not Workday). Sitemap lists /job/{id}/… URLs; phApp.ddo on posting pages.
   { id: "ph-united", name: "United Airlines (Phenom)", source_type: "phenom", company_handle: "unitedairlines", base_url: "https://careers.united.com/us/en/" },
   // Delta — Avature `SearchJobs/feed/` (recent postings; sufficient for ongoing ingest without backfill)
@@ -670,8 +681,6 @@ export const SEED_SOURCES: SeedSource[] = [
 
   // ─── EasyApply (HTML + JSON-LD) ─────────────────────────────────────────
   { id: "ea-snaplii", name: "Snaplii (EasyApply)", source_type: "easyapply", company_handle: "snaplii", base_url: "https://snaplii.easyapply.co/" },
-  // Recruiterflow — embedded `window.jobsList` + JSON-LD JobPosting per role
-  { id: "rf-recruitingfromscratch", name: "Recruiting From Scratch (Recruiterflow)", source_type: "recruiterflow", company_handle: "recruitingfromscratch", base_url: "https://recruiterflow.com/recruitingfromscratch/jobs" },
 
   // ─── Rippling (Next.js __NEXT_DATA__) ─────────────────────────────────
   // Board root: listing + pagination; per-job page has full description HTML.
@@ -763,6 +772,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "sr-bosch",     name: "Bosch",               source_type: "smartrecruiters", company_handle: "BoschGroup",         base_url: "https://api.smartrecruiters.com/v1/companies/BoschGroup/postings" },
   { id: "sr-asos",         name: "ASOS",                 source_type: "smartrecruiters", company_handle: "ASOS",           base_url: "https://api.smartrecruiters.com/v1/companies/ASOS/postings" },
   { id: "sr-primark",      name: "Primark",              source_type: "smartrecruiters", company_handle: "Primark",        base_url: "https://api.smartrecruiters.com/v1/companies/Primark/postings" },
+  // Corporate site links here; apply URLs on jobs.smartrecruiters.com/AbercrombieAndFitchCo/…
+  { id: "sr-abercrombie", name: "Abercrombie & Fitch Co.", source_type: "smartrecruiters", company_handle: "AbercrombieAndFitchCo", base_url: "https://api.smartrecruiters.com/v1/companies/AbercrombieAndFitchCo/postings" },
   { id: "sr-lvmh",         name: "LVMH",                 source_type: "smartrecruiters", company_handle: "LVMH",           base_url: "https://api.smartrecruiters.com/v1/companies/LVMH/postings" },
   // LVMH flagship multi-brand hub (Algolia) — ~6k roles across maisons; distinct from sr-lvmh SmartRecruiters API
   { id: "lvmh-jobhub", name: "LVMH (Job Hub)", source_type: "lvmh_algolia", company_handle: "lvmh-group", base_url: "https://www.lvmh.com/en/join-us/our-job-offers" },
@@ -836,11 +847,29 @@ export const SEED_SOURCES: SeedSource[] = [
   // careers.nike.com is a marketing shell; apply + data are on the Workday tenant above.
   { id: "wd-tapestry",    name: "Tapestry (Coach, Kate Spade, Stuart Weitzman)", source_type: "workday", company_handle: "tapestry", base_url: "https://tapestry.wd108.myworkdayjobs.com/wday/cxs/tapestry/Tapestry_Careers/jobs" },
   { id: "wd-capri",       name: "Capri Holdings (Michael Kors)", source_type: "workday", company_handle: "capri", base_url: "https://capri.wd1.myworkdayjobs.com/wday/cxs/capri/Michael_Kors/jobs" },
+  // Fast Retailing — `fastretailing.wd3`; NA + Europe boards only (US retail/HQ/corporate; EU store/HQ/graduates; Türkiye as EU-adjacent FR boards). Full tenant probe: `npx tsx scripts/probe-fastretailing-workday.ts`
+  { id: "wd-fr-retail-us-uniqlo", name: "UNIQLO — US Retail (Workday)", source_type: "workday", company_handle: "fr-retail-us-uniqlo", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/retail_us_Uniqlo/jobs" },
+  { id: "wd-fr-retail-us-theory", name: "Theory — US Retail (Workday)", source_type: "workday", company_handle: "fr-retail-us-theory", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/retail_us_Theory/jobs" },
+  { id: "wd-fr-retail-us-gu", name: "GU — US Retail (Workday)", source_type: "workday", company_handle: "fr-retail-us-gu", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/retail_us_GU/jobs" },
+  { id: "wd-fr-headquarters-us-uniqlo", name: "UNIQLO — US HQ (Workday)", source_type: "workday", company_handle: "fr-headquarters-us-uniqlo", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/headquarters_us_Uniqlo/jobs" },
+  { id: "wd-fr-corporate-us-theory", name: "Theory — US Corporate (Workday)", source_type: "workday", company_handle: "fr-corporate-us-theory", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/corporate_us_Theory/jobs" },
+  { id: "wd-fr-store-staff-eu-uniqlo", name: "UNIQLO — Europe Store Staff (Workday)", source_type: "workday", company_handle: "fr-store-staff-eu-uniqlo", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/store_staff_eu_Uniqlo/jobs" },
+  { id: "wd-fr-graduates-eu-uniqlo", name: "UNIQLO — Europe Graduates (Workday)", source_type: "workday", company_handle: "fr-graduates-eu-uniqlo", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/graduates_eu_Uniqlo/jobs" },
+  { id: "wd-fr-headquarters-eu-uniqlo", name: "UNIQLO — Europe HQ (Workday)", source_type: "workday", company_handle: "fr-headquarters-eu-uniqlo", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/headquarters_eu_Uniqlo/jobs" },
+  { id: "wd-fr-eu-theory", name: "Theory — Europe (Workday)", source_type: "workday", company_handle: "fr-eu-theory", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/EU_Theory/jobs" },
+  { id: "wd-fr-graduates-tr-uniqlo", name: "UNIQLO — Türkiye Graduates (Workday)", source_type: "workday", company_handle: "fr-graduates-tr-uniqlo", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/graduates_tr_Uniqlo/jobs" },
+  { id: "wd-fr-headquarter-roles-tr-uniqlo", name: "UNIQLO — Türkiye HQ Roles (Workday)", source_type: "workday", company_handle: "fr-headquarter-roles-tr-uniqlo", base_url: "https://fastretailing.wd3.myworkdayjobs.com/wday/cxs/fastretailing/headquarter_roles_tr_Uniqlo/jobs" },
   { id: "wd-gap",         name: "Gap Inc",          source_type: "workday", company_handle: "gapinc",         base_url: "https://gapinc.wd1.myworkdayjobs.com/wday/cxs/gapinc/GAPINC/jobs" },
   { id: "wd-tjx",         name: "TJX Companies",    source_type: "workday", company_handle: "tjx",            base_url: "https://tjx.wd1.myworkdayjobs.com/wday/cxs/tjx/TJX_EXTERNAL/jobs" },
   // Tenant Tencent_Careers — e.g. https://tencent.wd1.myworkdayjobs.com/Tencent_Careers/job/…/Product-Manager-Intern---Data-Agent_R107221
   { id: "wd-tencent",     name: "Tencent",          source_type: "workday", company_handle: "tencent",        base_url: "https://tencent.wd1.myworkdayjobs.com/wday/cxs/tencent/Tencent_Careers/jobs" },
-  { id: "wd-vfc",         name: "VF Corp (TNF/Vans/Timberland)", source_type: "workday", company_handle: "vfc", base_url: "https://vfc.wd5.myworkdayjobs.com/wday/cxs/vfc/vfc_careers/jobs" },
+  // VF Corporation — public board https://vfc.wd5.myworkdayjobs.com/vfc_careers (CXS `vfc_careers`)
+  { id: "wd-vfc", name: "VF Corporation (Workday)", source_type: "workday", company_handle: "vfc", base_url: "https://vfc.wd5.myworkdayjobs.com/wday/cxs/vfc/vfc_careers/jobs" },
+  // Signet Jewelers — two CXS site names on wd1 tenant (`signetjeweleryretailsales` matches public URL spelling)
+  { id: "wd-signet-retail", name: "Signet Jewelers — Retail (Workday)", source_type: "workday", company_handle: "signet-retail", base_url: "https://signetjewelers.wd1.myworkdayjobs.com/wday/cxs/signetjewelers/signetjeweleryretailsales/jobs" },
+  { id: "wd-signet-corporate", name: "Signet Jewelers — Corporate (Workday)", source_type: "workday", company_handle: "signet-corporate", base_url: "https://signetjewelers.wd1.myworkdayjobs.com/wday/cxs/signetjewelers/SignetCorporateCareers/jobs" },
+  // Kay Jewelers — dedicated CXS site (`/en-US/Kay_Jewelers` in UI; CXS key `Kay_Jewelers`)
+  { id: "wd-signet-kay", name: "Kay Jewelers (Workday)", source_type: "workday", company_handle: "kay-jewelers", base_url: "https://signetjewelers.wd1.myworkdayjobs.com/wday/cxs/signetjewelers/Kay_Jewelers/jobs" },
   { id: "wd-southwest",   name: "Southwest Airlines",source_type: "workday", company_handle: "swa",           base_url: "https://swa.wd1.myworkdayjobs.com/wday/cxs/swa/external/jobs" },
   { id: "wd-chevron",     name: "Chevron",          source_type: "workday", company_handle: "chevron",        base_url: "https://chevron.wd5.myworkdayjobs.com/wday/cxs/chevron/jobs/jobs" },
   { id: "wd-bakerhughes", name: "Baker Hughes",     source_type: "workday", company_handle: "bakerhughes",    base_url: "https://bakerhughes.wd5.myworkdayjobs.com/wday/cxs/bakerhughes/BakerHughes/jobs" },
@@ -903,11 +932,17 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ef-sephora",      name: "Sephora",                   source_type: "eightfold", company_handle: "sephora",     base_url: "https://join.sephora.com/careers?domain=sephora.com" },
   // careers.elcompanies.com — Eightfold PCS (`domain=elcompanies.com`); not Phenom despite locale-style paths.
   { id: "ef-elcompanies", name: "Estée Lauder Companies (Eightfold)", source_type: "eightfold", company_handle: "elcompanies", base_url: "https://careers.elcompanies.com/careers?domain=elcompanies.com" },
+  // Kering — Eightfold PCS on careers.kering.com (`/api/pcsx/search` + `position_details.jobDescription`). Marketing shell: kering.com/talent/job-offers/
+  { id: "ef-kering", name: "Kering (Eightfold)", source_type: "eightfold", company_handle: "kering", base_url: "https://careers.kering.com/careers?domain=kering.com" },
   // Coty — SAP SuccessFactors RMK (`/sitemap.xml` → `/job/.../{reqId}/`, microdata + `span.jobdescription`)
   { id: "sf-coty", name: "Coty (SuccessFactors RMK)", source_type: "successfactors_rmk", company_handle: "coty", base_url: "https://careers.coty.com/sitemap.xml" },
   { id: "sf-shiseido", name: "Shiseido (SuccessFactors RMK)", source_type: "successfactors_rmk", company_handle: "shiseido", base_url: "https://careers.shiseido.com/sitemap.xml" },
   // Listings on careers.adidas-group.com link to jobs.adidas-group.com (same RMK tenant; sitemap lives on jobs host)
   { id: "sf-adidas", name: "adidas (SuccessFactors RMK)", source_type: "successfactors_rmk", company_handle: "adidas", base_url: "https://jobs.adidas-group.com/sitemap.xml" },
+  // HanesBrands — RMK at careers.hanes.com; `/go/...` category pages are filters only — sitemap has full `/job/.../{reqId}/` set
+  { id: "sf-hanes", name: "Hanes Brands (SuccessFactors RMK)", source_type: "successfactors_rmk", company_handle: "hanes", base_url: "https://careers.hanes.com/sitemap.xml" },
+  // Pandora — careers.pandoragroup.com is Paradox/Olivia UI; requisitions + sitemap are on SAP host (ingest this only)
+  { id: "sf-pandora", name: "Pandora (SuccessFactors RMK)", source_type: "successfactors_rmk", company_handle: "pandora", base_url: "https://sapcareerssite.pandoragroup.com/sitemap.xml" },
   // Bath & Body Works — Symphony Talent CWS + SmartPost (`cws_opts.org` / Taleo; list API is m-cloud)
   {
     id: "mcloud-bbw",
@@ -917,6 +952,72 @@ export const SEED_SOURCES: SeedSource[] = [
     base_url:
       "https://careers.bathandbodyworks.com/en/job-search-results/?mcloud_org=1107&job_path=/en/job&mcloud_company_name=Bath%20%26%20Body%20Works",
   },
+
+  // ─── IBM BrassRing (Talent Gateway) ───────────────────────────────────
+  {
+    id: "br-guess",
+    name: "Guess (BrassRing)",
+    source_type: "brassring",
+    company_handle: "guess",
+    base_url:
+      "https://sjobs.brassring.com/TGnewUI/Search/Home/Home?partnerid=25813&siteid=5079",
+  },
+
+  // ─── Fashion / apparel (verified CXS, SF RMK, Jibe — no browser) ───────
+  {
+    id: "wd-columbia-sportswear",
+    name: "Columbia Sportswear (Workday)",
+    source_type: "workday",
+    company_handle: "columbia-sportswear",
+    base_url:
+      "https://columbiasportswearcompany.wd5.myworkdayjobs.com/wday/cxs/columbiasportswearcompany/CSC_Careers/jobs",
+  },
+  {
+    id: "sf-burberry",
+    name: "Burberry (SuccessFactors RMK)",
+    source_type: "successfactors_rmk",
+    company_handle: "burberry",
+    base_url: "https://burberrycareers.com/sitemap.xml",
+  },
+  {
+    id: "jibe-moncler",
+    name: "Moncler Group (Jibe)",
+    source_type: "jibe",
+    company_handle: "moncler",
+    base_url: "https://jobs.monclergroup.com/moncler-careers/jobs",
+  },
+  {
+    id: "wd-aritzia",
+    name: "Aritzia (Workday)",
+    source_type: "workday",
+    company_handle: "aritzia",
+    base_url: "https://aritzia.wd3.myworkdayjobs.com/wday/cxs/aritzia/External/jobs",
+  },
+  {
+    id: "wd-oxford-industries",
+    name: "Oxford Industries (Workday)",
+    source_type: "workday",
+    company_handle: "oxford-industries",
+    base_url: "https://oxford.wd5.myworkdayjobs.com/wday/cxs/oxford/Oxford/jobs",
+  },
+  {
+    id: "wd-deckers",
+    name: "Deckers Brands (Workday)",
+    source_type: "workday",
+    company_handle: "deckers",
+    base_url: "https://deckers.wd5.myworkdayjobs.com/wday/cxs/deckers/Deckers/jobs",
+  },
+  {
+    id: "wd-canada-goose",
+    name: "Canada Goose (Workday)",
+    source_type: "workday",
+    company_handle: "canada-goose",
+    base_url:
+      "https://canadagoose.wd3.myworkdayjobs.com/wday/cxs/canadagoose/CanadaGooseCareers/jobs",
+  },
+  // ADP: WFN tenants that only expose `workforcenow.adp.com/.../recruitment.html?cid=...&ccId=...`
+  // use `adp_wfn_recruitment` (RAAS JSON). MyJobs CX URLs use `adp_cx` with
+  // `https://myjobs.adp.com/{tenant}/…` from the employer’s public career link.
 
   // ─── Workday (Samsung CXS) ────────────────────────────────────────────
   { id: "wd-samsung",      name: "Samsung",                   source_type: "workday",   company_handle: "samsung",       base_url: "https://sec.wd3.myworkdayjobs.com/wday/cxs/sec/Samsung_Careers/jobs" },
@@ -1364,12 +1465,20 @@ export const SEED_SOURCES: SeedSource[] = [
   // Supersedes br-jpmorgan — Oracle CE public REST (see oracle_ce.ts); site from Candidate Experience URL
   { id: "oc-jpmorgan",    name: "JPMorgan Chase (Oracle CE)", source_type: "oracle_ce", company_handle: "jpmorgan",   base_url: "https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
   { id: "oc-macys",       name: "Macy's (Oracle CE)", source_type: "oracle_ce", company_handle: "macys", base_url: "https://ebwh.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
+  // American Eagle — hcml FA host; public jobs page uses site AEO-Careers (facet query params are UI-only; REST lists all requisitions).
+  { id: "oc-aeo", name: "American Eagle Outfitters (Oracle CE)", source_type: "oracle_ce", company_handle: "aeo", base_url: "https://hcml.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/AEO-Careers" },
   { id: "oc-albertsons", name: "Albertsons Companies (Oracle CE)", source_type: "oracle_ce", company_handle: "albertsons", base_url: "https://eofd.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001" },
   // Kroger banner + corporate (Fred Meyer, Ralphs, etc.) — REST on fa host; public UI at krogerfamilycareers.com
   { id: "oc-kroger", name: "Kroger (Oracle CE)", source_type: "oracle_ce", company_handle: "kroger", base_url: "https://eluq.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2001" },
   // Marriott — public UI at careers.marriott.com; Oracle CE REST on ejwl FA host (replaces disabled br-marriott browser seed).
   { id: "ce-marriott", name: "Marriott (Oracle CE)", source_type: "oracle_ce", company_handle: "marriott", base_url: "https://ejwl.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/MI_CS_1" },
   { id: "oc-honeywell", name: "Honeywell (Oracle CE)", source_type: "oracle_ce", company_handle: "honeywell", base_url: "https://ibqbjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/Honeywell" },
+  // Sally Beauty Holdings — Oracle CE on eigx.fa.us6; separate Candidate Experience sites per banner (SBH, DC, Full Service, CosmoProf, Sally)
+  { id: "oc-sbh-dc", name: "DC Careers (Oracle CE)", source_type: "oracle_ce", company_handle: "sbh-dc-careers", base_url: "https://eigx.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1" },
+  { id: "oc-sbh", name: "SBH Careers (Oracle CE)", source_type: "oracle_ce", company_handle: "sbh-careers", base_url: "https://eigx.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX" },
+  { id: "oc-sbh-full-service", name: "Full Service Careers (Oracle CE)", source_type: "oracle_ce", company_handle: "sbh-full-service", base_url: "https://eigx.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_5" },
+  { id: "oc-cosmoprof", name: "CosmoProf Careers (Oracle CE)", source_type: "oracle_ce", company_handle: "cosmoprof", base_url: "https://eigx.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_9" },
+  { id: "oc-sally-beauty", name: "Sally Careers (Oracle CE)", source_type: "oracle_ce", company_handle: "sally-beauty", base_url: "https://eigx.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_13" },
   // Aramark — WordPress JSON used by careers.aramark.com search SPA (`page-search.js`).
   { id: "ar-aramark", name: "Aramark", source_type: "aramark_careers", company_handle: "aramark", base_url: "https://careers.aramark.com/wp-json/aramark/jobs" },
   { id: "wd-petco",      name: "Petco", source_type: "workday", company_handle: "petco", base_url: "https://petco.wd1.myworkdayjobs.com/wday/cxs/petco/External/jobs" },
@@ -1404,6 +1513,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "br-adp",         name: "ADP (Browser)",              source_type: "browser", company_handle: "adp",             base_url: "https://careers.adp.com/job-search-results" },
   { id: "ac-kendo",       name: "Kendo Brands (ADP CX)",      source_type: "adp_cx",  company_handle: "kendo",           base_url: "https://myjobs.adp.com/kendo?c=1178815&d=Kendo" },
   { id: "ac-benefit",     name: "Benefit Cosmetics (ADP CX)", source_type: "adp_cx",  company_handle: "benefit",         base_url: "https://myjobs.adp.com/benefit?c=1178815&d=ExternalCareerSite" },
+  { id: "ac-revolve",     name: "Revolve (ADP WFN)",          source_type: "adp_wfn_recruitment", company_handle: "revolve", base_url: "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=02835ad7-1b2e-4eb2-9773-3454d03b1a3e&ccId=19000101_000001&type=MP&lang=en_US" },
   { id: "br-qualcomm",    name: "Qualcomm (Browser)",         source_type: "browser", company_handle: "qualcomm",        base_url: "https://careers.qualcomm.com/careers/search" },
   { id: "br-hp",          name: "HP Inc (Browser)",           source_type: "browser", company_handle: "hp",              base_url: "https://jobs.hp.com/search-jobs" },
 
@@ -1701,6 +1811,27 @@ export async function seedCompanyWebsites(db: D1Database): Promise<void> {
  * ATS company handle, so they are definitively the same company.
  */
 const COMPANY_ALIASES: Array<{ alias: string; canonical: string }> = [
+  // Fast Retailing — multiple Workday CXS boards per banner; GU keeps its own slug
+  { alias: "uniqlo-us-retail", canonical: "uniqlo" },
+  { alias: "uniqlo-us-hq", canonical: "uniqlo" },
+  { alias: "uniqlo-europe-store-staff", canonical: "uniqlo" },
+  { alias: "uniqlo-europe-graduates", canonical: "uniqlo" },
+  { alias: "uniqlo-europe-hq", canonical: "uniqlo" },
+  { alias: "uniqlo-trkiye-graduates", canonical: "uniqlo" },
+  { alias: "uniqlo-trkiye-hq-roles", canonical: "uniqlo" },
+  { alias: "theory-us-retail", canonical: "theory" },
+  { alias: "theory-us-corporate", canonical: "theory" },
+  { alias: "theory-europe", canonical: "theory" },
+  // Sally Beauty Holdings — Oracle CE sites (DC, SBH, Full Service, CosmoProf, Sally store brand)
+  { alias: "dc-careers", canonical: "sally-beauty" },
+  { alias: "sbh-careers", canonical: "sally-beauty" },
+  { alias: "full-service-careers", canonical: "sally-beauty" },
+  { alias: "cosmoprof-careers", canonical: "sally-beauty" },
+  { alias: "sally-careers", canonical: "sally-beauty" },
+  // Signet Jewelers — multiple Workday career sites (retail pool, corporate, Kay banner)
+  { alias: "signet-jewelers-retail", canonical: "signet-jewelers" },
+  { alias: "signet-jewelers-corporate", canonical: "signet-jewelers" },
+  { alias: "kay-jewelers", canonical: "signet-jewelers" },
   { alias: "thinking-machines-lab",  canonical: "thinking-machines" },
   { alias: "base-power-company",     canonical: "base-power" },
   { alias: "temporal-technologies",  canonical: "temporal" },
@@ -1744,13 +1875,32 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "ef-microsoft", hours: 48 },
   { id: "ef-sephora", hours: 48 },
   { id: "ef-elcompanies", hours: 48 },
+  { id: "ef-kering", hours: 48 },
   // Coty RMK — ~300 sitemap URLs + parallel HTML (detail fetches per run)
   { id: "sf-coty", hours: 12 },
   { id: "sf-shiseido", hours: 12 },
   { id: "sf-adidas", hours: 12 },
+  { id: "sf-hanes", hours: 12 },
+  // ~700 sitemap job URLs + parallel HTML per run
+  { id: "sf-pandora", hours: 48 },
   { id: "mcloud-bbw", hours: 12 },
   { id: "wd-tapestry", hours: 24 },
+  { id: "wd-vfc", hours: 24 },
+  { id: "wd-signet-retail", hours: 24 },
+  { id: "wd-signet-corporate", hours: 24 },
+  { id: "wd-signet-kay", hours: 24 },
   { id: "wd-capri", hours: 24 },
+  { id: "wd-fr-retail-us-uniqlo", hours: 24 },
+  { id: "wd-fr-retail-us-theory", hours: 24 },
+  { id: "wd-fr-retail-us-gu", hours: 24 },
+  { id: "wd-fr-headquarters-us-uniqlo", hours: 24 },
+  { id: "wd-fr-corporate-us-theory", hours: 24 },
+  { id: "wd-fr-store-staff-eu-uniqlo", hours: 24 },
+  { id: "wd-fr-graduates-eu-uniqlo", hours: 24 },
+  { id: "wd-fr-headquarters-eu-uniqlo", hours: 24 },
+  { id: "wd-fr-eu-theory", hours: 24 },
+  { id: "wd-fr-graduates-tr-uniqlo", hours: 24 },
+  { id: "wd-fr-headquarter-roles-tr-uniqlo", hours: 24 },
   // LVMH Algolia — ~6k jobs in 6 paginated requests; ease cron load on first full sync
   { id: "lvmh-jobhub", hours: 24 },
   { id: "mc-meta", hours: 48 },
@@ -1759,13 +1909,20 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "tb-pge", hours: 12 },
   { id: "tb-netapp", hours: 12 },
   { id: "oc-macys", hours: 48 },
+  { id: "oc-aeo", hours: 48 },
   { id: "oc-albertsons", hours: 48 },
   { id: "oc-kroger", hours: 48 },
   { id: "oc-honeywell", hours: 48 },
+  { id: "oc-sbh-dc", hours: 48 },
+  { id: "oc-sbh", hours: 48 },
+  { id: "oc-sbh-full-service", hours: 48 },
+  { id: "oc-cosmoprof", hours: 48 },
+  { id: "oc-sally-beauty", hours: 48 },
   { id: "ce-marriott", hours: 48 },
   { id: "ar-aramark", hours: 24 },
   { id: "wd-petco", hours: 48 },
   { id: "sr-raisingcanes", hours: 48 },
+  { id: "sr-abercrombie", hours: 48 },
   // Activate — thousands of per-job HTML fetches
   { id: "act-ross", hours: 24 },
   { id: "act-darden-olivegarden", hours: 48 },
@@ -1787,6 +1944,7 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "jibe-sheetz", hours: 12 },
   { id: "jibe-heb", hours: 12 },
   { id: "jibe-pepsico", hours: 12 },
+  { id: "ic-urbn", hours: 48 },
   { id: "ph-united", hours: 12 },
   { id: "av-delta", hours: 12 },
   { id: "av-lululemon", hours: 12 },
@@ -1834,8 +1992,6 @@ const FETCH_INTERVALS: Array<{ id: string; hours: number }> = [
   { id: "gh-starfaceworld", hours: 12 },
   { id: "gh-liquidiv", hours: 12 },
   { id: "wd-synnex-hyve", hours: 24 },
-  // ~300 roles + per-job HTML — ease hourly cron load
-  { id: "rf-recruitingfromscratch", hours: 24 },
 ];
 
 /**
@@ -2025,11 +2181,17 @@ export async function seedSources(db: D1Database): Promise<void> {
     "rss-he-admin",
     "rss-he-it",
   ];
-  const removedLegacySourceIds = ["gh-grammarly", "ab-superhuman"];
+  const removedLegacySourceIds = ["gh-grammarly", "ab-superhuman", "rf-recruitingfromscratch"];
   const allRemovedIds = [...removedSectorBoardIds, ...removedLegacySourceIds];
   await db.batch([
     ...allRemovedIds.map((id) => db.prepare("DELETE FROM jobs WHERE source_id = ?").bind(id)),
     ...allRemovedIds.map((id) => db.prepare("DELETE FROM sources WHERE id = ?").bind(id)),
+    db.prepare(
+      "DELETE FROM company_aliases WHERE alias_slug = 'recruitingfromscratch' OR canonical_slug = 'recruitingfromscratch'"
+    ),
+    db.prepare(
+      "DELETE FROM companies WHERE slug = 'recruitingfromscratch' AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.company_id = companies.id)"
+    ),
   ]);
 
   // Re-enable canonical ATS rows (replacements for ids in DISABLED_SOURCE_IDS).

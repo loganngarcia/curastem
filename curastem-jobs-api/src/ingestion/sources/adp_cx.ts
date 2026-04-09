@@ -8,6 +8,10 @@
  * `base_url` is any MyJobs URL whose first path segment is the career-site domain, e.g.
  * `https://myjobs.adp.com/kendo?c=1178815&d=Kendo` or `.../kendo/cx/job-listing?...`.
  * Query params `c` and `d` are preserved for canonical job-detail links.
+ *
+ * Workforce Now hosted pages (`workforcenow.adp.com/.../recruitment.html?cid=...`) are not the same host as
+ * MyJobs; there is no stable public mapping from `cid` alone to `{domain}` here. Use the employer’s
+ * published `myjobs.adp.com/{slug}/...` career URL when adding a source.
  */
 
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";

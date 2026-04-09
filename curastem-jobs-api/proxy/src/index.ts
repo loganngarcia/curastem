@@ -72,14 +72,21 @@ export default {
       },
     });
 
-    // Stream the upstream body with our CORS headers added
+    // Stream the upstream body with our CORS headers added. Forward map cache debug
+    // (HIT/MISS) so the Framer client can log latency vs Worker Cache API without extra requests.
+    const cacheHdr = upstreamResponse.headers.get("X-Curastem-Jobs-Map-Cache");
+    const headers: Record<string, string> = {
+      "Content-Type":
+        upstreamResponse.headers.get("Content-Type") ?? "application/json",
+      ...CORS_HEADERS,
+    };
+    if (cacheHdr) {
+      headers["X-Curastem-Jobs-Map-Cache"] = cacheHdr;
+      headers["Access-Control-Expose-Headers"] = "X-Curastem-Jobs-Map-Cache";
+    }
     const response = new Response(upstreamResponse.body, {
       status: upstreamResponse.status,
-      headers: {
-        "Content-Type":
-          upstreamResponse.headers.get("Content-Type") ?? "application/json",
-        ...CORS_HEADERS,
-      },
+      headers,
     });
 
     return response;

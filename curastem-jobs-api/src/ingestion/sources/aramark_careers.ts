@@ -152,7 +152,7 @@ export const aramarkCareersFetcher: JobSource = {
     }
 
     return parallelMap(skeletons, DETAIL_CONCURRENCY, async (job) => {
-      const pageRes = await fetch(job.source_url, {
+      const pageRes = await fetch(job.apply_url, {
         headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
         redirect: "follow",
       });

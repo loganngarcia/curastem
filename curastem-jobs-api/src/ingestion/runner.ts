@@ -97,6 +97,8 @@ const WORKDAY_FETCH_TIMEOUT_MS = 150_000;
  * many sitemap chunks and fetch individual job detail pages — same problem as Workday.
  */
 const PHENOM_FETCH_TIMEOUT_MS = 150_000;
+/** SAP SF RMK: sitemap + parallel job HTML pages (Burberry ~150 × ~1 MB responses). */
+const SUCCESSFACTORS_RMK_FETCH_TIMEOUT_MS = 150_000;
 /** Oracle Activate: list + thousands of parallel jobdetail GETs (Darden, Ross). */
 const ACTIVATE_CAREERS_FETCH_TIMEOUT_MS = 600_000;
 /**
@@ -111,6 +113,8 @@ const HCA_CAREERS_FETCH_TIMEOUT_MS = 300_000;
 const ORACLE_CE_FETCH_TIMEOUT_MS = 300_000;
 /** Aramark: JSON list + ~5k parallel job-page GETs for JSON-LD descriptions. */
 const ARAMARK_CAREERS_FETCH_TIMEOUT_MS = 300_000;
+/** BrassRing: GET home + paginated PowerSearchJobs POSTs (~50 rows per page). */
+const BRASSRING_FETCH_TIMEOUT_MS = 180_000;
 
 /**
  * Process a single ingestion source.
@@ -168,6 +172,7 @@ async function processSource(
       source.source_type === "getro" ? GETRO_FETCH_TIMEOUT_MS :
       source.source_type === "workday" ? WORKDAY_FETCH_TIMEOUT_MS :
       source.source_type === "phenom" ? PHENOM_FETCH_TIMEOUT_MS :
+      source.source_type === "successfactors_rmk" ? SUCCESSFACTORS_RMK_FETCH_TIMEOUT_MS :
       source.source_type === "activate_careers" ? ACTIVATE_CAREERS_FETCH_TIMEOUT_MS :
       source.source_type === "eightfold" ? EIGHTFOLD_FETCH_TIMEOUT_MS :
       // Google: ~4000 jobs × PAGE_CONCURRENCY=4 pages at ~650ms each = ~650s if fully sequential;
@@ -178,8 +183,13 @@ async function processSource(
       // TikTok: ~3400 global jobs at 100/page = ~35 POST requests ≈ 30-60s.
       source.source_type === "tiktok" ? 120_000 :
       source.source_type === "hca_careers" ? HCA_CAREERS_FETCH_TIMEOUT_MS :
+      // Hub listing + ~1k iframe job pages (JSON-LD detail)
+      source.source_type === "icims_portal" ? 240_000 :
       source.source_type === "oracle_ce" ? ORACLE_CE_FETCH_TIMEOUT_MS :
       source.source_type === "aramark_careers" ? ARAMARK_CAREERS_FETCH_TIMEOUT_MS :
+      source.source_type === "brassring" ? BRASSRING_FETCH_TIMEOUT_MS :
+      // WFN: list pages + one detail GET per job (parallel batches)
+      source.source_type === "adp_wfn_recruitment" ? 150_000 :
       SOURCE_FETCH_TIMEOUT_MS;
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(
