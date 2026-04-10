@@ -22,10 +22,9 @@
 <img width="3096" height="1080" alt="Open-source jobs map" src="https://github.com/user-attachments/assets/0e0cbe9f-5458-4151-8eb4-5d75c0d6afb7" />
 
 
-‎ 
 [**Curastem.org**](https://curastem.org) is a 501(c)(3) nonprofit building **public-interest job data** at scale. The core of the product is a growing corpus of **500,000+ job postings** updated hourly. We are working toward becoming the **Wikipedia for jobs** (open and community-aligned job information) and are **actively seeking funding** to accelerate that mission.
 
-Alongside jobs, [**Curastem.org**](https://curastem.org) delivers **live mentorship** (including real-time video) and **AI assistance** across resumes, applications, scholarships, and career questions. AI is in the data pipeline and mentor experience.
+Alongside jobs, [**Curastem.org**](https://curastem.org) delivers **live mentorship** (including real-time video) and **AI assistance** across resumes, applications, scholarships, and career questions. 
 
 [![GitHub stars](https://img.shields.io/github/stars/loganngarcia/curastem?style=social)](https://github.com/loganngarcia/curastem) ⬅️ *Support this non-profit with a star! ⭐️*
 
@@ -33,7 +32,7 @@ Alongside jobs, [**Curastem.org**](https://curastem.org) delivers **live mentors
 
 ## Why this matters
 
-Job information is fragmented behind proprietary search UIs and short-lived postings. Students and workers need **trustworthy, durable, and reusable** job data, not only another job board. Curastem combines **open data infrastructure** with **human mentorship** so guidance and opportunity can scale together.
+Job information is fragmented behind proprietary search UIs and short-lived postings. Students and workers need **trustworthy, durable, and reusable** job data, not only another job board. Curastem combines **open data infrastructure** with **human mentorship** so guidance and opportunity can scale together. AI is in the data pipeline and mentor experience.
 
 ---
 
