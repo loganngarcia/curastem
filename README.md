@@ -18,78 +18,88 @@
   </a>
 </p>
 
-# 🩵 Curastem — Omegle for mentorship
+# 🩵 Curastem — open jobs data
 
-[**Curastem.org**](https://curastem.org) is a 501(c)(3) non-profit platform connecting students with mentors in real-time. Think of it as Omegle for mentorship: students connect with mentors over video, or chat with AI for instant help with resumes, scholarships, college apps, internships, and everything in between.
+[**Curastem.org**](https://curastem.org) is a 501(c)(3) nonprofit building **public-interest job data** at scale. The core of the product is a growing corpus of **500,000+ job postings** updated hourly. We are working toward becoming the **Wikipedia for jobs** (structured, queryable, community-aligned job information) and are **actively seeking funding** to accelerate that mission.
 
-This is an AI agent with a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
+Alongside jobs, [**Curastem.org**](https://curastem.org) delivers **live mentorship** (including real-time video) and **AI assistance** across resumes, applications, scholarships, and career questions. AI is woven through both the jobs pipeline and the mentor experience.
 
-[![GitHub stars](https://img.shields.io/github/stars/loganngarcia/curastem?style=social)](https://github.com/loganngarcia/curastem) ⬅️ *Psssst. Hey, you, join our stargazers ⭐️*
-
----
-
-## Why This Matters
-
-Millions of students struggle to find guidance. They don't know where to start with FAFSA, how to write a resume, or how to prepare for college applications. Mentorship has always been gatekept. **Curastem changes that.**
-
-By making this component open source, we're inviting the world to help us scale what works. Every improvement, every fix, every new feature makes mentorship more accessible. That's the mission.
+[![GitHub stars](https://img.shields.io/github/stars/loganngarcia/curastem?style=social)](https://github.com/loganngarcia/curastem) ⬅️ *Support this non-profit with a star! ⭐️*
 
 ---
 
-## What's Inside
+## Why this matters
 
-- **Real-time video mentorship** — Connect students with mentors instantly
-- **Gemini AI integration** — Smart, contextual help 24/7
-- **Voice-in, voice-out** — Talk to AI naturally with Gemini Live
-- **Collaborative tools** — Whiteboard (Tldraw), document editor, mini IDE
-- **Shareable sessions** — Unique links (`#won-der-ful`) for easy sharing
-- **Mobile-first** — Built for the devices students actually use
+Job information is fragmented behind proprietary search UIs and short-lived postings. Students and workers need **trustworthy, durable, and reusable** job data, not only another job board. Curastem combines **open data infrastructure** with **human mentorship** so guidance and opportunity can scale together.
 
 ---
 
-## About web.tsx
+## Highlights
 
-`web.tsx` is the heart of Curastem — a single, powerful Framer component that brings our entire mentorship platform to the web. This isn't just a chatbot. It's a full mentorship experience: video calls, AI-powered assistance, collaborative whiteboards, document editing, and a mini IDE — all packed into one open-source component that anyone can drop into their site.
-
-Everything you see on [Curastem.org](https://curastem.org) is powered by this component. By open-sourcing it, we're inviting developers everywhere to help us build the future of accessible mentorship.
+- **Jobs at the center** — Hundreds of thousands of postings in D1, with ongoing ingest and enrichment (including AI where it helps).
+- **Public API and MCP** — REST at `api.curastem.org` plus an MCP server for agents.
+- **MCP on the main site** — Job search and context are first-class on Curastem.org.
+- **Live mentorship** — Real-time video and chat between students and mentors.
+- **AI throughout** — Mentor-side assistance (e.g. Gemini Live), skills menu, and jobs enrichment.
+- **Open source** — AGPL-3.0 so the community can inspect, improve, and reuse the stack.
 
 ---
 
-## Join the Community
+## Join the community
 
-This project thrives on contributors. Whether you're fixing a bug, improving accessibility, adding a feature, or just telling someone about it — you're part of something bigger.
+Contributions welcome across **new job sources and fetchers**, ingest, API design, MCP tools, Framer components, and docs.
 
 - **Found a bug?** Open an issue.
 - **Have an idea?** Start a discussion.
-- **Want to contribute?** Check open issues, read the code, and open a PR.
-- **Using it in your project?** We'd love to hear about it.
+- **Want to contribute?** Check open issues and open a PR.
 
-Curastem is a 501(c)(3) non-profit. Everything we build is for the students who need it most.
+Curastem is a 501(c)(3) nonprofit. What we ship is meant for learners and workers who need fair access to opportunity and guidance.
 
 ---
 
-## Get Started
+## What’s in this monorepo
 
-### 1. Get a Gemini API key
+| Package | Role |
+| --- | --- |
+| `curastem-jobs-api/` | Cloudflare Worker — ingests jobs, stores them in Cloudflare D1, REST API at [api.curastem.org](https://api.curastem.org) |
+| `curastem-jobs-mcp/` | [Model Context Protocol](https://modelcontextprotocol.io) server over the jobs API (search, job details, similar roles, market views) |
+| `agent-skills-api/` | Cloudflare Worker — skill catalog for slash commands in `web.tsx` ([skills.curastem.org](https://skills.curastem.org)) |
+| `blog-writer-ui/` | Internal Next.js app for blog authoring (publishes to Framer CMS) |
+| `web.tsx` | Framer code component — AI chat, Gemini Live, mentorship UI |
+| `skills/` | `SKILL.md` files consumed by `agent-skills-api` |
 
-Visit [Google AI Studio](https://aistudio.google.com/apikey) and create an API key.
+The **jobs MCP is integrated on [curastem.org](https://curastem.org)** so the live site can reason over the same job corpus developers get via the API and MCP tools.
 
-### 2. Add to your Framer project
+---
 
-Copy `web.tsx` into your Framer project's components directory.
+## Get started — grow the jobs database
 
-### 3. Configure and ship
+The highest-impact contributions are **new public job sources** that are not already in Curastem. More boards mean better coverage for anyone using the API or MCP.
 
-Use Framer's property panel to set your API key, system prompt, accent color, and default suggestions. Drop the component onto your page and publish.
+### Add a source for an existing ATS type
+
+Many employers publish open roles on **Greenhouse, Lever, Ashby, Workday, SmartRecruiters**, and [other supported boards](curastem-jobs-api/README.md#supported-ats-types). For those, ingestion is driven by rows in the `sources` table. See **[Adding a new source](curastem-jobs-api/README.md#adding-a-new-source)** in `curastem-jobs-api/README.md` (SQL example and how the hourly cron picks up new rows).
+
+### Add support for a new ATS or custom careers site
+
+If the careers feed is not covered yet, implement a new fetcher and register it. Follow **[Adding a new ATS type](curastem-jobs-api/README.md#adding-a-new-ats-type)** and the deeper walkthrough in [`curastem-jobs-api/CONTRIBUTING.md`](curastem-jobs-api/CONTRIBUTING.md) (types, `src/ingestion/sources/`, `registry.ts`, seeds or DB inserts). Read [`curastem-jobs-api/ARCHITECTURE.md`](curastem-jobs-api/ARCHITECTURE.md) first so changes stay aligned with ingestion and deduplication.
+
+### Run the jobs API locally
+
+Install and Wrangler setup live under **[Local development](curastem-jobs-api/README.md#local-development)** in `curastem-jobs-api/README.md`. The MCP server in `curastem-jobs-mcp/` consumes the same API for tools used on [curastem.org](https://curastem.org).
+
+### Optional — embed the Framer mentorship UI
+
+To experiment with **`web.tsx`** outside curastem.org, add a [Gemini API key](https://aistudio.google.com/apikey), copy `web.tsx` into a Framer project, and configure the property panel (API key, prompt, accent, suggestions). That path does not change the shared jobs corpus; source work still lives under `curastem-jobs-api/`.
 
 ---
 
 ## License
 
-[AGPL-3.0](LICENSE) — Free to use, modify, and distribute. If you modify it and run it on a server, you must share your source. That's how we keep mentorship open for everyone.
+[AGPL-3.0](LICENSE). If you modify this software and run it as a service, share your source so job data and mentorship stay open for everyone.
 
 ---
 
-**Built with care by [Curastem](https://curastem.org). For every student who deserves a mentor.**
+**Built by [Curastem](https://curastem.org).** Open data for jobs, real humans for mentorship, AI where it helps.
 
 <a href="#top" style="position: fixed; bottom: 20px; right: 20px; background: #0B87DA; color: white; padding: 10px 15px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">↑ Back to top</a>
