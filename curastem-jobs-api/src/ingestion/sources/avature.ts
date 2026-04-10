@@ -5,12 +5,14 @@
  *
  * Items include title, link, guid, pubDate; `<description>` is often only ` - {jobId}`.
  * Tenants expose a **recent-postings** feed on `…/careers/SearchJobs/feed/` (row count varies;
- * no historical backfill). Search HTML and locale sitemaps are often AWS WAF–blocked for
- * server-side HTTP clients, so we do not crawl posting HTML — only RSS fields and numeric
- * `external_id` from the JobDetail path.
+ * no historical backfill). After RSS parse we **best-effort fetch each JobDetail page** on the
+ * same origin (cookie-warmed from the careers/opportunities listing path) and extract the
+ * “Description & Requirements” HTML from `article__content__view__field__value`. If a detail
+ * fetch fails or HTML layout differs, we keep RSS-derived `description_raw` (often title-only).
  *
  * `base_url` must be the feed URL (ends with `feed/` or `feed`). Some tenants use a
  * locale prefix, e.g. `https://careers.lululemon.com/en_US/careers/SearchJobs/feed/`.
+ * Others use `…/opportunities/SearchJobs/feed/` instead of `…/careers/…` (e.g. Baker McKenzie).
  *
  * Akamai and similar CDNs often block non-browser or overly custom `User-Agent` strings
  * (503 / connection errors). Use a normal Chrome desktop UA; identify the pipeline in code
@@ -29,6 +31,11 @@ import {
 /** Chrome-like UA — Akamai-fronted Avature hosts reject many custom bot strings. */
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+/** Parallel JobDetail fetches after RSS (typical feed size ~20 rows). */
+const DETAIL_CONCURRENCY = 8;
+/** Ignore tiny field__value blocks (labels / one-line metadata). */
+const MIN_DESC_HTML_LEN = 120;
 
 /** Headers that mimic a same-origin RSS fetch in Chrome (helps L’Oréal and other strict Akamai rules). */
 function rssFetchHeaders(feedUrl: string): Record<string, string> {
@@ -215,6 +222,139 @@ async function fetchRssTextViaBrowser(feedUrl: string, env: Env): Promise<string
   }
 }
 
+/** Inner HTML of a `<div>` whose opening tag ends at `contentStart` (first char inside the div). */
+function innerHtmlUntilOuterDivCloses(html: string, contentStart: number): string | null {
+  let depth = 1;
+  let i = contentStart;
+  while (i < html.length && depth > 0) {
+    if (html.startsWith("</div>", i)) {
+      depth -= 1;
+      if (depth === 0) return html.slice(contentStart, i).trim();
+      i += 6;
+      continue;
+    }
+    if (i + 4 <= html.length && html.slice(i, i + 4).toLowerCase() === "<div") {
+      const after = html[i + 4];
+      if (after === " " || after === ">" || after === "/" || after === "\n" || after === "\r" || after === "\t") {
+        depth += 1;
+        const gt = html.indexOf(">", i);
+        if (gt < 0) return null;
+        i = gt + 1;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return null;
+}
+
+const FIELD_VALUE_OPEN_RE =
+  /<div[^>]*\bclass="[^"]*article__content__view__field__value[^"]*"[^>]*>/gi;
+
+function decodeBasicHtmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+/**
+ * Avature JobDetail templates expose the JD in a `field__value` under “Description & Requirements”,
+ * or as the largest such block on the page. Falls back to `og:description` / meta Description.
+ */
+function extractAvatureDescriptionHtml(html: string): string | null {
+  FIELD_VALUE_OPEN_RE.lastIndex = 0;
+  const markerIdx = html.search(/Description\s*&(?:amp;|#38;)?\s*Requirements/i);
+  if (markerIdx >= 0) {
+    const tail = html.slice(markerIdx);
+    FIELD_VALUE_OPEN_RE.lastIndex = 0;
+    const m = FIELD_VALUE_OPEN_RE.exec(tail);
+    if (m) {
+      const afterOpen = markerIdx + m.index + m[0].length;
+      const inner = innerHtmlUntilOuterDivCloses(html, afterOpen);
+      if (inner && inner.length >= MIN_DESC_HTML_LEN) return inner;
+    }
+  }
+
+  let best: string | null = null;
+  FIELD_VALUE_OPEN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FIELD_VALUE_OPEN_RE.exec(html)) !== null) {
+    const afterOpen = m.index + m[0].length;
+    const inner = innerHtmlUntilOuterDivCloses(html, afterOpen);
+    if (inner && inner.length >= MIN_DESC_HTML_LEN && (!best || inner.length > best.length)) best = inner;
+  }
+  if (best) return best;
+
+  const og =
+    html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']*)["']/i) ??
+    html.match(/<meta[^>]*name=["']Description["'][^>]*content=["']([^"']*)["']/i);
+  const plain = og?.[1]?.trim();
+  if (plain && plain.length >= 80) return `<p>${decodeBasicHtmlEntities(plain)}</p>`;
+
+  return null;
+}
+
+async function parallelMapJobs<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+async function enrichJobsWithAvatureJobDetailHtml(jobs: NormalizedJob[], feedUrl: string): Promise<NormalizedJob[]> {
+  const warmUrl = careersWarmupUrlFromFeed(feedUrl);
+  let jar = new Map<string, string>();
+  if (warmUrl) jar = await fetchCareersHtmlWithCookies(warmUrl);
+  if (jar.size === 0) {
+    try {
+      jar = await fetchCareersHtmlWithCookies(new URL(feedUrl).origin + "/");
+    } catch {
+      /* keep empty */
+    }
+  }
+  const cookie = cookieHeaderFromJar(jar);
+  const referer = warmUrl ?? `${new URL(feedUrl).origin}/`;
+
+  const detailHeaders: Record<string, string> = {
+    "User-Agent": USER_AGENT,
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    Referer: referer,
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Upgrade-Insecure-Requests": "1",
+  };
+  if (cookie) detailHeaders.Cookie = cookie;
+
+  return parallelMapJobs(jobs, DETAIL_CONCURRENCY, async (job) => {
+    const url = job.apply_url;
+    if (!url) return job;
+    try {
+      const res = await fetch(url, { redirect: "follow", headers: detailHeaders });
+      if (!res.ok) return job;
+      const html = await res.text();
+      const descHtml = extractAvatureDescriptionHtml(html);
+      if (descHtml && descHtml.length >= MIN_DESC_HTML_LEN) {
+        return { ...job, description_raw: descHtml };
+      }
+    } catch {
+      /* RSS snapshot only */
+    }
+    return job;
+  });
+}
+
 function getTagContent(xml: string, tag: string): string | null {
   const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
   const match = xml.match(regex);
@@ -236,6 +376,13 @@ function externalIdFromAvatureLink(link: string): string | null {
   return null;
 }
 
+/** RSS `<description>` is often ` - {internalRef}` only — not a place string; do not geocode it. */
+function isAvatureInternalRefOnlyDescription(raw: string | null | undefined): boolean {
+  const s = raw?.trim() ?? "";
+  if (!s) return false;
+  return /^-\s*\d+\s*$/.test(s);
+}
+
 function parseItem(itemXml: string, companyName: string): NormalizedJob | null {
   const title = getTagContent(itemXml, "title");
   if (!title) return null;
@@ -249,9 +396,10 @@ function parseItem(itemXml: string, companyName: string): NormalizedJob | null {
   const description = getTagContent(itemXml, "description");
   const pubDate = getTagContent(itemXml, "pubDate");
 
-  const location =
-    normalizeLocation(description ?? "") ??
-    normalizeLocation(title);
+  const refOnlyDesc = isAvatureInternalRefOnlyDescription(description);
+  const location = refOnlyDesc
+    ? null
+    : normalizeLocation(description ?? "") ?? normalizeLocation(title);
 
   // RSS `<description>` is usually a job id (` - 12345`) or a location line, not pay — `parseSalary`
   // would treat any digits as dollars. Only parse when currency / explicit money markers appear.
@@ -330,6 +478,6 @@ export const avatureFetcher: JobSource = {
       throw new Error(`avature: 0 items parsed from ${source.base_url}`);
     }
 
-    return jobs;
+    return enrichJobsWithAvatureJobDetailHtml(jobs, feedUrl);
   },
 };

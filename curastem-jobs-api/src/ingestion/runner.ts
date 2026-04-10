@@ -190,6 +190,8 @@ async function processSource(
       source.source_type === "brassring" ? BRASSRING_FETCH_TIMEOUT_MS :
       // WFN: list pages + one detail GET per job (parallel batches)
       source.source_type === "adp_wfn_recruitment" ? 150_000 :
+      // Avature: RSS + one JobDetail HTML fetch per item (parallel)
+      source.source_type === "avature" ? 120_000 :
       SOURCE_FETCH_TIMEOUT_MS;
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(

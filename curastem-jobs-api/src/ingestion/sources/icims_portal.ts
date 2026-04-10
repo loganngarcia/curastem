@@ -138,6 +138,14 @@ function descriptionFromLd(ld: JobPostingLd): string | null {
   return t.length > 0 ? t : null;
 }
 
+/** Some iCIMS tenants emit placeholder hiring org names in JSON-LD. */
+function hiringOrgNameFromLd(ld: JobPostingLd, fallback: string): string {
+  const raw = ld.hiringOrganization?.name?.trim();
+  if (!raw) return fallback;
+  if (/^unavailable$/i.test(raw)) return fallback;
+  return raw;
+}
+
 async function parallelMap<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
@@ -236,7 +244,7 @@ export const icimsPortalFetcher: JobSource = {
         salary_currency,
         salary_period,
         posted_at: parseEpochSeconds(ld.datePosted ?? null),
-        company_name: ld.hiringOrganization?.name?.trim() || fallbackCompany,
+        company_name: hiringOrgNameFromLd(ld, fallbackCompany),
         company_logo_url: null,
         company_website_url: null,
       };
