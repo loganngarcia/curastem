@@ -55,7 +55,7 @@ Contributions welcome across **new job sources and fetchers**, ingest, API desig
 - **Have an idea?** Start a discussion.
 - **Want to contribute?** Check open issues and open a PR.
 
-Curastem is a 501(c)(3) nonprofit. What we ship is meant for learners and workers who need fair access to opportunity and guidance.
+Curastem is a 501(c)(3) nonprofit. What we ship is meant for students and job-seekers who need fair access to opportunity and guidance.
 
 ---
 
@@ -68,31 +68,31 @@ Curastem is a 501(c)(3) nonprofit. What we ship is meant for learners and worker
 | `agent-skills-api/` | Cloudflare Worker — skill catalog for slash commands in `web.tsx` ([skills.curastem.org](https://skills.curastem.org)) |
 | `blog-writer-ui/` | Internal Next.js app for blog authoring (publishes to Framer CMS) |
 | `web.tsx` | Framer code component — AI chat, Gemini Live, mentorship UI |
-| `skills/` | `SKILL.md` files consumed by `agent-skills-api` |
+| `skills/` | `SKILL.md` files used by `agent-skills-api` |
 
-The **jobs MCP is integrated on [curastem.org](https://curastem.org)** so the live site can reason over the same job corpus developers get via the API and MCP tools.
+The **jobs MCP is integrated on [curastem.org](https://curastem.org)** so the live site fetches the same job corpus developers get via the API and MCP tools. 
 
 ---
 
 ## Get started — grow the jobs database
 
-The highest-impact contributions are **new public job sources** that are not already in Curastem. More boards mean better coverage for anyone using the API or MCP.
+The highest-impact contributions are **new public job sources** that are not already in Curastem. More boards mean better coverage on [Curastem.org](https://curastem.org) and for anyone using the API and MCP.
 
 ### Add a source for an existing ATS type
 
-Many employers publish open roles on **Greenhouse, Lever, Ashby, Workday, SmartRecruiters**, and [other supported boards](curastem-jobs-api/README.md#supported-ats-types). For those, ingestion is driven by rows in the `sources` table. See **[Adding a new source](curastem-jobs-api/README.md#adding-a-new-source)** in `curastem-jobs-api/README.md` (SQL example and how the hourly cron picks up new rows).
+Many companies publish open roles on a **[supported ATS](curastem-jobs-api/README.md#supported-ats-types)** (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, and 10+ more). For easy edits, you can often add jobs from a company by adding a company name and URL to [`migrate.ts`](curastem-jobs-api/src/db/migrate.ts). Further details and field meanings are in **[Adding a new source](curastem-jobs-api/README.md#adding-a-new-source)**.
 
 ### Add support for a new ATS or custom careers site
 
-If the careers feed is not covered yet, implement a new fetcher and register it. Follow **[Adding a new ATS type](curastem-jobs-api/README.md#adding-a-new-ats-type)** and the deeper walkthrough in [`curastem-jobs-api/CONTRIBUTING.md`](curastem-jobs-api/CONTRIBUTING.md) (types, `src/ingestion/sources/`, `registry.ts`, seeds or DB inserts). Read [`curastem-jobs-api/ARCHITECTURE.md`](curastem-jobs-api/ARCHITECTURE.md) first so changes stay aligned with ingestion and deduplication.
+If the careers feed is not covered yet, implement a new fetcher and register it. Follow **[Adding a new ATS type](curastem-jobs-api/README.md#adding-a-new-ats-type)** and the deeper walkthrough in [`CONTRIBUTING.md`](curastem-jobs-api/CONTRIBUTING.md). Read [`ARCHITECTURE.md`](curastem-jobs-api/ARCHITECTURE.md) first so changes stay aligned with ingestion and deduplication.
 
 ### Run the jobs API locally
 
-Install and Wrangler setup live under **[Local development](curastem-jobs-api/README.md#local-development)** in `curastem-jobs-api/README.md`. The MCP server in `curastem-jobs-mcp/` consumes the same API for tools used on [curastem.org](https://curastem.org).
+Install and Wrangler setup live under **[Local development](curastem-jobs-api/README.md#local-development)**. The MCP server in `curastem-jobs-mcp/` consumes the same API for tools used on [curastem.org](https://curastem.org).
 
-### Optional — embed the Framer mentorship UI
+### Optional — embed the Framer UI
 
-To experiment with **`web.tsx`** outside curastem.org, add a [Gemini API key](https://aistudio.google.com/apikey), copy `web.tsx` into a Framer project, and configure the property panel (API key, prompt, accent, suggestions). That path does not change the shared jobs corpus; source work still lives under `curastem-jobs-api/`.
+To experiment with backend and UI changes to curastem.org, import `web.tsx` into a Framer project. 
 
 ---
 
