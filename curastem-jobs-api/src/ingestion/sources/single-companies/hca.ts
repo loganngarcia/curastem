@@ -8,8 +8,8 @@
  * `base_url` may be any URL on the host (e.g. a job posting or `/search/...`); the origin is used for sitemap + fetches.
  */
 
-import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
-import { normalizeLocation, parseEpochSeconds } from "../../utils/normalize.ts";
+import type { JobSource, NormalizedJob, SourceRow } from "../../../types.ts";
+import { normalizeLocation, parseEpochSeconds } from "../../../utils/normalize.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 const SEARCH_FETCH_CONCURRENCY = 10;
@@ -27,7 +27,7 @@ async function fetchText(url: string): Promise<string> {
     headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xml,*/*" },
     redirect: "follow",
   });
-  if (!res.ok) throw new Error(`hca_careers: GET ${res.status} (${url})`);
+  if (!res.ok) throw new Error(`hca: GET ${res.status} (${url})`);
   return res.text();
 }
 
@@ -125,8 +125,8 @@ async function parallelMap<T, R>(
   return results;
 }
 
-export const hcaCareersFetcher: JobSource = {
-  sourceType: "hca_careers",
+export const hcaFetcher: JobSource = {
+  sourceType: "hca",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
     const origin = originFromBase(source.base_url);
@@ -136,7 +136,7 @@ export const hcaCareersFetcher: JobSource = {
     const sitemapXml = await fetchText(sitemapUrl);
     const searchUrls = extractSearchUrlsFromSitemap(sitemapXml, origin);
     if (searchUrls.length === 0) {
-      throw new Error(`hca_careers: no /search/jobs/in/ URLs in sitemap (${sitemapUrl})`);
+      throw new Error(`hca: no /search/jobs/in/ URLs in sitemap (${sitemapUrl})`);
     }
 
     const pathSet = new Set<string>();
@@ -151,7 +151,7 @@ export const hcaCareersFetcher: JobSource = {
 
     const paths = [...pathSet].slice(0, MAX_DETAIL_JOBS);
     if (paths.length === 0) {
-      throw new Error(`hca_careers: 0 job paths after scanning ${searchUrls.length} search URLs`);
+      throw new Error(`hca: 0 job paths after scanning ${searchUrls.length} search URLs`);
     }
 
     const rows = await parallelMap(paths, DETAIL_CONCURRENCY, async (path) => {
@@ -208,7 +208,7 @@ export const hcaCareersFetcher: JobSource = {
     }
 
     if (jobs.length === 0 && paths.length > 0) {
-      throw new Error(`hca_careers: ${paths.length} job URLs but 0 parsed (${source.company_handle})`);
+      throw new Error(`hca: ${paths.length} job URLs but 0 parsed (${source.company_handle})`);
     }
     return jobs;
   },

@@ -8,13 +8,13 @@
  * `base_url` is informational (canonical careers URL); the fetcher uses fixed index + app id.
  */
 
-import type { EmploymentType, JobSource, NormalizedJob, SourceRow, WorkplaceType } from "../../types.ts";
+import type { EmploymentType, JobSource, NormalizedJob, SourceRow, WorkplaceType } from "../../../types.ts";
 import {
   htmlToText,
   normalizeLocation,
   normalizeWorkplaceType,
   parseEpochSeconds,
-} from "../../utils/normalize.ts";
+} from "../../../utils/normalize.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 /** Public search app id from LVMH’s embedded Algolia client. */
@@ -174,12 +174,12 @@ async function fetchAlgoliaPage(indexName: string, page: number): Promise<Algoli
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    throw new Error(`lvmh_algolia: Algolia HTTP ${res.status}: ${errText.slice(0, 200)}`);
+    throw new Error(`lvmh: Algolia HTTP ${res.status}: ${errText.slice(0, 200)}`);
   }
   const json = (await res.json()) as { results: AlgoliaMultiResult[] };
   const first = json.results?.[0];
   if (!first) {
-    throw new Error("lvmh_algolia: empty Algolia multi-query response");
+    throw new Error("lvmh: empty Algolia multi-query response");
   }
   return first;
 }
@@ -209,8 +209,8 @@ function hitToJob(hit: LvmhHit): NormalizedJob | null {
   };
 }
 
-export const lvmhAlgoliaFetcher: JobSource = {
-  sourceType: "lvmh_algolia",
+export const lvmhFetcher: JobSource = {
+  sourceType: "lvmh",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
     void source;

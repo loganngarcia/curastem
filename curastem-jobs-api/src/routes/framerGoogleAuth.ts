@@ -39,6 +39,9 @@ export async function handleGeminiToken(env: Env): Promise<Response> {
     const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
     const expire = new Date(Date.now() + 30 * 60 * 1000).toISOString();
     const newSessionExpire = new Date(Date.now() + 60 * 1000).toISOString();
+    // authTokens.create is only exposed on v1alpha. The client must therefore
+    // open its Live WebSocket against the v1alpha BidiGenerateContent path —
+    // mixing v1alpha tokens with a v1beta WebSocket fails auth silently.
     const token = await ai.authTokens.create({
       config: {
         uses: 1,

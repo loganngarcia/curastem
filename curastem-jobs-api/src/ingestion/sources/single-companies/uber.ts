@@ -19,13 +19,13 @@
  *     the path segment before `careers` (e.g. `us/en` → `en`).
  */
 
-import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
+import type { JobSource, NormalizedJob, SourceRow } from "../../../types.ts";
 import {
   normalizeEmploymentType,
   normalizeLocation,
   normalizeWorkplaceType,
   parseEpochSeconds,
-} from "../../utils/normalize.ts";
+} from "../../../utils/normalize.ts";
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 50;
@@ -106,8 +106,8 @@ function jobApplyUrl(jobId: number, localeCode: string): string {
   return `https://www.uber.com/us/${lang}/careers/list/${jobId}`;
 }
 
-export const uberSitesFetcher: JobSource = {
-  sourceType: "uber_sites",
+export const uberFetcher: JobSource = {
+  sourceType: "uber",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
     const apiUrl = resolveUberSitesApiUrl(source.base_url);

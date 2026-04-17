@@ -195,7 +195,7 @@ async function handleRequest(
         : undefined;
 
     const limitRaw = parseInt(url.searchParams.get("limit") ?? "", 10);
-    const limit = !isNaN(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 100;
+    const limit = !isNaN(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 50;
 
     const employment_type = url.searchParams.get("employment_type") ?? undefined;
     const seniority_level = url.searchParams.get("seniority_level") ?? undefined;

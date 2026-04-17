@@ -80,7 +80,7 @@ The highest-impact contributions are **new public job sources** that are not alr
 
 ### Add a source for an existing ATS type
 
-Many companies publish open roles on a **[supported ATS](curastem-jobs-api/README.md#supported-ats-types)** (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, and 10+ more). For easy edits, you can often add jobs from a company by adding a company name and URL to [`migrate.ts`](curastem-jobs-api/src/db/migrate.ts). Further details and field meanings are in **[Adding a new source](curastem-jobs-api/README.md#adding-a-new-source)**.
+Many companies publish open roles on a **[supported ATS](curastem-jobs-api/README.md#supported-ats-types)** (Greenhouse, Lever, Ashby, JazzHR, Workday, SmartRecruiters, and more). For easy edits, you can often add jobs from a company by adding a company name and URL to [`migrate.ts`](curastem-jobs-api/src/db/migrate.ts). Further details and field meanings are in **[Adding a new source](curastem-jobs-api/README.md#adding-a-new-source)**.
 
 ### Add support for a new ATS or custom careers site
 

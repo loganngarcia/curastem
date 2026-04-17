@@ -23,13 +23,13 @@
  * JSON, or `https://jobright.ai/jobs/info/{jobId}` (same page users open to apply).
  */
 
-import type { JobSource, NormalizedJob, SourceRow, WorkplaceType } from "../../types.ts";
+import type { JobSource, NormalizedJob, SourceRow, WorkplaceType } from "../../../types.ts";
 import {
   normalizeEmploymentType,
   normalizeLocation,
   normalizeWorkplaceType,
   parseEpochSeconds,
-} from "../../utils/normalize.ts";
+} from "../../../utils/normalize.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 

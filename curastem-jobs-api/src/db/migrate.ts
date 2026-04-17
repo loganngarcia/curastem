@@ -39,12 +39,12 @@ export interface SeedSource {
  * coverage without touching any other code.
  *
  * Each source must return at least one live posting on the **actual** public
- * endpoint for its `source_type` (Greenhouse, Ashby, Lever, Workday CXS POST,
- * SmartRecruiters, Workable widget, Recruitee, Pinpoint, Personio XML, etc.).
+ * endpoint for its `source_type` (Greenhouse, Ashby, Lever, JazzHR applytojob.com,
+ * Workday CXS POST, SmartRecruiters, Workable widget, Recruitee, Pinpoint, Personio XML, etc.).
  * Do not assume a vendor from the careers URL alone.
  */
 /** Exported for scripts (e.g. verify-seed-sources-job-count) — keep in sync with seedSources(). */
-export const SEED_SOURCES: SeedSource[] = [
+export const SEED_SOURCES = [
   // ─── Greenhouse ───────────────────────────────────────────────────────
   // Public board API: https://boards-api.greenhouse.io/v1/boards/{handle}/jobs
   { id: "gh-stripe",    name: "Stripe (Greenhouse)",    source_type: "greenhouse", company_handle: "stripe",    base_url: "https://boards-api.greenhouse.io/v1/boards/stripe/jobs" },
@@ -128,8 +128,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-intercom",   name: "Intercom (Greenhouse)",    source_type: "greenhouse", company_handle: "intercom",   base_url: "https://boards-api.greenhouse.io/v1/boards/intercom/jobs" },
   { id: "gh-twilio",     name: "Twilio (Greenhouse)",      source_type: "greenhouse", company_handle: "twilio",     base_url: "https://boards-api.greenhouse.io/v1/boards/twilio/jobs" },
   { id: "gh-uberfreight", name: "Uber Freight (Greenhouse)", source_type: "greenhouse", company_handle: "uberfreight", base_url: "https://boards-api.greenhouse.io/v1/boards/uberfreight/jobs" },
-  // Corporate Uber — Fusion `loadSearchJobsResults` RPC (see uber_sites.ts); not Workday / not Freight GH.
-  { id: "uber-main", name: "Uber", source_type: "uber_sites", company_handle: "uber", base_url: "https://www.uber.com/api/loadSearchJobsResults?localeCode=en" },
+  // Corporate Uber — Fusion `loadSearchJobsResults` RPC (see single-companies/uber.ts); not Workday / not Freight GH.
+  { id: "uber-main", name: "Uber", source_type: "uber", company_handle: "uber", base_url: "https://www.uber.com/api/loadSearchJobsResults?localeCode=en" },
   // iCIMS Jibe — public JSON at /api/jobs (see jibe.ts)
   { id: "jibe-sprouts", name: "Sprouts Farmers Market (iCIMS Jibe)", source_type: "jibe", company_handle: "sprouts-farmers-market", base_url: "https://jobs.sprouts.com" },
   { id: "jibe-ulta", name: "Ulta Beauty (iCIMS Jibe)", source_type: "jibe", company_handle: "ulta-beauty", base_url: "https://careers.ulta.com" },
@@ -846,6 +846,178 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-xapo61", name: "Xapo Bank (Greenhouse)", source_type: "greenhouse", company_handle: "xapo61", base_url: "https://boards-api.greenhouse.io/v1/boards/xapo61/jobs" },
   { id: "gh-yesenergy", name: "Yes Energy (Greenhouse)", source_type: "greenhouse", company_handle: "yesenergy", base_url: "https://boards-api.greenhouse.io/v1/boards/yesenergy/jobs" },
 
+  // MyGreenhouse Los Angeles locality + past 30 days: https://my.greenhouse.io/jobs?location=Los%20Angeles%2C%20California%2C%20United%20States&lat=34.05513&lon=-118.25703&location_type=locality&country_short_name=US&state_short_name=CA&date_posted=past_thirty_days — Inertia JSON `page=1` through `page=135` in strict order (`moreResultsAvailable` false on page 135). ~1617 result cards in search; 298 unique `job-boards…/{token}/` handles from `publicUrl`. Page 39 returned HTTP 429 on first pass; resumed with ~2.2s between page fetches. MYGREENHOUSE_QUERY= (empty) MYGREENHOUSE_EXTRA_QUERY=location=Los%20Angeles%2C%20California%2C%20United%20States&lat=34.05513&lon=-118.25703&location_type=locality&country_short_name=US&state_short_name=CA&date_posted=past_thirty_days MYGREENHOUSE_MAX_PAGES=140
+
+
+  { id: "gh-12twenty", name: "12twenty (Greenhouse)", source_type: "greenhouse", company_handle: "12twenty", base_url: "https://boards-api.greenhouse.io/v1/boards/12twenty/jobs" },
+  { id: "gh-2kvegas", name: "2K Vegas (Greenhouse)", source_type: "greenhouse", company_handle: "2kvegas", base_url: "https://boards-api.greenhouse.io/v1/boards/2kvegas/jobs" },
+  { id: "gh-3dayblindssales", name: "3 Day Blinds (Sales) (Greenhouse)", source_type: "greenhouse", company_handle: "3dayblindssales", base_url: "https://boards-api.greenhouse.io/v1/boards/3dayblindssales/jobs" },
+  { id: "gh-absurdventures", name: "Absurd Ventures (Greenhouse)", source_type: "greenhouse", company_handle: "absurdventures", base_url: "https://boards-api.greenhouse.io/v1/boards/absurdventures/jobs" },
+  { id: "gh-adeedo", name: "Adeedo! (Greenhouse)", source_type: "greenhouse", company_handle: "adeedo", base_url: "https://boards-api.greenhouse.io/v1/boards/adeedo/jobs" },
+  { id: "gh-aestudio", name: "AE Studio (Greenhouse)", source_type: "greenhouse", company_handle: "aestudio", base_url: "https://boards-api.greenhouse.io/v1/boards/aestudio/jobs" },
+  { id: "gh-aftership", name: "AfterShip (Greenhouse)", source_type: "greenhouse", company_handle: "aftership", base_url: "https://boards-api.greenhouse.io/v1/boards/aftership/jobs" },
+  { id: "gh-ampm", name: "AM/PM Door Inc (Greenhouse)", source_type: "greenhouse", company_handle: "ampm", base_url: "https://boards-api.greenhouse.io/v1/boards/ampm/jobs" },
+  { id: "gh-apexcompaniescsw", name: "Apex Companies - CSW (Greenhouse)", source_type: "greenhouse", company_handle: "apexcompaniescsw", base_url: "https://boards-api.greenhouse.io/v1/boards/apexcompaniescsw/jobs" },
+  { id: "gh-apparatus", name: "APPARATUS (Greenhouse)", source_type: "greenhouse", company_handle: "apparatus", base_url: "https://boards-api.greenhouse.io/v1/boards/apparatus/jobs" },
+  { id: "gh-arcboatcompany", name: "Arc Boat Company (Greenhouse)", source_type: "greenhouse", company_handle: "arcboatcompany", base_url: "https://boards-api.greenhouse.io/v1/boards/arcboatcompany/jobs" },
+  { id: "gh-audipacific", name: "Audi Pacific (Greenhouse)", source_type: "greenhouse", company_handle: "audipacific", base_url: "https://boards-api.greenhouse.io/v1/boards/audipacific/jobs" },
+  { id: "gh-aviationinstituteofmaintenance", name: "Aviation Institute of Maintenance (Greenhouse)", source_type: "greenhouse", company_handle: "aviationinstituteofmaintenance", base_url: "https://boards-api.greenhouse.io/v1/boards/aviationinstituteofmaintenance/jobs" },
+  { id: "gh-aviatornation", name: "Aviator Nation (Greenhouse)", source_type: "greenhouse", company_handle: "aviatornation", base_url: "https://boards-api.greenhouse.io/v1/boards/aviatornation/jobs" },
+  { id: "gh-banyansoftware", name: "Banyan Software (Greenhouse)", source_type: "greenhouse", company_handle: "banyansoftware", base_url: "https://boards-api.greenhouse.io/v1/boards/banyansoftware/jobs" },
+  { id: "gh-berelaxspa", name: "Be Relax Spa (Greenhouse)", source_type: "greenhouse", company_handle: "berelaxspa", base_url: "https://boards-api.greenhouse.io/v1/boards/berelaxspa/jobs" },
+  { id: "gh-birdygrey", name: "Birdy Grey (Greenhouse)", source_type: "greenhouse", company_handle: "birdygrey", base_url: "https://boards-api.greenhouse.io/v1/boards/birdygrey/jobs" },
+  { id: "gh-blankstreet", name: "Blank Street (Greenhouse)", source_type: "greenhouse", company_handle: "blankstreet", base_url: "https://boards-api.greenhouse.io/v1/boards/blankstreet/jobs" },
+  { id: "gh-braeburn", name: "Braeburn  (Greenhouse)", source_type: "greenhouse", company_handle: "braeburn", base_url: "https://boards-api.greenhouse.io/v1/boards/braeburn/jobs" },
+  { id: "gh-brigadehealth", name: "Brigade Health (Greenhouse)", source_type: "greenhouse", company_handle: "brigadehealth", base_url: "https://boards-api.greenhouse.io/v1/boards/brigadehealth/jobs" },
+  { id: "gh-brileysecurities", name: "B. Riley Securities  (Greenhouse)", source_type: "greenhouse", company_handle: "brileysecurities", base_url: "https://boards-api.greenhouse.io/v1/boards/brileysecurities/jobs" },
+  { id: "gh-byd", name: "BYD North America (Greenhouse)", source_type: "greenhouse", company_handle: "byd", base_url: "https://boards-api.greenhouse.io/v1/boards/byd/jobs" },
+  { id: "gh-camp", name: "CAMP (Greenhouse)", source_type: "greenhouse", company_handle: "camp", base_url: "https://boards-api.greenhouse.io/v1/boards/camp/jobs" },
+  { id: "gh-cc", name: "Climate Corps (Greenhouse)", source_type: "greenhouse", company_handle: "cc", base_url: "https://boards-api.greenhouse.io/v1/boards/cc/jobs" },
+  { id: "gh-championsgroupholdings", name: "Champions Group Holdings (Greenhouse)", source_type: "greenhouse", company_handle: "championsgroupholdings", base_url: "https://boards-api.greenhouse.io/v1/boards/championsgroupholdings/jobs" },
+  { id: "gh-clearfield", name: "CLEAR - Field  (Greenhouse)", source_type: "greenhouse", company_handle: "clearfield", base_url: "https://boards-api.greenhouse.io/v1/boards/clearfield/jobs" },
+  { id: "gh-cofertility", name: "Cofertility (Greenhouse)", source_type: "greenhouse", company_handle: "cofertility", base_url: "https://boards-api.greenhouse.io/v1/boards/cofertility/jobs" },
+  { id: "gh-cogresearchfoundation", name: "COG Research Foundation, LLC  (Greenhouse)", source_type: "greenhouse", company_handle: "cogresearchfoundation", base_url: "https://boards-api.greenhouse.io/v1/boards/cogresearchfoundation/jobs" },
+  { id: "gh-collectively", name: "Collectively (Greenhouse)", source_type: "greenhouse", company_handle: "collectively", base_url: "https://boards-api.greenhouse.io/v1/boards/collectively/jobs" },
+  { id: "gh-commercialrealestatecompany", name: "Commercial Real Estate Company (Greenhouse)", source_type: "greenhouse", company_handle: "commercialrealestatecompany", base_url: "https://boards-api.greenhouse.io/v1/boards/commercialrealestatecompany/jobs" },
+  { id: "gh-concentric", name: "Concentric (Greenhouse)", source_type: "greenhouse", company_handle: "concentric", base_url: "https://boards-api.greenhouse.io/v1/boards/concentric/jobs" },
+  { id: "gh-coverai", name: "Cover (Greenhouse)", source_type: "greenhouse", company_handle: "coverai", base_url: "https://boards-api.greenhouse.io/v1/boards/coverai/jobs" },
+  { id: "gh-crexi", name: "Crexi (Greenhouse)", source_type: "greenhouse", company_handle: "crexi", base_url: "https://boards-api.greenhouse.io/v1/boards/crexi/jobs" },
+  { id: "gh-criticalinnovations", name: "Critical Innovations  (Greenhouse)", source_type: "greenhouse", company_handle: "criticalinnovations", base_url: "https://boards-api.greenhouse.io/v1/boards/criticalinnovations/jobs" },
+  { id: "gh-cuckooamerica", name: "Cuckoo Electronics America Inc (Greenhouse)", source_type: "greenhouse", company_handle: "cuckooamerica", base_url: "https://boards-api.greenhouse.io/v1/boards/cuckooamerica/jobs" },
+  { id: "gh-currentsmanagement", name: "Currents Management (Greenhouse)", source_type: "greenhouse", company_handle: "currentsmanagement", base_url: "https://boards-api.greenhouse.io/v1/boards/currentsmanagement/jobs" },
+  { id: "gh-cycles", name: "Cycles (Greenhouse)", source_type: "greenhouse", company_handle: "cycles", base_url: "https://boards-api.greenhouse.io/v1/boards/cycles/jobs" },
+  { id: "gh-czinger", name: "Czinger (Greenhouse)", source_type: "greenhouse", company_handle: "czinger", base_url: "https://boards-api.greenhouse.io/v1/boards/czinger/jobs" },
+  { id: "gh-discoverycube", name: "Discovery Cube (Greenhouse)", source_type: "greenhouse", company_handle: "discoverycube", base_url: "https://boards-api.greenhouse.io/v1/boards/discoverycube/jobs" },
+  { id: "gh-downtownmusic", name: "Downtown Music (Greenhouse)", source_type: "greenhouse", company_handle: "downtownmusic", base_url: "https://boards-api.greenhouse.io/v1/boards/downtownmusic/jobs" },
+  { id: "gh-ensafeinc", name: "EnSafe Inc. (Greenhouse)", source_type: "greenhouse", company_handle: "ensafeinc", base_url: "https://boards-api.greenhouse.io/v1/boards/ensafeinc/jobs" },
+  { id: "gh-ensco", name: "ENSCO, Inc. (Greenhouse)", source_type: "greenhouse", company_handle: "ensco", base_url: "https://boards-api.greenhouse.io/v1/boards/ensco/jobs" },
+  { id: "gh-eosfitness", name: "EōS Fitness (Greenhouse)", source_type: "greenhouse", company_handle: "eosfitness", base_url: "https://boards-api.greenhouse.io/v1/boards/eosfitness/jobs" },
+  { id: "gh-factored", name: "Factored (Greenhouse)", source_type: "greenhouse", company_handle: "factored", base_url: "https://boards-api.greenhouse.io/v1/boards/factored/jobs" },
+  { id: "gh-fambrands", name: "FAM Brands (Greenhouse)", source_type: "greenhouse", company_handle: "fambrands", base_url: "https://boards-api.greenhouse.io/v1/boards/fambrands/jobs" },
+  { id: "gh-flip", name: "Flip (Greenhouse)", source_type: "greenhouse", company_handle: "flip", base_url: "https://boards-api.greenhouse.io/v1/boards/flip/jobs" },
+  { id: "gh-focusfinancialpartners", name: "Focus Financial Partners (Greenhouse)", source_type: "greenhouse", company_handle: "focusfinancialpartners", base_url: "https://boards-api.greenhouse.io/v1/boards/focusfinancialpartners/jobs" },
+  { id: "gh-formativgroup", name: "FormativGroup (Greenhouse)", source_type: "greenhouse", company_handle: "formativgroup", base_url: "https://boards-api.greenhouse.io/v1/boards/formativgroup/jobs" },
+  { id: "gh-freeformfuturecorp", name: "Freeform (Greenhouse)", source_type: "greenhouse", company_handle: "freeformfuturecorp", base_url: "https://boards-api.greenhouse.io/v1/boards/freeformfuturecorp/jobs" },
+  { id: "gh-friendlyfranchiseescorporation", name: "Friendly Franchisees Corporation (Greenhouse)", source_type: "greenhouse", company_handle: "friendlyfranchiseescorporation", base_url: "https://boards-api.greenhouse.io/v1/boards/friendlyfranchiseescorporation/jobs" },
+  { id: "gh-galaxiatech", name: "Galaxia Technologies Inc. (Greenhouse)", source_type: "greenhouse", company_handle: "galaxiatech", base_url: "https://boards-api.greenhouse.io/v1/boards/galaxiatech/jobs" },
+  { id: "gh-gelfandrennertfeldman", name: "Gelfand, Rennert & Feldman, Focus Partners Business Management (Greenhouse)", source_type: "greenhouse", company_handle: "gelfandrennertfeldman", base_url: "https://boards-api.greenhouse.io/v1/boards/gelfandrennertfeldman/jobs" },
+  { id: "gh-genesissantamonica", name: "Genesis Santa Monica (Greenhouse)", source_type: "greenhouse", company_handle: "genesissantamonica", base_url: "https://boards-api.greenhouse.io/v1/boards/genesissantamonica/jobs" },
+  { id: "gh-givedirectly", name: "GiveDirectly (Greenhouse)", source_type: "greenhouse", company_handle: "givedirectly", base_url: "https://boards-api.greenhouse.io/v1/boards/givedirectly/jobs" },
+  { id: "gh-gruns", name: "Grüns (Greenhouse)", source_type: "greenhouse", company_handle: "gruns", base_url: "https://boards-api.greenhouse.io/v1/boards/gruns/jobs" },
+  { id: "gh-hankooktireamericacorp", name: "Hankook Tire America Corp. (Greenhouse)", source_type: "greenhouse", company_handle: "hankooktireamericacorp", base_url: "https://boards-api.greenhouse.io/v1/boards/hankooktireamericacorp/jobs" },
+  { id: "gh-happymoney", name: "Happy Money (Greenhouse)", source_type: "greenhouse", company_handle: "happymoney", base_url: "https://boards-api.greenhouse.io/v1/boards/happymoney/jobs" },
+  { id: "gh-hearcom", name: "Hear.com US (Greenhouse)", source_type: "greenhouse", company_handle: "hearcom", base_url: "https://boards-api.greenhouse.io/v1/boards/hearcom/jobs" },
+  { id: "gh-heartaerospace", name: "Heart Aerospace (Greenhouse)", source_type: "greenhouse", company_handle: "heartaerospace", base_url: "https://boards-api.greenhouse.io/v1/boards/heartaerospace/jobs" },
+  { id: "gh-hivewatch", name: "HiveWatch (Greenhouse)", source_type: "greenhouse", company_handle: "hivewatch", base_url: "https://boards-api.greenhouse.io/v1/boards/hivewatch/jobs" },
+  { id: "gh-hlb90067", name: "HLB90067 (Greenhouse)", source_type: "greenhouse", company_handle: "hlb90067", base_url: "https://boards-api.greenhouse.io/v1/boards/hlb90067/jobs" },
+  { id: "gh-holisticindustries", name: "Holistic Industries (Greenhouse)", source_type: "greenhouse", company_handle: "holisticindustries", base_url: "https://boards-api.greenhouse.io/v1/boards/holisticindustries/jobs" },
+  { id: "gh-hondasantamonica", name: "Honda Santa Monica (Greenhouse)", source_type: "greenhouse", company_handle: "hondasantamonica", base_url: "https://boards-api.greenhouse.io/v1/boards/hondasantamonica/jobs" },
+  { id: "gh-hopskipdrive", name: "HopSkipDrive (Greenhouse)", source_type: "greenhouse", company_handle: "hopskipdrive", base_url: "https://boards-api.greenhouse.io/v1/boards/hopskipdrive/jobs" },
+  { id: "gh-horizonsurgicalsystems", name: "Horizon Surgical Systems, Inc. (Greenhouse)", source_type: "greenhouse", company_handle: "horizonsurgicalsystems", base_url: "https://boards-api.greenhouse.io/v1/boards/horizonsurgicalsystems/jobs" },
+  { id: "gh-hyundaisantamonica", name: "Hyundai Santa Monica (Greenhouse)", source_type: "greenhouse", company_handle: "hyundaisantamonica", base_url: "https://boards-api.greenhouse.io/v1/boards/hyundaisantamonica/jobs" },
+  { id: "gh-inchargeenergy", name: "InCharge Energy (Greenhouse)", source_type: "greenhouse", company_handle: "inchargeenergy", base_url: "https://boards-api.greenhouse.io/v1/boards/inchargeenergy/jobs" },
+  { id: "gh-instride", name: "InStride (Greenhouse)", source_type: "greenhouse", company_handle: "instride", base_url: "https://boards-api.greenhouse.io/v1/boards/instride/jobs" },
+  { id: "gh-inversionspace", name: "Inversion (Greenhouse)", source_type: "greenhouse", company_handle: "inversionspace", base_url: "https://boards-api.greenhouse.io/v1/boards/inversionspace/jobs" },
+  { id: "gh-itcss", name: "Welcome to the Tarsanet Internal Career Center! (Greenhouse)", source_type: "greenhouse", company_handle: "itcss", base_url: "https://boards-api.greenhouse.io/v1/boards/itcss/jobs" },
+  { id: "gh-jennikayne", name: "Jenni Kayne (Greenhouse)", source_type: "greenhouse", company_handle: "jennikayne", base_url: "https://boards-api.greenhouse.io/v1/boards/jennikayne/jobs" },
+  { id: "gh-jetzero", name: "JetZero (Greenhouse)", source_type: "greenhouse", company_handle: "jetzero", base_url: "https://boards-api.greenhouse.io/v1/boards/jetzero/jobs" },
+  { id: "gh-jjsnackfoods", name: "J&J Snack Foods (Greenhouse)", source_type: "greenhouse", company_handle: "jjsnackfoods", base_url: "https://boards-api.greenhouse.io/v1/boards/jjsnackfoods/jobs" },
+  { id: "gh-jrmconstructionmanagementllc", name: "JRM Construction Management, LLC (Greenhouse)", source_type: "greenhouse", company_handle: "jrmconstructionmanagementllc", base_url: "https://boards-api.greenhouse.io/v1/boards/jrmconstructionmanagementllc/jobs" },
+  { id: "gh-jwplumbingheatingair", name: "JW Plumbing, Heating, & Air (Greenhouse)", source_type: "greenhouse", company_handle: "jwplumbingheatingair", base_url: "https://boards-api.greenhouse.io/v1/boards/jwplumbingheatingair/jobs" },
+  { id: "gh-k18inc", name: "K18 Hair (Greenhouse)", source_type: "greenhouse", company_handle: "k18inc", base_url: "https://boards-api.greenhouse.io/v1/boards/k18inc/jobs" },
+  { id: "gh-kapitus", name: "Kapitus (Greenhouse)", source_type: "greenhouse", company_handle: "kapitus", base_url: "https://boards-api.greenhouse.io/v1/boards/kapitus/jobs" },
+  { id: "gh-kasa", name: "Kasa (Greenhouse)", source_type: "greenhouse", company_handle: "kasa", base_url: "https://boards-api.greenhouse.io/v1/boards/kasa/jobs" },
+  { id: "gh-la28careers", name: "LA28 (Web) (Greenhouse)", source_type: "greenhouse", company_handle: "la28careers", base_url: "https://boards-api.greenhouse.io/v1/boards/la28careers/jobs" },
+  { id: "gh-lacarguy", name: "LAcarGUY (Greenhouse)", source_type: "greenhouse", company_handle: "lacarguy", base_url: "https://boards-api.greenhouse.io/v1/boards/lacarguy/jobs" },
+  { id: "gh-landmarktheatres", name: "Landmark Theatres (Greenhouse)", source_type: "greenhouse", company_handle: "landmarktheatres", base_url: "https://boards-api.greenhouse.io/v1/boards/landmarktheatres/jobs" },
+  { id: "gh-launch2", name: "Launch Potato (Greenhouse)", source_type: "greenhouse", company_handle: "launch2", base_url: "https://boards-api.greenhouse.io/v1/boards/launch2/jobs" },
+  { id: "gh-lusternational", name: "Luster National (Greenhouse)", source_type: "greenhouse", company_handle: "lusternational", base_url: "https://boards-api.greenhouse.io/v1/boards/lusternational/jobs" },
+  { id: "gh-m9solutions", name: "M9 Solutions (Greenhouse)", source_type: "greenhouse", company_handle: "m9solutions", base_url: "https://boards-api.greenhouse.io/v1/boards/m9solutions/jobs" },
+  { id: "gh-marksman", name: "Marksman Security LLC (Greenhouse)", source_type: "greenhouse", company_handle: "marksman", base_url: "https://boards-api.greenhouse.io/v1/boards/marksman/jobs" },
+  { id: "gh-medialabaiinc", name: "MediaLab.AI Inc. (Greenhouse)", source_type: "greenhouse", company_handle: "medialabaiinc", base_url: "https://boards-api.greenhouse.io/v1/boards/medialabaiinc/jobs" },
+  { id: "gh-mgac", name: "MGAC (Greenhouse)", source_type: "greenhouse", company_handle: "mgac", base_url: "https://boards-api.greenhouse.io/v1/boards/mgac/jobs" },
+  { id: "gh-mgproperties", name: "MG Properties (Greenhouse)", source_type: "greenhouse", company_handle: "mgproperties", base_url: "https://boards-api.greenhouse.io/v1/boards/mgproperties/jobs" },
+  { id: "gh-mobentertainment", name: "Mob Entertainment (Greenhouse)", source_type: "greenhouse", company_handle: "mobentertainment", base_url: "https://boards-api.greenhouse.io/v1/boards/mobentertainment/jobs" },
+  { id: "gh-movementstrategy", name: "Movement Strategy  (Greenhouse)", source_type: "greenhouse", company_handle: "movementstrategy", base_url: "https://boards-api.greenhouse.io/v1/boards/movementstrategy/jobs" },
+  { id: "gh-moversshakers", name: "Movers+Shakers (Greenhouse)", source_type: "greenhouse", company_handle: "moversshakers", base_url: "https://boards-api.greenhouse.io/v1/boards/moversshakers/jobs" },
+  { id: "gh-n2cozip", name: "N2 Co - Ziprecruiter (Greenhouse)", source_type: "greenhouse", company_handle: "n2cozip", base_url: "https://boards-api.greenhouse.io/v1/boards/n2cozip/jobs" },
+  { id: "gh-nabis", name: "NABIS (Greenhouse)", source_type: "greenhouse", company_handle: "nabis", base_url: "https://boards-api.greenhouse.io/v1/boards/nabis/jobs" },
+  { id: "gh-nationalpublicradioinc", name: "NPR (Greenhouse)", source_type: "greenhouse", company_handle: "nationalpublicradioinc", base_url: "https://boards-api.greenhouse.io/v1/boards/nationalpublicradioinc/jobs" },
+  { id: "gh-nex", name: "Nex (Greenhouse)", source_type: "greenhouse", company_handle: "nex", base_url: "https://boards-api.greenhouse.io/v1/boards/nex/jobs" },
+  { id: "gh-northwestadministratorsinc", name: "Northwest Administrators, Inc. (Greenhouse)", source_type: "greenhouse", company_handle: "northwestadministratorsinc", base_url: "https://boards-api.greenhouse.io/v1/boards/northwestadministratorsinc/jobs" },
+  { id: "gh-nutrafol", name: "Nutrafol (Greenhouse)", source_type: "greenhouse", company_handle: "nutrafol", base_url: "https://boards-api.greenhouse.io/v1/boards/nutrafol/jobs" },
+  { id: "gh-nve", name: "NVE Experience Agency (Greenhouse)", source_type: "greenhouse", company_handle: "nve", base_url: "https://boards-api.greenhouse.io/v1/boards/nve/jobs" },
+  { id: "gh-o2epcminc", name: "O2EPCM, Inc. dba O2 Engineering, Projects & Construction Management (Greenhouse)", source_type: "greenhouse", company_handle: "o2epcminc", base_url: "https://boards-api.greenhouse.io/v1/boards/o2epcminc/jobs" },
+  { id: "gh-oldcastlebuildingenvelope", name: "Oldcastle BuildingEnvelope (Greenhouse)", source_type: "greenhouse", company_handle: "oldcastlebuildingenvelope", base_url: "https://boards-api.greenhouse.io/v1/boards/oldcastlebuildingenvelope/jobs" },
+  { id: "gh-olympusproperty", name: "Olympus Property (Greenhouse)", source_type: "greenhouse", company_handle: "olympusproperty", base_url: "https://boards-api.greenhouse.io/v1/boards/olympusproperty/jobs" },
+  { id: "gh-omnicomproduction", name: "Omnicom Production (Greenhouse)", source_type: "greenhouse", company_handle: "omnicomproduction", base_url: "https://boards-api.greenhouse.io/v1/boards/omnicomproduction/jobs" },
+  { id: "gh-operationscareers", name: "Veo - Operations Careers  (Greenhouse)", source_type: "greenhouse", company_handle: "operationscareers", base_url: "https://boards-api.greenhouse.io/v1/boards/operationscareers/jobs" },
+  { id: "gh-opositiv", name: "O Positiv (Greenhouse)", source_type: "greenhouse", company_handle: "opositiv", base_url: "https://boards-api.greenhouse.io/v1/boards/opositiv/jobs" },
+  { id: "gh-outpostspace", name: "Outpost  (Greenhouse)", source_type: "greenhouse", company_handle: "outpostspace", base_url: "https://boards-api.greenhouse.io/v1/boards/outpostspace/jobs" },
+  { id: "gh-pacaso", name: "Pacaso  (Greenhouse)", source_type: "greenhouse", company_handle: "pacaso", base_url: "https://boards-api.greenhouse.io/v1/boards/pacaso/jobs" },
+  { id: "gh-parachutehome", name: "Parachute Home (Greenhouse)", source_type: "greenhouse", company_handle: "parachutehome", base_url: "https://boards-api.greenhouse.io/v1/boards/parachutehome/jobs" },
+  { id: "gh-personalizedbeautydiscoveryincdbaipsy", name: "IPSY (Greenhouse)", source_type: "greenhouse", company_handle: "personalizedbeautydiscoveryincdbaipsy", base_url: "https://boards-api.greenhouse.io/v1/boards/personalizedbeautydiscoveryincdbaipsy/jobs" },
+  { id: "gh-philzcoffeecareers", name: "Philz Coffee (Greenhouse)", source_type: "greenhouse", company_handle: "philzcoffeecareers", base_url: "https://boards-api.greenhouse.io/v1/boards/philzcoffeecareers/jobs" },
+  { id: "gh-phxproduction", name: "The Honest Company  (Greenhouse)", source_type: "greenhouse", company_handle: "phxproduction", base_url: "https://boards-api.greenhouse.io/v1/boards/phxproduction/jobs" },
+  { id: "gh-polygonus", name: "Polygon US (Greenhouse)", source_type: "greenhouse", company_handle: "polygonus", base_url: "https://boards-api.greenhouse.io/v1/boards/polygonus/jobs" },
+  { id: "gh-porschesouthbay", name: "Porsche South Bay (Greenhouse)", source_type: "greenhouse", company_handle: "porschesouthbay", base_url: "https://boards-api.greenhouse.io/v1/boards/porschesouthbay/jobs" },
+  { id: "gh-propertymanagementassociates", name: "Property Management Associates (Greenhouse)", source_type: "greenhouse", company_handle: "propertymanagementassociates", base_url: "https://boards-api.greenhouse.io/v1/boards/propertymanagementassociates/jobs" },
+  { id: "gh-puffco", name: "Puffco (Greenhouse)", source_type: "greenhouse", company_handle: "puffco", base_url: "https://boards-api.greenhouse.io/v1/boards/puffco/jobs" },
+  { id: "gh-reactivate", name: "Reactivate (Greenhouse)", source_type: "greenhouse", company_handle: "reactivate", base_url: "https://boards-api.greenhouse.io/v1/boards/reactivate/jobs" },
+  { id: "gh-rebag", name: "Rebag (Greenhouse)", source_type: "greenhouse", company_handle: "rebag", base_url: "https://boards-api.greenhouse.io/v1/boards/rebag/jobs" },
+  { id: "gh-regent", name: "Regent (Greenhouse)", source_type: "greenhouse", company_handle: "regent", base_url: "https://boards-api.greenhouse.io/v1/boards/regent/jobs" },
+  { id: "gh-reolink", name: "Reolink (Greenhouse)", source_type: "greenhouse", company_handle: "reolink", base_url: "https://boards-api.greenhouse.io/v1/boards/reolink/jobs" },
+  { id: "gh-rewardsnetwork", name: "Rewards Network (Greenhouse)", source_type: "greenhouse", company_handle: "rewardsnetwork", base_url: "https://boards-api.greenhouse.io/v1/boards/rewardsnetwork/jobs" },
+  { id: "gh-ribolifamilywines", name: "Riboli Family Wines (Greenhouse)", source_type: "greenhouse", company_handle: "ribolifamilywines", base_url: "https://boards-api.greenhouse.io/v1/boards/ribolifamilywines/jobs" },
+  { id: "gh-ridemobilityllc", name: "RIDE Mobility (Greenhouse)", source_type: "greenhouse", company_handle: "ridemobilityllc", base_url: "https://boards-api.greenhouse.io/v1/boards/ridemobilityllc/jobs" },
+  { id: "gh-rlsbio", name: "RLS Radiopharmacies (Greenhouse)", source_type: "greenhouse", company_handle: "rlsbio", base_url: "https://boards-api.greenhouse.io/v1/boards/rlsbio/jobs" },
+  { id: "gh-rockbot", name: "Rockbot (Greenhouse)", source_type: "greenhouse", company_handle: "rockbot", base_url: "https://boards-api.greenhouse.io/v1/boards/rockbot/jobs" },
+  { id: "gh-rpa", name: "RPA (Greenhouse)", source_type: "greenhouse", company_handle: "rpa", base_url: "https://boards-api.greenhouse.io/v1/boards/rpa/jobs" },
+  { id: "gh-saatva", name: "Saatva (Greenhouse)", source_type: "greenhouse", company_handle: "saatva", base_url: "https://boards-api.greenhouse.io/v1/boards/saatva/jobs" },
+  { id: "gh-salientmotion", name: "Salient Motion (Greenhouse)", source_type: "greenhouse", company_handle: "salientmotion", base_url: "https://boards-api.greenhouse.io/v1/boards/salientmotion/jobs" },
+  { id: "gh-sandsinvestmentgroup", name: "Sands Investment Group (Greenhouse)", source_type: "greenhouse", company_handle: "sandsinvestmentgroup", base_url: "https://boards-api.greenhouse.io/v1/boards/sandsinvestmentgroup/jobs" },
+  { id: "gh-sas", name: "Superior Alarm Systems (Greenhouse)", source_type: "greenhouse", company_handle: "sas", base_url: "https://boards-api.greenhouse.io/v1/boards/sas/jobs" },
+  { id: "gh-secretariatadvisorsllc", name: "Secretariat  (Greenhouse)", source_type: "greenhouse", company_handle: "secretariatadvisorsllc", base_url: "https://boards-api.greenhouse.io/v1/boards/secretariatadvisorsllc/jobs" },
+  { id: "gh-servicechampions", name: "Service Champions (Greenhouse)", source_type: "greenhouse", company_handle: "servicechampions", base_url: "https://boards-api.greenhouse.io/v1/boards/servicechampions/jobs" },
+  { id: "gh-shieldshealthsolutions", name: "Shields Health Solutions (Greenhouse)", source_type: "greenhouse", company_handle: "shieldshealthsolutions", base_url: "https://boards-api.greenhouse.io/v1/boards/shieldshealthsolutions/jobs" },
+  { id: "gh-sidecarhealth", name: "Sidecar Health (Greenhouse)", source_type: "greenhouse", company_handle: "sidecarhealth", base_url: "https://boards-api.greenhouse.io/v1/boards/sidecarhealth/jobs" },
+  { id: "gh-sitrepsllc", name: "Sitreps (Greenhouse)", source_type: "greenhouse", company_handle: "sitrepsllc", base_url: "https://boards-api.greenhouse.io/v1/boards/sitrepsllc/jobs" },
+  { id: "gh-skyryse", name: "Skyryse (Greenhouse)", source_type: "greenhouse", company_handle: "skyryse", base_url: "https://boards-api.greenhouse.io/v1/boards/skyryse/jobs" },
+  { id: "gh-smarterdxprivate", name: "SmarterDx (Private) (Greenhouse)", source_type: "greenhouse", company_handle: "smarterdxprivate", base_url: "https://boards-api.greenhouse.io/v1/boards/smarterdxprivate/jobs" },
+  { id: "gh-smartypantsvitamins", name: "SmartyPants Vitamins (Greenhouse)", source_type: "greenhouse", company_handle: "smartypantsvitamins", base_url: "https://boards-api.greenhouse.io/v1/boards/smartypantsvitamins/jobs" },
+  { id: "gh-smcp", name: "SMCP NORTH AMERICA (US, CANADA) (Greenhouse)", source_type: "greenhouse", company_handle: "smcp", base_url: "https://boards-api.greenhouse.io/v1/boards/smcp/jobs" },
+  { id: "gh-smcpnorthamerica44hq", name: "SMCP NORTH AMERICA (Greenhouse)", source_type: "greenhouse", company_handle: "smcpnorthamerica44hq", base_url: "https://boards-api.greenhouse.io/v1/boards/smcpnorthamerica44hq/jobs" },
+  { id: "gh-soeffects", name: "Second Order Effects (Greenhouse)", source_type: "greenhouse", company_handle: "soeffects", base_url: "https://boards-api.greenhouse.io/v1/boards/soeffects/jobs" },
+  { id: "gh-sonyhondamobilityofamerica", name: "Sony Honda Mobility of America (Greenhouse)", source_type: "greenhouse", company_handle: "sonyhondamobilityofamerica", base_url: "https://boards-api.greenhouse.io/v1/boards/sonyhondamobilityofamerica/jobs" },
+  { id: "gh-sonypicturesanimation", name: "Sony Pictures Animation (Greenhouse)", source_type: "greenhouse", company_handle: "sonypicturesanimation", base_url: "https://boards-api.greenhouse.io/v1/boards/sonypicturesanimation/jobs" },
+  { id: "gh-spacekinetic", name: "Space Kinetic (Greenhouse)", source_type: "greenhouse", company_handle: "spacekinetic", base_url: "https://boards-api.greenhouse.io/v1/boards/spacekinetic/jobs" },
+  { id: "gh-speechify", name: "Speechify (Greenhouse)", source_type: "greenhouse", company_handle: "speechify", base_url: "https://boards-api.greenhouse.io/v1/boards/speechify/jobs" },
+  { id: "gh-squishable", name: "Squishable (Greenhouse)", source_type: "greenhouse", company_handle: "squishable", base_url: "https://boards-api.greenhouse.io/v1/boards/squishable/jobs" },
+  { id: "gh-stackadapt", name: "StackAdapt (Greenhouse)", source_type: "greenhouse", company_handle: "stackadapt", base_url: "https://boards-api.greenhouse.io/v1/boards/stackadapt/jobs" },
+  { id: "gh-strongpointpartners", name: "Strongpoint Partners (Greenhouse)", source_type: "greenhouse", company_handle: "strongpointpartners", base_url: "https://boards-api.greenhouse.io/v1/boards/strongpointpartners/jobs" },
+  { id: "gh-subarupacific", name: "Subaru Pacific (Greenhouse)", source_type: "greenhouse", company_handle: "subarupacific", base_url: "https://boards-api.greenhouse.io/v1/boards/subarupacific/jobs" },
+  { id: "gh-techholding", name: "Tech Holding (Greenhouse)", source_type: "greenhouse", company_handle: "techholding", base_url: "https://boards-api.greenhouse.io/v1/boards/techholding/jobs" },
+  { id: "gh-telemed2u", name: "TeleMed2U (Greenhouse)", source_type: "greenhouse", company_handle: "telemed2u", base_url: "https://boards-api.greenhouse.io/v1/boards/telemed2u/jobs" },
+  { id: "gh-thatsnomoonentertainment", name: "That's No Moon Entertainment (Greenhouse)", source_type: "greenhouse", company_handle: "thatsnomoonentertainment", base_url: "https://boards-api.greenhouse.io/v1/boards/thatsnomoonentertainment/jobs" },
+  { id: "gh-theagencyre", name: "The Agency (Greenhouse)", source_type: "greenhouse", company_handle: "theagencyre", base_url: "https://boards-api.greenhouse.io/v1/boards/theagencyre/jobs" },
+  { id: "gh-thedutchie", name: "Dutchie (Greenhouse)", source_type: "greenhouse", company_handle: "thedutchie", base_url: "https://boards-api.greenhouse.io/v1/boards/thedutchie/jobs" },
+  { id: "gh-thesciongroupllc", name: "The Scion Group (Greenhouse)", source_type: "greenhouse", company_handle: "thesciongroupllc", base_url: "https://boards-api.greenhouse.io/v1/boards/thesciongroupllc/jobs" },
+  { id: "gh-thewilshiregroup", name: "The Wilshire Group (Greenhouse)", source_type: "greenhouse", company_handle: "thewilshiregroup", base_url: "https://boards-api.greenhouse.io/v1/boards/thewilshiregroup/jobs" },
+  { id: "gh-traegergrills", name: "Traeger Grills (Greenhouse)", source_type: "greenhouse", company_handle: "traegergrills", base_url: "https://boards-api.greenhouse.io/v1/boards/traegergrills/jobs" },
+  { id: "gh-trailerpark", name: "Trailer Park Group (Greenhouse)", source_type: "greenhouse", company_handle: "trailerpark", base_url: "https://boards-api.greenhouse.io/v1/boards/trailerpark/jobs" },
+  { id: "gh-trueclassicteesllc", name: "True Classic  (Greenhouse)", source_type: "greenhouse", company_handle: "trueclassicteesllc", base_url: "https://boards-api.greenhouse.io/v1/boards/trueclassicteesllc/jobs" },
+  { id: "gh-ttiinc", name: "TTI, Inc (Greenhouse)", source_type: "greenhouse", company_handle: "ttiinc", base_url: "https://boards-api.greenhouse.io/v1/boards/ttiinc/jobs" },
+  { id: "gh-unrealsnacks", name: "Unreal Snacks  (Greenhouse)", source_type: "greenhouse", company_handle: "unrealsnacks", base_url: "https://boards-api.greenhouse.io/v1/boards/unrealsnacks/jobs" },
+  { id: "gh-upkeep", name: "UpKeep (Greenhouse)", source_type: "greenhouse", company_handle: "upkeep", base_url: "https://boards-api.greenhouse.io/v1/boards/upkeep/jobs" },
+  { id: "gh-urbangolfperformance", name: "Urban Golf Performance (Greenhouse)", source_type: "greenhouse", company_handle: "urbangolfperformance", base_url: "https://boards-api.greenhouse.io/v1/boards/urbangolfperformance/jobs" },
+  { id: "gh-veocorporatecareers", name: "Veo - Corporate Careers (Greenhouse)", source_type: "greenhouse", company_handle: "veocorporatecareers", base_url: "https://boards-api.greenhouse.io/v1/boards/veocorporatecareers/jobs" },
+  { id: "gh-via", name: "Via (Greenhouse)", source_type: "greenhouse", company_handle: "via", base_url: "https://boards-api.greenhouse.io/v1/boards/via/jobs" },
+  { id: "gh-volterapower", name: "Voltera Power (Greenhouse)", source_type: "greenhouse", company_handle: "volterapower", base_url: "https://boards-api.greenhouse.io/v1/boards/volterapower/jobs" },
+  { id: "gh-wfclainc", name: "Angel City  (Greenhouse)", source_type: "greenhouse", company_handle: "wfclainc", base_url: "https://boards-api.greenhouse.io/v1/boards/wfclainc/jobs" },
+  { id: "gh-whalarinc", name: "Whalar Group (Greenhouse)", source_type: "greenhouse", company_handle: "whalarinc", base_url: "https://boards-api.greenhouse.io/v1/boards/whalarinc/jobs" },
+  { id: "gh-wildcardcreativegroup", name: "Wild Card Creative Group (Greenhouse)", source_type: "greenhouse", company_handle: "wildcardcreativegroup", base_url: "https://boards-api.greenhouse.io/v1/boards/wildcardcreativegroup/jobs" },
+  { id: "gh-withumsmithbrown", name: "WithumSmith+Brown (Greenhouse)", source_type: "greenhouse", company_handle: "withumsmithbrown", base_url: "https://boards-api.greenhouse.io/v1/boards/withumsmithbrown/jobs" },
+
   // MyGreenhouse query=robot (no location filter): https://my.greenhouse.io/jobs?query=robot — pages 1→4 walked in order with pacing; page 5 had no results. MYGREENHOUSE_QUERY=robot
   { id: "gh-diligentrobotics", name: "Diligent Robotics (Greenhouse)", source_type: "greenhouse", company_handle: "diligentrobotics", base_url: "https://boards-api.greenhouse.io/v1/boards/diligentrobotics/jobs" },
   { id: "gh-smaamerica", name: "SMA America (Greenhouse)", source_type: "greenhouse", company_handle: "smaamerica", base_url: "https://boards-api.greenhouse.io/v1/boards/smaamerica/jobs" },
@@ -1321,6 +1493,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "ab-parafin",          name: "Parafin (Ashby)",                source_type: "ashby", company_handle: "parafin",          base_url: "https://api.ashbyhq.com/posting-api/job-board/parafin?includeCompensation=true" },
   { id: "ab-pylon-labs",       name: "Pylon (Ashby)",                  source_type: "ashby", company_handle: "pylon-labs",       base_url: "https://api.ashbyhq.com/posting-api/job-board/pylon-labs?includeCompensation=true" },
   { id: "ab-partly-com",       name: "Partly (Ashby)",                 source_type: "ashby", company_handle: "partly.com",       base_url: "https://api.ashbyhq.com/posting-api/job-board/partly.com?includeCompensation=true" },
+  { id: "ab-harperinsure",     name: "Harper (Ashby)",                 source_type: "ashby", company_handle: "harperinsure",     base_url: "https://api.ashbyhq.com/posting-api/job-board/harperinsure?includeCompensation=true" },
   { id: "ab-lindy",            name: "Lindy (Ashby)",                  source_type: "ashby", company_handle: "lindy",            base_url: "https://api.ashbyhq.com/posting-api/job-board/lindy?includeCompensation=true" },
   { id: "ab-lightspark",       name: "Lightspark (Ashby)",             source_type: "ashby", company_handle: "lightspark",       base_url: "https://api.ashbyhq.com/posting-api/job-board/lightspark?includeCompensation=true" },
   { id: "ab-llamaindex",       name: "LlamaIndex (Ashby)",             source_type: "ashby", company_handle: "llamaindex",       base_url: "https://api.ashbyhq.com/posting-api/job-board/llamaindex?includeCompensation=true" },
@@ -1474,7 +1647,7 @@ export const SEED_SOURCES: SeedSource[] = [
   // ─── Workable ─────────────────────────────────────────────────────────
   // Public widget API: https://apply.workable.com/api/v1/widget/accounts/{handle}
   { id: "wb-pitch",        name: "Pitch (Workable)",          source_type: "workable",  company_handle: "pitch-software", base_url: "https://apply.workable.com/api/v1/widget/accounts/pitch-software" },
-  { id: "wb-shopify",     name: "Shopify",                  source_type: "shopify_careers", company_handle: "shopify",     base_url: "https://www.shopify.com/careers" },
+  { id: "wb-shopify",     name: "Shopify",                  source_type: "shopify", company_handle: "shopify",     base_url: "https://www.shopify.com/careers" },
   { id: "wb-untuckit",    name: "UNTUCKit",         source_type: "workable", company_handle: "untuckit",      base_url: "https://apply.workable.com/api/v1/widget/accounts/untuckit" },
   { id: "wb-chipotle",    name: "Chipotle",                 source_type: "talentbrew", company_handle: "chipotle",       base_url: "https://jobs.chipotle.com/search-jobs" },
   // KinderCare: Workable widget is empty; public board is Phenom (kcecareers.com).
@@ -1507,6 +1680,9 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "rp-partnerco", name: "PartnerCo (Rippling)", source_type: "rippling", company_handle: "partnerco", base_url: "https://ats.rippling.com/partnerco/jobs" },
   { id: "rp-rippling", name: "Rippling (Rippling)", source_type: "rippling", company_handle: "rippling", base_url: "https://ats.rippling.com/rippling/jobs" },
   { id: "rp-amika", name: "amika (Rippling)", source_type: "rippling", company_handle: "amika", base_url: "https://ats.rippling.com/amika-careers/jobs" },
+
+  // Gusto Recruiting — `jobs.gusto.com/postings/{slug}` (see gusto_recruiting.ts). Distinct from Gusto (Greenhouse) `gh-gusto`.
+  { id: "gr-verc-inc", name: "Verc, Inc. (Gusto Recruiting)", source_type: "gusto_recruiting", company_handle: "verc-inc", base_url: "https://jobs.gusto.com/boards/verc-inc-eeca220a-05f9-4bce-b5d1-3dd35caa58d0" },
 
   // ─── Brillio (WordPress listing HTML — see brillio.ts) ───────────────────
   { id: "br-brillio", name: "Brillio (Careers)", source_type: "brillio", company_handle: "brillio", base_url: "https://careers.brillio.com/job-listing/" },
@@ -1559,6 +1735,9 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "jv-legalzoom", name: "LegalZoom (Jobvite)", source_type: "jobvite", company_handle: "legalzoom", base_url: "https://jobs.jobvite.com/legalzoom/jobs" },
   { id: "jv-ninjaone", name: "NinjaOne (Jobvite)", source_type: "jobvite", company_handle: "ninjaone", base_url: "https://jobs.jobvite.com/ninjaone/jobs" },
 
+  // ─── JazzHR (`*.applytojob.com`) — listing `/apply` + JSON-LD per job ──
+  { id: "jz-ouster", name: "Ouster (JazzHR)", source_type: "jazzhr", company_handle: "ouster", base_url: "https://ouster.applytojob.com/apply" },
+
   // ─── CATS One (HTML + JobPosting JSON-LD) ─────────────────────────────
   // Department listing; per-job pages embed schema.org JobPosting.
   { id: "cats-sphereinc", name: "Sphere Partners (CATS)", source_type: "catsone", company_handle: "sphereinc", base_url: "https://sphereinc.catsone.com/careers/90438-General" },
@@ -1594,7 +1773,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "sr-abercrombie", name: "Abercrombie & Fitch Co.", source_type: "smartrecruiters", company_handle: "AbercrombieAndFitchCo", base_url: "https://api.smartrecruiters.com/v1/companies/AbercrombieAndFitchCo/postings" },
   { id: "sr-lvmh",         name: "LVMH",                 source_type: "smartrecruiters", company_handle: "LVMH",           base_url: "https://api.smartrecruiters.com/v1/companies/LVMH/postings" },
   // LVMH flagship multi-brand hub (Algolia) — ~6k roles across maisons; distinct from sr-lvmh SmartRecruiters API
-  { id: "lvmh-jobhub", name: "LVMH (Job Hub)", source_type: "lvmh_algolia", company_handle: "lvmh-group", base_url: "https://www.lvmh.com/en/join-us/our-job-offers" },
+  { id: "lvmh-jobhub", name: "LVMH (Job Hub)", source_type: "lvmh", company_handle: "lvmh-group", base_url: "https://www.lvmh.com/en/join-us/our-job-offers" },
   { id: "sr-cottonon",         name: "Cotton On",         source_type: "smartrecruiters", company_handle: "CottonOn",       base_url: "https://api.smartrecruiters.com/v1/companies/CottonOn/postings" },
   { id: "sr-abbvie",           name: "AbbVie",                 source_type: "smartrecruiters", company_handle: "AbbVie",                 base_url: "https://api.smartrecruiters.com/v1/companies/AbbVie/postings" },
   { id: "sr-cencora",          name: "Cencora",                source_type: "smartrecruiters", company_handle: "Cencora",                base_url: "https://api.smartrecruiters.com/v1/companies/Cencora/postings" },
@@ -1615,6 +1794,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "wd-walmart",   name: "Walmart",    source_type: "workday", company_handle: "walmart",   base_url: "https://walmart.wd5.myworkdayjobs.com/wday/cxs/walmart/WalmartExternal/jobs" },
   { id: "wd-workday",   name: "Workday",    source_type: "workday", company_handle: "workday",   base_url: "https://workday.wd5.myworkdayjobs.com/wday/cxs/workday/Workday/jobs" },
   { id: "wd-zendesk",   name: "Zendesk (Workday)", source_type: "workday", company_handle: "zendesk", base_url: "https://zendesk.wd1.myworkdayjobs.com/wday/cxs/zendesk/zendesk/jobs" },
+  // Snap — same tenant as careers.snap.com; myworkdaysite.com URLs map to this CXS board
+  { id: "wd-snapchat", name: "Snap Inc. (Workday)", source_type: "workday", company_handle: "snapchat", base_url: "https://snapchat.wd1.myworkdayjobs.com/wday/cxs/snapchat/snap/jobs" },
   // DLA Piper — careers at dlapiper.wd1.myworkdayjobs.com/dlapiper (CXS site id matches path segment)
   { id: "wd-dlapiper",  name: "DLA Piper (Workday)", source_type: "workday", company_handle: "dlapiper", base_url: "https://dlapiper.wd1.myworkdayjobs.com/wday/cxs/dlapiper/dlapiper/jobs" },
   { id: "wd-nvidia",    name: "NVIDIA",     source_type: "workday", company_handle: "nvidia",    base_url: "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs" },
@@ -1972,6 +2153,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "gh-modern-animal", name: "Modern Animal (Greenhouse)", source_type: "greenhouse", company_handle: "modernanimal", base_url: "https://boards-api.greenhouse.io/v1/boards/modernanimal/jobs" },
   { id: "lv-collate", name: "Collate (Lever)", source_type: "lever", company_handle: "collate", base_url: "https://api.lever.co/v0/postings/collate" },
   { id: "lv-corbalt", name: "Corbalt (Lever)", source_type: "lever", company_handle: "corbalt", base_url: "https://api.lever.co/v0/postings/corbalt" },
+  { id: "lv-chefrobotics", name: "Chef Robotics (Lever)", source_type: "lever", company_handle: "ChefRobotics", base_url: "https://api.lever.co/v0/postings/ChefRobotics" },
   { id: "lv-eternal", name: "Eternal (Lever)", source_type: "lever", company_handle: "eternal", base_url: "https://api.lever.co/v0/postings/eternal" },
   { id: "lv-loop", name: "Loop (Returns) (Lever)", source_type: "lever", company_handle: "loopreturns", base_url: "https://api.lever.co/v0/postings/loopreturns" },
   { id: "lv-paradigm-health", name: "Paradigm Health (Lever)", source_type: "lever", company_handle: "paradigm-health", base_url: "https://api.lever.co/v0/postings/paradigm-health" },
@@ -2273,8 +2455,8 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "tb-uhg", name: "UnitedHealth Group (TalentBrew)", source_type: "talentbrew", company_handle: "unitedhealthgroup", base_url: "https://careers.unitedhealthgroup.com/search-jobs" },
   // Kaiser Permanente — Radancy TalentBrew (`/search-jobs`, `/job/{city}/{slug}/{org}/{id}`); see talentbrew.ts.
   { id: "tb-kaiser", name: "Kaiser Permanente (TalentBrew)", source_type: "talentbrew", company_handle: "kaiser-permanente", base_url: "https://www.kaiserpermanentejobs.org/search-jobs" },
-  // HCA Healthcare — custom careers site; sitemap lists regional `/search/jobs/in/…` pages with `/jobs/{id}-{slug}` links + JSON-LD. See hcaCareers.ts.
-  { id: "hc-hca", name: "HCA Healthcare", source_type: "hca_careers", company_handle: "hca", base_url: "https://careers.hcahealthcare.com/jobs/17513377-echo-technician" },
+  // HCA Healthcare — custom careers site; sitemap lists regional `/search/jobs/in/…` pages with `/jobs/{id}-{slug}` links + JSON-LD. See single-companies/hca.ts.
+  { id: "hc-hca", name: "HCA Healthcare", source_type: "hca", company_handle: "hca", base_url: "https://careers.hcahealthcare.com/jobs/17513377-echo-technician" },
   // Ashby-hosted pages where posting-api/{handle} is not publicly reachable from Workers; rely on XHR capture in browser.ts.
   { id: "br-evenup", name: "EvenUp (Browser)", source_type: "browser", company_handle: "evenup", base_url: "https://jobs.ashbyhq.com/evenup" },
   // Careers HTML — may embed Ashby/Greenhouse; no stable public JSON URL found.
@@ -2300,7 +2482,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "oc-cosmoprof", name: "CosmoProf Careers (Oracle CE)", source_type: "oracle_ce", company_handle: "cosmoprof", base_url: "https://eigx.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_9" },
   { id: "oc-sally-beauty", name: "Sally Careers (Oracle CE)", source_type: "oracle_ce", company_handle: "sally-beauty", base_url: "https://eigx.fa.us6.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_13" },
   // Aramark — WordPress JSON used by careers.aramark.com search SPA (`page-search.js`).
-  { id: "ar-aramark", name: "Aramark", source_type: "aramark_careers", company_handle: "aramark", base_url: "https://careers.aramark.com/wp-json/aramark/jobs" },
+  { id: "ar-aramark", name: "Aramark", source_type: "aramark", company_handle: "aramark", base_url: "https://careers.aramark.com/wp-json/aramark/jobs" },
   { id: "wd-petco",      name: "Petco", source_type: "workday", company_handle: "petco", base_url: "https://petco.wd1.myworkdayjobs.com/wday/cxs/petco/External/jobs" },
   { id: "sr-raisingcanes", name: "Raising Cane's", source_type: "smartrecruiters", company_handle: "RaisingCanes", base_url: "https://api.smartrecruiters.com/v1/companies/RaisingCanes/postings" },
   { id: "br-bofa",        name: "Bank of America (Browser)", source_type: "browser", company_handle: "bankofamerica",   base_url: "https://careers.bankofamerica.com/en-us/job-search" },
@@ -2310,7 +2492,7 @@ export const SEED_SOURCES: SeedSource[] = [
   { id: "br-google",      name: "Google (Browser)",          source_type: "browser", company_handle: "google",          base_url: "https://careers.google.com/jobs/results" },
   // Supersedes br-google — parses AF_initDataCallback ds:1 from HTML search pages (~4000 jobs)
   { id: "gc-google",      name: "Google",                    source_type: "google",  company_handle: "google",          base_url: "https://careers.google.com/jobs/results/?q=&hl=en_US" },
-  { id: "mc-meta", name: "Meta (Metacareers)", source_type: "metacareers", company_handle: "meta", base_url: "https://www.metacareers.com/jobsearch/sitemap.xml" },
+  { id: "mc-meta", name: "Meta (Metacareers)", source_type: "meta", company_handle: "meta", base_url: "https://www.metacareers.com/jobsearch/sitemap.xml" },
   // Netflix — custom Eightfold at explore.jobs.netflix.net; search API is auth-gated,
   // so we use the public sitemap (apply.netflixhouse.com) + position_details API (~640 jobs)
   { id: "nf-netflix", name: "Netflix", source_type: "netflix", company_handle: "netflix", base_url: "https://explore.jobs.netflix.net/careers?domain=netflix.com" },
@@ -2413,7 +2595,7 @@ export const SEED_SOURCES: SeedSource[] = [
   // { id: "br-trinet",      name: "TriNet (Browser)",           source_type: "browser", company_handle: "trinet",          base_url: "https://trinet.com/careers/search-jobs" },
   // { id: "br-ajgallagher", name: "AJ Gallagher (Browser)",     source_type: "browser", company_handle: "arthurjgallagher",base_url: "https://careers.ajg.com/search-jobs" },
   // { id: "br-pilgrims",    name: "Pilgrim's Pride (Browser)",  source_type: "browser", company_handle: "pilgrimspride",   base_url: "https://pilgrims.com/careers/job-search" },
-];
+] as unknown as SeedSource[];
 
 
 /**
@@ -2993,8 +3175,15 @@ export async function seedSources(db: D1Database): Promise<void> {
     // KinderCare: Phenom at kcecareers.com.
     db.prepare(`UPDATE sources SET name = ?, source_type = ?, base_url = ?, enabled = 1, last_error = NULL WHERE id = 'wb-kindercare'`)
       .bind("KinderCare (Phenom)", "phenom", "https://www.kcecareers.com/us/en/"),
-    // Meta: browser source superseded by metacareers.
+    // Meta: browser source superseded by single-companies/meta.ts fetcher.
     db.prepare("UPDATE sources SET enabled = 0 WHERE id = 'br-meta'"),
+    // Rename legacy single-employer source_type values (idempotent).
+    db.prepare("UPDATE sources SET source_type = 'uber' WHERE source_type = 'uber_sites'"),
+    db.prepare("UPDATE sources SET source_type = 'shopify' WHERE source_type = 'shopify_careers'"),
+    db.prepare("UPDATE sources SET source_type = 'hca' WHERE source_type = 'hca_careers'"),
+    db.prepare("UPDATE sources SET source_type = 'aramark' WHERE source_type = 'aramark_careers'"),
+    db.prepare("UPDATE sources SET source_type = 'lvmh' WHERE source_type = 'lvmh_algolia'"),
+    db.prepare("UPDATE sources SET source_type = 'meta' WHERE source_type = 'metacareers'"),
   ]);
 
   // Drop removed sector-board source rows (delete jobs first — FK to sources).

@@ -5,8 +5,8 @@
  * escaped JSON blob (same shape Ashby uses client-side).
  */
 
-import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
-import { normalizeWorkplaceType } from "../../utils/normalize.ts";
+import type { JobSource, NormalizedJob, SourceRow } from "../../../types.ts";
+import { normalizeWorkplaceType } from "../../../utils/normalize.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 const LIST_URL = "https://www.shopify.com/careers";
@@ -78,8 +78,8 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
   return out;
 }
 
-export const shopifyCareersFetcher: JobSource = {
-  sourceType: "shopify_careers",
+export const shopifyFetcher: JobSource = {
+  sourceType: "shopify",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
     const listUrl = (source.base_url?.trim() || LIST_URL).replace(/\/$/, "");

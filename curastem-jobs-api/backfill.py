@@ -106,7 +106,7 @@ ALL_SOURCES = {
     "jibe":       [(s[0], s[1], s[2], s[3], "jibe")       for s in JIBE_SOURCES],
     "eightfold":  [(s[0], s[1], s[2], s[3], "eightfold")  for s in EIGHTFOLD_SOURCES],
     "talentbrew": [(s[0], s[1], s[2], s[3], "talentbrew") for s in TALENTBREW_SOURCES],
-    "aramark_careers": [(s[0], s[1], s[2], s[3], "aramark_careers") for s in ARAMARK_SOURCES],
+    "aramark": [(s[0], s[1], s[2], s[3], "aramark") for s in ARAMARK_SOURCES],
     "activate_careers": [(s[0], s[1], s[2], s[3], "activate_careers") for s in ACTIVATE_SOURCES],
 }
 
@@ -639,7 +639,7 @@ def fetch_oracle_ce_source(source_id: str, company_handle: str, display_name: st
 
     return jobs
 
-def fetch_aramark_careers_source(source_id: str, company_handle: str, display_name: str,
+def fetch_aramark_source(source_id: str, company_handle: str, display_name: str,
                                 api_url: str, max_jobs: int = MAX_TOTAL_JOBS) -> list[dict]:
     """GET careers.aramark.com/wp-json/aramark/jobs — JSON array with req_id, title, location, etc."""
     req = urllib.request.Request(api_url, headers={
@@ -1267,8 +1267,8 @@ def fetch_source(source_id: str, company_handle: str, display_name: str,
         return fetch_eightfold_source(source_id, company_handle, display_name, url, max_jobs, max_desc)
     if source_type == "talentbrew":
         return fetch_talentbrew_source(source_id, company_handle, display_name, url, max_jobs, max_desc)
-    if source_type == "aramark_careers":
-        return fetch_aramark_careers_source(source_id, company_handle, display_name, url, max_jobs)
+    if source_type == "aramark":
+        return fetch_aramark_source(source_id, company_handle, display_name, url, max_jobs)
     if source_type == "activate_careers":
         return fetch_activate_careers_source(source_id, company_handle, display_name, url, max_jobs)
     raise ValueError(f"Unknown source_type: {source_type}")

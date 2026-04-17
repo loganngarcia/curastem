@@ -13,14 +13,14 @@
  * is the reliable way to enumerate every URL Meta exposes to crawlers.
  */
 
-import type { JobSource, NormalizedJob, SalaryPeriod, SourceRow, WorkplaceType } from "../../types.ts";
+import type { JobSource, NormalizedJob, SalaryPeriod, SourceRow, WorkplaceType } from "../../../types.ts";
 import {
   normalizeEmploymentType,
   normalizeLocation,
   normalizeWorkplaceType,
   parseEpochSeconds,
-} from "../../utils/normalize.ts";
-import { logger } from "../../utils/logger.ts";
+} from "../../../utils/normalize.ts";
+import { logger } from "../../../utils/logger.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 
@@ -371,8 +371,8 @@ async function parallelMap<T, R>(items: T[], limit: number, fn: (item: T, index:
   return results;
 }
 
-export const metacareersFetcher: JobSource = {
-  sourceType: "metacareers",
+export const metaFetcher: JobSource = {
+  sourceType: "meta",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
     const trimmed = source.base_url.trim();
@@ -384,12 +384,12 @@ export const metacareersFetcher: JobSource = {
       const jobUrl = `https://www.metacareers.com/profile/job_details/${singleMatch[1]}`;
       const html = await fetchJobHtml(jobUrl, FETCH_ATTEMPTS);
       if (!html) {
-        throw new Error(`metacareers: failed to fetch ${jobUrl}`);
+        throw new Error(`meta: failed to fetch ${jobUrl}`);
       }
       const companyName = source.name.replace(/\s*\(Meta careers\)\s*/i, "").trim() || "Meta";
       const row = parseMetacareersPage(html, jobUrl, companyName);
       if (!row) {
-        throw new Error(`metacareers: no JobPosting JSON-LD for ${jobUrl}`);
+        throw new Error(`meta: no JobPosting JSON-LD for ${jobUrl}`);
       }
       return [row];
     }
@@ -398,7 +398,7 @@ export const metacareersFetcher: JobSource = {
     if (!sitemapUrl) sitemapUrl = DEFAULT_SITEMAP;
     const origin = new URL(sitemapUrl);
     if (origin.hostname !== "www.metacareers.com") {
-      throw new Error(`metacareers base_url must be on www.metacareers.com, got ${source.base_url}`);
+      throw new Error(`meta base_url must be on www.metacareers.com, got ${source.base_url}`);
     }
 
     const urls = await collectJobDetailUrls(sitemapUrl, 0);
@@ -435,12 +435,12 @@ export const metacareersFetcher: JobSource = {
     const ok = jobs.filter((j): j is NormalizedJob => j !== null);
     if (ok.length === 0 && urls.length > 0) {
       throw new Error(
-        `metacareers: ${urls.length} sitemap URL(s) but 0 valid JobPosting JSON-LD payloads (${source.company_handle})`
+        `meta: ${urls.length} sitemap URL(s) but 0 valid JobPosting JSON-LD payloads (${source.company_handle})`
       );
     }
 
     if (ok.length < urls.length) {
-      logger.warn("metacareers_partial_parse", {
+      logger.warn("meta_partial_parse", {
         source_id: source.id,
         company_handle: source.company_handle,
         sitemap_urls: urls.length,

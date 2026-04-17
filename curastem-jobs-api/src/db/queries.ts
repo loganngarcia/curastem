@@ -2105,7 +2105,7 @@ export async function listJobsForMap(
   since: number,
   bbox?: MapBbox,
   center?: MapCenter,
-  limit = 100,
+  limit = 50,
   employment_type?: string,
   seniority_level?: string,
   /** When set, only jobs matching GET /jobs ?q= title rules are aggregated into chips. */
@@ -3066,6 +3066,7 @@ async function listJobsNearUsingAllListedLocations(
     radius_km: number;
     exclude_remote: boolean;
     limit: number;
+    offset?: number;
     exclude_ids?: string[];
     title?: string;
     q?: string;
@@ -3086,6 +3087,7 @@ async function listJobsNearUsingAllListedLocations(
     radius_km,
     exclude_remote,
     limit,
+    offset: offsetRaw,
     title: titleNear,
     q,
     posted_since,
@@ -3099,8 +3101,12 @@ async function listJobsNearUsingAllListedLocations(
     visa_sponsorship,
     exclude_ids,
   } = filter;
+  const offset = Math.max(0, Math.floor(offsetRaw ?? 0));
 
-  const candidateLimit = Math.min(450, Math.max(limit * 10, 120));
+  const candidateLimit = Math.min(
+    2000,
+    Math.max(limit * 10, offset + limit + 120, 120)
+  );
 
   const { rows: candidates } = await listJobs(db, {
     title: titleNear?.trim() ? titleNear : undefined,
@@ -3141,7 +3147,7 @@ async function listJobsNearUsingAllListedLocations(
     const tb = b.row.posted_at ?? b.row.first_seen_at;
     return tb - ta;
   });
-  return { rows: scored.slice(0, limit).map((s) => s.row) };
+  return { rows: scored.slice(offset, offset + limit).map((s) => s.row) };
 }
 
 /**
@@ -3157,6 +3163,8 @@ export async function listJobsNear(
     radius_km: number;
     exclude_remote: boolean;
     limit: number;
+    /** SQL OFFSET for distance-sorted pages (map drawer load more). */
+    offset?: number;
     exclude_ids?: string[];
     /** Title substring only — preferred over `q` for role + geo. */
     title?: string;
@@ -3178,6 +3186,7 @@ export async function listJobsNear(
     radius_km,
     exclude_remote,
     limit,
+    offset: offsetRaw,
     exclude_ids,
     title: titleNear,
     q,
@@ -3191,6 +3200,7 @@ export async function listJobsNear(
     company,
     visa_sponsorship,
   } = filter;
+  const offset = Math.max(0, Math.floor(offsetRaw ?? 0));
   // Map company chips use primary + secondary geocodes; "nearby" for a chip must
   // match the closest listed location, not only the primary lat/lng column.
   if (company?.trim()) {
@@ -3314,9 +3324,10 @@ ${LIST_JOBS_ROW_SELECT}
     AND ${hav} <= ?
     ORDER BY ${hav} ASC
     LIMIT ?
+    OFFSET ?
   `;
 
-  const allBindings = [...bindings, radius_km, limit];
+  const allBindings = [...bindings, radius_km, limit, offset];
   const { results } = await db.prepare(sql).bind(...allBindings).all<ListJobsRow>();
   return { rows: results ?? [] };
 }

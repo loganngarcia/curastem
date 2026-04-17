@@ -71,6 +71,15 @@ import type { Env, PublicJob } from "../types.ts";
 import { jsonOk } from "../utils/errors.ts";
 import { authenticate, recordKeyUsage } from "../middleware/auth.ts";
 import { checkRateLimit } from "../middleware/rateLimit.ts";
+import { logger } from "../utils/logger.ts";
+import {
+  JOBS_LIST_CACHE_VERSION,
+  JOBS_LIST_CACHE_HDR,
+  JOBS_LIST_CACHE_MAX_AGE_SECONDS,
+  buildJobsListCacheKeySearchString,
+  isJobsListRequestCacheable,
+  jobsListCacheKeyRequest,
+} from "../utils/jobsListCache.ts";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -79,6 +88,15 @@ const MAX_LIMIT = 50;
 // bind slot per ID, so we keep topK at 100 to stay safely within that limit.
 // listJobsByIds also chunks queries if needed for future safety.
 const VECTOR_CANDIDATES = 100;
+
+function hashCacheKeyFingerprint(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
 
 // Cache Gemini query embeddings in KV for 5 minutes.
 // A 768-float vector is ~3 KB. Popular searches ("product manager", "engineer")
@@ -112,6 +130,25 @@ function decodeVectorCursor(cursor: string): number | null {
   } catch {
     return null;
   }
+}
+
+/** Distance-sorted GET /jobs?near_* pagination — OFFSET into Haversine ORDER BY. */
+function decodeNearListingCursor(cursor: string): number | null {
+  try {
+    const padded = cursor.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = atob(padded);
+    if (!decoded.startsWith("nr:")) return null;
+    const offset = parseInt(decoded.slice(3), 10);
+    return isNaN(offset) || offset < 0 ? null : offset;
+  } catch {
+    return null;
+  }
+}
+
+function buildNearListingCursor(currentOffset: number, pageSize: number, rowsReturned: number): string | null {
+  if (rowsReturned < pageSize) return null;
+  const nextOffset = currentOffset + pageSize;
+  return btoa(`nr:${nextOffset}`).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -222,6 +259,83 @@ export async function handleListJobs(
 
   const url = new URL(request.url);
   const params = url.searchParams;
+  const requestStartMs = Date.now();
+  const cacheable = isJobsListRequestCacheable(params);
+  const cacheKeySearchString = cacheable ? buildJobsListCacheKeySearchString(params) : "";
+  const cacheKeyReq = cacheable
+    ? jobsListCacheKeyRequest(request.url, new URLSearchParams(cacheKeySearchString))
+    : null;
+  const cacheKeyFingerprint = cacheable ? hashCacheKeyFingerprint(cacheKeySearchString) : null;
+
+  // ── Cloudflare edge cache (free, per-colo) ─────────────────────────────────
+  if (cacheKeyReq) {
+    const cached = await caches.default.match(cacheKeyReq);
+    if (cached) {
+      const h = new Headers(cached.headers);
+      h.set("Access-Control-Allow-Origin", "*");
+      h.set(JOBS_LIST_CACHE_HDR, "HIT");
+      h.set("X-Curastem-Jobs-Cache-Hash", String(cacheKeyFingerprint));
+      h.set("X-Curastem-Jobs-Cache-Path", "cache");
+      h.set("Access-Control-Expose-Headers", `${JOBS_LIST_CACHE_HDR}, X-Curastem-Jobs-Cache-Hash, X-Curastem-Jobs-Cache-Path`);
+      const elapsedMs = Date.now() - requestStartMs;
+      logger.info("jobs_list_request", {
+        route: "/jobs",
+        cache_status: "HIT",
+        cache_key_version: JOBS_LIST_CACHE_VERSION,
+        cache_key_hash: cacheKeyFingerprint,
+        cursor: params.get("cursor") ?? null,
+        has_near: params.has("near_lat") && params.has("near_lng"),
+        has_exclude_ids: params.has("exclude_ids"),
+        has_q: params.has("q"),
+        has_title: params.has("title"),
+        cache_path: "cache",
+        duration_ms: elapsedMs,
+      });
+      return new Response(cached.body, { status: cached.status, headers: h });
+    }
+  }
+
+  const finalize = (
+    resp: Response,
+    path: "near" | "vector" | "sql",
+    rowCount: number,
+    nextCursor: string | null
+  ): Response => {
+    resp.headers.set("Access-Control-Allow-Origin", "*");
+    resp.headers.set(JOBS_LIST_CACHE_HDR, "MISS");
+    resp.headers.set("X-Curastem-Jobs-Cache-Hash", String(cacheKeyFingerprint));
+    resp.headers.set("X-Curastem-Jobs-Cache-Path", path);
+    resp.headers.set(
+      "Access-Control-Expose-Headers",
+      `${JOBS_LIST_CACHE_HDR}, X-Curastem-Jobs-Cache-Hash, X-Curastem-Jobs-Cache-Path`
+    );
+    if (cacheKeyReq && resp.status === 200) {
+      resp.headers.set(
+        "Cache-Control",
+        `public, max-age=${JOBS_LIST_CACHE_MAX_AGE_SECONDS}`
+      );
+      resp.headers.set("X-Curastem-Jobs-Cache-Generated", `${Date.now() - requestStartMs}ms`);
+      // Clone before the body is consumed by the client — caches.default.put
+      // needs its own readable stream.
+      ctx.waitUntil(caches.default.put(cacheKeyReq, resp.clone()));
+    }
+    logger.info("jobs_list_request", {
+      route: "/jobs",
+      cache_status: "MISS",
+      cache_key_version: JOBS_LIST_CACHE_VERSION,
+      cache_key_hash: cacheKeyFingerprint,
+      cache_path: path,
+      cursor: params.get("cursor") ?? null,
+      has_near: params.has("near_lat") && params.has("near_lng"),
+      has_exclude_ids: params.has("exclude_ids"),
+      has_q: params.has("q"),
+      has_title: params.has("title"),
+      row_count: rowCount,
+      next_cursor: nextCursor,
+      duration_ms: Date.now() - requestStartMs,
+    });
+    return resp;
+  };
 
   const limitRaw = parseInt(params.get("limit") ?? String(DEFAULT_LIMIT), 10);
   const limit = isNaN(limitRaw) || limitRaw < 1 ? DEFAULT_LIMIT : Math.min(limitRaw, MAX_LIMIT);
@@ -269,12 +383,14 @@ export async function handleListJobs(
 
   if (!isNaN(nearLat) && !isNaN(nearLng) && nearLat >= -90 && nearLat <= 90 && nearLng >= -180 && nearLng <= 180) {
     try {
+      const nearOffset = cursor ? decodeNearListingCursor(cursor) ?? 0 : 0;
       const { rows } = await listJobsNear(env.JOBS_DB, {
         lat: nearLat,
         lng: nearLng,
         radius_km: Math.min(Math.max(radius_km, 1), 500),
         exclude_remote,
         limit,
+        offset: nearOffset,
         exclude_ids,
         title: titleForSearch,
         q: titleForSearch ? undefined : q,
@@ -288,10 +404,11 @@ export async function handleListJobs(
         company: company || undefined,
         visa_sponsorship,
       });
-      return jsonOk({
+      const nextNear = buildNearListingCursor(nearOffset, limit, rows.length);
+      return finalize(jsonOk({
         data: rows.map(rowToPublicJob),
-        meta: { total: rows.length, limit, next_cursor: null },
-      });
+        meta: { total: rows.length, limit, next_cursor: nextNear },
+      }), "near", rows.length, nextNear);
     } catch (err) {
       console.error("[listJobsNear] failed:", err instanceof Error ? err.message : String(err));
       // fall through to standard path
@@ -452,14 +569,14 @@ export async function handleListJobs(
           const page = reranked.slice(vectorOffset, vectorOffset + limit);
           const nextCursor = buildVectorCursor(vectorOffset, page.length, reranked.length);
 
-          return jsonOk({
+          return finalize(jsonOk({
             data: page.map(rowToPublicJob),
             meta: {
               total: reranked.length,
               limit,
               next_cursor: nextCursor,
             },
-          });
+          }), "vector", page.length, nextCursor);
         }
       }
       // else: Vectorize index is empty OR all vector results were filtered by recency
@@ -494,7 +611,7 @@ export async function handleListJobs(
   const data = rows.map(rowToPublicJob);
   const nextCursor = buildRegularCursor(rows, limit);
 
-  return jsonOk({
+  return finalize(jsonOk({
     data,
     meta: {
       // total is null on cursor pages — it was already returned on page 1
@@ -503,5 +620,5 @@ export async function handleListJobs(
       limit,
       next_cursor: nextCursor,
     },
-  });
+  }), "sql", data.length, nextCursor);
 }

@@ -182,11 +182,11 @@ async function processSource(
       source.source_type === "netflix" ? 180_000 :
       // TikTok: ~3400 global jobs at 100/page = ~35 POST requests ≈ 30-60s.
       source.source_type === "tiktok" ? 120_000 :
-      source.source_type === "hca_careers" ? HCA_CAREERS_FETCH_TIMEOUT_MS :
+      source.source_type === "hca" ? HCA_CAREERS_FETCH_TIMEOUT_MS :
       // Hub listing + ~1k iframe job pages (JSON-LD detail)
       source.source_type === "icims_portal" ? 240_000 :
       source.source_type === "oracle_ce" ? ORACLE_CE_FETCH_TIMEOUT_MS :
-      source.source_type === "aramark_careers" ? ARAMARK_CAREERS_FETCH_TIMEOUT_MS :
+      source.source_type === "aramark" ? ARAMARK_CAREERS_FETCH_TIMEOUT_MS :
       source.source_type === "brassring" ? BRASSRING_FETCH_TIMEOUT_MS :
       // WFN: list pages + one detail GET per job (parallel batches)
       source.source_type === "adp_wfn_recruitment" ? 150_000 :
@@ -883,7 +883,7 @@ export async function processSourceById(
   env: Env,
   sourceId: string,
   limit?: number,
-  /** When set (e.g. metacareers single-job ingest), overrides `sources.base_url` for this run only. */
+  /** When set (e.g. Meta careers single-job ingest), overrides `sources.base_url` for this run only. */
   baseUrlOverride?: string,
   /** When set with `limit`, processes `rawJobs.slice(offset, offset+limit)` after fetch. */
   jobOffset?: number

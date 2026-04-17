@@ -12,7 +12,7 @@ The system has five distinct responsibilities. Understanding the boundary betwee
 ┌─────────────────────────────────────────────────────────────────────┐
 │  1. INGESTION                                                        │
 │     Fetch raw job data from public ATS sources (Greenhouse, Lever,  │
-│     Ashby, Workday, SmartRecruiters). Normalize it. Write to D1.    │
+│     Ashby, JazzHR, Workday, SmartRecruiters). Normalize it. Write to D1.    │
 │     Runs on a 1-hour cron schedule. Isolated from the API path.     │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ writes
@@ -97,7 +97,7 @@ This separation between "what ATS type" (code) and "which company" (data) is int
 **Level 2 — cross-source match:** The `dedup_key` column (`lower(title) + "|" + company_slug`) catches the same job appearing on multiple ATS platforms. When a duplicate is detected, the lower-priority source is skipped. Priority is defined in `src/ingestion/registry.ts`.
 
 Source priority (higher = more trusted):
-- Greenhouse, Lever, Ashby: 100 (direct employer ATS)
+- Greenhouse, Lever, Ashby, JazzHR: 100 (direct employer ATS)
 - Workday: 80
 - SmartRecruiters: 70
 

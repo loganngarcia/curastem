@@ -289,7 +289,7 @@ export type SourceType =
   | "getro"
   /**
    * Jobright.ai native postings (Next.js `/_next/data/.../jobs/info/{id}.json`).
-   * `base_url` must include `jr_ingest_ids` (comma-separated job ids). See jobright.ts.
+   * `base_url` must include `jr_ingest_ids` (comma-separated job ids). See single-companies/jobright.ts.
    */
   | "jobright"
   /**
@@ -304,9 +304,9 @@ export type SourceType =
   | "easyapply"
   /**
    * Meta careers — official `jobsearch/sitemap.xml` plus per-role `JobPosting` JSON-LD on static HTML.
-   * `base_url` is the sitemap URL (see metacareers.ts).
+   * `base_url` is the sitemap URL (see companies/meta.ts).
    */
-  | "metacareers"
+  | "meta"
   /**
    * Rippling Recruiting public boards — Next.js `__NEXT_DATA__` on `ats.rippling.com/{slug}/jobs`.
    * `base_url` is the board root (a single-job URL is normalized). See rippling.ts.
@@ -342,6 +342,11 @@ export type SourceType =
    */
   | "jobvite"
   /**
+   * JazzHR hosted boards (`{subdomain}.applytojob.com`). Listing at `/apply` links to per-job
+   * pages; each page includes `application/ld+json` JobPosting with HTML description. See jazzhr.ts.
+   */
+  | "jazzhr"
+  /**
    * Radancy TalentBrew HTML career sites — `search-jobs` listing + per-job `/job/...` pages
    * (`div.job-description__description` or `div.ats-description`). `base_url` is the search root
    * (e.g. `https://www.schwabjobs.com/search-jobs`). See talentbrew.ts.
@@ -357,9 +362,9 @@ export type SourceType =
   /**
    * Uber corporate careers (uber-sites Fusion RPC). `base_url` is
    * `https://www.uber.com/api/loadSearchJobsResults?localeCode=en` or a `/…/careers/list/` URL
-   * (locale is inferred). See uber_sites.ts.
+   * (locale is inferred). See single-companies/uber.ts.
    */
-  | "uber_sites"
+  | "uber"
   /**
    * Oracle Fusion HCM Candidate Experience — public ADF REST `recruitingCEJobRequisitions`
    * (`/hcmRestApi/resources/latest/...`). `base_url` is the CE sites URL with locale, e.g.
@@ -380,9 +385,9 @@ export type SourceType =
   | "icims_portal"
   /**
    * Shopify marketing careers — Ashby-backed listings on shopify.com (public Ashby posting API off).
-   * `base_url` is `https://www.shopify.com/careers`. See shopify_careers.ts.
+   * `base_url` is `https://www.shopify.com/careers`. See single-companies/shopify.ts.
    */
-  | "shopify_careers"
+  | "shopify"
   /**
    * Oracle Activate career sites (listing often still applies via classic Taleo).
    * `GET {origin}/Search/SearchResults?jtStartIndex=&jtPageSize=` for JSON rows;
@@ -426,14 +431,14 @@ export type SourceType =
   /**
    * HCA Healthcare — `careers.hcahealthcare.com/sitemap.xml` regional `/search/jobs/in/…` pages
    * list `href="/jobs/{requisitionId}-{slug}"`; each job page has `application/ld+json` JobPosting.
-   * `base_url` may be any URL on that host. See hcaCareers.ts.
+   * `base_url` may be any URL on that host. See single-companies/hca.ts.
    */
-  | "hca_careers"
+  | "hca"
   /**
    * Aramark — WordPress `GET /wp-json/aramark/jobs` (JSON array; SPA loads from this endpoint).
-   * `base_url` is that endpoint URL. See aramark_careers.ts.
+   * `base_url` is that endpoint URL. See single-companies/aramark.ts.
    */
-  | "aramark_careers"
+  | "aramark"
   /**
    * TikTok / Life at TikTok — proprietary careers API at api.lifeattiktok.com.
    * POST /config/job/filters → POST /search/job/posts (offset-paginated, PAGE_SIZE=100).
@@ -444,9 +449,9 @@ export type SourceType =
   /**
    * LVMH Group careers — Algolia multi-query on index `PRD-en-us-timestamp-desc`
    * (`filters=category:job`). Public search key from the Next.js client; not routed via `lvmh.com`
-   * `/api/search` (Akamai). See lvmh_algolia.ts.
+   * `/api/search` (Akamai). See single-companies/lvmh.ts.
    */
-  | "lvmh_algolia"
+  | "lvmh"
   /**
    * SAP SuccessFactors Recruitment Marketing (RMK) — `sitemap.xml` lists `/job/{slug}/{reqId}/`;
    * detail HTML uses schema.org JobPosting microdata + `span.jobdescription`. See successfactors_rmk.ts.
@@ -474,7 +479,13 @@ export type SourceType =
    * `base_url` is the search home with `partnerid` and `siteid`, e.g.
    * `https://sjobs.brassring.com/TGnewUI/Search/Home/Home?partnerid=25813&siteid=5079`. See brassring.ts.
    */
-  | "brassring";
+  | "brassring"
+  /**
+   * Gusto Recruiting employer boards (`jobs.gusto.com/boards/...` or `/postings/...`). Uses HTTP
+   * mirror fallback when Cloudflare blocks plain fetch; Browser binding is optional. See
+   * gusto_recruiting.ts.
+   */
+  | "gusto_recruiting";
 
 export type EmploymentType =
   | "full_time"

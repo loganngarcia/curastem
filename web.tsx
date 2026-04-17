@@ -396,7 +396,8 @@ function docCallTypeFromMessage(
 }
 
 const DEFAULT_APP_CODE = `<h1>Welcome to Apps</h1>
-<p>Ask Curastem to build presentations, quizzes, portfolios, and anything you can imagine</p>`
+<p>Ask Curastem to build presentations, quizzes, 
+portfolios, and anything you can imagine</p>`
 
 interface ChatSession {
     id: string
@@ -1577,7 +1578,7 @@ const MAX_P2P_FILE_SIZE_BYTES = 3 * 1024 * 1024 // 3MB limit for P2P transfer
 
 // User abuse guardrails
 // These are designed to prevent abuse and ensure the API is used responsibly
-const MAX_INPUT_LENGTH = 2000 // Limit input characters (send)
+const MAX_INPUT_LENGTH = 8000 // Limit input characters (send)
 const MESSAGE_RATE_LIMIT_MS = 1000 // 1 second between messages
 const API_TIMEOUT_MS = 30000 // 30 seconds timeout
 const MAX_HISTORY_MESSAGES = 50 // Limit history context
@@ -4386,6 +4387,8 @@ const HeaderActions = React.memo(
         downloadTooltip = "Download",
         closeTooltip = "Close",
         shareMode = false,
+        copied = false,
+        copiedTooltip = "Copied link",
     }: {
         themeColors: any
         onDownloadClick: (e: React.MouseEvent) => void
@@ -4400,6 +4403,10 @@ const HeaderActions = React.memo(
         closeTooltip?: string
         /** Swaps the download arrow to point up (share/upload) */
         shareMode?: boolean
+        /** Briefly swap the share/download icon to a checkmark (e.g. after clipboard copy). */
+        copied?: boolean
+        /** Tooltip shown while `copied` is true. */
+        copiedTooltip?: string
     }) => {
         return (
             <div
@@ -4452,9 +4459,11 @@ const HeaderActions = React.memo(
                     >
                         <path
                             d={
-                                shareMode
-                                    ? "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
-                                    : "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M19.9987 13.5V22.7258M19.9987 22.7258L22.9342 19.7903M19.9987 22.7258L17.0633 19.7903"
+                                copied
+                                    ? "M13.5 20.25L18 24.75L26.5 14.75"
+                                    : shareMode
+                                      ? "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M20.0046 22.7258L19.9929 13.5M19.9929 13.5L17.0611 16.4392M19.9929 13.5L22.9321 16.4318"
+                                      : "M13.2891 23.1485V23.9839C13.2891 24.6512 13.5542 25.2912 14.026 25.763C14.4979 26.2349 15.1379 26.5 15.8052 26.5H24.1923C24.8596 26.5 25.4996 26.2349 25.9715 25.763C26.4433 25.2912 26.7084 24.6512 26.7084 23.9839V23.1452M19.9987 13.5V22.7258M19.9987 22.7258L22.9342 19.7903M19.9987 22.7258L17.0633 19.7903"
                             }
                             stroke={themeColors.text.primary}
                             strokeOpacity="0.95"
@@ -4463,7 +4472,7 @@ const HeaderActions = React.memo(
                             strokeLinejoin="round"
                         />
                     </svg>
-                    {isDownloadHovered && (
+                    {(isDownloadHovered || (copied && !isCloseHovered)) && (
                         <Tooltip
                             style={{
                                 top: "100%",
@@ -4472,7 +4481,7 @@ const HeaderActions = React.memo(
                                 zIndex: 100,
                             }}
                         >
-                            {downloadTooltip}
+                            {copied ? copiedTooltip : downloadTooltip}
                         </Tooltip>
                     )}
                 </div>
@@ -6819,7 +6828,10 @@ const DocEditor = React.memo(function DocEditor({
                             paddingBottom: isMobileLayout
                                 ? "max(160px, calc(48px + env(safe-area-inset-bottom, 0px) + 88px))"
                                 : "48px", // mobile: extra space so text clears the floating chat input bar
-                            fontSize: 14,
+                            // Mobile Safari auto-zooms into any editable field
+                            // whose computed font-size is < 16px on focus, so
+                            // keep the doc editor at 16 on mobile.
+                            fontSize: isMobileLayout ? 16 : 14,
                             fontFamily: DOC_FONT_STACK,
                             fontWeight: 400,
                             lineHeight: 1.55,
@@ -10863,6 +10875,36 @@ interface ReportModalProps {
     participantCount?: number
     themeColors?: typeof darkColors
     reportType?: "user" | "chat"
+    /** Pull-to-dismiss motion value driven by the parent (mobile only). */
+    dragY?: ReturnType<typeof useMotionValue<number>>
+}
+
+/** 1.2 stroke-width checkmark used in the Submit → "Reported" confirmation. */
+function CheckmarkIcon({
+    size = 14,
+    color = "#000",
+}: {
+    size?: number
+    color?: string
+}) {
+    return (
+        <svg
+            width={size}
+            height={size}
+            viewBox="0 0 16 16"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+        >
+            <path
+                d="M3 8.5L6.5 12L13 5"
+                stroke={color}
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
+    )
 }
 
 function ReportModal({
@@ -10872,10 +10914,15 @@ function ReportModal({
     participantCount = 2,
     themeColors = darkColors,
     reportType = "user",
+    dragY,
 }: ReportModalProps) {
     const [selected, setSelected] = React.useState<string | null>(null)
     const [hoveredRow, setHoveredRow] = React.useState<string | null>(null)
     const [isCloseHovered, setIsCloseHovered] = React.useState(false)
+    // After Submit: swap button content to "Reported" + checkmark and hold the
+    // sheet open for 1.5s so the confirmation reads before dismissal.
+    const [justSubmitted, setJustSubmitted] = React.useState(false)
+    const submitTimerRef = React.useRef<number | null>(null)
 
     const reasons = [
         "Violence & self-harm",
@@ -10893,8 +10940,30 @@ function ReportModal({
     React.useEffect(() => {
         if (!isOpen) {
             setSelected(null)
+            setJustSubmitted(false)
+            if (submitTimerRef.current != null) {
+                window.clearTimeout(submitTimerRef.current)
+                submitTimerRef.current = null
+            }
         }
     }, [isOpen])
+
+    React.useEffect(() => {
+        return () => {
+            if (submitTimerRef.current != null) {
+                window.clearTimeout(submitTimerRef.current)
+            }
+        }
+    }, [])
+
+    const handleSubmit = React.useCallback(() => {
+        if (!selected || justSubmitted) return
+        setJustSubmitted(true)
+        submitTimerRef.current = window.setTimeout(() => {
+            submitTimerRef.current = null
+            onSubmit(selected)
+        }, 1000)
+    }, [selected, justSubmitted, onSubmit])
 
     const handleBackdropClick = (e: React.MouseEvent) => {
         if (e.target === e.currentTarget) onClose()
@@ -10913,8 +10982,6 @@ function ReportModal({
               ? "Why are you reporting this user? User in violation will be banned."
               : "Why are you reporting this user?"
 
-    if (!isOpen) return null
-
     return (
         <ModalSheet
             isOpen={isOpen}
@@ -10922,50 +10989,57 @@ function ReportModal({
             themeColors={themeColors}
             zIndex={10000}
             className="ReportOverlay"
+            dragY={isMobileLayout ? dragY : undefined}
             sheetStyle={{
+                flex: "none",
                 width: isMobileLayout ? "100%" : 400,
                 height: isMobileLayout ? "calc(100% - 16px)" : "auto",
                 maxWidth: isMobileLayout ? "none" : 400,
                 maxHeight: isMobileLayout ? "none" : 600,
-                paddingTop: 24,
-                paddingBottom: 28,
-                paddingLeft: isMobileLayout ? 16 : 28,
-                paddingRight: isMobileLayout ? 16 : 28,
                 boxShadow: "0px 4px 24px hsla(0, 0%, 0%, 0.04)",
                 borderRadius: isMobileLayout ? "24px 24px 0 0" : 48,
                 outline: `0.33px ${themeColors.hover.strong} solid`,
                 outlineOffset: "-0.33px",
                 justifyContent: "flex-start",
                 alignItems: "flex-start",
-                gap: 24,
             }}
         >
-            {/* Header */}
+            {/* Floating gradient header — matches Your profile overlay */}
             <div
+                data-layer="report header"
+                className="ReportHeader"
                 style={{
-                    alignSelf: "stretch",
-                    height: "auto",
-                    position: "relative",
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    padding: isMobileLayout ? 16 : 28,
+                    paddingBottom: 32,
+                    background: `linear-gradient(180deg, ${themeColors.background} 72%, transparent 100%)`,
                     flexDirection: "column",
                     justifyContent: "center",
                     alignItems: "flex-start",
                     gap: 8,
                     display: "flex",
+                    zIndex: 2,
+                    pointerEvents: "none",
                 }}
             >
-                <div
+                <h2
                     style={{
+                        margin: 0,
+                        padding: 0,
                         alignSelf: "stretch",
                         color: themeColors.text.primary,
                         fontSize: 16,
                         fontFamily: "Inter",
                         fontWeight: "400",
-                        lineHeight: "18px",
+                        lineHeight: "16px",
                         wordWrap: "break-word",
                     }}
                 >
                     {title}
-                </div>
+                </h2>
                 <div
                     style={{
                         alignSelf: "stretch",
@@ -10976,20 +11050,22 @@ function ReportModal({
                         fontSize: 12,
                         fontFamily: "Inter",
                         fontWeight: "400",
-                        lineHeight: "17px",
+                        lineHeight: "16.8px",
                         wordWrap: "break-word",
                     }}
                 >
                     {question}
                 </div>
+                {/* Close button — re-enable pointer events since parent is none */}
                 <div
                     data-svg-wrapper
                     data-layer="close report button"
                     className="CloseReportButtonHasAFillHoverEffect"
+                    aria-label="Close report"
                     style={{
-                        right: isMobileLayout ? 0 : -12,
-                        top: -12,
                         position: "absolute",
+                        top: isMobileLayout ? 4 : 14,
+                        right: isMobileLayout ? 8 : 16,
                         cursor: "pointer",
                         width: 36,
                         height: 36,
@@ -10997,12 +11073,16 @@ function ReportModal({
                         alignItems: "center",
                         justifyContent: "center",
                         background: isCloseHovered
-                            ? themeColors.hover.strong
+                            ? themeColors.hover.default
                             : "transparent",
                         borderRadius: "50%",
                         transition: "background 0.2s",
+                        pointerEvents: "auto",
                     }}
-                    onClick={onClose}
+                    onClick={() => {
+                        haptic.light()
+                        onClose()
+                    }}
                     onMouseEnter={() =>
                         !isMobileLayout && setIsCloseHovered(true)
                     }
@@ -11014,6 +11094,7 @@ function ReportModal({
                         viewBox="0 0 36 36"
                         fill="none"
                         xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
                     >
                         <path
                             d="M23.25 12.75L12.75 23.25M12.75 12.75L23.25 23.25"
@@ -11027,99 +11108,212 @@ function ReportModal({
                 </div>
             </div>
 
-            {/* Options List */}
+            {/* Scroll body — paddingTop accounts for floating header */}
             <div
+                className="ReportScrollBody"
                 style={{
+                    width: "100%",
+                    // Mobile: flex to fill the full sheet so the pinned submit
+                    // bar sits at the true bottom. Desktop: size to content so
+                    // the sheet's auto height hugs its actual content.
+                    flex: isMobileLayout ? "1 1 0" : "0 0 auto",
+                    overflowY: "auto",
+                    overflowX: "hidden",
                     display: "flex",
                     flexDirection: "column",
+                    gap: 16,
+                    paddingTop: 112,
+                    // Leave room for the mobile pinned submit bar (button 40 +
+                    // 16 gutter + 16 bottom + safe-area inset) so the last
+                    // reason row isn't obscured.
+                    paddingBottom: isMobileLayout
+                        ? "calc(72px + env(safe-area-inset-bottom, 0px) + 16px)"
+                        : 28,
+                    paddingLeft: isMobileLayout ? 16 : 28,
+                    paddingRight: isMobileLayout ? 16 : 28,
+                    boxSizing: "border-box",
                 }}
             >
-                {reasons.map((reason) => (
-                    <div
-                        key={reason}
-                        onClick={() => setSelected(reason)}
-                        onMouseEnter={() => setHoveredRow(reason)}
-                        onMouseLeave={() => setHoveredRow(null)}
-                        style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "8px 0",
-                            cursor: "pointer",
-                        }}
-                    >
-                        <div
-                            style={{
-                                width: 16,
-                                height: 16,
-                                borderRadius: "50%",
-                                border: `0.33px solid ${selected === reason ? themeColors.text.primary : themeColors.text.secondary}`,
-                                background:
-                                    hoveredRow === reason
-                                        ? themeColors.border.subtle
-                                        : "transparent",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                boxSizing: "border-box",
-                            }}
-                        >
-                            {selected === reason && (
-                                <div
-                                    style={{
-                                        width: 7,
-                                        height: 7,
-                                        borderRadius: "50%",
-                                        background: themeColors.text.primary,
-                                    }}
-                                />
-                            )}
-                        </div>
-                        <div
-                            style={{
-                                color: themeColors.text.primary,
-                                fontSize: 15,
-                                fontFamily: "Inter",
-                                fontWeight: "400",
-                                opacity: 0.95,
-                            }}
-                        >
-                            {reason}
-                        </div>
-                    </div>
-                ))}
-            </div>
+                <style>{`
+                    .ReportScrollBody::-webkit-scrollbar { display: none; }
+                `}</style>
 
-            {/* Footer / Submit */}
-            <div
-                style={{
-                    display: "flex",
-                    justifyContent: "flex-end",
-                }}
-            >
-                <button
-                    disabled={!selected}
-                    onClick={() => selected && onSubmit(selected)}
+                {/* Options List */}
+                <div
                     style={{
-                        padding: "10px 12px",
-                        borderRadius: 28,
-                        background: selected
-                            ? themeColors.text.primary
-                            : themeColors.surface,
-                        color: selected
-                            ? themeColors.surfaceBlack
-                            : themeColors.text.tertiary,
-                        border: "none",
-                        fontSize: 14,
-                        fontFamily: "Inter",
-                        fontWeight: "500",
-                        cursor: selected ? "pointer" : "default",
-                        boxSizing: "border-box",
+                        display: "flex",
+                        flexDirection: "column",
                     }}
                 >
-                    Submit
-                </button>
+                    {reasons.map((reason) => (
+                        <div
+                            key={reason}
+                            onClick={() => setSelected(reason)}
+                            onMouseEnter={() => setHoveredRow(reason)}
+                            onMouseLeave={() => setHoveredRow(null)}
+                            style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                padding: "8px 0",
+                                cursor: "pointer",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    width: 16,
+                                    height: 16,
+                                    borderRadius: "50%",
+                                    border: `0.33px solid ${selected === reason ? themeColors.text.primary : themeColors.text.secondary}`,
+                                    background:
+                                        hoveredRow === reason
+                                            ? themeColors.border.subtle
+                                            : "transparent",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    boxSizing: "border-box",
+                                }}
+                            >
+                                {selected === reason && (
+                                    <div
+                                        style={{
+                                            width: 7,
+                                            height: 7,
+                                            borderRadius: "50%",
+                                            background:
+                                                themeColors.text.primary,
+                                        }}
+                                    />
+                                )}
+                            </div>
+                            <div
+                                style={{
+                                    color: themeColors.text.primary,
+                                    fontSize: 15,
+                                    fontFamily: "Inter",
+                                    fontWeight: "400",
+                                    opacity: 0.95,
+                                }}
+                            >
+                                {reason}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Desktop inline footer — right-aligned pill button */}
+                {!isMobileLayout && (
+                    <div
+                        style={{
+                            display: "flex",
+                            justifyContent: "flex-end",
+                            marginTop: 8,
+                        }}
+                    >
+                        <button
+                            disabled={!selected || justSubmitted}
+                            onClick={handleSubmit}
+                            style={{
+                                padding: "10px 12px",
+                                borderRadius: 28,
+                                background: selected
+                                    ? themeColors.text.primary
+                                    : themeColors.surface,
+                                color: selected
+                                    ? themeColors.surfaceBlack
+                                    : themeColors.text.tertiary,
+                                border: "none",
+                                fontSize: 14,
+                                fontFamily: "Inter",
+                                fontWeight: "500",
+                                cursor:
+                                    selected && !justSubmitted
+                                        ? "pointer"
+                                        : "default",
+                                boxSizing: "border-box",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: 6,
+                            }}
+                        >
+                            {justSubmitted ? (
+                                <>
+                                    <CheckmarkIcon
+                                        size={14}
+                                        color={themeColors.surfaceBlack}
+                                    />
+                                    Reported
+                                </>
+                            ) : (
+                                "Submit"
+                            )}
+                        </button>
+                    </div>
+                )}
             </div>
+
+            {/* Mobile pinned full-width Submit — respects sheet side padding
+                and safe-area inset so it sits flush at the bottom. */}
+            {isMobileLayout && (
+                <div
+                    style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        padding: 16,
+                        paddingBottom:
+                            "calc(16px + env(safe-area-inset-bottom, 0px))",
+                        boxSizing: "border-box",
+                        background: themeColors.background,
+                        zIndex: 2,
+                    }}
+                >
+                    <button
+                        disabled={!selected || justSubmitted}
+                        onClick={handleSubmit}
+                        style={{
+                            width: "100%",
+                            height: 48,
+                            padding: "0 12px",
+                            borderRadius: 28,
+                            background: selected
+                                ? themeColors.text.primary
+                                : themeColors.surface,
+                            color: selected
+                                ? themeColors.surfaceBlack
+                                : themeColors.text.tertiary,
+                            border: "none",
+                            fontSize: 15,
+                            fontFamily: "Inter",
+                            fontWeight: "500",
+                            cursor:
+                                selected && !justSubmitted
+                                    ? "pointer"
+                                    : "default",
+                            boxSizing: "border-box",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 8,
+                        }}
+                    >
+                        {justSubmitted ? (
+                            <>
+                                <CheckmarkIcon
+                                    size={16}
+                                    color={themeColors.surfaceBlack}
+                                />
+                                Reported
+                            </>
+                        ) : (
+                            "Submit"
+                        )}
+                    </button>
+                </div>
+            )}
         </ModalSheet>
     )
 }
@@ -11704,6 +11898,71 @@ const JobSkeleton = ({
         }}
     />
 )
+
+/** Single map drawer job row — shared by company feed, explore loading, and load-more. */
+function MapDrawerJobRowSkeleton({
+    themeColors,
+    cardBg,
+    ariaBusy,
+    ariaLabel,
+}: {
+    themeColors: typeof darkColors
+    cardBg: string
+    ariaBusy?: boolean
+    ariaLabel?: string
+}) {
+    const h = themeColors.hover.default
+    return (
+        <div
+            style={{
+                background: cardBg,
+                borderRadius: 28,
+                padding: "16px 20px",
+                flexShrink: 0,
+            }}
+            aria-busy={ariaBusy}
+            aria-label={ariaLabel}
+        >
+            <div
+                style={{
+                    height: 18,
+                    width: "65%",
+                    background: h,
+                    borderRadius: 6,
+                    marginBottom: 10,
+                    animation: "homepageSkeleton 1.4s ease-in-out infinite",
+                }}
+            />
+            <div
+                style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                }}
+            >
+                <div
+                    style={{
+                        width: 16,
+                        height: 16,
+                        borderRadius: 8,
+                        background: h,
+                        flexShrink: 0,
+                        animation: "homepageSkeleton 1.4s ease-in-out infinite",
+                    }}
+                />
+                <div
+                    style={{
+                        height: 13,
+                        width: "40%",
+                        background: h,
+                        borderRadius: 6,
+                        animation: "homepageSkeleton 1.4s ease-in-out infinite",
+                    }}
+                />
+            </div>
+        </div>
+    )
+}
 
 // Large card: featured card in sections 1 and 2
 const BigJobCard = ({
@@ -14387,6 +14646,23 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
 }) {
     const [isShareHovered, setIsShareHovered] = React.useState(false)
     const [isCloseHovered, setIsCloseHovered] = React.useState(false)
+    // When the browser lacks a share sheet we fall back to clipboard copy —
+    // flip this for ~1.5s so the icon briefly becomes a checkmark as feedback.
+    const [justCopied, setJustCopied] = React.useState(false)
+    const copiedTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+        null
+    )
+    const flashCopied = React.useCallback(() => {
+        if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+        setJustCopied(true)
+        copiedTimerRef.current = setTimeout(() => setJustCopied(false), 1500)
+    }, [])
+    React.useEffect(
+        () => () => {
+            if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+        },
+        []
+    )
     const clipRef = React.useRef<HTMLDivElement>(null)
     const swipeColPrevRef = React.useRef<HTMLDivElement>(null)
     const swipeColCenterRef = React.useRef<HTMLDivElement>(null)
@@ -14499,15 +14775,22 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         const url = `${origin}/?job=${job.id}`
         const text = `${job.title} at ${job.company.name}`
         if (typeof navigator === "undefined") return
+        const copyToClipboard = async () => {
+            try {
+                await navigator.clipboard?.writeText(url)
+                flashCopied()
+            } catch {
+                /* clipboard blocked (e.g. insecure context) — silent */
+            }
+        }
         if (navigator.share) {
             try {
                 await navigator.share({ title: text, url, text })
             } catch (e) {
-                if ((e as Error).name !== "AbortError")
-                    navigator.clipboard?.writeText(url)
+                if ((e as Error).name !== "AbortError") await copyToClipboard()
             }
         } else {
-            navigator.clipboard?.writeText(url)
+            await copyToClipboard()
         }
     }
 
@@ -14558,6 +14841,8 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                     onCloseHoverChange={setIsCloseHovered}
                     downloadTooltip="Share"
                     shareMode
+                    copied={justCopied}
+                    copiedTooltip="Copied link"
                 />
             </div>
 
@@ -15652,7 +15937,15 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     const [overlayNextCursor, setOverlayNextCursor] = React.useState<
         string | null
     >(null)
+    const overlayNextCursorRef = React.useRef<string | null>(null)
+    React.useEffect(() => {
+        overlayNextCursorRef.current = overlayNextCursor
+    }, [overlayNextCursor])
     const [isLoadingOverlay, setIsLoadingOverlay] = React.useState(false)
+    const [isLoadingOverlayMore, setIsLoadingOverlayMore] =
+        React.useState(false)
+    const overlayLoadMoreInFlightRef = React.useRef(false)
+    const mapExploreLoadMoreSentinelRef = React.useRef<HTMLDivElement>(null)
     // How many of the currently displayed company-view jobs are "nearby" (geocoded within radius)
     const [nearbyJobCount, setNearbyJobCount] = React.useState<number | null>(
         null
@@ -15813,7 +16106,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         // Fetch /jobs/map for the current viewport bbox, then merge into the
         // accumulated cache. Re-fetch when the center moves a meaningful fraction
         // of the view (pan), when zoom changes span enough, or when q/filters change.
-        const MAX_CHIPS = 100
+        const MAX_CHIPS = 50
         /** Relative span change that counts as a zoom change (10%). */
         const ZOOM_SPAN_THRESHOLD = 0.1
         /**
@@ -15969,7 +16262,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                 Math.floor(Date.now() / 1000) -
                 (daysMap[filterDaysRef.current] ?? 7) * 24 * 60 * 60
 
-            // Pass center so backend orders by distance (closest first) and limits to 100
+            // Pass center so backend orders by distance (closest first) and limits to MAX_CHIPS
             const params = new URLSearchParams({
                 since: String(sinceTs),
                 min_lat: String(minLat),
@@ -16213,6 +16506,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         })
         if (filterType) p.set("employment_type", filterType)
         if (filterSeniority) p.set("seniority_level", filterSeniority)
+        setIsLoadingOverlayMore(false)
+        overlayLoadMoreInFlightRef.current = false
         setIsLoadingOverlay(true)
         fetch(`${jobsApiUrl}/jobs?${p}`, { signal: ctrl.signal })
             .then((r) => (r.ok ? r.json() : { data: [], meta: {} }))
@@ -16303,6 +16598,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         })
         if (filterType) p.set("employment_type", filterType)
         if (filterSeniority) p.set("seniority_level", filterSeniority)
+        setIsLoadingOverlayMore(false)
+        overlayLoadMoreInFlightRef.current = false
         setIsLoadingOverlay(true)
         fetch(`${jobsApiUrl}/jobs?${p}`, { signal: ctrl.signal })
             .then((r) => (r.ok ? r.json() : { data: [], meta: {} }))
@@ -16340,6 +16637,114 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         selectedChipEntry,
         debouncedMapSearchQuery,
         jobsApiUrl,
+        mapsReady,
+        mapHasIdle,
+    ])
+
+    const loadMoreMapExploreJobs = React.useCallback(async () => {
+        if (!jobsApiUrl) return
+        if (selectedChipEntryRef.current) return
+        const cursor = overlayNextCursorRef.current
+        if (!cursor || overlayLoadMoreInFlightRef.current) return
+        const anchor = overlayFetchCoordsRef.current
+        if (!anchor) return
+
+        const genAtStart = mapExploreFeedGenRef.current
+
+        const q = debouncedMapSearchQuery.trim()
+
+        const daysMap: Record<string, number> = {
+            "1d": 1,
+            "3d": 3,
+            "7d": 7,
+            "30d": 30,
+        }
+        const sinceTs =
+            Math.floor(Date.now() / 1000) -
+            (daysMap[filterDays] ?? 7) * 24 * 60 * 60
+
+        const { radiusKm, limit } = mapViewportVisibleSpan
+            ? radiusKmForMapDrawerList(
+                  mapViewportVisibleSpan.latSpan,
+                  mapViewportVisibleSpan.lngSpan,
+                  anchor.lat
+              )
+            : { radiusKm: 50, limit: 30 }
+
+        const p = new URLSearchParams({
+            near_lat: String(anchor.lat),
+            near_lng: String(anchor.lng),
+            radius_km: String(radiusKm),
+            since: String(sinceTs),
+            limit: String(limit),
+            exclude_remote: "true",
+            cursor,
+        })
+        if (q) p.set("q", q)
+        if (filterType) p.set("employment_type", filterType)
+        if (filterSeniority) p.set("seniority_level", filterSeniority)
+
+        overlayLoadMoreInFlightRef.current = true
+        setIsLoadingOverlayMore(true)
+        try {
+            const r = await fetch(`${jobsApiUrl}/jobs?${p}`)
+            const json: {
+                data?: HomepageJob[]
+                meta?: { next_cursor?: string | null }
+            } = r.ok ? await r.json() : { data: [], meta: {} }
+            if (genAtStart !== mapExploreFeedGenRef.current) return
+            const jobs = Array.isArray(json.data) ? json.data : []
+            const sorted = sortNearbyJobsByDistanceThenPosted(
+                jobs,
+                anchor.lat,
+                anchor.lng
+            )
+            setSelectedJobs((prev) => {
+                const base = prev ?? []
+                const seen = new Set(base.map((j) => j.id))
+                const out = [...base]
+                for (const j of sorted) {
+                    if (!seen.has(j.id)) {
+                        seen.add(j.id)
+                        out.push(j)
+                    }
+                }
+                return out
+            })
+            setOverlayNextCursor(json.meta?.next_cursor ?? null)
+        } finally {
+            overlayLoadMoreInFlightRef.current = false
+            setIsLoadingOverlayMore(false)
+        }
+    }, [
+        jobsApiUrl,
+        debouncedMapSearchQuery,
+        filterDays,
+        filterType,
+        filterSeniority,
+        mapViewportVisibleSpan,
+    ])
+
+    React.useEffect(() => {
+        const root = overlayScrollRef.current
+        const sentinel = mapExploreLoadMoreSentinelRef.current
+        if (!root || !sentinel || selectedChipEntry || !overlayNextCursor)
+            return
+
+        const obs = new IntersectionObserver(
+            (entries) => {
+                if (!entries[0]?.isIntersecting) return
+                void loadMoreMapExploreJobs()
+            },
+            { root, rootMargin: "160px", threshold: 0 }
+        )
+        obs.observe(sentinel)
+        return () => obs.disconnect()
+    }, [
+        overlayNextCursor,
+        selectedChipEntry,
+        selectedJobs?.length,
+        loadMoreMapExploreJobs,
         mapsReady,
         mapHasIdle,
     ])
@@ -16616,7 +17021,13 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         // Small deterministic jitter per chip so nearby employers do not sit on identical
         // pixels. Seed is company + lat/lng only — never neighbor set or zoom — so dots
         // do not jump when clustering membership used to change across zoom levels.
-        const SCATTER_BASE = 0.0013
+        //
+        // Uniform disk in (lat,lng): radius r = sqrt(U)·R and angle θ from two hashes with
+        // unrelated prefixes so FNV outputs are not correlated (Cartesian u,v from `|x`/`|y`
+        // produced visible ~45° lines). sqrt(U) spreads area uniformly in the disk — unlike
+        // a fixed annulus, which read as a ring.
+        // ~0.0051° lat ≈ 560 m max radius before per-chip scale.
+        const SCATTER_BASE = 0.0051
 
         const pts: Array<{ entry: MapCompanyEntry; lat: number; lng: number }> =
             []
@@ -16627,13 +17038,15 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         for (const { entry, lat, lng } of pts) {
             const cosLat = Math.cos((lat * Math.PI) / 180)
             const seed = `${entry.company_id}|${lat.toFixed(5)}|${lng.toFixed(5)}`
-            const angle = ((fnv(seed) % 100000) / 100000) * Math.PI * 2
-            const r =
-                SCATTER_BASE * (0.7 + ((fnv(seed, 1) % 1000) / 1000) * 0.6)
+            const uRad = (fnv(`mapjit-r:${seed}`) % 1_000_000) / 1_000_000
+            const uTheta =
+                ((fnv(`mapjit-theta:${seed}`) % 1_000_000) / 1_000_000) * Math.PI * 2
+            const scale = 0.75 + ((fnv(seed, 1) % 1000) / 1000) * 0.55
+            const r = Math.sqrt(uRad) * SCATTER_BASE * scale
             placeChip(
                 entry,
-                lat + r * Math.cos(angle),
-                lng + (r * Math.sin(angle)) / cosLat
+                lat + r * Math.cos(uTheta),
+                lng + (r * Math.sin(uTheta)) / cosLat
             )
         }
 
@@ -16812,6 +17225,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         justifyContent: "center",
         padding: 0,
         boxShadow: isDark ? "none" : "0 1px 4px rgba(0,0,0,0.24)",
+        position: "relative",
+    }
+    // Hover tracking for map toolbar tooltips (close / location / zoom in/out).
+    const [hoveredMapBtn, setHoveredMapBtn] = React.useState<
+        null | "close" | "location" | "zoomIn" | "zoomOut"
+    >(null)
+    const mapTooltipStyle: React.CSSProperties = {
+        top: "50%",
+        right: "100%",
+        transform: "translate(-8px, -50%)",
+        zIndex: 100,
     }
 
     // X icon for company feed close button (12×12, primaryText)
@@ -16942,6 +17366,10 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                         haptic.light()
                         onClose()
                     }}
+                    onMouseEnter={() => setHoveredMapBtn("close")}
+                    onMouseLeave={() =>
+                        setHoveredMapBtn((v) => (v === "close" ? null : v))
+                    }
                     style={tbStyle}
                 >
                     <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
@@ -16953,6 +17381,9 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                             strokeLinejoin="round"
                         />
                     </svg>
+                    {!isMobile && hoveredMapBtn === "close" && (
+                        <Tooltip style={mapTooltipStyle}>Close</Tooltip>
+                    )}
                 </button>
 
                 {/* Current location — desktop only; mobile version floats above the feed sheet */}
@@ -16960,6 +17391,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                     <button
                         aria-label="Go to current location"
                         onClick={handleCurrentLocation}
+                        onMouseEnter={() => setHoveredMapBtn("location")}
+                        onMouseLeave={() =>
+                            setHoveredMapBtn((v) =>
+                                v === "location" ? null : v
+                            )
+                        }
                         style={tbStyle}
                     >
                         <svg
@@ -16977,6 +17414,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 strokeLinejoin="round"
                             />
                         </svg>
+                        {hoveredMapBtn === "location" && (
+                            <Tooltip style={mapTooltipStyle}>
+                                My location
+                            </Tooltip>
+                        )}
                     </button>
                 )}
 
@@ -17000,6 +17442,12 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     (mapInstanceRef.current.getZoom() ?? 11) + 1
                                 )
                             }
+                            onMouseEnter={() => setHoveredMapBtn("zoomIn")}
+                            onMouseLeave={() =>
+                                setHoveredMapBtn((v) =>
+                                    v === "zoomIn" ? null : v
+                                )
+                            }
                             style={{
                                 width: 40,
                                 height: 40,
@@ -17010,6 +17458,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 alignItems: "center",
                                 justifyContent: "center",
                                 padding: 0,
+                                position: "relative",
                             }}
                         >
                             <svg
@@ -17026,12 +17475,23 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     strokeLinejoin="round"
                                 />
                             </svg>
+                            {hoveredMapBtn === "zoomIn" && (
+                                <Tooltip style={mapTooltipStyle}>
+                                    Zoom in
+                                </Tooltip>
+                            )}
                         </button>
                         <button
                             aria-label="Zoom out"
                             onClick={() =>
                                 mapInstanceRef.current?.setZoom(
                                     (mapInstanceRef.current.getZoom() ?? 11) - 1
+                                )
+                            }
+                            onMouseEnter={() => setHoveredMapBtn("zoomOut")}
+                            onMouseLeave={() =>
+                                setHoveredMapBtn((v) =>
+                                    v === "zoomOut" ? null : v
                                 )
                             }
                             style={{
@@ -17044,6 +17504,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                 alignItems: "center",
                                 justifyContent: "center",
                                 padding: 0,
+                                position: "relative",
                             }}
                         >
                             <svg
@@ -17060,6 +17521,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                     strokeLinejoin="round"
                                 />
                             </svg>
+                            {hoveredMapBtn === "zoomOut" && (
+                                <Tooltip style={mapTooltipStyle}>
+                                    Zoom out
+                                </Tooltip>
+                            )}
                         </button>
                     </div>
                 )}
@@ -18643,64 +19109,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                 10
                                             ),
                                         }).map((_, i) => (
-                                            <div
+                                            <MapDrawerJobRowSkeleton
                                                 key={i}
-                                                style={{
-                                                    background: cardBg,
-                                                    borderRadius: 28,
-                                                    padding: "16px 20px",
-                                                    flexShrink: 0,
-                                                }}
-                                            >
-                                                <div
-                                                    style={{
-                                                        height: 18,
-                                                        width: "65%",
-                                                        background:
-                                                            themeColors.hover
-                                                                .default,
-                                                        borderRadius: 6,
-                                                        marginBottom: 10,
-                                                        animation:
-                                                            "homepageSkeleton 1.4s ease-in-out infinite",
-                                                    }}
-                                                />
-                                                <div
-                                                    style={{
-                                                        display: "flex",
-                                                        gap: 8,
-                                                        alignItems: "center",
-                                                    }}
-                                                >
-                                                    <div
-                                                        style={{
-                                                            width: 16,
-                                                            height: 16,
-                                                            borderRadius: 8,
-                                                            background:
-                                                                themeColors
-                                                                    .hover
-                                                                    .default,
-                                                            flexShrink: 0,
-                                                            animation:
-                                                                "homepageSkeleton 1.4s ease-in-out infinite",
-                                                        }}
-                                                    />
-                                                    <div
-                                                        style={{
-                                                            height: 13,
-                                                            width: "40%",
-                                                            background:
-                                                                themeColors
-                                                                    .hover
-                                                                    .default,
-                                                            borderRadius: 6,
-                                                            animation:
-                                                                "homepageSkeleton 1.4s ease-in-out infinite",
-                                                        }}
-                                                    />
-                                                </div>
-                                            </div>
+                                                themeColors={themeColors}
+                                                cardBg={cardBg}
+                                            />
                                         ))
                                     ) : selectedChipEntry &&
                                       nearbyJobCount !== null &&
@@ -18720,74 +19133,20 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         </div>
                                     ) : !selectedChipEntry &&
                                       mapSearchQuery.trim() !== "" &&
+                                      selectedJobs.length === 0 &&
                                       (mapSearchQuery.trim() !==
                                           debouncedMapSearchQuery.trim() ||
                                           (debouncedMapSearchQuery.trim() !==
                                               "" &&
                                               isLoadingOverlay)) ? (
-                                        // Global search: skeleton as soon as the box has text (ahead of debounce) or while /jobs?q is in flight — hide stale list rows.
+                                        // Global search: skeleton only when there is nothing to show yet (first load / cleared). Otherwise keep prior rows until the new fetch replaces them.
                                         Array.from({ length: 4 }).map(
                                             (_, i) => (
-                                                <div
+                                                <MapDrawerJobRowSkeleton
                                                     key={`map-search-pending-sk-${i}`}
-                                                    style={{
-                                                        background: cardBg,
-                                                        borderRadius: 28,
-                                                        padding: "16px 20px",
-                                                        flexShrink: 0,
-                                                    }}
-                                                >
-                                                    <div
-                                                        style={{
-                                                            height: 18,
-                                                            width: "65%",
-                                                            background:
-                                                                themeColors
-                                                                    .hover
-                                                                    .default,
-                                                            borderRadius: 6,
-                                                            marginBottom: 10,
-                                                            animation:
-                                                                "homepageSkeleton 1.4s ease-in-out infinite",
-                                                        }}
-                                                    />
-                                                    <div
-                                                        style={{
-                                                            display: "flex",
-                                                            gap: 8,
-                                                            alignItems:
-                                                                "center",
-                                                        }}
-                                                    >
-                                                        <div
-                                                            style={{
-                                                                width: 16,
-                                                                height: 16,
-                                                                borderRadius: 8,
-                                                                background:
-                                                                    themeColors
-                                                                        .hover
-                                                                        .default,
-                                                                flexShrink: 0,
-                                                                animation:
-                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
-                                                            }}
-                                                        />
-                                                        <div
-                                                            style={{
-                                                                height: 13,
-                                                                width: "40%",
-                                                                background:
-                                                                    themeColors
-                                                                        .hover
-                                                                        .default,
-                                                                borderRadius: 6,
-                                                                animation:
-                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
-                                                            }}
-                                                        />
-                                                    </div>
-                                                </div>
+                                                    themeColors={themeColors}
+                                                    cardBg={cardBg}
+                                                />
                                             )
                                         )
                                     ) : !selectedChipEntry &&
@@ -18800,66 +19159,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                         // Without q, we wait for map idle (overlay anchor) or user geolocation for nearby list.
                                         Array.from({ length: 4 }).map(
                                             (_, i) => (
-                                                <div
+                                                <MapDrawerJobRowSkeleton
                                                     key={`map-feed-sk-${i}`}
-                                                    style={{
-                                                        background: cardBg,
-                                                        borderRadius: 28,
-                                                        padding: "16px 20px",
-                                                        flexShrink: 0,
-                                                    }}
-                                                >
-                                                    <div
-                                                        style={{
-                                                            height: 18,
-                                                            width: "65%",
-                                                            background:
-                                                                themeColors
-                                                                    .hover
-                                                                    .default,
-                                                            borderRadius: 6,
-                                                            marginBottom: 10,
-                                                            animation:
-                                                                "homepageSkeleton 1.4s ease-in-out infinite",
-                                                        }}
-                                                    />
-                                                    <div
-                                                        style={{
-                                                            display: "flex",
-                                                            gap: 8,
-                                                            alignItems:
-                                                                "center",
-                                                        }}
-                                                    >
-                                                        <div
-                                                            style={{
-                                                                width: 16,
-                                                                height: 16,
-                                                                borderRadius: 8,
-                                                                background:
-                                                                    themeColors
-                                                                        .hover
-                                                                        .default,
-                                                                flexShrink: 0,
-                                                                animation:
-                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
-                                                            }}
-                                                        />
-                                                        <div
-                                                            style={{
-                                                                height: 13,
-                                                                width: "40%",
-                                                                background:
-                                                                    themeColors
-                                                                        .hover
-                                                                        .default,
-                                                                borderRadius: 6,
-                                                                animation:
-                                                                    "homepageSkeleton 1.4s ease-in-out infinite",
-                                                            }}
-                                                        />
-                                                    </div>
-                                                </div>
+                                                    themeColors={themeColors}
+                                                    cardBg={cardBg}
+                                                />
                                             )
                                         )
                                     ) : !selectedChipEntry &&
@@ -19192,6 +19496,68 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
                                                     </React.Fragment>
                                                 )
                                             })}
+                                            {!selectedChipEntry &&
+                                                ((overlayNextCursor &&
+                                                    selectedJobs &&
+                                                    selectedJobs.length > 0) ||
+                                                    isLoadingOverlayMore) && (
+                                                    <div
+                                                        style={{
+                                                            display: "flex",
+                                                            flexDirection:
+                                                                "column",
+                                                            gap: 0,
+                                                        }}
+                                                    >
+                                                        {overlayNextCursor &&
+                                                            selectedJobs &&
+                                                            selectedJobs.length >
+                                                                0 && (
+                                                                <div
+                                                                    ref={
+                                                                        mapExploreLoadMoreSentinelRef
+                                                                    }
+                                                                    style={{
+                                                                        height: 1,
+                                                                        width: "100%",
+                                                                        flexShrink: 0,
+                                                                    }}
+                                                                    aria-hidden
+                                                                />
+                                                            )}
+                                                        {isLoadingOverlayMore && (
+                                                            <div
+                                                                role="status"
+                                                                aria-busy
+                                                                aria-label="Loading more jobs"
+                                                                style={{
+                                                                    display:
+                                                                        "flex",
+                                                                    flexDirection:
+                                                                        "column",
+                                                                    gap: 10,
+                                                                    width: "100%",
+                                                                }}
+                                                            >
+                                                                {Array.from({
+                                                                    length: 5,
+                                                                }).map(
+                                                                    (_, i) => (
+                                                                        <MapDrawerJobRowSkeleton
+                                                                            key={`map-load-more-sk-${i}`}
+                                                                            themeColors={
+                                                                                themeColors
+                                                                            }
+                                                                            cardBg={
+                                                                                cardBg
+                                                                            }
+                                                                        />
+                                                                    )
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
                                         </>
                                     )}
                                 </div>
@@ -19374,15 +19740,27 @@ const HomepageJobs = React.memo(function HomepageJobs({
     /** Flat order: next → near → top, for job panel cycling with chat results */
     onHomepageDeckJobs?: (jobs: HomepageJob[]) => void
     onOpenMap?: () => void
-    /** Tools & MCP debug: log each unique /jobs request URL + API row count. */
-    onJobsHomepageQuery?: (url: string, rowCount: number) => void
+    /** Tools & MCP debug: log each unique /jobs request URL + API row count + cache path. */
+    onJobsHomepageQuery?: (
+        url: string,
+        rowCount: number,
+        cacheStatus?: "HIT" | "MISS" | "?"
+    ) => void
 }) {
     const onJobsHomepageQueryRef = React.useRef(onJobsHomepageQuery)
     React.useEffect(() => {
         onJobsHomepageQueryRef.current = onJobsHomepageQuery
     })
-    const emitJobsQuery = (url: string, rowCount: number) => {
-        onJobsHomepageQueryRef.current?.(url, rowCount)
+    const parseJobsCacheStatus = (response: Response): "HIT" | "MISS" | "?" => {
+        const cacheHdr = response.headers.get("X-Curastem-Jobs-Cache")
+        return cacheHdr === "HIT" || cacheHdr === "MISS" ? cacheHdr : "?"
+    }
+    const emitJobsQuery = (
+        url: string,
+        rowCount: number,
+        cacheStatus: "HIT" | "MISS" | "?"
+    ) => {
+        onJobsHomepageQueryRef.current?.(url, rowCount, cacheStatus)
     }
 
     const [nearJobs, setNearJobs] = React.useState<HomepageJob[]>([])
@@ -19505,24 +19883,22 @@ const HomepageJobs = React.memo(function HomepageJobs({
             if (country) u.searchParams.set("country", country)
             const urlStr = u.toString()
             return fetchJ(urlStr)
-                .then((r) => (r.ok ? r.json() : { data: [], meta: {} }))
-                .then(
-                    (j: {
+                .then(async (r) => {
+                    const cacheStatus = parseJobsCacheStatus(r)
+                    if (!r.ok) {
+                        emitJobsQuery(urlStr, 0, cacheStatus)
+                        return { data: [] as HomepageJob[], next_cursor: null as string | null }
+                    }
+                    const j: {
                         data?: unknown
                         meta?: { next_cursor?: string | null }
-                    }) => {
-                        const data = Array.isArray(j.data)
-                            ? (j.data as HomepageJob[])
-                            : []
-                        emitJobsQuery(urlStr, data.length)
-                        return {
-                            data,
-                            next_cursor: j.meta?.next_cursor ?? null,
-                        }
-                    }
-                )
+                    } = await r.json()
+                    const data = Array.isArray(j.data) ? (j.data as HomepageJob[]) : []
+                    emitJobsQuery(urlStr, data.length, cacheStatus)
+                    return { data, next_cursor: j.meta?.next_cursor ?? null }
+                })
                 .catch(() => {
-                    emitJobsQuery(urlStr, 0)
+                    emitJobsQuery(urlStr, 0, "?")
                     return {
                         data: [] as HomepageJob[],
                         next_cursor: null as string | null,
@@ -19670,16 +20046,19 @@ const HomepageJobs = React.memo(function HomepageJobs({
             if (country) u.searchParams.set("country", country)
             const urlStr = u.toString()
             return fetchJ(urlStr)
-                .then((r) => (r.ok ? r.json() : { data: [] }))
-                .then(({ data }) => {
-                    const rows = (
-                        Array.isArray(data) ? data : []
-                    ) as HomepageJob[]
-                    emitJobsQuery(urlStr, rows.length)
+                .then(async (r) => {
+                    const cacheStatus = parseJobsCacheStatus(r)
+                    if (!r.ok) {
+                        emitJobsQuery(urlStr, 0, cacheStatus)
+                        return [] as HomepageJob[]
+                    }
+                    const payload = await r.json()
+                    const rows = (Array.isArray(payload.data) ? payload.data : []) as HomepageJob[]
+                    emitJobsQuery(urlStr, rows.length, cacheStatus)
                     return rows
                 })
                 .catch(() => {
-                    emitJobsQuery(urlStr, 0)
+                    emitJobsQuery(urlStr, 0, "?")
                     return [] as HomepageJob[]
                 })
         }
@@ -19863,16 +20242,19 @@ const HomepageJobs = React.memo(function HomepageJobs({
             if (country) u.searchParams.set("country", country)
             const urlStr = u.toString()
             return fetchJ(urlStr)
-                .then((r) => (r.ok ? r.json() : { data: [] }))
-                .then(({ data }) => {
-                    const rows = (
-                        Array.isArray(data) ? data : []
-                    ) as HomepageJob[]
-                    emitJobsQuery(urlStr, rows.length)
+                .then(async (r) => {
+                    const cacheStatus = parseJobsCacheStatus(r)
+                    if (!r.ok) {
+                        emitJobsQuery(urlStr, 0, cacheStatus)
+                        return [] as HomepageJob[]
+                    }
+                    const payload = await r.json()
+                    const rows = (Array.isArray(payload.data) ? payload.data : []) as HomepageJob[]
+                    emitJobsQuery(urlStr, rows.length, cacheStatus)
                     return rows
                 })
                 .catch(() => {
-                    emitJobsQuery(urlStr, 0)
+                    emitJobsQuery(urlStr, 0, "?")
                     return [] as HomepageJob[]
                 })
         }
@@ -20723,7 +21105,7 @@ const WelcomeOverlay = ({
                         wordWrap: "break-word",
                     }}
                 >
-                    Search thousands of jobs and create AI resumes, practice for
+                    Search millions of jobs, create AI resumes, and practice for
                     interviews, or get help with school.
                 </span>
                 {isMobile ? " " : null}
@@ -25726,59 +26108,59 @@ ${extracted.resumeText.trim()}`
     }, [role])
 
     // chatWidth = width of the CHAT panel (left side). Agents panel = availableWidth - chatWidth.
-    // Persisted so chat area stays the same width when viewport changes; agents absorb the delta.
+    // Non-map tool panel (Doc / Whiteboard / App / Job detail) and map job
+    // overlay persist independently so each can remember its own width.
+    const TOOL_PANEL_WIDTH_KEY = "curastem_tool_panel_width"
+    const MAP_JOB_PANEL_WIDTH_KEY = "curastem_map_job_width"
+
+    const readStoredInt = (key: string, min = 320): number | null => {
+        if (typeof window === "undefined") return null
+        const raw = localStorage.getItem(key)
+        const n = raw ? parseInt(raw, 10) : NaN
+        return !isNaN(n) && n >= min ? n : null
+    }
+    // Max width for the non-map tool panel, used as first-load default.
+    const computeMaxToolPanelWidth = (vw: number) =>
+        Math.min(640, Math.floor(vw * 0.4))
+
     const [chatWidth, setChatWidth] = React.useState(() => {
-        if (typeof window !== "undefined") {
-            // Migrate from old key if present
-            const legacy = localStorage.getItem("omeg_chat_width")
-            const current = localStorage.getItem("curastem_chat_width")
-            const raw = current ?? legacy
-            if (raw) {
-                const parsed = parseInt(raw, 10)
-                // Legacy stored agents width (~940); derive chat width from it
-                // by assuming a 1400px viewport. If it looks like an agents width
-                // (>600) migrate it; otherwise use directly.
-                if (!isNaN(parsed)) {
-                    if (legacy && !current) {
-                        // Stored value was agents width — convert to chat width default
-                        localStorage.removeItem("omeg_chat_width")
-                        return 872
-                    }
-                    return parsed
-                }
-            }
-        }
-        return 872 // default chat width when agents first open
+        if (typeof window === "undefined") return 1000
+        const vw = window.innerWidth || 1400
+        const stored = readStoredInt(TOOL_PANEL_WIDTH_KEY)
+        const toolW = stored ?? computeMaxToolPanelWidth(vw)
+        return Math.max(600, vw - toolW)
     })
 
     React.useEffect(() => {
-        if (typeof window !== "undefined") {
-            localStorage.setItem("curastem_chat_width", String(chatWidth))
-        }
+        if (typeof window === "undefined") return
+        // Don't persist involuntary width changes caused by the sidebar
+        // opening — only save when the user has actually dragged to resize.
+        if (isSidebarOpen && !hasResizedWhileSidebarOpen.current) return
+        const containerWidth =
+            containerRef.current?.clientWidth || window.innerWidth
+        const leftSidebarPx =
+            !isMobileLayout && isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
+        const toolW = Math.max(320, containerWidth - leftSidebarPx - chatWidth)
+        localStorage.setItem(TOOL_PANEL_WIDTH_KEY, String(toolW))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [chatWidth])
 
     const dragStartWidth = React.useRef(872)
-    const liveChatWidthRef = React.useRef(872) // tracks clamped value during drag; committed to state on pointer-up
+    const liveChatWidthRef = React.useRef(872)
     const [isResizing, setIsResizing] = React.useState(false)
+    const hasResizedWhileSidebarOpen = React.useRef(false)
 
-    // Map job detail panel — independently resizable from its left edge, width persisted
-    const [mapJobPanelWidth, setMapJobPanelWidth] = React.useState(() => {
-        if (typeof window !== "undefined") {
-            const saved = localStorage.getItem("curastem_map_job_width")
-            if (saved) {
-                const parsed = parseInt(saved, 10)
-                if (!isNaN(parsed) && parsed >= 320) return parsed
-            }
-        }
-        return 428
-    })
+    // Map job overlay — its own persisted width, separate from the non-map
+    // tool panel. Default 428 when nothing is stored.
+    const [mapJobPanelWidth, setMapJobPanelWidth] = React.useState(
+        () => readStoredInt(MAP_JOB_PANEL_WIDTH_KEY) ?? 428
+    )
     React.useEffect(() => {
-        if (typeof window !== "undefined") {
-            localStorage.setItem(
-                "curastem_map_job_width",
-                String(mapJobPanelWidth)
-            )
-        }
+        if (typeof window === "undefined") return
+        localStorage.setItem(
+            MAP_JOB_PANEL_WIDTH_KEY,
+            String(mapJobPanelWidth)
+        )
     }, [mapJobPanelWidth])
     const mapJobPanelRef = React.useRef<HTMLDivElement>(null)
     const mapDocOverlayRef = React.useRef<HTMLDivElement>(null)
@@ -25930,6 +26312,11 @@ ${extracted.resumeText.trim()}`
     // Refs for WebRTC (declared early so they can be used in useEffect dependencies)
     const activeCalls = React.useRef<Map<string, any>>(new Map())
     const myId = React.useRef("user_" + Math.random().toString(36).substr(2, 6))
+    // Passive MQTT heartbeats fire ~1Hz, so we'd otherwise log the same
+    // "peer detected" / "cannot start chat" line every second. Track the last
+    // (peerId, status) pair we logged so the debug panel only shows transitions.
+    const lastPassiveLogRef = React.useRef<string>("")
+    const lastActiveLogRef = React.useRef<string>("")
 
     // Calculate if I am the host based on peer IDs
     React.useEffect(() => {
@@ -27363,7 +27750,12 @@ Do not include markdown formatting or explanations.`
                 log("Missing ephemeral token from Worker")
                 return
             }
-            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(liveToken)}`
+            // Ephemeral tokens (minted via authTokens.create in the Worker) must
+            // connect to the v1alpha BidiGenerateContentConstrained endpoint with
+            // ?access_token=<token.name>. The unconstrained BidiGenerateContent
+            // path requires a long-lived API key via ?key=… and returns 1008
+            // "unregistered callers" when given an ephemeral token.
+            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(liveToken)}`
             const ws = new WebSocket(url)
             liveClientRef.current = ws
 
@@ -27987,9 +28379,17 @@ Do not include markdown formatting or explanations.`
                                         const jobsRes = await fetch(
                                             `${jobsApiUrl}/jobs?${params}`
                                         )
+                                        const jobsCacheHdr = jobsRes.headers.get(
+                                            "X-Curastem-Jobs-Cache"
+                                        )
+                                        const jobsCacheStatus =
+                                            jobsCacheHdr === "HIT" ||
+                                            jobsCacheHdr === "MISS"
+                                                ? jobsCacheHdr
+                                                : "?"
                                         if (debugPanelRef.current === "tools") {
                                             log(
-                                                `[live tool] search_jobs HTTP ${jobsRes.status}`,
+                                                `[live tool] search_jobs HTTP ${jobsRes.status} cache=${jobsCacheStatus}`,
                                                 "tools"
                                             )
                                         }
@@ -28046,7 +28446,7 @@ Do not include markdown formatting or explanations.`
                                                 "tools"
                                             ) {
                                                 log(
-                                                    `[live tool] search_jobs rows=${snippets.length}`,
+                                `[live tool] search_jobs rows=${snippets.length} cache=${jobsCacheStatus}`,
                                                     "tools"
                                                 )
                                             }
@@ -28416,7 +28816,7 @@ Do not include markdown formatting or explanations.`
         }
     }
 
-    /** Tools & MCP panel: deduped /jobs homepage fetch URLs (with profile job title for context). */
+    /** Tools & MCP panel: deduped /jobs homepage fetch URLs + cache status (with profile job title context). */
     const homepageJobsQueryLoggedRef = React.useRef<Set<string>>(new Set())
     React.useEffect(() => {
         homepageJobsQueryLoggedRef.current.clear()
@@ -28430,12 +28830,17 @@ Do not include markdown formatting or explanations.`
         debouncedYouWorkHomepageDebugRef.current = debouncedYouWork
     }, [debouncedYouWork])
     const emitHomepageJobsQuery = React.useCallback(
-        (url: string, rowCount: number) => {
-            if (homepageJobsQueryLoggedRef.current.has(url)) return
-            homepageJobsQueryLoggedRef.current.add(url)
+        (
+            url: string,
+            rowCount: number,
+            cacheStatus: "HIT" | "MISS" | "?" = "?"
+        ) => {
+            const key = `${cacheStatus}:${url}`
+            if (homepageJobsQueryLoggedRef.current.has(key)) return
+            homepageJobsQueryLoggedRef.current.add(key)
             const t = debouncedYouWorkHomepageDebugRef.current.trim()
             logRefForHomepageJobs.current(
-                `[jobs homepage]${t ? ` title="${t}"` : ""} ${rowCount} rows ${url}`,
+                `[jobs homepage]${t ? ` title="${t}"` : ""} ${rowCount} rows [cache=${cacheStatus}] ${url}`,
                 "tools"
             )
         },
@@ -28726,31 +29131,22 @@ Do not include markdown formatting or explanations.`
     }, [status, geminiProxyUrl, model])
 
     // --- STATE: AI CHAT (GEMINI) ---
-    const [messages, setMessages] = React.useState<Message[]>(() => {
-        if (typeof window !== "undefined") {
-            // Try to restore messages synchronously to prevent empty state render
-            // Check if we have a valid timestamp
-            const savedTime = localStorage.getItem("student_data_timestamp")
-            if (savedTime) {
-                const timeDiff = Date.now() - parseInt(savedTime, 10)
-                if (timeDiff < 24 * 60 * 60 * 1000) {
-                    const savedMessages =
-                        localStorage.getItem("student_messages")
-                    if (savedMessages) {
-                        try {
-                            return JSON.parse(savedMessages)
-                        } catch (e) {
-                            console.error("Failed to parse saved messages", e)
-                        }
-                    }
-                }
-            }
-        }
-        return []
-    })
+    // Full reload always starts empty so the jobs homepage shows; open a saved chat from the sidebar to resume.
+    const [messages, setMessages] = React.useState<Message[]>([])
 
     // --- CHAT HISTORY & SIDEBAR STATE ---
-    const [savedChats, setSavedChats] = React.useState<ChatSession[]>([])
+    const [savedChats, setSavedChats] = React.useState<ChatSession[]>(() => {
+        if (typeof window === "undefined") return []
+        try {
+            const saved = localStorage.getItem("saved_chat_history")
+            if (!saved) return []
+            const parsed = JSON.parse(saved)
+            return Array.isArray(parsed) ? parsed : []
+        } catch (e) {
+            console.error("Failed to load chat history", e)
+            return []
+        }
+    })
 
     // --- SIDEBAR CHAT ACTIONS ---
     const [menuOpenChatId, setMenuOpenChatId] = React.useState<string | null>(
@@ -28785,8 +29181,6 @@ Do not include markdown formatting or explanations.`
         }
     }, [editingChatId])
 
-    // Always start a fresh chat on load — a new ID won't match any savedChats entry,
-    // so the restore effect falls through to the "new chat" branch automatically.
     const [currentChatId, setCurrentChatId] = React.useState<string>(() =>
         Date.now().toString()
     )
@@ -28815,24 +29209,14 @@ Do not include markdown formatting or explanations.`
     const [aiGeneratedSuggestions, setAiGeneratedSuggestions] = React.useState<
         string[]
     >(() => {
-        if (typeof window !== "undefined") {
-            try {
-                const currentId = localStorage.getItem("current_chat_id")
-                const savedHistory = localStorage.getItem("saved_chat_history")
-                if (currentId && savedHistory) {
-                    const history = JSON.parse(savedHistory)
-                    const chat = history.find((c: any) => c.id === currentId)
-                    if (chat && chat.suggestions) {
-                        return chat.suggestions
-                    }
-                }
-            } catch (e) {
-                console.error("Failed to load suggestions from history", e)
-            }
+        if (typeof window === "undefined") return []
+        try {
             const saved = localStorage.getItem("ai_suggestions")
             return saved ? JSON.parse(saved) : []
+        } catch (e) {
+            console.error("Failed to load ai_suggestions", e)
+            return []
         }
-        return []
     })
 
     // Sync suggestions to current chat in savedChats
@@ -28894,10 +29278,24 @@ Do not include markdown formatting or explanations.`
         }
     }, [isSidebarOpen])
 
-    // Motion values for sidebar gesture
+    // Motion values for sidebar gesture. Range is dynamic because mobile uses
+    // 70vw (with a floor) — desktop still fits inside that range since 260 ≤
+    // 70vw on any device ≥ 372px wide.
     const sidebarX = useMotionValue(-260)
-    const sidebarOverlayOpacity = useTransform(sidebarX, [-260, 0], [0, 1])
-    const contentX = useTransform(sidebarX, [-260, 0], [0, 260])
+    const sidebarOverlayOpacity = useTransform(sidebarX, (v) => {
+        const w =
+            typeof window !== "undefined" && window.innerWidth < 768
+                ? Math.max(260, Math.round(window.innerWidth * 0.8))
+                : 260
+        return Math.max(0, Math.min(1, (v + w) / w))
+    })
+    const contentX = useTransform(sidebarX, (v) => {
+        const w =
+            typeof window !== "undefined" && window.innerWidth < 768
+                ? Math.max(260, Math.round(window.innerWidth * 0.8))
+                : 260
+        return Math.max(0, v + w)
+    })
 
     React.useEffect(() => {
         if (typeof window !== "undefined") {
@@ -28905,14 +29303,12 @@ Do not include markdown formatting or explanations.`
         }
     }, [isSidebarOpen])
 
-    useSaveRestoreOnToggle(
-        isAgentOpen,
-        () => isSidebarOpen,
-        setIsSidebarOpen,
-        (saved) => {
-            if (saved) setIsSidebarOpen(false)
-        }
-    )
+    // When any agent panel (doc / whiteboard / app / job / map) is open on
+    // desktop we collapse the left sidebar to reclaim width. We do NOT mutate
+    // `isSidebarOpen` here — otherwise closing the panel flips two pieces of
+    // state across two renders, and the chat panel's width animation reads a
+    // stale `leftSidebarWidth` for one frame and visibly glitches. Instead the
+    // effective width is derived below so both values update in the same render.
 
     const [isSidebarBtnHovered, setIsSidebarBtnHovered] = React.useState(false)
     const [isVideoCallIconHovered, setIsVideoCallIconHovered] =
@@ -29107,19 +29503,6 @@ Do not include markdown formatting or explanations.`
             })
             .catch(() => {})
     }, [openJobDetail])
-
-    React.useEffect(() => {
-        if (typeof window !== "undefined") {
-            const saved = localStorage.getItem("saved_chat_history")
-            if (saved) {
-                try {
-                    setSavedChats(JSON.parse(saved))
-                } catch (e) {
-                    console.error("Failed to load chat history", e)
-                }
-            }
-        }
-    }, [])
 
     const generateChatTitle = React.useCallback(
         async (firstMessageText: string) => {
@@ -29520,65 +29903,13 @@ Do not include markdown formatting or explanations.`
                 }
             }
 
-            // Only fall back to legacy localStorage if we have NO saved chats yet (e.g. very first load ever)
-            // or if savedChats hasn't loaded yet (length 0).
-            const savedTime = localStorage.getItem("student_data_timestamp")
-            if (savedTime) {
-                const timeDiff = Date.now() - parseInt(savedTime, 10)
-                if (timeDiff < 24 * 60 * 60 * 1000) {
-                    // Note: Messages are restored via lazy init now.
-
-                    // Restore Doc if default
-                    if (docContent.includes("Welcome to your notes")) {
-                        const savedDoc = localStorage.getItem("student_doc")
-                        if (savedDoc && savedDoc !== docContent) {
-                            setDocContent(savedDoc)
-                        }
-                        const savedDocType =
-                            localStorage.getItem("student_doc_type")
-                        if (
-                            savedDocType === "resume" ||
-                            savedDocType === "cover_letter"
-                        ) {
-                            setDocType(
-                                savedDocType as "resume" | "cover_letter"
-                            )
-                        }
-                    }
-                    // Restore App Code
-                    const savedAppCode =
-                        localStorage.getItem("student_app_code")
-                    if (savedAppCode) {
-                        setAppCode(savedAppCode)
-                    }
-                    const savedAppMode =
-                        localStorage.getItem("student_app_mode")
-                    if (savedAppMode) {
-                        setAppMode(savedAppMode as any)
-                    }
-                    // Restore Whiteboard (pending snapshot)
-                    if (!editor) {
-                        const savedWhiteboard =
-                            localStorage.getItem("student_whiteboard")
-                        if (savedWhiteboard) {
-                            try {
-                                pendingSnapshotRef.current =
-                                    JSON.parse(savedWhiteboard)
-                            } catch (e) {
-                                console.error("Failed to restore whiteboard", e)
-                            }
-                        }
-                    }
-                } else {
-                    // Expired
-                    localStorage.removeItem("student_messages")
-                    localStorage.removeItem("student_doc")
-                    localStorage.removeItem("student_whiteboard")
-                    localStorage.removeItem("student_app_code")
-                    localStorage.removeItem("student_app_mode")
-                    localStorage.removeItem("student_data_timestamp")
-                }
-            }
+            // Empty sidebar history (first visit or cleared): same defaults as a new chat session.
+            setChatDocs([])
+            setActiveDocId(null)
+            setDocContent(DEFAULT_DOC_CONTENT)
+            setDocType("doc")
+            setDocCompany("")
+            loadedChatIdRef.current = currentChatId
         }
     }, [role, savedChats, currentChatId, applyChatDocHydration])
 
@@ -29637,135 +29968,6 @@ Do not include markdown formatting or explanations.`
         }
     }, [role, messages, docContent, docType, appCode, appMode, editor, status])
 
-    // --- PERSISTENCE: STUDENT / NO-ROLE DATA (24H) ---
-    React.useEffect(() => {
-        // Restore if student OR if no role (initial state)
-        if (role === "student" || role === null) {
-            const savedTime = localStorage.getItem("student_data_timestamp")
-            if (savedTime) {
-                const timeDiff = Date.now() - parseInt(savedTime, 10)
-                if (timeDiff < 24 * 60 * 60 * 1000) {
-                    // Restore Messages if empty
-                    if (messages.length === 0) {
-                        const savedMessages =
-                            localStorage.getItem("student_messages")
-                        if (savedMessages) {
-                            try {
-                                setMessages(JSON.parse(savedMessages))
-                            } catch (e) {
-                                console.error("Failed to restore messages", e)
-                            }
-                        }
-                    }
-                    // Restore Doc if default
-                    if (docContent.includes("Welcome to your notes")) {
-                        const savedDoc = localStorage.getItem("student_doc")
-                        if (savedDoc && savedDoc !== docContent) {
-                            setDocContent(savedDoc)
-                        }
-                        const savedDocType =
-                            localStorage.getItem("student_doc_type")
-                        if (
-                            savedDocType === "resume" ||
-                            savedDocType === "cover_letter"
-                        ) {
-                            setDocType(
-                                savedDocType as "resume" | "cover_letter"
-                            )
-                        }
-                    }
-                    // Restore App Code
-                    const savedAppCode =
-                        localStorage.getItem("student_app_code")
-                    if (savedAppCode) {
-                        setAppCode(savedAppCode)
-                    }
-                    const savedAppMode =
-                        localStorage.getItem("student_app_mode")
-                    if (savedAppMode) {
-                        setAppMode(savedAppMode as any)
-                    }
-                    // Restore Whiteboard (pending snapshot)
-                    if (!editor) {
-                        const savedWhiteboard =
-                            localStorage.getItem("student_whiteboard")
-                        if (savedWhiteboard) {
-                            try {
-                                pendingSnapshotRef.current =
-                                    JSON.parse(savedWhiteboard)
-                            } catch (e) {
-                                console.error("Failed to restore whiteboard", e)
-                            }
-                        }
-                    }
-                } else {
-                    // Expired
-                    localStorage.removeItem("student_messages")
-                    localStorage.removeItem("student_doc")
-                    localStorage.removeItem("student_whiteboard")
-                    localStorage.removeItem("student_app_code")
-                    localStorage.removeItem("student_app_mode")
-                    localStorage.removeItem("student_data_timestamp")
-                }
-            }
-        }
-    }, [role])
-
-    // Save student / no-role / volunteer-pre-connect data
-    React.useEffect(() => {
-        // Save if student, OR if no role, OR if volunteer (until they connect)
-        // Note: Volunteer data gets wiped on connect in handleCall, so saving it here is fine (it's "draft" state).
-        // We use "student_" keys for the generic "my saved work" storage.
-        if (role === "student" || role === null || role === "volunteer") {
-            // Check if we are connected as a volunteer - if so, DO NOT overwrite the saved "student" data with empty volunteer state?
-            // Actually, if I am a volunteer and I am chatting with a student, I DON'T want to save that chat history to my "personal" storage.
-            // But the requirements say: "saves ur msgs until u become a volunteer then in which it deletes ur msgs ONCE u connect with a student"
-
-            // Refined Logic:
-            // 1. If role is STUDENT: Always save.
-            // 2. If role is NULL: Always save.
-            // 3. If role is VOLUNTEER: Only save if NOT connected. (Preserve draft state).
-            //    Once connected, we wiped the state in handleCall. If we save now, we save empty state (which effectively clears storage).
-            //    That seems correct per "deletes ur msgs ONCE u connect".
-
-            // Wait, if I am a volunteer and I connect, handleCall wipes my state.
-            // Then this effect runs (msg changed to empty).
-            // Then it saves empty state to localStorage.
-            // This effectively "deletes" the saved messages. This matches the requirement.
-
-            // Exception: If I am a volunteer connected to a student, do I want to save the *active* session to localStorage?
-            // "Mentors get no chat history saved". So NO.
-            // So if role is volunteer AND status is connected, do NOT save.
-
-            if (role === "volunteer" && status === "connected") {
-                return
-            }
-
-            localStorage.setItem("student_messages", JSON.stringify(messages))
-            localStorage.setItem("student_doc", docContent)
-            localStorage.setItem("student_doc_type", docType)
-            localStorage.setItem("student_app_code", appCode)
-            localStorage.setItem("student_app_mode", appMode)
-            localStorage.setItem(
-                "student_data_timestamp",
-                Date.now().toString()
-            )
-
-            // Save whiteboard snapshot if editor exists
-            if (editor) {
-                try {
-                    const snapshot = editor.store.getSnapshot()
-                    localStorage.setItem(
-                        "student_whiteboard",
-                        JSON.stringify(snapshot)
-                    )
-                } catch (e) {
-                    // Ignore errors during save
-                }
-            }
-        }
-    }, [role, messages, docContent, docType, appCode, appMode, editor, status]) // Triggers on message/doc change. Whiteboard might lag if no other activity.
-
     const hasMessages = messages.length > 0
     const [copiedMessageId, setCopiedMessageId] = React.useState<string | null>(
         null
@@ -29802,7 +30004,7 @@ Do not include markdown formatting or explanations.`
 
     // --- HOOK: SCROLL MANAGER ---
     // Mimics "Chat" behavior (WhatsApp/Telegram/Gemini):
-    // 1. When a page reloads (or first load), we snap to the most recent user message.
+    // 1. When switching threads (currentChatId) with messages, snap to the latest user message.
     // 2. When a user sends a message, snap it to the top.
     // 3. But we must avoid the "void" (scrolling past content).
     // 4. Solution: We can ONLY snap to the top if there is enough content below it.
@@ -29917,7 +30119,10 @@ Do not include markdown formatting or explanations.`
 
     // --- CONSTANTS ---
     const MIN_CHAT_HEIGHT = 204
+    // Desktop sidebar width is fixed; mobile grows to 70vw so wide phones /
+    // tablets get a roomier drawer, with 260 as a floor on narrow devices.
     const LEFT_SIDEBAR_WIDTH = 260
+    const MOBILE_SIDEBAR_MIN = 260
     const MIN_CHAT_WIDTH = 400 // chat panel hard floor
     const CHAT_MAX_WIDTH = 872 // chat panel max when agent sidebar is open
     const AGENTS_MIN_WIDTH = 400 // agent sidebar minimum — viewport too narrow: chat shrinks to cover
@@ -29976,16 +30181,52 @@ Do not include markdown formatting or explanations.`
     // Width 0 happens before first layout / SSR — do not treat as mobile or
     // homepage job skeletons use the wrong (narrow) placeholder layout on desktop.
     const isMobileLayout = containerSize.width > 0 && containerSize.width < 768
+    // Mobile drawer: 70% of the viewport, floored at MOBILE_SIDEBAR_MIN so
+    // narrow phones still get a usable width. Desktop keeps its fixed 260.
+    const mobileSidebarWidth = Math.max(
+        MOBILE_SIDEBAR_MIN,
+        Math.round(containerSize.width * 0.8)
+    )
+    // Any of the floating right-side panels (Doc / Whiteboard / App / Job).
+    // Map is tracked separately because it fills the full width.
+    const isAnyFloatingPanelOpen =
+        isDocOpen || isWhiteboardOpen || isAppOpen || isJobOpen
+    // Effective sidebar width: visually collapsed while an agent panel/map is
+    // open even though `isSidebarOpen` remains true, so closing the panel
+    // restores the sidebar and chat width in the same render.
     const leftSidebarWidth =
-        !isMobileLayout && isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
+        !isMobileLayout && isSidebarOpen && !isAgentOpen
+            ? LEFT_SIDEBAR_WIDTH
+            : 0
+    // Clamp the tool panel width to its maxWidth (min(640, 40%)) so the chat
+    // panel always fills the remaining space — no gap between chat and the
+    // floating panel when chatWidth drifts too small for any reason.
+    const availableDesktopWidth = Math.max(
+        0,
+        containerSize.width - leftSidebarWidth
+    )
+    const toolPanelMaxWidth = Math.min(
+        640,
+        Math.floor(containerSize.width * 0.4)
+    )
+    const toolPanelEffectiveWidth = Math.min(
+        Math.max(0, availableDesktopWidth - chatWidth),
+        toolPanelMaxWidth
+    )
+    const effectiveChatWidth = Math.max(
+        0,
+        availableDesktopWidth - toolPanelEffectiveWidth
+    )
 
     React.useEffect(() => {
-        animate(sidebarX, isSidebarOpen ? 0 : -LEFT_SIDEBAR_WIDTH, {
+        const visuallyOpen = isSidebarOpen && !isAgentOpen
+        const closedX = isMobileLayout ? -mobileSidebarWidth : -LEFT_SIDEBAR_WIDTH
+        animate(sidebarX, visuallyOpen ? 0 : closedX, {
             type: "spring",
             stiffness: 700,
             damping: 50,
         })
-    }, [isSidebarOpen, sidebarX])
+    }, [isSidebarOpen, isAgentOpen, isMobileLayout, mobileSidebarWidth, sidebarX])
 
     // Default Suggestions Logic
     React.useEffect(() => {
@@ -30047,7 +30288,6 @@ Do not include markdown formatting or explanations.`
     const containerRef = React.useRef<HTMLDivElement>(null)
     const rafRef = React.useRef<number | null>(null)
     const hasInitialResized = React.useRef(false)
-    const hasResizedWhileSidebarOpen = React.useRef(false)
 
     // Cleanup hover timeout
     React.useEffect(() => {
@@ -30432,6 +30672,7 @@ Do not include markdown formatting or explanations.`
     }, [hasMessages])
 
     const chatHeightBeforeSidebar = React.useRef<number | null>(null)
+    const chatWidthBeforeSidebar = React.useRef<number | null>(null)
     const prevSidebarOpen = React.useRef(isSidebarOpen)
 
     // --- EFFECT: MINIMIZE CHAT WHEN DOC, WHITEBOARD, APP, JOBS, OR MAP OPENS ---
@@ -30513,12 +30754,17 @@ Do not include markdown formatting or explanations.`
         prevSidebarOpen.current = isOpen
 
         if (!wasOpen && isOpen) {
-            // Sidebar just opened: Save current height
+            // Sidebar just opened: save current height AND width so we can
+            // restore them on close if the user doesn't resize manually.
             chatHeightBeforeSidebar.current = chatHeight
+            chatWidthBeforeSidebar.current = chatWidth
             hasResizedWhileSidebarOpen.current = false
         } else if (wasOpen && !isOpen) {
             // Sidebar just closed: Restore height if saved AND user didn't resize manually
             if (!hasResizedWhileSidebarOpen.current) {
+                if (chatWidthBeforeSidebar.current !== null) {
+                    setChatWidth(chatWidthBeforeSidebar.current)
+                }
                 if (chatHeightBeforeSidebar.current !== null) {
                     setChatHeight(chatHeightBeforeSidebar.current)
                 } else {
@@ -30551,6 +30797,7 @@ Do not include markdown formatting or explanations.`
                 }
             }
             chatHeightBeforeSidebar.current = null
+            chatWidthBeforeSidebar.current = null
         }
     }, [
         isSidebarOpen,
@@ -31050,6 +31297,24 @@ Do not include markdown formatting or explanations.`
     const closeSettingsSheetRef = React.useRef<() => void>(() => {})
     closeSettingsSheetRef.current = () => setShowYouSettings(false)
 
+    // Pull-to-dismiss motion state for the mobile Report sheet — mirrors the
+    // settings sheet so the close animation (drag + fling to dismiss, soft
+    // spring-back under threshold) feels identical.
+    const reportOverlayDragY = useMotionValue(0)
+    const reportOverlayDragYRef = React.useRef(reportOverlayDragY)
+    reportOverlayDragYRef.current = reportOverlayDragY
+    const prevReportSheetOpen = React.useRef(false)
+    React.useEffect(() => {
+        const open = isMobileLayout && showReportModal
+        if (open && !prevReportSheetOpen.current) {
+            reportOverlayDragY.set(0)
+        }
+        prevReportSheetOpen.current = open
+    }, [isMobileLayout, showReportModal, reportOverlayDragY])
+
+    const closeReportSheetRef = React.useRef<() => void>(() => {})
+    closeReportSheetRef.current = () => setShowReportModal(false)
+
     const mobileToolGestureAxisRef = React.useRef<null | "x" | "y">(null)
     const [mobileToolGestureAxis, setMobileToolGestureAxis] = React.useState<
         null | "x" | "y"
@@ -31451,6 +31716,131 @@ Do not include markdown formatting or explanations.`
             sheet.removeEventListener("touchmove", onTouchMove)
         }
     }, [isMobileLayout, showYouSettings, lockMobileToolGesture])
+
+    // Pull-to-dismiss for the mobile Report sheet (same gesture rules as the
+    // settings sheet — only engage when inner scroll is at top and vertical
+    // motion dominates).
+    React.useEffect(() => {
+        if (!isMobileLayout || !showReportModal) return
+        const sheet = document.querySelector(
+            ".ReportOverlay"
+        ) as HTMLElement | null
+        if (!sheet) return
+        const pullY = reportOverlayDragYRef.current
+        let lastY = 0,
+            lastX = 0,
+            startX = 0,
+            startY = 0,
+            pressed = false
+        let activePointerId = -1
+        let pullCaptureActive = false
+        const scrollEl = () =>
+            sheet.querySelector(".ReportScrollBody") as HTMLElement | null
+        const GESTURE_MIN = 10
+        const AXIS_RATIO = 1.35
+        const releasePullCapture = () => {
+            if (!pullCaptureActive || activePointerId < 0) return
+            try {
+                if (sheet.hasPointerCapture(activePointerId)) {
+                    sheet.releasePointerCapture(activePointerId)
+                }
+            } catch {
+                /* released or lost */
+            }
+            pullCaptureActive = false
+            activePointerId = -1
+        }
+        const settle = () => {
+            releasePullCapture()
+            pressed = false
+            lockMobileToolGesture(null)
+            const py = pullY.get()
+            if (py < 88) {
+                animate(pullY, 0, {
+                    type: "spring",
+                    stiffness: 420,
+                    damping: 38,
+                })
+            } else {
+                closeReportSheetRef.current()
+            }
+        }
+        const onDown = (e: PointerEvent) => {
+            if (e.pointerType === "mouse" && e.button !== 0) return
+            pressed = true
+            pullCaptureActive = false
+            activePointerId = e.pointerId
+            lockMobileToolGesture(null)
+            startX = e.clientX
+            startY = e.clientY
+            lastY = e.clientY
+            lastX = e.clientX
+        }
+        const onMove = (e: PointerEvent) => {
+            if (!pressed) return
+            let axis = mobileToolGestureAxisRef.current
+            if (axis === "x") return
+
+            const totalDx = e.clientX - startX
+            const totalDy = e.clientY - startY
+            const adx = Math.abs(totalDx)
+            const ady = Math.abs(totalDy)
+
+            if (axis === null) {
+                if (adx < GESTURE_MIN && ady < GESTURE_MIN) return
+                if (adx > ady * AXIS_RATIO) {
+                    lockMobileToolGesture("x")
+                    return
+                }
+                if (ady > adx * AXIS_RATIO) {
+                    lockMobileToolGesture("y")
+                } else if (Math.max(adx, ady) >= 22) {
+                    lockMobileToolGesture(adx >= ady ? "x" : "y")
+                } else {
+                    return
+                }
+                axis = mobileToolGestureAxisRef.current
+                if (axis === "x") return
+            }
+
+            const dy = e.clientY - lastY,
+                dx = e.clientX - lastX
+            lastY = e.clientY
+            lastX = e.clientX
+            const py = pullY.get()
+            const sc = scrollEl()
+            const atTop = sc != null && sc.scrollTop <= 1
+            const pulling = py > 0 || (atTop && dy > 0 && dy >= Math.abs(dx))
+            if (!pulling) return
+            if (!pullCaptureActive) {
+                try {
+                    sheet.setPointerCapture(e.pointerId)
+                    pullCaptureActive = true
+                    activePointerId = e.pointerId
+                } catch {
+                    /* target may not support capture */
+                }
+            }
+            pullY.set(Math.max(0, py + dy))
+            if (e.pointerType === "touch" && e.cancelable) e.preventDefault()
+        }
+        const onTouchMove = (e: TouchEvent) => {
+            if (pullY.get() > 2 && e.cancelable) e.preventDefault()
+        }
+        sheet.addEventListener("pointerdown", onDown)
+        sheet.addEventListener("pointermove", onMove)
+        sheet.addEventListener("pointerup", settle)
+        sheet.addEventListener("pointercancel", settle)
+        sheet.addEventListener("touchmove", onTouchMove, { passive: false })
+        return () => {
+            releasePullCapture()
+            sheet.removeEventListener("pointerdown", onDown)
+            sheet.removeEventListener("pointermove", onMove)
+            sheet.removeEventListener("pointerup", settle)
+            sheet.removeEventListener("pointercancel", settle)
+            sheet.removeEventListener("touchmove", onTouchMove)
+        }
+    }, [isMobileLayout, showReportModal, lockMobileToolGesture])
 
     const handleAppChange = React.useCallback((code: string) => {
         setAppCode(code)
@@ -32688,21 +33078,25 @@ Do not include markdown formatting or explanations.`
 
                 // Someone with our hash detected!
                 if (isMyPrivateRoom && data.hash === currentHash) {
-                    log(
-                        `🎉 Peer detected in private room ${currentHash}! Peer ID: ${data.id}`
-                    )
+                    // Dedupe: only log on transitions (new peer or status change).
+                    // Heartbeats fire every second — otherwise the debug panel
+                    // fills with repeats and hides real signal.
+                    const sig = `${data.id}|${statusRef.current}`
+                    const changed = sig !== lastPassiveLogRef.current
+                    lastPassiveLogRef.current = sig
 
-                    // Mark as private room connection
+                    if (changed) {
+                        log(
+                            `🎉 Peer detected in private room ${currentHash}! Peer ID: ${data.id}`
+                        )
+                    }
+
                     setIsPrivateRoomConnection(true)
 
-                    // KEEP LISTENING - do not end client
-                    // client.end()
-
-                    // Start camera now
                     if (statusRef.current === "idle") {
                         log(`Starting camera for private room connection...`)
                         startChat()
-                    } else {
+                    } else if (changed) {
                         log(
                             `Cannot start chat, status is: ${statusRef.current}`
                         )
@@ -32879,9 +33273,6 @@ Do not include markdown formatting or explanations.`
             const currentHash =
                 typeof window !== "undefined" ? window.location.hash : ""
             const currentRole = roleRef.current
-            log(
-                `🔵 [Active MQTT] Current hash: ${currentHash}, Current role: ${currentRole}`
-            )
 
             // PRIORITY 1: PRIVATE ROOM MATCHING (Hash-based, no role required)
             // If message is from our private room topic, connect immediately
@@ -32889,27 +33280,42 @@ Do not include markdown formatting or explanations.`
                 topic.includes(currentHash.replace("#", "")) &&
                 currentHash.length > 1
             if (isMyPrivateRoom && data.hash === currentHash) {
-                log(
-                    `🔵 [Active MQTT] Peer found in private room ${currentHash}: ${data.id}`
-                )
-                log(
-                    `🔵 [Active MQTT] My ID: ${myId.current}, Peer ID: ${data.id}`
-                )
-                log(
-                    `🔵 [Active MQTT] My Role: ${currentRole}, Peer Role: ${data.role}`
-                )
+                // Dedupe chatty per-heartbeat block — only log on transitions.
+                const activeSig = `${data.id}|${data.role}|${currentRole}`
+                const activeChanged =
+                    activeSig !== lastActiveLogRef.current
+                lastActiveLogRef.current = activeSig
+
+                if (activeChanged) {
+                    log(
+                        `🔵 [Active MQTT] Current hash: ${currentHash}, Current role: ${currentRole}`
+                    )
+                    log(
+                        `🔵 [Active MQTT] Peer found in private room ${currentHash}: ${data.id}`
+                    )
+                    log(
+                        `🔵 [Active MQTT] My ID: ${myId.current}, Peer ID: ${data.id}`
+                    )
+                    log(
+                        `🔵 [Active MQTT] My Role: ${currentRole}, Peer Role: ${data.role}`
+                    )
+                }
 
                 // Determine if this is a private room connection (both without roles)
                 const isPrivateRoomConnection = !currentRole && !data.role
-                log(
-                    `🔵 [Active MQTT] Is Private Room Connection: ${isPrivateRoomConnection}`
-                )
+                if (activeChanged) {
+                    log(
+                        `🔵 [Active MQTT] Is Private Room Connection: ${isPrivateRoomConnection}`
+                    )
+                }
 
                 // Connect regardless of roles
                 if (myId.current > data.id) {
-                    log(
-                        `🔵 [Active MQTT] I have higher ID, initiating call to ${data.id}`
-                    )
+                    if (activeChanged) {
+                        log(
+                            `🔵 [Active MQTT] I have higher ID, initiating call to ${data.id}`
+                        )
+                    }
                     // Add a small delay to avoid race conditions if both peers try to call simultaneously?
                     // Actually ID check prevents simultaneous calls.
 
@@ -35993,9 +36399,16 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 `${jobsApiUrl}/jobs?${params}`,
                                 { signal: controller.signal }
                             )
+                            const jobsCacheHdr = jobsRes.headers.get(
+                                "X-Curastem-Jobs-Cache"
+                            )
+                            const jobsCacheStatus =
+                                jobsCacheHdr === "HIT" || jobsCacheHdr === "MISS"
+                                    ? jobsCacheHdr
+                                    : "?"
                             if (debugPanelRef.current === "tools") {
                                 log(
-                                    `[tool] search_jobs HTTP ${jobsRes.status}`,
+                                    `[tool] search_jobs HTTP ${jobsRes.status} cache=${jobsCacheStatus}`,
                                     "tools"
                                 )
                             }
@@ -36030,7 +36443,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 )
                                 if (debugPanelRef.current === "tools") {
                                     log(
-                                        `[tool] search_jobs rows=${jobSnippets.length}`,
+                                        `[tool] search_jobs rows=${jobSnippets.length} cache=${jobsCacheStatus}`,
                                         "tools"
                                     )
                                 }
@@ -37223,6 +37636,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
     )
 
     const rightContentPanelRef = React.useRef<HTMLDivElement>(null)
+    const desktopToolPanelRef = React.useRef<HTMLDivElement>(null)
 
     const handlePointerMove = React.useCallback(
         (e: PointerEvent) => {
@@ -37264,10 +37678,22 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     const newChatWidth = dragStartWidth.current + deltaX
 
                     const availableWidth = containerWidth - leftSidebarWidth
-                    // Chat can grow until agents hit their minimum (400px); no upper cap during manual drag
                     const chatMax = availableWidth - AGENTS_MIN_WIDTH
-                    const clampedChatWidth = Math.max(
+                    // Tool panel is capped at min(640, 40% of container) to
+                    // match the map job overlay — so chat can't shrink past
+                    // the point where tool would exceed that cap (otherwise
+                    // a gap appears between chat and the floating panel).
+                    const toolMaxPx = Math.min(
+                        640,
+                        Math.floor(containerWidth * 0.4)
+                    )
+                    const chatMinFromToolMax = availableWidth - toolMaxPx
+                    const effectiveChatMin = Math.max(
                         MIN_CHAT_WIDTH,
+                        chatMinFromToolMax
+                    )
+                    const clampedChatWidth = Math.max(
+                        effectiveChatMin,
                         Math.min(newChatWidth, chatMax)
                     )
 
@@ -37275,6 +37701,15 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     liveChatWidthRef.current = clampedChatWidth
                     if (rightContentPanelRef.current) {
                         rightContentPanelRef.current.style.width = `${clampedChatWidth}px`
+                    }
+                    // Live-update the floating tool panel's width so it tracks
+                    // the drag in real time instead of snapping on pointer-up.
+                    if (desktopToolPanelRef.current) {
+                        const toolW = Math.max(
+                            0,
+                            availableWidth - clampedChatWidth
+                        )
+                        desktopToolPanelRef.current.style.width = `${toolW}px`
                     }
                     return
                 }
@@ -37387,8 +37822,24 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
         window.removeEventListener("pointerup", handlePointerUp)
 
         if (dragMode.current === "horizontal-sidebar") {
-            // Commit from ref — avoids reading DOM value that Framer Motion may have overridden
-            if (liveChatWidthRef.current > 0) {
+            if (!hasDragged.current) {
+                // Click (no drag) on the edge — reset to the default tool
+                // panel width (its max: min(640, 40% of container)).
+                const containerWidth =
+                    containerRef.current?.clientWidth || window.innerWidth
+                const leftSidebarPx =
+                    !isMobileLayout && isSidebarOpen ? LEFT_SIDEBAR_WIDTH : 0
+                const defaultToolW = Math.min(
+                    640,
+                    Math.floor(containerWidth * 0.4)
+                )
+                const resetChat = Math.max(
+                    MIN_CHAT_WIDTH,
+                    containerWidth - leftSidebarPx - defaultToolW
+                )
+                setChatWidth(resetChat)
+                hasResizedWhileSidebarOpen.current = true
+            } else if (liveChatWidthRef.current > 0) {
                 setChatWidth(liveChatWidthRef.current)
             }
             setTimeout(() => setIsResizing(false), 50)
@@ -40692,7 +41143,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 // When open, X is 0. Dragging left makes delta.x negative.
                                 // So newX will be negative (e.g. -10).
                                 const newX = sidebarX.get() + info.delta.x
-                                if (newX <= 0 && newX >= -260) {
+                                if (newX <= 0 && newX >= -mobileSidebarWidth) {
                                     sidebarX.set(newX)
                                 }
                             }}
@@ -40719,7 +41170,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         aria-label="Main navigation"
                         style={{
                             x: sidebarX,
-                            width: 260,
+                            width: isMobileLayout
+                                ? mobileSidebarWidth
+                                : 260,
                             height: "100%",
                             paddingTop: 222,
                             position: "absolute",
@@ -40746,7 +41199,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             // When open, X is 0. Dragging left makes delta.x negative.
                             // So newX will be negative (e.g. -10).
                             const newX = sidebarX.get() + info.delta.x
-                            if (newX <= 0 && newX >= -260) {
+                            if (newX <= 0 && newX >= -mobileSidebarWidth) {
                                 sidebarX.set(newX)
                             }
                         }}
@@ -40936,7 +41389,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                     wordWrap: "break-word",
                                                 }}
                                             >
-                                                Your stuff
+                                                Your files
                                             </div>
                                             {/* Expand Icon - Show on hover when collapsed */}
                                             {canExpand &&
@@ -40946,6 +41399,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                         data-svg-wrapper
                                                         data-layer="arrow expand icon"
                                                         className="ArrowExpandIcon"
+                                                        style={{ marginTop: 3 }}
                                                     >
                                                         <svg
                                                             width="6"
@@ -40976,6 +41430,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                         data-svg-wrapper
                                                         data-layer="arrow collapse icon (show when collapsable)"
                                                         className="ArrowCollapseIconShowWhenCollapsable"
+                                                        style={{ marginTop: 1 }}
                                                     >
                                                         <svg
                                                             width="10"
@@ -42510,7 +42965,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         aria-label="Close settings"
                         style={{
                             position: "absolute",
-                            top: 14,
+                            top: isMobileLayout ? 4 : 14,
                             right: isMobileLayout ? 8 : 16,
                             cursor: "pointer",
                             width: 36,
@@ -43226,7 +43681,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 ref={jobTitleTextareaRef}
                                 className="SettingsInput"
                                 aria-label="Your job title"
-                                placeholder="Add your dream job"
+                                placeholder="Add your role"
                                 rows={1}
                                 value={youWork}
                                 {...makeUndoHandlers(
@@ -43768,13 +44223,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         if (Math.abs(info.delta.y) > Math.abs(info.delta.x))
                             return
 
-                        // Dragging right to open
-                        // Start from -260
+                        // Dragging right to open — clamp within [-mobileSidebarWidth, 0]
                         const currentX = sidebarX.get()
                         const newX = currentX + info.delta.x
 
-                        // Limit between -260 and 0
-                        if (newX <= 0 && newX >= -260) {
+                        if (newX <= 0 && newX >= -mobileSidebarWidth) {
                             sidebarX.set(newX)
                         }
                     }}
@@ -43782,10 +44235,13 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         if (!isMobileLayout || isSidebarOpen) return
 
                         const currentX = sidebarX.get()
-                        if (currentX > -210 || info.velocity.x > 100) {
+                        // Trigger open once the user has pulled in ~80% of the
+                        // drawer, or with a rightward velocity flick.
+                        const openThreshold = -mobileSidebarWidth * 0.2
+                        if (currentX > openThreshold || info.velocity.x > 100) {
                             setIsSidebarOpen(true)
                         } else {
-                            animate(sidebarX, -260, {
+                            animate(sidebarX, -mobileSidebarWidth, {
                                 type: "spring",
                                 stiffness: 700,
                                 damping: 50,
@@ -43798,20 +44254,18 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         width:
                             !isMobileLayout && isMapOpen
                                 ? 0
-                                : !isMobileLayout &&
-                                    (isDocOpen ||
-                                        isWhiteboardOpen ||
-                                        isAppOpen ||
-                                        isJobOpen)
-                                  ? chatWidth
-                                  : "100%",
+                                : !isMobileLayout && isAnyFloatingPanelOpen
+                                  ? effectiveChatWidth
+                                  : !isMobileLayout && isSidebarOpen
+                                    ? Math.max(
+                                          0,
+                                          containerSize.width -
+                                              LEFT_SIDEBAR_WIDTH
+                                      )
+                                    : "100%",
                         flexGrow:
                             !isMobileLayout &&
-                            (isDocOpen ||
-                                isWhiteboardOpen ||
-                                isAppOpen ||
-                                isJobOpen ||
-                                isMapOpen)
+                            (isAnyFloatingPanelOpen || isMapOpen)
                                 ? 0
                                 : 1,
                     }}
@@ -43832,11 +44286,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 >
                     {renderStandardLayout(
                         !isMobileLayout &&
-                            (isDocOpen ||
-                                isWhiteboardOpen ||
-                                isAppOpen ||
-                                isJobOpen ||
-                                isMapOpen)
+                            (isAnyFloatingPanelOpen || isMapOpen)
                     )}
 
                     {/* Video Call Icon — same position as new chat button, shown when idle with no messages */}
@@ -43993,53 +44443,95 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 </motion.div>
 
                 {/* Resize Handle — hidden when map fills full width */}
-                {!isMobileLayout &&
-                    !isMapOpen &&
-                    (isDocOpen ||
-                        isWhiteboardOpen ||
-                        isAppOpen ||
-                        isJobOpen) && (
-                        <div
-                            onPointerDown={(e) =>
-                                handlePointerDown(e, "horizontal-sidebar")
-                            }
-                            style={{
-                                width: 12, // Wider hit area
-                                marginLeft: -6, // Center over the border
-                                marginRight: -6,
-                                cursor: "ew-resize",
-                                zIndex: 30,
-                                position: "relative",
-                            }}
-                        />
-                    )}
+                {!isMobileLayout && !isMapOpen && isAnyFloatingPanelOpen && (
+                    <div
+                        onPointerDown={(e) =>
+                            handlePointerDown(e, "horizontal-sidebar")
+                        }
+                        style={{
+                            width: 12,
+                            marginLeft: -6,
+                            marginRight: -6,
+                            cursor: "ew-resize",
+                            zIndex: 30,
+                            position: "relative",
+                        }}
+                    />
+                )}
 
-                {/* Left: Tool (Desktop only) */}
+                {/*
+                    Desktop tool panel (Doc / Whiteboard / App / Job detail).
+                    Floating panel pinned to the right edge with a 12px gap
+                    and 36px radius, sliding in on x (mirrors the map job
+                    detail overlay).
+                */}
                 <AnimatePresence>
                     {!isMobileLayout &&
-                        (isDocOpen ||
-                            isWhiteboardOpen ||
-                            isAppOpen ||
-                            isJobOpen ||
-                            isMapOpen) && (
+                        (isAnyFloatingPanelOpen || isMapOpen) && (
                             <motion.div
+                                ref={desktopToolPanelRef}
                                 data-layer="desktop-tool-panel"
                                 className="DesktopToolPanel"
-                                initial={{ x: "-100%" }}
-                                animate={{ x: 0 }}
-                                exit={{ x: "-100%" }}
+                                initial={{
+                                    x: "100%",
+                                    width: isMapOpen
+                                        ? availableDesktopWidth
+                                        : toolPanelEffectiveWidth,
+                                }}
+                                animate={{
+                                    x: 0,
+                                    width: isMapOpen
+                                        ? availableDesktopWidth
+                                        : toolPanelEffectiveWidth,
+                                }}
+                                exit={{ x: "100%" }}
                                 transition={{
-                                    duration: 0.25,
-                                    ease: "easeInOut",
+                                    x: {
+                                        duration: 0.28,
+                                        ease: [0.32, 0.72, 0, 1],
+                                    },
+                                    width: isResizing
+                                        ? { duration: 0 }
+                                        : {
+                                              type: "spring",
+                                              stiffness: 700,
+                                              damping: 50,
+                                          },
                                 }}
                                 style={{
-                                    flex: 1,
-                                    position: "relative",
-                                    zIndex: 30, // Higher than chat panel (20) so shadow overlays onto it
-                                    background: themeColors.background,
+                                    position: "absolute",
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    zIndex: 30,
+                                    padding: isMapOpen
+                                        ? 0
+                                        : "12px 12px 12px 0",
+                                    overflow: "visible",
+                                    boxSizing: "border-box",
                                 }}
                             >
-                                {renderActiveTool(false)}
+                                <div
+                                    style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        borderRadius: isMapOpen ? 0 : 36,
+                                        overflow: "hidden",
+                                        background: themeColors.background,
+                                        // Apple-style ambient shadow: equidistant,
+                                        // soft, light-mode only. Hidden on map
+                                        // (edge-to-edge) and whiteboard.
+                                        boxShadow:
+                                            isMapOpen ||
+                                            isWhiteboardOpen ||
+                                            themeColors.background !==
+                                                lightColors.background
+                                                ? "none"
+                                                : "0 0 32px rgba(0,0,0,0.04), 0 0 8px rgba(0,0,0,0.02)",
+                                    }}
+                                >
+                                    {renderActiveTool(false)}
+                                </div>
                             </motion.div>
                         )}
                 </AnimatePresence>
@@ -44136,6 +44628,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 participantCount={remoteStreams.size + 1}
                 themeColors={themeColors}
                 reportType={reportType}
+                dragY={isMobileLayout ? reportOverlayDragY : undefined}
             />
 
             {/* FILE DRAG OVERLAY */}

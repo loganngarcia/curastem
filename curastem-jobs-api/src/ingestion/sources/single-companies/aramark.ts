@@ -11,13 +11,13 @@
  * `base_url` should be `https://careers.aramark.com/wp-json/aramark/jobs`.
  */
 
-import type { EmploymentType, JobSource, NormalizedJob, SourceRow } from "../../types.ts";
+import type { EmploymentType, JobSource, NormalizedJob, SourceRow } from "../../../types.ts";
 import {
   htmlToText,
   normalizeLocation,
   normalizeWorkplaceType,
   parseEpochSeconds,
-} from "../../utils/normalize.ts";
+} from "../../../utils/normalize.ts";
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 const DETAIL_CONCURRENCY = 20;
@@ -93,13 +93,13 @@ async function parallelMap<T, R>(items: T[], limit: number, fn: (item: T, index:
   return results;
 }
 
-export const aramarkCareersFetcher: JobSource = {
-  sourceType: "aramark_careers",
+export const aramarkFetcher: JobSource = {
+  sourceType: "aramark",
 
   async fetch(source: SourceRow): Promise<NormalizedJob[]> {
     const apiUrl = source.base_url.trim();
     if (!apiUrl.includes("aramark") || !apiUrl.includes("aramark/jobs")) {
-      throw new Error(`aramark_careers: base_url must be the Aramark jobs JSON endpoint (${apiUrl})`);
+      throw new Error(`aramark: base_url must be the Aramark jobs JSON endpoint (${apiUrl})`);
     }
 
     const res = await fetch(apiUrl, {
@@ -107,12 +107,12 @@ export const aramarkCareersFetcher: JobSource = {
       redirect: "follow",
     });
     if (!res.ok) {
-      throw new Error(`aramark_careers: ${res.status} (${apiUrl})`);
+      throw new Error(`aramark: ${res.status} (${apiUrl})`);
     }
 
     const rows = (await res.json()) as AramarkJobRow[];
     if (!Array.isArray(rows) || rows.length === 0) {
-      throw new Error(`aramark_careers: empty or invalid JSON (${source.company_handle})`);
+      throw new Error(`aramark: empty or invalid JSON (${source.company_handle})`);
     }
 
     const companyName = source.name.replace(/\s*\([^)]*\)\s*$/, "").trim() || "Aramark";
@@ -148,7 +148,7 @@ export const aramarkCareersFetcher: JobSource = {
     }
 
     if (skeletons.length === 0) {
-      throw new Error(`aramark_careers: 0 jobs parsed from ${rows.length} row(s) (${source.company_handle})`);
+      throw new Error(`aramark: 0 jobs parsed from ${rows.length} row(s) (${source.company_handle})`);
     }
 
     return parallelMap(skeletons, DETAIL_CONCURRENCY, async (job) => {

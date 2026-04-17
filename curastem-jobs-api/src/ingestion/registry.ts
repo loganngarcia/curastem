@@ -4,7 +4,7 @@
  * This is the single place where source types are mapped to their fetcher
  * implementations. Adding a new source to Curastem means:
  *   1. Adding a new SourceType value to types.ts
- *   2. Implementing a JobSource in ingestion/sources/
+ *   2. Implementing a JobSource in ingestion/sources/ (single-employer parsers live under sources/single-companies/)
  *   3. Registering it here
  *   4. Inserting rows into the sources table (via migrate.ts seed or SQL)
  *
@@ -29,10 +29,10 @@ import { rssFetcher } from "./sources/rss.ts";
 import { usajobsFetcher } from "./sources/usajobs.ts";
 import { saashrFetcher } from "./sources/saashr.ts";
 import { considerFetcher } from "./sources/consider.ts";
-import { jobrightFetcher } from "./sources/jobright.ts";
+import { jobrightFetcher } from "./sources/single-companies/jobright.ts";
 import { framerFetcher } from "./sources/framer.ts";
 import { easyapplyFetcher } from "./sources/easyapply.ts";
-import { metacareersFetcher } from "./sources/metacareers.ts";
+import { metaFetcher } from "./sources/single-companies/meta.ts";
 import { ripplingFetcher } from "./sources/rippling.ts";
 import { catsoneFetcher } from "./sources/catsone.ts";
 import { oracleCeFetcher } from "./sources/oracle_ce.ts";
@@ -41,12 +41,13 @@ import { globallogicFetcher } from "./sources/globallogic.ts";
 import { phenomFetcher } from "./sources/phenom.ts";
 import { paradoxFetcher } from "./sources/paradox.ts";
 import { jobviteFetcher } from "./sources/jobvite.ts";
+import { jazzhrFetcher } from "./sources/jazzhr.ts";
 import { eightfoldFetcher } from "./sources/eightfold.ts";
-import { uberSitesFetcher } from "./sources/uber_sites.ts";
+import { uberFetcher } from "./sources/single-companies/uber.ts";
 import { talentbrewFetcher } from "./sources/talentbrew.ts";
 import { jibeFetcher } from "./sources/jibe.ts";
 import { icimsPortalFetcher } from "./sources/icims_portal.ts";
-import { shopifyCareersFetcher } from "./sources/shopify_careers.ts";
+import { shopifyFetcher } from "./sources/single-companies/shopify.ts";
 import { activateCareersFetcher } from "./sources/activate_careers.ts";
 import { avatureFetcher } from "./sources/avature.ts";
 import { servicenowSeoFetcher } from "./sources/servicenow_seo.ts";
@@ -56,14 +57,15 @@ import { getroFetcher } from "./sources/getro.ts";
 import { googleFetcher } from "./sources/google.ts";
 import { netflixFetcher } from "./sources/netflix.ts";
 import { tiktokFetcher } from "./sources/tiktok.ts";
-import { hcaCareersFetcher } from "./sources/hcaCareers.ts";
-import { aramarkCareersFetcher } from "./sources/aramark_careers.ts";
+import { hcaFetcher } from "./sources/single-companies/hca.ts";
+import { aramarkFetcher } from "./sources/single-companies/aramark.ts";
 import { adpCxFetcher } from "./sources/adp_cx.ts";
 import { adpWfnRecruitmentFetcher } from "./sources/adp_wfn_recruitment.ts";
-import { lvmhAlgoliaFetcher } from "./sources/lvmh_algolia.ts";
+import { lvmhFetcher } from "./sources/single-companies/lvmh.ts";
 import { successfactorsRmkFetcher } from "./sources/successfactors_rmk.ts";
 import { symphonyMcloudFetcher } from "./sources/symphony_mcloud.ts";
 import { brassringFetcher } from "./sources/brassring.ts";
+import { gustoRecruitingFetcher } from "./sources/gusto_recruiting.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -86,7 +88,7 @@ const REGISTRY: Record<SourceType, JobSource> = {
   jobright: jobrightFetcher,
   framer: framerFetcher,
   easyapply: easyapplyFetcher,
-  metacareers: metacareersFetcher,
+  meta: metaFetcher,
   rippling: ripplingFetcher,
   catsone: catsoneFetcher,
   oracle_ce: oracleCeFetcher,
@@ -95,12 +97,13 @@ const REGISTRY: Record<SourceType, JobSource> = {
   phenom: phenomFetcher,
   paradox: paradoxFetcher,
   jobvite: jobviteFetcher,
+  jazzhr: jazzhrFetcher,
   eightfold: eightfoldFetcher,
-  uber_sites: uberSitesFetcher,
+  uber: uberFetcher,
   talentbrew: talentbrewFetcher,
   jibe: jibeFetcher,
   icims_portal: icimsPortalFetcher,
-  shopify_careers: shopifyCareersFetcher,
+  shopify: shopifyFetcher,
   activate_careers: activateCareersFetcher,
   avature: avatureFetcher,
   servicenow_seo: servicenowSeoFetcher,
@@ -110,14 +113,15 @@ const REGISTRY: Record<SourceType, JobSource> = {
   google: googleFetcher,
   netflix: netflixFetcher,
   tiktok: tiktokFetcher,
-  hca_careers: hcaCareersFetcher,
-  aramark_careers: aramarkCareersFetcher,
+  hca: hcaFetcher,
+  aramark: aramarkFetcher,
   adp_cx: adpCxFetcher,
   adp_wfn_recruitment: adpWfnRecruitmentFetcher,
-  lvmh_algolia: lvmhAlgoliaFetcher,
+  lvmh: lvmhFetcher,
   successfactors_rmk: successfactorsRmkFetcher,
   symphony_mcloud: symphonyMcloudFetcher,
   brassring: brassringFetcher,
+  gusto_recruiting: gustoRecruitingFetcher,
 };
 
 /**
@@ -173,7 +177,7 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   // EasyApply JSON-LD on static HTML (tenant-hosted apply flows)
   easyapply: 78,
   // Meta official sitemap + JSON-LD (same trust model as EasyApply)
-  metacareers: 78,
+  meta: 78,
   // Rippling board SSR payloads (same trust model as EasyApply / Meta JSON-LD)
   rippling: 78,
   // CATS One static HTML + JSON-LD (same trust model as EasyApply)
@@ -189,19 +193,21 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   paradox: 76,
   // Jobvite static HTML listing + per-job description (employer's own ATS — high trust)
   jobvite: 100,
+  // JazzHR / ApplyToJob — static listing + JSON-LD JobPosting on each posting (employer ATS)
+  jazzhr: 100,
   // TalentBrew — employer Radancy-hosted HTML (listing + detail; apply often redirects to iCIMS/SF)
   talentbrew: 82,
   // HCA — sitemap + regional search HTML + JSON-LD (same trust model as TalentBrew)
-  hca_careers: 82,
+  hca: 82,
   // Eightfold PCS — employer-configured board; structured JSON from their public PCS API
   eightfold: 86,
-  uber_sites: 90,
+  uber: 90,
   // iCIMS Jibe — employer-branded board; full descriptions in API
   jibe: 88,
   // iCIMS hub search + JSON-LD on iframe job pages (multi-host retail portals)
   icims_portal: 87,
   // Shopify careers — SSR HTML + per-job Ashby payload (same trust as employer-direct)
-  shopify_careers: 82,
+  shopify: 82,
   // Oracle Activate + Taleo apply — structured list + HTML detail
   activate_careers: 82,
   // Avature RSS — structured feed; detail pages often blocked by WAF for server-side clients
@@ -218,19 +224,21 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   // TikTok — proprietary lifeattiktok.com API; ~3400 global / 1384 US jobs
   tiktok: 90,
   // Aramark — employer WordPress JSON (official careers domain)
-  aramark_careers: 82,
+  aramark: 82,
   // ADP RM MyJobs — employer’s own requisitions + HTML descriptions from public CX API
   adp_cx: 95,
   // ADP WFN RAAS — same trust as adp_cx (employer tenant JSON + per-req HTML descriptions)
   adp_wfn_recruitment: 95,
   // LVMH multi-brand Algolia hub — official listings; syndicated apply URLs (many maison ATS)
-  lvmh_algolia: 87,
+  lvmh: 87,
   // SAP SF RMK — employer HTML + microdata; same trust model as Phenom/TalentBrew detail pages
   successfactors_rmk: 82,
   // Symphony Talent m-cloud job API — employer WordPress marketing site; apply via Taleo-backed flows
   symphony_mcloud: 82,
   // BrassRing TG — employer-configured IBM gateway; structured JSON with full HTML descriptions
   brassring: 88,
+  // Gusto Recruiting — employer-hosted boards on jobs.gusto.com (SSR + JSON-LD; CF may require browser)
+  gusto_recruiting: 80,
 };
 
 export function getSourcePriority(sourceType: string): number {
