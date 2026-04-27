@@ -10,10 +10,10 @@ High-level context for AI agents. Use this for orientation and principles; disco
 | --- | --- |
 | `curastem-jobs-api/` | Cloudflare Worker — ingests jobs from ATS sources, stores in D1, exposes REST API at api.curastem.org |
 | `curastem-jobs-mcp/` | MCP server over the jobs API — tools for search, job details, similar jobs, market overview |
-| `agent-skills-api/` | Cloudflare Worker — serves skill catalog from GitHub for the slash-command menu in web.tsx (`skills.curastem.org`) |
+| `app/agent-skills-api/` | Cloudflare Worker — serves skill catalog from GitHub for the slash-command menu in `app/web.tsx` (`skills.curastem.org`) |
 | `blog-writer-ui/` | Next.js app (Vercel) — internal blog authoring, publishes to Framer CMS |
-| `web.tsx` | Framer code component — AI mentorship chat (Vertex/Gemini Live) |
-| `skills/` | SKILL.md files consumed by agent-skills-api |
+| `app/web.tsx` | Framer code component — AI mentorship chat (Vertex/Gemini Live) |
+| `skills/` | SKILL.md files consumed by `app/agent-skills-api` |
 
 ---
 
@@ -26,7 +26,7 @@ High-level context for AI agents. Use this for orientation and principles; disco
 - Use Cloudflare MCP for any Cloudflare interactions and operations, when available
 - Always deploy any Cloudflare changes without asking
 - When adding or verifying a company or source, **always report two numbers in chat**: (1) how many **jobs** the ingest path returns (list size or API `total`), and (2) how many of those have a **substantive description at ingest time** (`description_raw` non-null after the fetcher runs — not “pending AI enrichment”). If the source only returns titles or one-line snippets until enrichment, say so explicitly.
-- **D1 schema changes** — one PR should update `curastem-jobs-api/schema.sql`, matching `*Row` types in `types.ts`, and any `ensure*Columns` / `ensureJobIndexes` guards in `src/db/queries.ts` so cold databases and docs stay aligned.
+- **D1 schema changes** — one PR should update `curastem-jobs-api/schema.sql`, matching `*Row` types in `src/shared/types.ts`, and any `ensure*Columns` / `ensureJobIndexes` guards in `src/shared/db/queries.ts` so cold databases and docs stay aligned.
 - Job URLs should point directly to the posting page, not a search or filtered list.
 - Locations should be normalized to a consistent format (e.g., "City, ST" for US, "City, Country" for international, or "Remote").
 - Avoid redundant API calls — skip enrichment when data is already populated.
@@ -34,7 +34,7 @@ High-level context for AI agents. Use this for orientation and principles; disco
 - AI lazy loading enrichment: Gemini for summary, structured description, location, salary, etc
 - Regex enrichment: salary, location, experience level, etc when available
 
-**Framer components** (`web.tsx`, `donorform.tsx`, etc.)
+**Framer components** (`app/web.tsx`, `donorform.tsx`, etc.)
 - Must follow Framer code component conventions: layout annotations, root element with `props.style`, property controls + defaultProps.
 - Allowed imports: `react`, `react-dom`, `framer`, `framer-motion` only.
 - Never access `window`/`document`/`navigator` during render — use `useEffect` or guards.

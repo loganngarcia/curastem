@@ -235,7 +235,7 @@ Jobs are ingested hourly from public ATS boards. Each source is a row in the `so
 
 ### Supported ATS types
 
-These rows cover **multi-tenant recruiting products** (ATS and talent platforms), **syndicated listing surfaces** (VC boards, static site indexes), and related enterprise career APIs. Types are listed in rough alphabetical order by `source_type`. Implementation files live in `src/ingestion/sources/<name>.ts` unless noted.
+These rows cover **multi-tenant recruiting products** (ATS and talent platforms), **syndicated listing surfaces** (VC boards, static site indexes), and related enterprise career APIs. Types are listed in rough alphabetical order by `source_type`. Implementation files live in `src/shared/ingestion/sources/<name>.ts` unless noted.
 
 
 | Source type           | How it works                                                                                                        | Auth required                              |
@@ -311,9 +311,9 @@ VALUES (
 
 ### Adding a new ATS type
 
-1. Add the new type to `SourceType` in `src/types.ts`.
-2. Create a new fetcher in `src/ingestion/sources/` (or `sources/single-companies/` for one-off employer parsers).
-3. Register it in `src/ingestion/registry.ts`.
+1. Add the new type to `SourceType` in `src/shared/types.ts`.
+2. Create a new fetcher in `src/shared/ingestion/sources/` (or `sources/single-companies/` for one-off employer parsers).
+3. Register it in `src/shared/ingestion/registry.ts`.
 4. Insert source rows into the `sources` table.
 
 ---

@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// Curastem uses Firebase strictly for authentication. All user data lives in
+// Cloudflare D1 (via curastem-jobs-api) and R2. Firestore is not used by any
+// client or server in this project — deny every read and write so a future
+// mistake (accidental SDK call, copy-pasted example) cannot leak data.
+//
+// This is the same control that would have prevented the July 2025 Tea app
+// breach, where client-side-only rules exposed a public Storage bucket.
+//
+// If we ever adopt Firestore, replace this block with per-collection rules
+// that authenticate via `request.auth` AND authorize via ownership checks
+// on the document path. Never rely on obscurity or client-side filtering.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "curastem-jobs-api",
-  "main": "src/index.ts",
+  "main": "src/shared/index.ts",
   "compatibility_date": "2025-01-01",
   "compatibility_flags": ["nodejs_compat"],
 
@@ -33,7 +33,20 @@
   //   USAJOBS_API_KEY       — USAJOBS API key for federal jobs (free at developer.usajobs.gov)
   //   LOGO_DEV_TOKEN        — Logo.dev sk_ (Search API) or pk_ (img CDN); Google favicon if unset / no match
   //   MAPBOX_ACCESS_TOKEN   — Mapbox Geocoding v6 (major-metro company+city); temporary tier + D1 cache
+  //   FIREBASE_PROJECT_ID   — Firebase project id ("curastem"); validates aud/iss on Firebase ID tokens
+  //   SESSION_SIGNING_KEY   — 32+ random bytes (base64) used to derive session token_hash
   "vars": {},
+
+  // R2 bucket storing per-user uploads (resume files). Private — all access
+  // goes through presigned URLs minted by app/uploads/handlers.ts so the Worker
+  // enforces ownership before handing out a PUT/GET URL.
+  // Create once: wrangler r2 bucket create curastem-user-files
+  "r2_buckets": [
+    {
+      "binding": "USER_FILES",
+      "bucket_name": "curastem-user-files"
+    }
+  ],
 
   // Vectorize index for semantic job search (768-dimensional cosine similarity)
   "vectorize": [

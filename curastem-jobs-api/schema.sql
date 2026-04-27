@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS companies (
   logo_url                TEXT,
   website_url             TEXT,
   website_checked_at      INTEGER,               -- last HTTP probe of website_url (epoch)
-  website_infer_suppressed INTEGER NOT NULL DEFAULT 0, -- 1 = never auto-set website from {slug}.com
+  website_infer_suppressed INTEGER NOT NULL DEFAULT 0, -- 1 = do not re-fill company website from Exa after dead URL probe
+  wikidata_website_attempted_at INTEGER,          -- last Wikidata P856 website lookup for education companies (epoch)
 
   -- Social / professional links (Exa primary, Brandfetch fallback)
   linkedin_url            TEXT,
@@ -73,7 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_companies_slug ON companies (slug);
 CREATE TABLE IF NOT EXISTS sources (
   id              TEXT PRIMARY KEY,   -- UUID v4
   name            TEXT NOT NULL,      -- human-readable, e.g. "Stripe (Greenhouse)"
-  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "brassring" | "gusto_recruiting" | "icims_portal" | "lvmh" | "uber" | "shopify" | "hca" | "aramark" | "meta" | "successfactors_rmk" | "symphony_mcloud" | "adp_cx" | "adp_wfn_recruitment" | "activate_careers" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "jazzhr" | "workday" | "smartrecruiters" | "consider" | "getro" | "jobright" | "rss" | ...
+  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "edjoin" | "schoolspring" | "k12jobspot" | "higheredjobs" | "chronicle_jobs" | "brassring" | "gusto_recruiting" | "icims_portal" | "lvmh" | "uber" | "shopify" | "hca" | "aramark" | "meta" | "successfactors_rmk" | "symphony_mcloud" | "adp_cx" | "adp_wfn_recruitment" | "activate_careers" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "jazzhr" | "workday" | "smartrecruiters" | "consider" | "getro" | "jobright" | "rss" | ...
   company_handle  TEXT NOT NULL,      -- ATS-specific company slug / board name
   base_url        TEXT NOT NULL,      -- canonical API or job-board URL for this source
   enabled         INTEGER NOT NULL DEFAULT 1,    -- 0 = disabled, skip in cron
@@ -287,7 +288,161 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys (active);
 CREATE INDEX IF NOT EXISTS idx_api_keys_active_hash ON api_keys (key_hash) WHERE active = 1;
 
 -- ──────────────────────────────────────────────────────────────────────────────
+-- USER ACCOUNTS (auth + cross-device sync)
+-- ──────────────────────────────────────────────────────────────────────────────
+-- Firebase verifies identity (Google/email); these tables own all user data.
+-- users.id is our own UUID so the rows survive any future auth-provider swap.
+-- google_sub is the portable identifier across providers (Firebase, Auth0, Clerk, ...).
+-- All user-scoped FK columns reference users(id) with ON DELETE CASCADE so
+-- `DELETE /auth/me` removes every trace (see routes/auth.ts).
+-- ──────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS users (
+  id                   TEXT PRIMARY KEY,          -- UUID v4 we generate on first sign-in
+  email                TEXT NOT NULL UNIQUE,
+  google_sub           TEXT NOT NULL UNIQUE,      -- stable across auth providers
+  firebase_uid         TEXT UNIQUE,               -- secondary; provider-specific
+  display_name         TEXT,
+  photo_url            TEXT,
+  created_at           INTEGER NOT NULL,
+  last_login_at        INTEGER NOT NULL,
+  scheduled_delete_at  INTEGER,                   -- Unix seconds; null = active account
+  email_job_alerts     INTEGER NOT NULL DEFAULT 1,
+  email_local_events   INTEGER NOT NULL DEFAULT 1,
+  email_announcements  INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users (google_sub);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+
+-- 1:1 with users. Mirrors the localStorage profile keys used in web.tsx
+-- (you_name/school/work/interests, dismissed_interest_chips, resume fields).
+CREATE TABLE IF NOT EXISTS profile (
+  user_id                   TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  you_name                  TEXT,
+  you_school                TEXT,
+  you_work                  TEXT,
+  you_interests             TEXT,        -- newline-separated bullets (matches localStorage format)
+  dismissed_interest_chips  TEXT,        -- JSON array
+  resume_plain              TEXT,        -- curastem_resume (plain text from save_resume tool)
+  resume_doc_html           TEXT,        -- curastem_resume_doc_html (structured DocEditor HTML)
+  resume_file_r2_key        TEXT,        -- R2 object key for the original upload
+  resume_file_name          TEXT,
+  resume_file_mime          TEXT,
+  resume_file_size          INTEGER,
+  updated_at                INTEGER NOT NULL
+);
+
+-- Chats (v2) — metadata only; messages live in chat_messages.
+--
+-- Design:
+--   • updated_at is a second-granularity epoch and moves on ANY change:
+--     new message arrival (sidebar recency), title edit, pin/unpin, ref update.
+--   • last_message_at / last_message_preview are denormalized for the sidebar
+--     so listing N chats is a single SELECT with no per-chat join.
+--   • meta_hash is sha256 of canonical { title, is_pinned, pinned_at, meta_json }
+--     — NOT the messages. Messages dedup separately via chat_messages.content_hash.
+--     This keeps meta_hash stable while messages stream.
+--   • meta_json holds the non-message payload: { suggestions, notes, docType,
+--     docCompany, activeDocId, refs: { docs, app, whiteboard } }.
+CREATE TABLE IF NOT EXISTS chats (
+  id                    TEXT PRIMARY KEY,   -- client-generated UUID (stable across sync)
+  user_id               TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title                 TEXT,
+  is_pinned             INTEGER NOT NULL DEFAULT 0,
+  pinned_at             INTEGER,
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL,
+  last_message_at       INTEGER,            -- millis; NULL for empty chats
+  last_message_preview  TEXT,               -- first ~160 chars of newest message text
+  message_count         INTEGER NOT NULL DEFAULT 0,
+  next_seq              INTEGER NOT NULL DEFAULT 1, -- next monotonic seq for chat_messages
+  meta_json             TEXT NOT NULL,      -- see above
+  meta_hash             TEXT NOT NULL,      -- sha256 of canonical meta + title/pin
+  payload_json          TEXT NOT NULL DEFAULT '{}', -- legacy alias for older deployed D1 tables
+  content_hash          TEXT NOT NULL DEFAULT '' -- legacy alias for older deployed D1 tables
+);
+CREATE INDEX IF NOT EXISTS idx_chats_user_updated ON chats (user_id, updated_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_chats_user_pinned_updated ON chats (user_id, is_pinned DESC, pinned_at DESC, updated_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_chats_user_hash ON chats (user_id, meta_hash);
+
+-- chat_messages — one row per message. (chat_id, seq) is the stable PK;
+-- created_at is in MILLIS to disambiguate messages in the same second.
+-- Scroll-up pagination uses (created_at DESC, seq DESC) as the cursor tuple.
+CREATE TABLE IF NOT EXISTS chat_messages (
+  chat_id        TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  seq            INTEGER NOT NULL,          -- per-chat monotonic counter (starts at 1)
+  created_at     INTEGER NOT NULL,          -- epoch MILLIS
+  role           TEXT NOT NULL,             -- 'user'|'assistant'|'system'|'tool'|'status'|...
+  content_json   TEXT NOT NULL,             -- opaque to server; full web.tsx Message object
+  content_hash   TEXT NOT NULL,             -- sha256 of canonical content_json (dedup key)
+  PRIMARY KEY (chat_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_recency
+  ON chat_messages (chat_id, created_at DESC, seq DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user_recency
+  ON chat_messages (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_content_hash
+  ON chat_messages (chat_id, content_hash);
+
+-- tombstones — record of deletes so sync doesn't resurrect locally-deleted rows.
+-- entity_id for 'message' kind is encoded as "<chat_id>:<seq>".
+CREATE TABLE IF NOT EXISTS tombstones (
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL,                -- 'chat' | 'doc' | 'app' | 'message'
+  entity_id   TEXT NOT NULL,
+  deleted_at  INTEGER NOT NULL,             -- epoch MILLIS
+  PRIMARY KEY (user_id, kind, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tombstones_user_deleted ON tombstones (user_id, deleted_at DESC);
+
+-- Docs — one row per ChatDocEntry (kind = "doc" | "resume" | "cover_letter").
+CREATE TABLE IF NOT EXISTS docs (
+  id            TEXT PRIMARY KEY,            -- matches ChatDocEntry.id
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chat_id       TEXT REFERENCES chats(id) ON DELETE SET NULL,
+  kind          TEXT NOT NULL,               -- 'doc' | 'resume' | 'cover_letter'
+  title         TEXT,
+  doc_company   TEXT,
+  html          TEXT NOT NULL,
+  content_hash  TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_docs_user_updated ON docs (user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_docs_chat ON docs (chat_id);
+
+-- Apps — mini-apps (ChatSession.app) and whiteboards (ChatSession.whiteboard).
+-- Discriminator 'kind' controls payload_json shape.
+CREATE TABLE IF NOT EXISTS apps (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chat_id       TEXT REFERENCES chats(id) ON DELETE SET NULL,
+  kind          TEXT NOT NULL,               -- 'app' | 'whiteboard'
+  title         TEXT,
+  payload_json  TEXT NOT NULL,               -- { code, mode } for app; whiteboard JSON for whiteboard
+  content_hash  TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_apps_user_updated ON apps (user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_apps_chat ON apps (chat_id);
+
+-- Sessions — backs the curastem_session cookie (and Bearer fallback).
+-- Opaque 32-byte token; only the sha256 is stored so a DB leak can't forge sessions.
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash    TEXT PRIMARY KEY,            -- sha256 hex of opaque token
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  last_seen_at  INTEGER NOT NULL,
+  user_agent    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at);
+
+-- ──────────────────────────────────────────────────────────────────────────────
 -- Schema change discipline (read before adding columns)
--- New job/company columns: update this file, types.ts *Row interfaces, and ensure*Columns
--- in src/db/queries.ts in the same PR so cold D1 and docs stay aligned.
+-- New job/company columns: update this file, src/shared/types.ts *Row interfaces,
+-- and ensure*Columns in src/shared/db/queries.ts in the same PR so cold D1 and docs stay aligned.
 -- ──────────────────────────────────────────────────────────────────────────────

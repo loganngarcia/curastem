@@ -76,12 +76,12 @@ This design means:
 
 ## Source registry pattern
 
-Every ingestion source is a row in the `sources` table. The `source_type` column maps to a fetcher in `src/ingestion/registry.ts`.
+Every ingestion source is a row in the `sources` table. The `source_type` column maps to a fetcher in `src/shared/ingestion/registry.ts`.
 
 Adding support for a new ATS type requires:
-1. Adding the type to `SourceType` in `src/types.ts`
-2. Creating a fetcher in `src/ingestion/sources/`
-3. Registering it in `src/ingestion/registry.ts`
+1. Adding the type to `SourceType` in `src/shared/types.ts`
+2. Creating a fetcher in `src/shared/ingestion/sources/`
+3. Registering it in `src/shared/ingestion/registry.ts`
 4. Inserting source rows into the `sources` table
 
 Adding a new company on an existing ATS requires only a DB row — no code changes.
@@ -94,7 +94,7 @@ This separation between "what ATS type" (code) and "which company" (data) is int
 
 **Level 1 — exact match:** The `UNIQUE(source_id, external_id)` index prevents duplicate rows for the same job on the same source. Re-ingesting an existing job triggers an UPDATE.
 
-**Level 2 — cross-source match:** The `dedup_key` column (`lower(title) + "|" + company_slug`) catches the same job appearing on multiple ATS platforms. When a duplicate is detected, the lower-priority source is skipped. Priority is defined in `src/ingestion/registry.ts`.
+**Level 2 — cross-source match:** The `dedup_key` column (`lower(title) + "|" + company_slug`) catches the same job appearing on multiple ATS platforms. When a duplicate is detected, the lower-priority source is skipped. Priority is defined in `src/shared/ingestion/registry.ts`.
 
 Source priority (higher = more trusted):
 - Greenhouse, Lever, Ashby, JazzHR: 100 (direct employer ATS)
@@ -173,7 +173,7 @@ src/
 ## Key invariants to preserve
 
 1. **`description_raw` is append-only.** Never overwrite it without also nulling `ai_generated_at`.
-2. **No SQL outside `src/db/queries.ts`.** Raw queries in route handlers or ingestion code make the codebase impossible to audit.
+2. **No shared Jobs API SQL outside `src/shared/db/queries.ts`.** Raw queries in route handlers or ingestion code make the codebase impossible to audit.
 3. **No network calls outside source fetchers and enrichment modules.** The route handlers must never make outbound HTTP requests directly.
 4. **AI generation is always lazy and cached.** Never call Gemini during ingestion.
 5. **Ingestion failures are isolated per-source.** One bad source must never fail the entire cron run.
@@ -182,7 +182,7 @@ src/
 
 ## Adding a new endpoint
 
-1. Create `src/routes/yourEndpoint.ts` implementing the handler function.
-2. Import and register the route in `src/index.ts`.
-3. Add any new query functions to `src/db/queries.ts`.
+1. Create public Jobs API handlers under `src/public/routes/`, or private app handlers under `src/app/`.
+2. Register public routes in `src/public/router.ts` or private app routes in `src/app/router.ts`.
+3. Add any new shared query functions to `src/shared/db/queries.ts`.
 4. Document the new endpoint in `README.md`.

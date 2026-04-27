@@ -1,0 +1,18 @@
+rules_version = '2';
+
+// Curastem does NOT use Firebase Storage. User uploads (resumes, etc.) go to
+// Cloudflare R2 via the private `curastem-user-files` bucket, gated by the
+// Worker's /uploads endpoints which enforce ownership before minting
+// presigned URLs. Deny every read and write here so an accidental client
+// call or misconfigured SDK cannot expose files publicly.
+//
+// Why this matters: the July 2025 Tea app breach exposed ~72k verification
+// selfies because the Storage bucket was effectively public. Curastem's R2
+// bucket is private by default and clients never hold long-lived credentials.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

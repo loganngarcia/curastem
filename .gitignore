@@ -8,6 +8,7 @@ scripts/
 .env
 .env.local
 .env.*.local
+.dev.vars
 
 # Python
 __pycache__/
@@ -33,3 +34,11 @@ node_modules/
 dist/
 build/
 .cache/
+.wrangler/
+
+# Firebase local/cache/log artifacts. Keep firebase.json and deny-all rules tracked.
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.runtimeconfig.json

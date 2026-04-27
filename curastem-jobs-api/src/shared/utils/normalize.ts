@@ -1,0 +1,3927 @@
+/**
+ * Normalization utilities.
+ *
+ * These functions convert raw, source-specific values into the Curastem
+ * canonical schema. All source fetchers call these helpers so that
+ * normalization logic lives in one place and is testable independently.
+ */
+
+import type { EmploymentType, SalaryPeriod, SeniorityLevel, WorkplaceType } from "../types.ts";
+import { applyLocationPrePipeline } from "./companyLocationNormalize.ts";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Company slug
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Convert a company name to a URL-safe, lowercase slug used as a dedup key
+ * across sources. E.g. "Acme Corp." → "acme-corp".
+ */
+export function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deduplication key
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a cross-source deduplication key from job title and company slug.
+ * This catches the same posting appearing on Greenhouse and SmartRecruiters,
+ * for example, and lets us prefer the higher-trust source.
+ */
+export function buildDedupKey(title: string, companySlug: string): string {
+  const normalizedTitle = title
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ");
+  return `${normalizedTitle}|${companySlug}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Employment type
+// ─────────────────────────────────────────────────────────────────────────────
+
+const EMPLOYMENT_TYPE_MAP: Record<string, EmploymentType> = {
+  // Greenhouse
+  full_time: "full_time",
+  part_time: "part_time",
+  contract: "contract",
+  // "internship" → seniority_level now, not employment_type
+  temporary: "temporary",
+  volunteer: "volunteer",
+  // Lever
+  "full-time": "full_time",
+  "part-time": "part_time",
+  // Workday / SmartRecruiters
+  "full time": "full_time",
+  "part time": "part_time",
+  /** EDJOIN / school boards — role is not a permanent FTE slot */
+  substitute: "temporary",
+  /** Common K–12 pool / as-needed wording */
+  "per diem": "part_time",
+  regular: "full_time",
+  "fixed-term": "temporary",
+  freelance: "contract",
+};
+
+export function normalizeEmploymentType(raw: string | null | undefined): EmploymentType | null {
+  if (!raw) return null;
+  const key = raw.toLowerCase().trim();
+  return EMPLOYMENT_TYPE_MAP[key] ?? null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heuristic employment-type detection from free-form text
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Scan job title + description for employment-type signals.
+ * Called during ingest only when the ATS did not supply an explicit type.
+ * Intentionally conservative — ambiguous text returns null to let AI handle it.
+ */
+export function detectEmploymentTypeFromText(
+  title: string,
+  description: string | null,
+): EmploymentType | null {
+  const hay = `${title} ${description ?? ""}`.toLowerCase();
+
+  // Contract signals (check before full-time to avoid "full-time contractor" → full_time)
+  if (/\b(contractor|contract\s+(?:role|position|assignment|work|job)|c2c|1099|corp[-\s]?to[-\s]?corp|freelance)\b/.test(hay))
+    return "contract";
+
+  // Temporary signals
+  if (/\b(temp(?:orary)?\s+(?:role|position|job|worker|staff|assignment)|short[-\s]term\s+(?:contract|role|position))\b/.test(hay))
+    return "temporary";
+
+  // Part-time — check before full-time
+  if (/\bpart[-\u2013\s]time\b/.test(hay)) return "part_time";
+
+  // Full-time — only trigger on clear employment-type phrases (not "full-time benefits")
+  if (/\bfull[-\u2013\s]time\s+(?:position|role|job|opportunity|employment|employee)\b/.test(hay)) return "full_time";
+  if (/\bthis\s+is\s+a\s+full[-\u2013\s]time\b/.test(hay)) return "full_time";
+  // Title-level "Full Time" or "FT" suffix is reliable
+  if (/\bfull[-\u2013\s]time\b/.test(title.toLowerCase())) return "full_time";
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legal minimum age vs. years of professional experience
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Retail and hourly postings often say "must be 18 years of age or older".
+// Heuristics and the extraction model must not treat that as "18 years of
+// experience" or infer senior IC levels from it.
+
+/** Phrases that refer to legal age — strip these before counting "N years" tenure. */
+const LEGAL_AGE_PHRASE_STRIP_RES: RegExp[] = [
+  /\b(?:at least|must be|minimum(?:\s+age)?)\s+\d{1,2}\s+years?\s+of\s+age\b/gi,
+  /\b\d{1,2}\s+years?\s+of\s+age\b/gi,
+  /\b\d{1,2}\s+years?\s+or\s+older\b/gi,
+  /\b\d{1,2}\s+years?\s+or\s+over\b/gi,
+  /\b\d{1,2}\s+years?\s+old\b/gi,
+  /\bage\s+of\s+\d{1,2}\b/gi,
+];
+
+export function stripAgeRequirementPhrasesForExperienceParsing(text: string): string {
+  let s = text;
+  for (const re of LEGAL_AGE_PHRASE_STRIP_RES) {
+    s = s.replace(re, " ");
+  }
+  return s;
+}
+
+/** True when `years` matches a legal-age line in the description (not tenure). */
+export function experienceYearsMinIsLikelyLegalAgeNotTenure(
+  description: string,
+  years: number
+): boolean {
+  if (years < 14 || years > 25) return false;
+  const d = description.toLowerCase();
+  const n = String(years);
+  const paired = [
+    new RegExp(`\\b${n}\\s+years?\\s+of\\s+age\\b`, "i"),
+    new RegExp(`\\b${n}\\s+years?\\s+or\\s+older\\b`, "i"),
+    new RegExp(`\\b${n}\\s+years?\\s+or\\s+over\\b`, "i"),
+    new RegExp(`\\b${n}\\s+years?\\s+old\\b`, "i"),
+    new RegExp(`\\b(?:at least|must be|minimum)\\s+${n}\\s+years?\\s+of\\s+age\\b`, "i"),
+    new RegExp(`\\bage\\s+of\\s+${n}\\b`, "i"),
+  ];
+  return paired.some((re) => re.test(d));
+}
+
+export function sanitizeExperienceYearsMinFromDescription(
+  description: string,
+  minYears: number | null
+): number | null {
+  if (minYears === null) return null;
+  if (experienceYearsMinIsLikelyLegalAgeNotTenure(description, minYears)) return null;
+  return minYears;
+}
+
+const LEGAL_AGE_BOILERPLATE_RE =
+  /\b(?:\d{1,2}\s+years?\s+of\s+age|(?:at least|must be|minimum)\s+\d{1,2}\s+years?\s+of\s+age|\d{1,2}\s+years?\s+or\s+older|\d{1,2}\s+years?\s+or\s+over|\d{1,2}\s+years?\s+old|age\s+of\s+\d{1,2})\b/i;
+
+/**
+ * Drop senior|staff from the model when the body only adds legal-age boilerplate
+ * and the title does not already signal a senior IC / leadership band.
+ */
+export function sanitizeSeniorityLevelFromAgeNoise(
+  title: string,
+  description: string,
+  seniority: SeniorityLevel | null
+): SeniorityLevel | null {
+  if (seniority !== "senior" && seniority !== "staff") return seniority;
+  if (!LEGAL_AGE_BOILERPLATE_RE.test(description)) return seniority;
+  const t = title.toLowerCase();
+  if (/\b(senior|sr\.?|staff|principal|lead|director|manager|vp\b|executive)\b/.test(t)) {
+    return seniority;
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heuristic seniority detection from title keywords + years-of-experience
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Detect seniority from the job title (fast, high-confidence) and
+ * years-of-experience patterns in the description (lower-confidence fallback).
+ *
+ * Title matching is tried first and returns immediately when a clear signal is
+ * found. Year-range parsing is attempted only when no title keyword matched.
+ *
+ * Returns null when uncertain so the AI lazy-load can fill the gap.
+ *
+ * Year → seniority mapping (conservative to avoid blocking AI corrections):
+ *   0–2  yrs minimum required → entry
+ *   3–5  yrs minimum required → mid
+ *   6+   yrs minimum required → senior
+ * manager / staff / director / executive are left to the AI because they cannot
+ * be reliably inferred from years alone.
+ */
+export function detectSeniorityFromText(
+  title: string,
+  description: string | null,
+): SeniorityLevel | null {
+  const t = title.toLowerCase();
+  const d = (description ?? "").toLowerCase();
+
+  // ── Title keywords (ordered from most-specific to least) ──────────────────
+
+  // Executive: VP, C-suite, SVP, EVP, President
+  if (/\b(vp\b|vice\s+president|svp\b|evp\b|c[a-z]{1,2}o\b|chief\s+\w+\s+officer|president)\b/.test(t))
+    return "executive";
+
+  // Director (watch for "product director" vs "director of engineering" — both director-level)
+  if (/\bdirector\b/.test(t)) return "director";
+
+  // Staff / Principal IC (above senior, no direct reports)
+  if (/\b(staff\s+(?:software|data|ml|platform|infra|infrastructure|devops|security|backend|frontend|fullstack|full.?stack|mobile|ios|android|site\s+reliability|sre)\s+engineer|staff\s+engineer|principal\s+(?:engineer|scientist|architect|designer|researcher)|distinguished\s+engineer)\b/.test(t))
+    return "staff";
+
+  // Intern / internship
+  if (/\b(intern(ship)?)\b/.test(t)) return "internship";
+
+  // New grad / campus hire
+  if (/\b(new\s*grad(uate)?|campus\s*(hire|recruit(er)?)|university\s*grad|early\s*career|0\s*[-–]\s*1\s*year)\b/.test(t))
+    return "new_grad";
+
+  // "Senior Manager" (and variants) is a management level, not a senior IC
+  if (/\bsenior\s+manager\b/.test(t)) return "manager";
+
+  // Senior IC
+  if (/\b(sr\.?\s|senior\s|sr\s)/.test(t)) return "senior";
+
+  // Junior / entry-level explicit
+  if (/\b(jr\.?\s|junior\s|entry[-\s]?level|associate\s+(?:software|data|product|design|engineer|developer|analyst|scientist))\b/.test(t))
+    return "entry";
+
+  // ── Description-level signals (lower confidence, title gave nothing) ──────
+
+  // Internship described in body even if not in title
+  if (/\b(internship|intern\s+program|summer\s+intern|co[-\s]?op)\b/.test(d)) return "internship";
+
+  // New grad described in body
+  if (/\b(new\s*grad(uate)?|campus\s+hire|university\s+grad|recent\s+grad(uate)?|graduating\s+(class|student))\b/.test(d))
+    return "new_grad";
+
+  // ── Years-of-experience parsing ────────────────────────────────────────────
+  // Patterns: "3 years", "3+ years", "3-8 years", "3–8 years", "3-8+ years", "3 yrs"
+  // No need to require "experience" after — job descriptions don't say "X years"
+  // unless they mean required experience.
+  // Strip legal-age lines first so "18 years of age" is not read as 18 years' tenure.
+  const dForYears = stripAgeRequirementPhrasesForExperienceParsing(d);
+  const yrsRx = /(\d+)\s*(?:[-–]\s*\d+\s*)?\+?\s*(?:years?|yrs?)\b/gi;
+
+  let minYears = Infinity;
+  let m: RegExpExecArray | null;
+  while ((m = yrsRx.exec(dForYears)) !== null) {
+    const v = parseInt(m[1], 10);
+    if (!isNaN(v) && v < minYears) minYears = v;
+  }
+
+  if (minYears === Infinity) return null;
+
+  if (minYears <= 2) return "entry";
+  if (minYears <= 5) return "mid";
+  return "senior";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workplace type (remote / hybrid / on_site)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function normalizeWorkplaceType(
+  raw: string | null | undefined,
+  locationHint?: string | null
+): WorkplaceType | null {
+  const text = (raw ?? locationHint ?? "").toLowerCase();
+  if (text.includes("remote")) return "remote";
+  if (text.includes("hybrid")) return "hybrid";
+  if (text.includes("on-site") || text.includes("on site") || text.includes("onsite") || text.includes("in-person")) return "on_site";
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Salary parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ParsedSalary {
+  min: number | null;
+  max: number | null;
+  currency: string | null;
+  period: SalaryPeriod | null;
+}
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  "$": "USD",
+  "£": "GBP",
+  "€": "EUR",
+  "¥": "JPY",
+  "₹": "INR",
+  "C$": "CAD",
+  "A$": "AUD",
+};
+
+/**
+ * Attempt to extract salary range from a freeform string.
+ * Examples: "$80k–$120k/yr", "£50,000 - £70,000 per year", "25-35 USD/hr"
+ *
+ * Returns all nulls if parsing fails — salary is always optional.
+ */
+export function parseSalary(raw: string | null | undefined): ParsedSalary {
+  const empty: ParsedSalary = { min: null, max: null, currency: null, period: null };
+  if (!raw) return empty;
+
+  // Detect currency
+  let currency: string | null = null;
+  for (const [sym, code] of Object.entries(CURRENCY_SYMBOLS)) {
+    if (raw.includes(sym)) {
+      currency = code;
+      break;
+    }
+  }
+  // Also check for ISO codes like "USD", "EUR"
+  const isoMatch = raw.match(/\b(USD|GBP|EUR|JPY|INR|CAD|AUD)\b/i);
+  if (!currency && isoMatch) currency = isoMatch[1].toUpperCase();
+
+  // Detect period
+  let period: SalaryPeriod | null = null;
+  if (/\/?\s*(yr|year|annual|annually)/i.test(raw)) period = "year";
+  else if (/\/?\s*(mo|month|monthly)/i.test(raw)) period = "month";
+  else if (/\/?\s*(hr|hour|hourly)/i.test(raw)) period = "hour";
+
+  // Extract numbers (handle "k" suffix = ×1000)
+  const numbers = [...raw.matchAll(/[\d,]+(?:\.\d+)?k?/gi)].map((m) => {
+    const s = m[0].replace(/,/g, "");
+    const multiplier = s.toLowerCase().endsWith("k") ? 1000 : 1;
+    return parseFloat(s) * multiplier;
+  });
+
+  if (numbers.length === 0) return empty;
+  const min = numbers[0];
+  const max = numbers.length > 1 ? numbers[1] : null;
+
+  return { min, max, currency, period };
+}
+
+/**
+ * Scan a full job description for a salary/pay range.
+ *
+ * Designed for California pay-transparency disclosures and common US patterns:
+ *   "$80,000 – $120,000 per year", "$25–$35/hr", "Salary: $150,000",
+ *   "$80k - $120k annually", "Pay Range: $25.00 - $30.00/hour"
+ *
+ * Strategy: find every `$amount [–range]` in the text, then check up to 80
+ * chars before/after for a period indicator. Magnitude-based inference is used
+ * only when a salary/pay/compensation keyword is present in the same window
+ * (avoids mis-classifying funding rounds like "$50M Series B").
+ *
+ * Returns all nulls when no credible pattern is found — salary is optional.
+ */
+export function extractSalaryFromText(text: string | null | undefined): ParsedSalary {
+  const empty: ParsedSalary = { min: null, max: null, currency: null, period: null };
+  if (!text) return empty;
+
+  let t = text.replace(/\r\n|\r/g, "\n").replace(/[ \t]+/g, " ");
+  // Decode HTML entities so salary figures inside HTML job descriptions are found
+  t = t
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/&mdash;|&#8212;/g, "—")
+    .replace(/&ndash;|&#8211;/g, "–")
+    .replace(/&#36;/g, "$")
+    .replace(/&nbsp;/g, " ");
+  // Strip HTML tags after decoding (descriptions stored as HTML often wrap salary in spans)
+  t = t.replace(/<[^>]+>/g, " ");
+  // Normalize "between $X and $Y" → "$X - $Y" so the main regex handles it uniformly
+  t = t.replace(/between\s+(\$[\d,]+(?:\.\d+)?k?)\s+and\s+(\$[\d,]+(?:\.\d+)?k?)/gi, "$1 - $2");
+  // Bridge salary ranges split across a line break: "$145,000–\n$270,000" → "$145,000–$270,000"
+  t = t.replace(/(\$[\d,]+(?:\.\d+)?k?)\s*[-–—]\s*\n\s*(\$[\d,]+(?:\.\d+)?k?)/gi, "$1 – $2");
+
+  // $ amount (optional k-suffix), optional range, then trailing context window.
+  // (?!\d) prevents backtracking to sub-strings of longer numbers (e.g. "$120M" → never "$12").
+  // (?![MBTmbt]) then excludes million/billion/trillion shorthand (funding, revenue, etc.).
+  // Range separator allows an optional ISO currency code between number and dash/to
+  // (e.g. "$146,200.00 USD to $233,700.00").
+  const SALARY_RX = /\$\s*([\d,]+(?:\.\d+)?)(?!\d)(k?)(?![MBTmbt])(?:\s*(?:[A-Z]{2,3}\s+)?(?:[-–—]|\bto\b)\s*\$?\s*([\d,]+(?:\.\d+)?)(?!\d)(k?))?([^$\n]{0,80})?/gi;
+
+  const PERIOD_MAP: Array<[RegExp, SalaryPeriod]> = [
+    [/\/\s*(?:yr|year|annum)|per\s+(?:yr|year|annum)|\ba(?:n)?\s+year\b|\bannually\b/i, "year"],
+    [/\/\s*(?:hr|hour)|per\s+(?:hr|hour)|\ba(?:n)?\s+hour\b|\bhourly\b/i, "hour"],
+    [/\/\s*(?:mo|month)|per\s+(?:mo|month)|\ba\s+month\b|\bmonthly\b/i, "month"],
+  ];
+
+  // Salary-context keywords that make magnitude-based period inference safe.
+  // "rate" alone is too broad (hits "revenue run rate", "conversion rate", etc.);
+  // only "rate of pay" is specific enough.
+  const CONTEXT_RX = /\b(?:salary|pay(?:\s+range)?|compensation|wage|rate\s+of\s+pay|earn(?:ings?)?|total\s+(?:comp|compensation)|base(?:\s+(?:pay|salary))?|OTE|on[\s-]target\s+earn)\b/i;
+
+  interface Candidate { min: number; max: number | null; period: SalaryPeriod; score: number; }
+  const candidates: Candidate[] = [];
+
+  let m: RegExpExecArray | null;
+  SALARY_RX.lastIndex = 0;
+  while ((m = SALARY_RX.exec(t)) !== null) {
+    let min = parseFloat(m[1].replace(/,/g, "")) * (m[2].toLowerCase() === "k" ? 1000 : 1);
+    let max = m[3]
+      ? parseFloat(m[3].replace(/,/g, "")) * ((m[4]?.toLowerCase() ?? "") === "k" ? 1000 : 1)
+      : null;
+
+    // "$110-120K" — max has explicit k but min doesn't; if max is ≥100× min the min is
+    // implicitly also in thousands (e.g. "$110-120K" = $110k–$120k, not $110–$120k).
+    if (max !== null && (m[4]?.toLowerCase() ?? "") === "k" && (m[2] ?? "") === "" && min < 1000 && max >= min * 100) {
+      min = min * 1000;
+    }
+
+    // Skip implausible values (funding rounds, revenue figures, etc.)
+    if (min < 8 || min > 2_000_000) continue;
+    if (max !== null && (max < min || max > 2_000_000)) continue;
+
+    const trailing   = m[5] ?? "";
+    // Narrow (60-char) window for period indicators — keeps them adjacent to the amount
+    // so stray "/mo" in a URL 100 chars away doesn't corrupt the period classification.
+    const nearLeading = t.slice(Math.max(0, m.index - 60), m.index);
+    // Wide (150-char) window for salary-keyword context — catches "Salary Range:" section
+    // headers that appear above the dollar figures with no keyword on the same line.
+    const wideLeading = t.slice(Math.max(0, m.index - 150), m.index);
+    const window      = wideLeading + m[0] + trailing;
+
+    let period: SalaryPeriod | null = null;
+    let hasPeriod = false;
+    for (const [rx, p] of PERIOD_MAP) {
+      if (rx.test(trailing) || rx.test(nearLeading)) {
+        period    = p;
+        hasPeriod = true;
+        break;
+      }
+    }
+    // Reject if the period word is part of a revenue/MRR/ARR phrase, not a pay period
+    // e.g. "$650K in monthly recurring revenue", "$50k+/month in revenue"
+    if (hasPeriod && /\b(?:recurring\s+revenue|in\s+(?:\w+\s+)?revenue|MRR\b|ARR\b|revenue\s+run)\b/i.test(trailing + nearLeading)) {
+      period    = null;
+      hasPeriod = false;
+    }
+
+    // Fall back to magnitude inference when a salary keyword anchors the context
+    if (!period && CONTEXT_RX.test(window)) {
+      if (min >= 10_000) period = "year";
+      else if (min <= 500) period = "hour";
+    }
+
+    // Final fallback: bare range with a currency/region marker near the match.
+    // Companies like Pinterest/Toast/Oura use "$X — $Y USD" or "Region 1 $X-$Y" without
+    // a "per year" phrase. Check both trailing and the near-leading window (Oura puts
+    // "Region 1" before the numbers; Pinterest/Toast put "USD" after). Only fire when
+    // both min and max are present (deliberate range = pay disclosure).
+    if (!period && max !== null && /\b(?:USD|CAD|GBP|EUR|Region|Zone|Tier)\b/i.test(trailing + nearLeading)) {
+      if (min >= 10_000) period = "year";
+    }
+
+    if (!period) continue;
+
+    // Weed out non-salary dollar amounts that happen to carry a period indicator:
+    // benefit stipends ($100–$150/mo), dev budgets ($1,500/yr), etc. are never salaries.
+    if (period === "year"  && min < 20_000) continue;
+    if (period === "month" && min < 1_500)  continue;
+    if (period === "hour"  && min < 8)      continue;
+
+    const hasContext = CONTEXT_RX.test(window);
+    const score = (hasPeriod ? 4 : 0) + (hasContext ? 2 : 0) + (max !== null ? 1 : 0);
+    candidates.push({ min, max, period, score });
+  }
+
+  if (candidates.length === 0) return empty;
+
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  return { min: best.min, max: best.max, currency: "USD", period: best.period };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Location normalization
+// ─────────────────────────────────────────────────────────────────────────────
+
+const US_STATE_ABBREVS: Record<string, string> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR",
+  california: "CA", colorado: "CO", connecticut: "CT", delaware: "DE",
+  florida: "FL", georgia: "GA", hawaii: "HI", idaho: "ID",
+  illinois: "IL", indiana: "IN", iowa: "IA", kansas: "KS",
+  kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD",
+  massachusetts: "MA", michigan: "MI", minnesota: "MN", mississippi: "MS",
+  missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK",
+  oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT",
+  vermont: "VT", virginia: "VA", washington: "WA", "west virginia": "WV",
+  wisconsin: "WI", wyoming: "WY", "district of columbia": "DC",
+};
+
+/** USPS state / DC codes — disambiguate from Canadian provinces (ON, AB, …). */
+const US_STATE_ABBREV_SET = new Set(Object.values(US_STATE_ABBREVS));
+
+/** Lowercase full US state names (keys of US_STATE_ABBREVS) — preserve "Minnesota, USA" vs strip "San Francisco, USA". */
+const US_STATE_FULL_NAME_SET = new Set(Object.keys(US_STATE_ABBREVS));
+
+// Strings that are not meaningful geocodable locations.
+// Jobs with these values will have null lat/lng (by design).
+const NON_GEOCODABLE = new Set([
+  // Gemini-identified non-geocodable strings
+  "hatvan",
+  "aveiro",
+  "miskolc",
+  "camp foster",
+  "western australia, au",
+  "western australia, wa",
+  "telengana, india",
+  "z-test & templates only",
+  "us full-time",
+  "us california",
+  "prisons - nationwide",
+  "ky",
+  "south america",
+  "aranjuez, md",
+  "vernon",
+  "united states & canada",
+  "shape",
+  "hybrid",
+  // Workplace labels with no placename (not remote / not hybrid — just non-geographic)
+  "in-office",
+  "distributed",
+  "national capital region",
+  "va",
+  "turkey",
+  "riverside",
+  "michigan",
+  "mo",
+  "korea",
+  "gurugram, croatia",
+  "camp humphreys",
+  "union county, sd",
+  "rota",
+  "houston",
+  "central",
+  "birmingham",
+  "western australia, western australia",
+  "west",
+  "sc",
+  "queensland, au",
+  "ms",
+  "mi",
+  "flanders, belgium",
+  "fairfield",
+  "dallas",
+  "binh thanh",
+  "alabama, az",
+  "westchester",
+  "united states of america",
+  "united states and canada",
+  "us border patrol nationwide",
+  "trøndelag, norway",
+  "telangana, india",
+  "tx",
+  "sh, germany",
+  "sa, germany",
+  "remotely in europe",
+  "queensland, ref",
+  "ohio",
+  "new zealand",
+  "naval air station",
+  "nj",
+  "missouri",
+  "latin america",
+  "kendall county, il",
+  "kansas",
+  "gregg township, pa",
+  "erie county, pa",
+  "cook county, il",
+  "chievres air base",
+  "cbpo nationwide",
+  "bulgaria",
+  "więte, podkarpackie voivodeship",
+  "telangana, india",
+  "rd",
+  "provincia di napoli",
+  "provincia di cosenza",
+  "zuid nederland, netherlands",
+  "west and mountain timezones",
+  "west coast, united states (hybrid",
+  "vorarlberg, austria",
+  "vestland, norway",
+  "vestfold, vestfold",
+  "veneto",
+  "uusimaa, etelä-pohjanmaa",
+  "utah",
+  "troy",
+  "tirol, austria",
+  "thun, belgium",
+  "tasmania, ref",
+  "summit county, oh",
+  "stadt, austria",
+  "spain full-time",
+  "southeast",
+  "south gyeonggi, south korea",
+  "south florida",
+  "slovakia",
+  "skaraborg, dalarna county",
+  "saskatoon, slovakia",
+  "sf bay area, us-national",
+  "rockingham",
+  "región metropolitana, cl",
+  "pakistan",
+  "page county, va",
+  "oberösterreich, austria",
+  "oh",
+  "northwest",
+  "northern europe",
+  "northeast, u.s.",
+  "northeast",
+  "north carolina",
+  "new york privy",
+  "new south wales, ref",
+  "new south wales, nsw",
+  "nebraska",
+  "nyc-privy",
+  "ny",
+  "møre og romsdal, møre og romsdal",
+  "mercor",
+  "mekong delta",
+  "meir 34",
+  "maryland",
+  "md",
+  "landquart, greece",
+  "lahr",
+  "khanh hoa",
+  "jämtlands län, sweden",
+  "jamtland county, sweden",
+  "jp_bgsw, india",
+  "illinois",
+  "in tamil nadu",
+  "hawaii",
+  "gyeonggi-do, south korea",
+  "edina",
+  "eastern europe",
+  "east and central timezones",
+  "east hampton",
+  "east coast",
+  "east",
+  "distributed, emea",
+  "department of state posts - overseas and domestic",
+  "dach region",
+  "costa rica",
+  "connecticut",
+  "chandigarh, switzerland",
+  "bay area",
+  "australian capital territory, ref",
+  "asia",
+  "alaska flight service stations",
+  "al",
+  // Remote / flexible
+  "remote", "fully remote", "100% remote", "work from home",
+  // Vague / multi-location
+  "multiple locations", "multiple cities", "various locations", "all locations",
+  "4 locations",
+  "location negotiable after selection", "location negotiable",
+  "location", "tbd", "na", "n/a",
+  "us & canada", "southeast, u.s.", "raleigh-durham",
+  // Bare country names
+  "united states", "us", "usa", "north america",
+  "united kingdom", "uk", "great britain",
+  "europe", "emea", "eu", "apac", "latam",
+  "india", "canada", "germany", "france", "italy", "brazil",
+  "south korea", "japan", "china", "australia", "taiwan",
+  "netherlands", "the netherlands", "israel",
+  "mexico", "ireland", "spain", "romania", "switzerland",
+  "belgium", "austria", "poland", "portugal", "czech republic",
+  "hungary", "sweden", "norway", "finland", "denmark",
+  "greece", "ukraine", "south africa", "thailand", "indonesia",
+  "malaysia", "philippines", "vietnam", "egypt", "nigeria",
+  "kenya", "ghana", "colombia", "chile", "peru", "argentina",
+  "saudi arabia", "united arab emirates", "uae",
+  "worldwide", "global", "international", "allemagne",
+  // Bare US state names — handled by normalizeLocation → "State, USA" (see step 2b)
+  "new york state", "washington state",
+  // Bare Australian state/territory names
+  "queensland", "new south wales", "victoria", "south australia",
+  "western australia", "northern territory", "tasmania",
+  "australian capital territory",
+  // Bare ISO-2 country codes that slipped through
+  "jp", "de", "cn", "in", "gb", "au", "fr", "br", "kr", "nl",
+  "ae", "ie", "es", "it", "tw", "sg", "il", "mx", "dk", "gr",
+  "ua", "be", "se", "no", "fi", "at", "ch", "pl", "pt", "cz",
+  "hu", "ro", "za", "ar", "co", "cl", "pe", "ng", "ke", "gh",
+  // Bare airport/city shortcodes
+  "tlv", "sea", "les",
+  // FAA / government boilerplate
+  "faa - air traffic locations", "faa location negotiable upon request - see additional info",
+  "irs nationwide locations", "may be filled in various faa duty locations",
+  "us locations",
+  // Malformed / ATS junk
+  "n", "", "hq", "moment hq", "strella hq", "us-sf-hq",
+]);
+
+// Canonical form for common bare cities — tech hubs plus international cities
+// seen frequently in the job dataset.
+// Note: "New York, NY" is the single canonical form; "New York City, NY" is an alias.
+const BARE_CITY_MAP: Record<string, string> = {
+  "san francisco": "San Francisco, CA",
+  "palo alto": "Palo Alto, CA",
+  "menlo park": "Menlo Park, CA",
+  "mountain view": "Mountain View, CA",
+  "santa clara": "Santa Clara, CA",
+  "redwood city": "Redwood City, CA",
+  "san jose": "San Jose, CA",
+  "san diego": "San Diego, CA",
+  "los angeles": "Los Angeles, CA",
+  "new york": "New York, NY",
+  "new york city": "New York, NY",
+  "washington dc": "Washington, DC",
+  "washington d.c.": "Washington, DC",
+  "tel aviv": "Tel Aviv, Israel",
+  "new delhi": "New Delhi, India",
+  "mexico city": "Mexico City, Mexico",
+  "ciudad de méxico": "Mexico City, Mexico",
+  "abu dhabi": "Abu Dhabi, UAE",
+  "ho chi minh city": "Ho Chi Minh City, Vietnam",
+  "ho chi minh": "Ho Chi Minh City, Vietnam",
+  "kuala lumpur": "Kuala Lumpur, Malaysia",
+  "tel aviv-yafo": "Tel Aviv, Israel",
+  "são paulo": "São Paulo, Brazil",
+  "sao paulo": "São Paulo, Brazil",
+  "buenos aires": "Buenos Aires, Argentina",
+  "cape town": "Cape Town, South Africa",
+  "suzhou, jiangsu": "Suzhou, China",
+  "wuxi, jiangsu": "Wuxi, China",
+  "stuttgart, bw": "Stuttgart, Germany",
+  "lohr am main, by": "Lohr am Main, Germany",
+  "reutlingen, bw": "Reutlingen, Germany",
+  "hangzhou, zhejiang": "Hangzhou, China",
+  "changzhou, jiangsu": "Changzhou, China",
+  "ludwigshafen, rp": "Ludwigshafen, Germany",
+  "braga, braga": "Braga, Portugal",
+  "martillac, nouvelle-aquitaine": "Martillac, France",
+  "frankfurt am main, he": "Frankfurt am Main, Germany",
+  "bayan lepas, pulau pinang": "Bayan Lepas, Malaysia",
+  "wiesbaden, he": "Wiesbaden, Germany",
+  "leipzig, sn": "Leipzig, Germany",
+  "dresden, sn": "Dresden, Germany",
+  "renningen, bw": "Renningen, Germany",
+  "naval air station san diego, ca": "San Diego, CA",
+  "district 2, thu duc city": "Ho Chi Minh City, Vietnam",
+  "pasay city": "Pasay City, Philippines",
+  "tinker afb, ok": "Oklahoma City, OK",
+  "lisboa, lisboa": "Lisbon, Portugal",
+  "campinas, sp": "Campinas, Brazil",
+  "naval base, norfolk": "Norfolk, VA",
+  "lackland afb, tx": "San Antonio, TX",
+  "changsha, hunan": "Changsha, China",
+  "celaya planta, mx": "Celaya, Mexico",
+  "air force academy, co": "Colorado Springs, CO",
+  "pentagon, arlington": "Arlington, VA",
+  "pearl harbor naval base, oahu": "Pearl Harbor, HI",
+  "guadalajara, jal.": "Guadalajara, Mexico",
+  "fort sill, ok": "Lawton, OK",
+  "fort lee, va": "Fort Gregg-Adams, VA",
+  "fort carson, co": "Colorado Springs, CO",
+  "joint base lewis-mcchord, wa": "Tacoma, WA",
+  "langley afb, va": "Hampton, VA",
+  "hickam afb, hi": "Honolulu, HI",
+  "fort stewart, ga": "Hinesville, GA",
+  "washington navy yard, dc": "Washington, DC",
+  "tyndall afb, fl": "Panama City, FL",
+  "sligo, so": "Sligo, Ireland",
+  "redstone arsenal, al": "Huntsville, AL",
+  "fort benning, ga": "Fort Moore, GA",
+  "randolph afb, tx": "San Antonio, TX",
+  "patrick afb, fl": "Satellite Beach, FL",
+  "nanjing, jiangsu": "Nanjing, China",
+  "fort polk, la": "Fort Johnson, LA",
+  "braga": "Braga, Portugal",
+  "bellevue": "Bellevue, WA",
+  // Bare global cities — canonical intl form is City, Full English country name (D1 samples)
+  "london": "London, United Kingdom",
+  "toronto": "Toronto, Canada",
+  "amsterdam": "Amsterdam, Netherlands",
+  "tokyo": "Tokyo, Japan",
+  "nagoya": "Nagoya, Japan",
+  "minato": "Minato, Japan",
+  "taipei": "Taipei, Taiwan",
+  "zhubei": "Zhubei, Taiwan",
+  "stockholm": "Stockholm, Sweden",
+  "krakow": "Krakow, Poland",
+  "hanoi": "Hanoi, Vietnam",
+  "bangkok": "Bangkok, Thailand",
+  "lysaker": "Lysaker, Norway",
+  "north sydney": "North Sydney, Australia",
+  "armenia": "Armenia",
+  "singapore": "Singapore",
+  "seattle": "Seattle, WA",
+  "miami": "Miami, FL",
+  "whittier": "Whittier, CA",
+  "milan": "Milan, Italy",
+  "petaling jaya": "Petaling Jaya, Malaysia",
+  "roubaix": "Roubaix, France",
+  "vilvoorde": "Vilvoorde, Belgium",
+  "leonberg": "Leonberg, Germany",
+  "magdeburg": "Magdeburg, Germany",
+  "crawley": "Crawley, United Kingdom",
+  "querétaro": "Querétaro, Mexico",
+  "queretaro": "Querétaro, Mexico",
+  "monterrey": "Monterrey, Mexico",
+  "guadalajara": "Guadalajara, Mexico",
+  "tlaquepaque": "Tlaquepaque, Mexico",
+  "pasig": "Pasig, Philippines",
+  "berlin": "Berlin, Germany",
+  "washington": "Washington, DC",
+  "rensselaer": "Rensselaer, NY",
+  "marne la vallee cedex 4": "Marne-la-Vallée, France",
+  "madison": "Madison, WI",
+  "austin": "Austin, TX",
+  "dublin": "Dublin, Ireland",
+  "paris": "Paris, France",
+  "barcelona": "Barcelona, Spain",
+  "mumbai": "Mumbai, India",
+  "hyderabad": "Hyderabad, India",
+  "chennai": "Chennai, India",
+  "pune": "Pune, India",
+  "gurgaon": "Gurgaon, India",
+  "noida": "Noida, India",
+  "bengaluru": "Bengaluru, India",
+  "santiago": "Santiago, Chile",
+  "charlotte": "Charlotte, NC",
+  "cupertino": "Cupertino, CA",
+  "northridge": "Northridge, CA",
+  "christchurch": "Christchurch, New Zealand",
+  "riyadh": "Riyadh, Saudi Arabia",
+  "bay pines, fl": "St. Petersburg, FL",
+  "westport, mo": "Kansas City, MO",
+  "schofield barracks, hi": "Wahiawa, HI",
+  "sasebo": "Sasebo, Japan",
+  "buckley afb, co": "Aurora, CO",
+  "wernau (neckar), bw": "Wernau, Germany",
+  "new cumberland defense logistics center, pa": "New Cumberland, PA",
+  "minato city, tokyo": "Tokyo, Japan",
+  "maxwell afb, al": "Montgomery, AL",
+  "eglin afb, fl": "Valparaiso, FL",
+  "batu kawan, penang": "Batu Kawan, Malaysia",
+  "coimbatore, india": "Coimbatore, India",
+  "washington, d.c.": "Washington, DC",
+  "schwieberdingen, bw": "Schwieberdingen, Germany",
+  "point loma complex, san diego": "San Diego, CA",
+  "naval air station jacksonville, fl": "Jacksonville, FL",
+  "mather afb, ca": "Sacramento, CA",
+  "macdill afb, fl": "Tampa, FL",
+  "holloman afb, nm": "Alamogordo, NM",
+  "heredia, heredia province": "Heredia, Costa Rica",
+  "helsinki, uusimaa": "Helsinki, Finland",
+  "gerlingen, bw": "Gerlingen, Germany",
+  "fort eustis, va": "Newport News, VA",
+  "timișoara, tm": "Timișoara, Romania",
+  "robins afb, ga": "Warner Robins, GA",
+  "ramstein": "Ramstein-Miesenbach, Germany",
+  "nanchang, jiangxi": "Nanchang, China",
+  "magdeburg, sa": "Magdeburg, Germany",
+  "klong toei, bangkok": "Bangkok, Thailand",
+  "hanscom afb, ma": "Bedford, MA",
+  "fort wainwright, ak": "Fairbanks, AK",
+  "fort mccoy, wi": "Sparta, WI",
+  "campus nyc": "New York, NY",
+  "luke afb, az": "Glendale, AZ",
+  "kirtland afb, nm": "Albuquerque, NM",
+  "karlsruhe, bw": "Karlsruhe, Germany",
+  "hurlburt field, fl": "Mary Esther, FL",
+  "fairchild afb, wa": "Spokane, WA",
+  "schiphol, nh": "Schiphol, Netherlands",
+  "peterson afb, co": "Colorado Springs, CO",
+  "naval shipyard, portsmouth": "Portsmouth, VA",
+  "kyiv": "Kyiv, Ukraine",
+  "kiel, sh": "Kiel, Germany",
+  "fort richardson, ak": "Anchorage, AK",
+  "fort bliss, tx": "El Paso, TX",
+  "aviano": "Aviano, Italy",
+  "abstatt, bw": "Abstatt, Germany",
+  "tripler army medical center, hi": "Honolulu, HI",
+  "selfridge ang base, mi": "Harrison Township, MI",
+  "picatinny arsenal, nj": "Dover, NJ",
+  "montreal, qc": "Montreal, Canada",
+  "mcconnell afb, ks": "Wichita, KS",
+  "fort gordon, ga": "Augusta, GA",
+  "elchingen, by": "Elchingen, Germany",
+  "hosur road bangalore, india": "Bangalore, India",
+  "wetzlar, he": "Wetzlar, Germany",
+  "union square, new york city": "New York, NY",
+  "naval medical center, san diego": "San Diego, CA",
+  "minot afb, nd": "Minot, ND",
+  "lübeck, sh": "Lübeck, Germany",
+  "jinan, shandong": "Jinan, China",
+  "hanover, nds": "Hanover, Germany",
+  "fort jackson, sc": "Columbia, SC",
+  "erfurt, th": "Erfurt, Germany",
+  "camp lejeune, nc": "Jacksonville, NC",
+  "thiruvananthapuram": "Thiruvananthapuram, India",
+  "sligo, ie": "Sligo, Ireland",
+  "sheppard afb, tx": "Wichita Falls, TX",
+  "offutt afb, ne": "Bellevue, NE",
+  "neumünster, sh": "Neumünster, Germany",
+  "mayport, fl": "Jacksonville, FL",
+  "keesler afb, ms": "Biloxi, MS",
+  "kaiserslautern": "Kaiserslautern, Germany",
+  "kadena air base okinawa": "Okinawa, Japan",
+  "glenrothes, fife": "Glenrothes, United Kingdom",
+  "chesapeake county, va": "Chesapeake, VA",
+  "cherry point, nc": "Havelock, NC",
+  "bolzano, south tyrol": "Bolzano, Italy",
+  "beograd, serbia": "Belgrade, Serbia",
+  "belgrade": "Belgrade, Serbia",
+  "an phuoc commune, dong nai": "Long Thanh, Vietnam",
+  "west roxbury, ma": "Boston, MA",
+  "warren afb, wy": "Cheyenne, WY",
+  "vénissieux, auvergne-rhône-alpes": "Vénissieux, France",
+  "tranås, jönköpings län": "Tranås, Sweden",
+  "sanand, gj": "Sanand, India",
+  "saint-ouen-sur-seine, idf": "Saint-Ouen-sur-Seine, France",
+  "naval air station key west, fl": "Key West, FL",
+  "mountain home afb, id": "Mountain Home, ID",
+  "mcguire afb, nj": "Trenton, NJ",
+  "mannheim, bw": "Mannheim, Germany",
+  "immenstadt im allgäu, by": "Immenstadt im Allgäu, Germany",
+  "gunzenhausen, by": "Gunzenhausen, Germany",
+  "eisenach, th": "Eisenach, Germany",
+  "davis monthan afb, az": "Tucson, AZ",
+  "cluj, jucu": "Cluj-Napoca, Romania",
+  "chongqing, chongqing": "Chongqing, China",
+  "bühl, bw": "Bühl, Germany",
+  "bursa, tr": "Bursa, Turkey",
+  "whiteman afb, mo": "Knob Noster, MO",
+  "ulm, bw": "Ulm, Germany",
+  "travis afb, ca": "Fairfield, CA",
+  "rostock, mv": "Rostock, Germany",
+  "petaling jaya, selangor": "Petaling Jaya, Malaysia",
+  "misawa afb": "Misawa, Japan",
+  "maklár": "Maklár, Hungary",
+  "horb am neckar, bw": "Horb am Neckar, Germany",
+  "hong kong, hk": "Hong Kong, Hong Kong",
+  "hill afb, ut": "Ogden, UT",
+  "fort wingate, nm": "Gallup, NM",
+  "fort huachuca, az": "Sierra Vista, AZ",
+  "fort dix, nj": "Joint Base McGuire-Dix-Lakehurst, NJ",
+  "düsseldorf, nrw": "Düsseldorf, Germany",
+  "dover afb, de": "Dover, DE",
+  "cluj-napoca, cj": "Cluj-Napoca, Romania",
+  "charleston afb, sc": "Charleston, SC",
+  "bayan lepas, penang": "Bayan Lepas, Malaysia",
+  "annecy, auvergne-rhône-alpes": "Annecy, France",
+  "andrews afb, md": "Camp Springs, MD",
+  "imanovci, vojvodina": "Šimanovci, Serbia",
+  "tân bình, thành phố hồ chí minh": "Ho Chi Minh City, Vietnam",
+  "stuttgart": "Stuttgart, Germany",
+  "spangdahlem": "Spangdahlem, Germany",
+  "sigonella sicily": "Sigonella, Italy",
+  "piaseczno, masovian voivodeship": "Piaseczno, Poland",
+  "oslo, oslo": "Oslo, Norway",
+  "naval business center, philadelphia": "Philadelphia, PA",
+  "leinfelden-echterdingen, bw": "Leinfelden-Echterdingen, Germany",
+  "cologne, nrw": "Cologne, Germany",
+  "carlisle barracks, pa": "Carlisle, PA",
+  "breukelen, ut": "Breukelen, Netherlands",
+  "baumholder": "Baumholder, Germany",
+  "stanbul, tr": "Istanbul, Turkey",
+  "yokosuka": "Yokosuka, Japan",
+  "san francisco bay area": "San Francisco, CA",
+  "rotterdam, zh": "Rotterdam, Netherlands",
+  "rickenbacker afb, oh": "Columbus, OH",
+  "potsdam, bb": "Potsdam, Germany",
+  "nellis afb, nv": "Las Vegas, NV",
+  "naples": "Naples, Italy",
+  "minato-ku, 13": "Tokyo, Japan",
+  "marine corps air station miramar, ca": "San Diego, CA",
+  "malmstrom afb, mt": "Great Falls, MT",
+  "mainz, rp": "Mainz, Germany",
+  "luxembourg, luxembourg": "Luxembourg City, Luxembourg",
+  "lisboa": "Lisbon, Portugal",
+  "kusterdingen, bw": "Kusterdingen, Germany",
+  "juárez, chih.": "Ciudad Juárez, Mexico",
+  "hallein, salzburg": "Hallein, Austria",
+  "fort rucker, al": "Fort Novosel, AL",
+  "espoo, uusimaa": "Espoo, Finland",
+  "blaj, alba": "Blaj, Romania",
+  "beale afb, ca": "Marysville, CA",
+  "auckland, auckland": "Auckland, New Zealand",
+  "vicenza": "Vicenza, Italy",
+  "togus, me": "Augusta, ME",
+  "seymour johnson afb, nc": "Goldsboro, NC",
+  "schweinfurt, by": "Schweinfurt, Germany",
+  "saint augustine, fl": "St. Augustine, FL",
+  "roma, rome": "Rome, Italy",
+  "naval station complex, san diego": "San Diego, CA",
+  "naval medical center, portsmouth": "Portsmouth, VA",
+  "niwc lant charleston, sc": "Charleston, SC",
+  "machelen, flanders": "Machelen, Belgium",
+  "luxembourg": "Luxembourg City, Luxembourg",
+  "kings park, nsw": "Kings Park, Australia",
+  "hanau, he": "Hanau, Germany",
+  "halle (saale), sa": "Halle, Germany",
+  "groton submarine base, ct": "Groton, CT",
+  "grafenwohr": "Grafenwöhr, Germany",
+  "goodfellow afb, tx": "San Angelo, TX",
+  "fort myer, va": "Arlington, VA",
+  "ellington afb, tx": "Houston, TX",
+  "cork, co": "Cork, Ireland",
+  "celaya planta, guanajuato": "Celaya, Mexico",
+  "berkel en rodenrijs, zh": "Berkel en Rodenrijs, Netherlands",
+  "barksdale afb, la": "Bossier City, LA",
+  "xian, shaanxi": "Xi'an, China",
+  "waltenhofen, by": "Waltenhofen, Germany",
+  "stade, nds": "Stade, Germany",
+  "sofia, engineering center sofia": "Sofia, Bulgaria",
+  "osan": "Osan, South Korea",
+  "oranienburg, bb": "Oranienburg, Germany",
+  "nieuwegein, ut": "Nieuwegein, Netherlands",
+  "markkleeberg, sn": "Markkleeberg, Germany",
+  "manisa, tr": "Manisa, Turkey",
+  "jamaica plain, ma": "Boston, MA",
+  "innsbruck, tirol": "Innsbruck, Austria",
+  "hong kong": "Hong Kong, Hong Kong",
+  "hohenfels": "Hohenfels, Germany",
+  "greifswald, mv": "Greifswald, Germany",
+  "graz, steiermark": "Graz, Austria",
+  "darmstadt, he": "Darmstadt, Germany",
+  "buxtehude, nds": "Buxtehude, Germany",
+  "bucurești, bucurești": "Bucharest, Romania",
+  "buchholz in der nordheide, nds": "Buchholz in der Nordheide, Germany",
+  "bremen, hb": "Bremen, Germany",
+  "boulogne-billancourt, idf": "Boulogne-Billancourt, France",
+  "birmingham, west midlands": "Birmingham, United Kingdom",
+  "benagaluru": "Bengaluru, India",
+  "basavanapura, ka": "Bengaluru, India",
+  "yokota air base": "Yokota Air Base, Japan",
+  "yokosuka naval base": "Yokosuka, Japan",
+  "wilkes barre, pa": "Wilkes-Barre, PA",
+  "wiesbaden": "Wiesbaden, Germany",
+  "westover air reserve base, ma": "Chicopee, MA",
+  "torino, turin": "Turin, Italy",
+  "taoyuan": "Taoyuan, Taiwan",
+  "taguig, ph": "Taguig, Philippines",
+  "stralsund, mv": "Stralsund, Germany",
+  "south san francisco": "South San Francisco, CA",
+  "schwerin, mv": "Schwerin, Germany",
+  "schkeuditz, sn": "Schkeuditz, Germany",
+  "sankt niklaus, vs": "Sankt Niklaus, Switzerland",
+  "sanand, gujarat": "Sanand, India",
+  "salzburg, salzburg": "Salzburg, Austria",
+  "salt lake city": "Salt Lake City, UT",
+  "rüsselsheim, he": "Rüsselsheim, Germany",
+  "remotely in the usa": "Remote",
+  "reinbek, sh": "Reinbek, Germany",
+  "queretaro, mx": "Querétaro, Mexico",
+  "nürnberg, by": "Nuremberg, Germany",
+  "norderstedt, sh": "Norderstedt, Germany",
+  "neubrandenburg, mv": "Neubrandenburg, Germany",
+  "neu-isenburg, he": "Neu-Isenburg, Germany",
+  "naval base newport, ri": "Newport, RI",
+  "nashik, maharashtra": "Nashik, India",
+  "middenmeer, nh": "Middenmeer, Netherlands",
+  "ludwigsburg, bw": "Ludwigsburg, Germany",
+  "lollar, he": "Lollar, Germany",
+  "langen, he": "Langen, Germany",
+  "landstuhl": "Landstuhl, Germany",
+  "københavn, denmark": "Copenhagen, Denmark",
+  "hunter afb, ga": "Savannah, GA",
+  "hoan kiem dis": "Hanoi, Vietnam",
+  "frankfurt am main": "Frankfurt, Germany",
+  "fort pickett, va": "Blackstone, VA",
+  "fort detrick, md": "Frederick, MD",
+  "elmshorn, sh": "Elmshorn, Germany",
+  "edmonton, ab": "Edmonton, Canada",
+  "district of columbia, dc": "Washington, DC",
+  "dam neck naval facility, virginia beach": "Virginia Beach, VA",
+  "camp h.m. smith marine corp base, hi": "Camp H.M. Smith, HI",
+  "brandenburg, bb": "Brandenburg, Germany",
+  "bordeaux": "Bordeaux, France",
+  "bernau bei berlin, bb": "Bernau bei Berlin, Germany",
+  "barceloneta, barceloneta": "Barceloneta, Puerto Rico",
+  "bad oldesloe, sh": "Bad Oldesloe, Germany",
+  "almaty, kazakhstan": "Almaty, Kazakhstan",
+  "ahrensburg, sh": "Ahrensburg, Germany",
+  "dź, łódź voivodeship": "Łódź, Poland",
+  "dź, województwo łódzkie": "Łódź, Poland",
+  "zwenkau, sn": "Zwenkau, Germany",
+  "wismar, mv": "Wismar, Germany",
+  "winsen, nds": "Winsen, Germany",
+  "welland, on": "Welland, Canada",
+  "waren, mv": "Waren, Germany",
+  "verona, verona": "Verona, Italy",
+  "venezia, venice": "Venice, Italy",
+  "tân phú, thành phố hồ chí minh": "Ho Chi Minh City, Vietnam",
+  "teltow, bb": "Teltow, Germany",
+  "taucha, sn": "Taucha, Germany",
+  "stuttgart, baden-württemberg": "Stuttgart, Germany",
+  "seberang perai selatan, penang": "Seberang Perai Selatan, Malaysia",
+  "schiphol-rijk, nh": "Schiphol-Rijk, Netherlands",
+  "san juan, puerto rico": "San Juan, PR",
+  "robakowo, województwo wielkopolskie": "Robakowo, Poland",
+  "rio de janeiro": "Rio de Janeiro, Brazil",
+  "pinneberg, sh": "Pinneberg, Germany",
+  "ovar": "Ovar, Portugal",
+  "mörfelden-walldorf, he": "Mörfelden-Walldorf, Germany",
+  "ludwigslust, mv": "Ludwigslust, Germany",
+  "lecco, lecco": "Lecco, Italy",
+  "königs wusterhausen, bb": "Königs Wusterhausen, Germany",
+  "kauai island, hi": "Kauai, HI",
+  "homburg, sl": "Homburg, Germany",
+  "hildesheim, nds": "Hildesheim, Germany",
+  "herlong sierra ordnance depot, ca": "Herlong, CA",
+  "hennigsdorf, bb": "Hennigsdorf, Germany",
+  "güstrow, mv": "Güstrow, Germany",
+  "groß-gerau, he": "Groß-Gerau, Germany",
+  "grimma, sn": "Grimma, Germany",
+  "goleniów, województwo zachodniopomorskie": "Goleniów, Poland",
+  "geldrop, nb": "Geldrop, Netherlands",
+  "falkensee, bb": "Falkensee, Germany",
+  "eindhoven, nb": "Eindhoven, Netherlands",
+  "dublin 1, county dublin": "Dublin, Ireland",
+  "district of columbia": "Washington, DC",
+  "carugate, milan": "Carugate, Italy",
+  "camp williams, wi": "Camp Douglas, WI",
+  "butner federal correctional complex, nc": "Butner, NC",
+  "brnik - aerodrom, slovenia": "Brnik, Slovenia",
+  "beykoz, i̇stanbul": "Beykoz, Turkey",
+  "bergen, vestland": "Bergen, Norway",
+  "bergen auf rügen, mv": "Bergen auf Rügen, Germany",
+  "bamberg, by": "Bamberg, Germany",
+  "bad homburg, he": "Bad Homburg, Germany",
+  "auckland, new zealand": "Auckland, New Zealand",
+  "altus afb, ok": "Altus, OK",
+  "zg, switzerland": "Zug, Switzerland",
+  "wurzen, sn": "Wurzen, Germany",
+  "vicenza, vicenza": "Vicenza, Italy",
+  "via a. olivetti, 70056 molfetta ba": "Molfetta, Italy",
+  "utrecht, ut": "Utrecht, Netherlands",
+  "us-sf": "San Francisco, CA",
+  "talavera de la reina, toledo": "Talavera de la Reina, Spain",
+  "strausberg, bb": "Strausberg, Germany",
+  "solothurn": "Solothurn, Switzerland",
+  "shibuya, tokyo": "Shibuya, Japan",
+  "san luis potosí, s.l.p.": "San Luis Potosí, Mexico",
+  "salzgitter, nds": "Salzgitter, Germany",
+  "saarbrücken, sl": "Saarbrücken, Germany",
+  "roma": "Rome, Italy",
+  "reggio nell'emilia, reggio emilia": "Reggio nell'Emilia, Italy",
+  "pruszków, masovian voivodeship": "Pruszków, Poland",
+  "providencia, región metropolitana": "Providencia, Chile",
+  "poznań, greater poland voivodeship": "Poznań, Poland",
+  "pyong taek": "Pyeongtaek, South Korea",
+  "okinawa island": "Okinawa, Japan",
+  "nonantola, emilia-romagna": "Nonantola, Italy",
+  "naval support activity, mechanicsburg": "Mechanicsburg, PA",
+  "mcchord afb, wa": "Lakewood, WA",
+  "luleå, norrbotten county": "Luleå, Sweden",
+  "lingen, nds": "Lingen, Germany",
+  "lecce, lecce": "Lecce, Italy",
+  "karlskrona, blekinge county": "Karlskrona, Sweden",
+  "iwakuni": "Iwakuni, Japan",
+  "itatiba, sp": "Itatiba, Brazil",
+  "hybrid - san francisco, ca": "San Francisco, CA",
+  "hybrid - luxembourg": "Luxembourg, Luxembourg",
+  "gurugram, haryana": "Gurugram, India",
+  "grissom afb, in": "Peru, IN",
+  "gothenburg, västra götaland county": "Gothenburg, Sweden",
+  "ghent, flanders": "Ghent, Belgium",
+  "geilenkirchen": "Geilenkirchen, Germany",
+  "gangnam district, seoul": "Seoul, South Korea",
+  "frankfurt": "Frankfurt, Germany",
+  "fort buchanan, puerto rico": "Fort Buchanan, PR",
+  "forbes afb, ks": "Topeka, KS",
+  "dreieich, he": "Dreieich, Germany",
+  "delitzsch, sn": "Delitzsch, Germany",
+  "columbus afb, ms": "Columbus, MS",
+  "china lake, ca": "Ridgecrest, CA",
+  "chadstone, vic": "Chadstone, Australia",
+  "campus austin": "Austin, TX",
+  "campus atlanta": "Atlanta, GA",
+  "campoverde, lazio": "Campoverde, Italy",
+  "camp j t robinson, ar": "North Little Rock, AR",
+  "camp blanding, fl": "Starke, FL",
+  "bochum, nrw": "Bochum, Germany",
+  "benevento, province benevento": "Benevento, Italy",
+  "asse, flanders": "Asse, Belgium",
+  "anniston army depot, al": "Anniston, AL",
+  "alicante, comunidad valenciana": "Alicante, Spain",
+  "abidjan, côte d'ivoire": "Abidjan, Ivory Coast",
+  "stanbul, i̇stanbul": "Istanbul, Turkey",
+  "zwolle, ov": "Zwolle, Netherlands",
+  "zagreb, grad zagreb": "Zagreb, Croatia",
+  "wittlich, rp": "Wittlich, Germany",
+  "växjö, kronoberg county": "Växjö, Sweden",
+  "vibo valentia, vibo valentia": "Vibo Valentia, Italy",
+  "vecsés": "Vecsés, Hungary",
+  "trondheim, trøndelag": "Trondheim, Norway",
+  "torino, piemonte": "Turin, Italy",
+  "toluca de lerdo, méx.": "Toluca, Mexico",
+  "tienen, vlaanderen": "Tienen, Belgium",
+  "tienen, vlaams gewest": "Tienen, Belgium",
+  "sherbrooke, qc": "Sherbrooke, Canada",
+  "san juan, san juan": "San Juan, Puerto Rico",
+  "roncadelle, brescia": "Roncadelle, Italy",
+  "portsmouth naval shipyard, me": "Kittery, ME",
+  "palermo, palermo": "Palermo, Italy",
+  "oulu, pohjois-pohjanmaa": "Oulu, Finland",
+  "otis ang base, ma": "Bourne, MA",
+  "offenbach, he": "Offenbach, Germany",
+  "offenbach am main, hessen": "Offenbach, Germany",
+  "nürnberg, germany": "Nuremberg, Germany",
+  "naval air station pensacola, fl": "Pensacola, FL",
+  "münster, nrw": "Münster, Germany",
+  "moody afb, ga": "Valdosta, GA",
+  "montreal": "Montreal, Canada",
+  "mexicali, b.c.": "Mexicali, Mexico",
+  "mellansel, västernorrlands län": "Mellansel, Sweden",
+  "mechelen, vlaanderen": "Mechelen, Belgium",
+  "marine corps air station - yuma, az": "Yuma, AZ",
+  "marcon, venice": "Marcon, Italy",
+  "march afb, ca": "Riverside, CA",
+  "maximall pontecagnano": "Pontecagnano, Italy",
+  "lyon": "Lyon, France",
+  "lund, skåne län": "Lund, Sweden",
+  "los angeles county, ca": "Los Angeles, CA",
+  "long thanh, dong nai": "Long Thanh, Vietnam",
+  "linz, oberösterreich": "Linz, Austria",
+  "linköping, östergötland county": "Linköping, Sweden",
+  "la spezia": "La Spezia, Italy",
+  "kurali, mh": "Kurali, India",
+  "kocaeli, tr": "Kocaeli, Turkey",
+  "karachi, pakistan": "Karachi, Pakistan",
+  "kalmar, kalmar county": "Kalmar, Sweden",
+  "kalefeld, nds": "Kalefeld, Germany",
+  "jönköping, jonkoping county": "Jönköping, Sweden",
+  "joint base anacostia-bolling, dc": "Washington, DC",
+  "istanbul, i̇stanbul": "Istanbul, Turkey",
+  "indiantown gap, pa": "Annville, PA",
+  "homestead afb, fl": "Homestead, FL",
+  "gądki, województwo wielkopolskie": "Gądki, Poland",
+  "gunter afb, al": "Montgomery, AL",
+  "grand forks afb, nd": "Grand Forks, ND",
+  "gerlingen-schillerhöhe, bw": "Gerlingen, Germany",
+  "frauenfeld, tg": "Frauenfeld, Switzerland",
+  "fort meade naval facilities, md": "Fort Meade, MD",
+  "ford island, hi": "Honolulu, HI",
+  "fano, pesaro and urbino": "Fano, Italy",
+  "eskilstuna, södermanland county": "Eskilstuna, Sweden",
+  "erbusco, brescia": "Erbusco, Italy",
+  "edwards afb, ca": "Edwards, CA",
+  "doha, doha municipality": "Doha, Qatar",
+  "como, como": "Como, Italy",
+  "colombo, sri lanka": "Colombo, Sri Lanka",
+  "clayton, vic": "Clayton, Australia",
+  "chieti, chieti": "Chieti, Italy",
+  "cheb 2, karlovarský kraj": "Cheb, Czech Republic",
+  "cham, zg": "Cham, Switzerland",
+  "cannon afb, nm": "Clovis, NM",
+  "calgary, ab": "Calgary, Canada",
+  "arnold afb, tn": "Tullahoma, TN",
+  "arnhem, ge": "Arnhem, Netherlands",
+  "antegnate, bergamo": "Antegnate, Italy",
+  "ansbach": "Ansbach, Germany",
+  "anderlecht, brussels": "Anderlecht, Belgium",
+  "amadora, lisbon": "Amadora, Portugal",
+  "taunton, ma": "Taunton, MA",
+  "zwolle, overijssel": "Zwolle, Netherlands",
+  "zuchwil, so": "Zuchwil, Switzerland",
+  "yerevan, am": "Yerevan, Armenia",
+  "xian, china": "Xi'an, China",
+  "wolfsburg, nds": "Wolfsburg, Germany",
+  "wellington, wellington region": "Wellington, New Zealand",
+  "waterloo, ontario": "Waterloo, Canada",
+  "villanova, bologna": "Villanova, Italy",
+  "vigo, es": "Vigo, Spain",
+  "varberg, halland county": "Varberg, Sweden",
+  "vantaa, uusimaa": "Vantaa, Finland",
+  "uppsala, uppsala county": "Uppsala, Sweden",
+  "ukraine anywhere": "Remote",
+  "udine, udine": "Udine, Italy",
+  "tsukuba, ibaraki": "Tsukuba, Japan",
+  "trollhättan, västra götaland county": "Trollhättan, Sweden",
+  "tiel, ge": "Tiel, Netherlands",
+  "tendō, yamagata": "Tendō, Japan",
+  "tbilisi, ga": "Tbilisi, Georgia",
+  "takaoka, toyama": "Takaoka, Japan",
+  "taichung city": "Taichung, Taiwan",
+  "taegu": "Daegu, South Korea",
+  "sơn trà, đà nẵng": "Da Nang, Vietnam",
+  "södertälje, stockholm county": "Södertälje, Sweden",
+  "sundsvall, västernorrland county": "Sundsvall, Sweden",
+  "stuttgart-feuerbach, germany": "Stuttgart, Germany",
+  "stewart afb, ny": "Newburgh, NY",
+  "stead afb, nv": "Reno, NV",
+  "stavanger, rogaland": "Stavanger, Norway",
+  "st. mary's, pa": "St. Marys, PA",
+  "spittal an der drau, niederösterreich": "Spittal an der Drau, Austria",
+  "sorocaba, sp": "Sorocaba, Brazil",
+  "sofia, bosch digital": "Sofia, Bulgaria",
+  "skien, telemark": "Skien, Norway",
+  "siegen, nrw": "Siegen, Germany",
+  "seiersberg, steiermark": "Seiersberg, Austria",
+  "seefeld, bayern": "Seefeld, Germany",
+  "schübelbach, sz": "Schübelbach, Switzerland",
+  "schönefeld, bb": "Schönefeld, Germany",
+  "schwäbisch gmünd, bw": "Schwäbisch Gmünd, Germany",
+  "schweinfurt, bayern": "Schweinfurt, Germany",
+  "savignano sul rubicone": "Savignano sul Rubicone, Italy",
+  "sankt pölten, niederösterreich": "Sankt Pölten, Austria",
+  "saint-bruno-de-montarville, qc": "Saint-Bruno-de-Montarville, Canada",
+  "rozzano, milan": "Rozzano, Italy",
+  "robina, qld": "Robina, Australia",
+  "rjukan, telemark": "Rjukan, Norway",
+  "regensburg, by": "Regensburg, Germany",
+  "ravenna, ravenna": "Ravenna, Italy",
+  "ratingen, nrw": "Ratingen, Germany",
+  "rancho bernardo, ca": "San Diego, CA",
+  "québec, qc": "Quebec City, Canada",
+  "quartz hills, ca": "Quartz Hill, CA",
+  "praha, czechia": "Prague, Czech Republic",
+  "portogruaro, venice": "Portogruaro, Italy",
+  "parque industrial del valle de aguascalientes, ags.": "Aguascalientes, Mexico",
+  "padova": "Padua, Italy",
+  "paderno dugnano, milan": "Paderno Dugnano, Italy",
+  "pulau pinang, pulau pinang": "George Town, Malaysia",
+  "oostende, vlaanderen": "Ostend, Belgium",
+  "olbia": "Olbia, Italy",
+  "novate milanese, milan": "Novate Milanese, Italy",
+  "newtownabbey, county antrim": "Newtownabbey, United Kingdom",
+  "new taipei city": "New Taipei City, Taiwan",
+  "neuenburg am rhein, baden-württemberg": "Neuenburg am Rhein, Germany",
+  "naval weapons station, yorktown": "Yorktown, VA",
+  "naval air station whidbey island, wa": "Oak Harbor, WA",
+  "naval air station patuxent river, md": "Patuxent River, MD",
+  "nasushiobara, tochigi": "Nasushiobara, Japan",
+  "murrhardt, bw": "Murrhardt, Germany",
+  "mt. vernon, wa": "Mount Vernon, WA",
+  "mojave": "Mojave, CA",
+  "modena, modena": "Modena, Italy",
+  "mirków, województwo dolnośląskie": "Mirków, Poland",
+  "mirabel, qc": "Mirabel, Canada",
+  "martillac, 33": "Martillac, France",
+  "markranstädt, sn": "Markranstädt, Germany",
+  "marki, masovian voivodeship": "Marki, Poland",
+  "markham, on": "Markham, Canada",
+  "marbella, malaga": "Marbella, Spain",
+  "manchester": "Manchester, United Kingdom",
+  "makati city, ncr": "Makati City, Philippines",
+  "makati city": "Makati City, Philippines",
+  "merano": "Merano, Italy",
+  "loule, faro": "Loulé, Portugal",
+  "ljungby, kronoberg county": "Ljungby, Sweden",
+  "livorno, livorno": "Livorno, Italy",
+  "livorno": "Livorno, Italy",
+  "little creek amphibious base, va": "Virginia Beach, VA",
+  "leverkusen, nrw": "Leverkusen, Germany",
+  "leonberg, bw": "Leonberg, Germany",
+  "leoben, steiermark": "Leoben, Austria",
+  "lemoore naval air station, ca": "Lemoore, CA",
+  "landvetter, västra götaland county": "Landvetter, Sweden",
+  "la estancia, qro.": "Querétaro, Mexico",
+  "kristianstad, skåne county": "Kristianstad, Sweden",
+  "kristiansand, agder": "Kristiansand, Norway",
+  "koszalin, zachodnio-pomorskie": "Koszalin, Poland",
+  "knokke-heist, vlaanderen": "Knokke-Heist, Belgium",
+  "kingshill, virgin islands": "Kingshill, VI",
+  "kassel, he": "Kassel, Germany",
+  "karlsborg, västra götaland county": "Karlsborg, Sweden",
+  "jena, th": "Jena, Germany",
+  "jefferson barracks, mo": "St. Louis, MO",
+  "isernhagen, nds": "Isernhagen, Germany",
+  "in - bengaluru": "Bengaluru, India",
+  "hybrid - new york, ny": "New York, NY",
+  "hull, east riding of yorkshire": "Hull, United Kingdom",
+  "heidelberg, bw": "Heidelberg, Germany",
+  "guatemala, guatemala": "Guatemala City, Guatemala",
+  "guadalajara, jalisco": "Guadalajara, Mexico",
+  "gotland, gotlands län": "Gotland, Sweden",
+  "gliwice, silesian voivodeship": "Gliwice, Poland",
+  "giugliano in campania, naples": "Giugliano in Campania, Italy",
+  "gießen, he": "Gießen, Germany",
+  "germersheim": "Germersheim, Germany",
+  "gdynia, pomeranian voivodeship": "Gdynia, Poland",
+  "garmisch-partenkirchen, by": "Garmisch-Partenkirchen, Germany",
+  "gangtok, sikkim": "Gangtok, India",
+  "gangseo-gu, seoul": "Seoul, South Korea",
+  "freiburg im breisgau, bw": "Freiburg im Breisgau, Germany",
+  "fort hamilton, ny": "Brooklyn, NY",
+  "fort belvior, va": "Fort Belvoir, VA",
+  "fort ap hill, va": "Bowling Green, VA",
+  "fiumicino, rome": "Fiumicino, Italy",
+  "federal medical center carswell, tx": "Fort Worth, TX",
+  "eger": "Eger, Hungary",
+  "ede, ge": "Ede, Netherlands",
+  "dugway proving ground, ut": "Dugway, UT",
+  "drancy, idf": "Drancy, France",
+  "dortmund, nrw": "Dortmund, Germany",
+  "donghai, lianyungang": "Lianyungang, China",
+  "dong nai": "Dong Nai, Vietnam",
+  "curitiba, pr": "Curitiba, Brazil",
+  "copenhagen": "Copenhagen, Denmark",
+  "constanța, ct": "Constanța, Romania",
+  "co. cork, co": "Cork, Ireland",
+  "civitavecchia, rome": "Civitavecchia, Italy",
+  "ciudad juárez, chihuahua": "Ciudad Juárez, Mexico",
+  "christchurch, canterbury region": "Christchurch, New Zealand",
+  "chengdu, sichuan": "Chengdu, China",
+  "chemnitz, sn": "Chemnitz, Germany",
+  "casalecchio di reno, bologna": "Casalecchio di Reno, Italy",
+  "casablanca": "Casablanca, Morocco",
+  "canada - toronto": "Toronto, Canada",
+  "campi bisenzio, florence": "Campi Bisenzio, Italy",
+  "cagliari, cagliari": "Cagliari, Italy",
+  "bucharest, bucharest": "Bucharest, Romania",
+  "brunssum": "Brunssum, Netherlands",
+  "broadway complex, san diego": "San Diego, CA",
+  "brno-černovice, jihomoravský kraj": "Brno, Czech Republic",
+  "breda, nb": "Breda, Netherlands",
+  "brandis, sn": "Brandis, Germany",
+  "borsdorf, sn": "Borsdorf, Germany",
+  "borna, sn": "Borna, Germany",
+  "bodø, nordland": "Bodø, Norway",
+  "blaichach, by": "Blaichach, Germany",
+  "bischofshofen, salzburg": "Bischofshofen, Austria",
+  "bielefeld, nrw": "Bielefeld, Germany",
+  "białystok, podlaskie voivodeship": "Białystok, Poland",
+  "bhopal, madhya pradesh": "Bhopal, India",
+  "baku, azerbaijan": "Baku, Azerbaijan",
+  "baden-baden, bw": "Baden-Baden, Germany",
+  "augsburg, by": "Augsburg, Germany",
+  "arnstadt, th": "Arnstadt, Germany",
+  "arese, milan": "Arese, Italy",
+  "alta, finnmark": "Alta, Norway",
+  "alexandria county, va": "Alexandria, VA",
+  "albany marine corps logistics base, ga": "Albany, GA",
+  "ahmedabad, gujrat": "Ahmedabad, India",
+  "ahmedabad, gujarat": "Ahmedabad, India",
+  "afragola, naples": "Afragola, Italy",
+  "adelaide, sa": "Adelaide, Australia",
+  "abidjan, abidjan autonomous district": "Abidjan, Ivory Coast",
+  "a coruna, es": "A Coruña, Spain",
+  "taylorsville, nc": "Taylorsville, NC",
+  "lmhult, kronoberg county": "Älmhult, Sweden",
+  "lesund, møre og romsdal": "Ålesund, Norway",
+  "hringen, baden-württemberg": "Öhringen, Germany",
+  "graham, nc": "Graham, NC",
+  "zug, zg": "Zug, Switzerland",
+  "zhuhai, guangdong": "Zhuhai, China",
+  "zell am see, salzburg": "Zell am See, Austria",
+  "zaventem, flanders": "Zaventem, Belgium",
+  "zama, camp zama": "Zama, Japan",
+  "zadar, zadar county": "Zadar, Croatia",
+  "zabrze, silesian voivodeship": "Zabrze, Poland",
+  "yunusemre, manisa": "Yunusemre, Turkey",
+  "yuma proving ground, az": "Yuma, AZ",
+  "ytre enebakk, akershus": "Ytre Enebakk, Norway",
+  "yongin-si, gyeonggi-do": "Yongin, South Korea",
+  "yeongdeungpo district, seoul": "Seoul, South Korea",
+  "würzburg, by": "Würzburg, Germany",
+  "wuppertal, nrw": "Wuppertal, Germany",
+  "wuhan, hubei": "Wuhan, China",
+  "wrocław, lower silesian voivodeship": "Wrocław, Poland",
+  "wood green, london": "London, United Kingdom",
+  "wolfsberg, kärnten": "Wolfsberg, Austria",
+  "wolfratshausen, bayern": "Wolfratshausen, Germany",
+  "winston salem, nc": "Winston-Salem, NC",
+  "winnipeg, mb": "Winnipeg, Canada",
+  "wilhelmshaven, nds": "Wilhelmshaven, Germany",
+  "white lake charter township, mi": "White Lake, MI",
+  "wexford, wexford": "Wexford, Ireland",
+  "west los angeles, ca": "Los Angeles, CA",
+  "west bromwich, west midlands": "West Bromwich, United Kingdom",
+  "weilheim in oberbayern, bayern": "Weilheim in Oberbayern, Germany",
+  "waiblingen, baden-württemberg": "Waiblingen, Germany",
+  "waiblingen, bw": "Waiblingen, Germany",
+  "waalwijk, nb": "Waalwijk, Netherlands",
+  "vösendorf, niederösterreich": "Vösendorf, Austria",
+  "volkach, by": "Volkach, Germany",
+  "visby, gotland county": "Visby, Sweden",
+  "vilseck": "Vilseck, Germany",
+  "vilnius, vilniaus apskr.": "Vilnius, Lithuania",
+  "victoria, bc": "Victoria, Canada",
+  "vestfold, norge": "Vestfold, Norway",
+  "verona": "Verona, Italy",
+  "valbonne, provence-alpes-côte d'azur": "Valbonne, France",
+  "vaihingen": "Vaihingen, Germany",
+  "vibrata colonnella": "Colonnella, Italy",
+  "urasoe, okinawa": "Urasoe, Japan",
+  "ueda, nagano": "Ueda, Japan",
+  "tübingen, baden-württemberg": "Tübingen, Germany",
+  "trollåsen, akershus": "Trollåsen, Norway",
+  "traveler's rest, sc": "Travelers Rest, SC",
+  "toyota, aichi": "Toyota, Japan",
+  "toyama, toyama": "Toyama, Japan",
+  "tottori, tottori": "Tottori, Japan",
+  "torino, torino": "Turin, Italy",
+  "tooele army depot, ut": "Tooele, UT",
+  "tirunelveli, tamil nadu": "Tirunelveli, India",
+  "tashkent city, uzbekistan": "Tashkent, Uzbekistan",
+  "tampere, pirkanmaa": "Tampere, Finland",
+  "tallinn, harju maakond": "Tallinn, Estonia",
+  "talcahuano, bío bío": "Talcahuano, Chile",
+  "sękocin nowy, masovian voivodeship": "Sękocin Nowy, Poland",
+  "são joão, aveiro": "São João, Portugal",
+  "surat, gujarat": "Surat, India",
+  "stryków, łódź voivodeship": "Stryków, Poland",
+  "stratford, east london": "London, United Kingdom",
+  "stord, vestland": "Stord, Norway",
+  "st peters, mo": "St. Peters, MO",
+  "st charles, mo": "St. Charles, MO",
+  "south jakarta, dki jakarta": "Jakarta, Indonesia",
+  "south africa - hybrid": "Remote",
+  "songpa district, seoul": "Seoul, South Korea",
+  "sona, verona": "Sona, Italy",
+  "sokołów, masovian voivodeship": "Sokołów, Poland",
+  "sheraton al matar, cairo governorate": "Cairo, Egypt",
+  "sheffield, south yorkshire": "Sheffield, United Kingdom",
+  "shah alam, selangor": "Shah Alam, Malaysia",
+  "sevilla, sevilla": "Seville, Spain",
+  "settimo torinese, turin": "Settimo Torinese, Italy",
+  "sesto fiorentino": "Sesto Fiorentino, Italy",
+  "serris, idf": "Serris, France",
+  "sequeira, braga": "Sequeira, Portugal",
+  "seatac, wa": "SeaTac, WA",
+  "schwäbisch hall, baden-württemberg": "Schwäbisch Hall, Germany",
+  "schorndorf, baden-württemberg": "Schorndorf, Germany",
+  "sassari, sassari": "Sassari, Italy",
+  "santo domingo, dominican republic": "Santo Domingo, Dominican Republic",
+  "santa monica": "Santa Monica, CA",
+  "sandvika, akershus": "Sandvika, Norway",
+  "san rocco al porto, lodi": "San Rocco al Porto, Italy",
+  "san clemente naval reserve island, ca": "San Clemente, CA",
+  "salzburg, sankt johann im pongau": "Salzburg, Austria",
+  "salvador, ba": "Salvador, Brazil",
+  "salisbury, wiltshire": "Salisbury, United Kingdom",
+  "saint thomas, virgin islands": "Saint Thomas, USVI",
+  "saguenay, qc": "Saguenay, Canada",
+  "rīga, latvia": "Riga, Latvia",
+  "rushden, northamptonshire": "Rushden, United Kingdom",
+  "rosdorf, niedersachsen": "Rosdorf, Germany",
+  "roma sud": "Rome, Italy",
+  "rodgau, he": "Rodgau, Germany",
+  "rio de mouro, lisboa": "Rio de Mouro, Portugal",
+  "rimini": "Rimini, Italy",
+  "ried im innkreis, oberösterreich": "Ried im Innkreis, Austria",
+  "reutlingen, baden-württemberg": "Reutlingen, Germany",
+  "rennes": "Rennes, France",
+  "red river army depot, tx": "Texarkana, TX",
+  "ravensburg, bw": "Ravensburg, Germany",
+  "raunheim, he": "Raunheim, Germany",
+  "rackwitz, sn": "Rackwitz, Germany",
+  "rome maximo laurentino": "Rome, Italy",
+  "rodez, france": "Rodez, France",
+  "querétaro, mx": "Querétaro, Mexico",
+  "queen's square, corby": "Corby, United Kingdom",
+  "praha 1, hlavní město praha": "Prague, Czech Republic",
+  "poitiers, nouvelle-aquitaine": "Poitiers, France",
+  "pointe-claire, qc": "Pointe-Claire, Canada",
+  "piorunów, masovian voivodeship": "Piorunów, Poland",
+  "pier a airside, brussels airport": "Brussels, Belgium",
+  "philadelphia county, pa": "Philadelphia, PA",
+  "pergine valsugana, trentino": "Pergine Valsugana, Italy",
+  "pease afb, nh": "Portsmouth, NH",
+  "pavone canavese, turin": "Pavone Canavese, Italy",
+  "pathum wan, bangkok": "Bangkok, Thailand",
+  "pasching, oberösterreich": "Pasching, Austria",
+  "parramatta, nsw": "Parramatta, Australia",
+  "palma de mallorca, islas baleares": "Palma de Mallorca, Spain",
+  "paget, qld": "Paget, Australia",
+  "providence, ri": "Providence, RI",
+  "oxford, oxfordshire": "Oxford, United Kingdom",
+  "ovar, aveiro": "Ovar, Portugal",
+  "oulu, north ostrobothnia": "Oulu, Finland",
+  "ottersberg, nds": "Ottersberg, Germany",
+  "ottawa, ontario": "Ottawa, Canada",
+  "ottawa, on": "Ottawa, Canada",
+  "osnabrück, nds": "Osnabrück, Germany",
+  "oskarshamn, kalmar county": "Oskarshamn, Sweden",
+  "orio al serio, bergamo": "Orio al Serio, Italy",
+  "oakbrook": "Oak Brook, IL",
+  "oak brook": "Oak Brook, IL",
+  "nürtingen, baden-württemberg": "Nürtingen, Germany",
+  "nyköping, södermanland county": "Nyköping, Sweden",
+  "nuremberg, by": "Nuremberg, Germany",
+  "north point, hk": "Hong Kong, Hong Kong",
+  "norfolk county, va": "Norfolk, VA",
+  "nord, ib": "Palma de Mallorca, Spain",
+  "noida, up": "Noida, India",
+  "nijmegen, ge": "Nijmegen, Netherlands",
+  "nice": "Nice, France",
+  "new york - hybrid": "New York, NY",
+  "neukirchen": "Neukirchen, Germany",
+  "neuhausen ob eck, bw": "Neuhausen ob Eck, Germany",
+  "neuenstadt am kocher, baden-württemberg": "Neuenstadt am Kocher, Germany",
+  "naval post graduate school, monterey": "Monterey, CA",
+  "naval air station oceana, va": "Virginia Beach, VA",
+  "naval academy, md": "Annapolis, MD",
+  "naunhof, sn": "Naunhof, Germany",
+  "nantes": "Nantes, France",
+  "nacka, stockholms län": "Nacka, Sweden",
+  "mulhouse": "Mulhouse, France",
+  "mt. pleasant, nc": "Mount Pleasant, NC",
+  "montréal, qc": "Montreal, Canada",
+  "montijo": "Montijo, Portugal",
+  "monterrey, n.l.": "Monterrey, Mexico",
+  "mont belieu, tx": "Mont Belvieu, TX",
+  "modugno, puglia": "Modugno, Italy",
+  "misterbianco": "Misterbianco, Italy",
+  "milton keynes, buckinghamshire": "Milton Keynes, United Kingdom",
+  "mikulov na moravě, jihomoravský kraj": "Mikulov, Czech Republic",
+  "miesau": "Miesau, Germany",
+  "midrand, gp": "Midrand, South Africa",
+  "metzingen, baden-württemberg": "Metzingen, Germany",
+  "mayport naval station, fl": "Jacksonville, FL",
+  "matsumoto, nagano": "Matsumoto, Japan",
+  "marseille": "Marseille, France",
+  "marburg, he": "Marburg, Germany",
+  "mall of america, bloomington": "Bloomington, MN",
+  "malaga, andalucia": "Malaga, Spain",
+  "makati": "Makati, Philippines",
+  "maida, catanzaro": "Maida, Italy",
+  "milano merlata bloom": "Milan, Italy",
+  "ludwigshafen am rhein, rp": "Ludwigshafen, Germany",
+  "ludwigsburg, baden-württemberg": "Ludwigsburg, Germany",
+  "longueuil": "Longueuil, Canada",
+  "lonato del garda, brescia": "Lonato del Garda, Italy",
+  "llanelli, carmarthenshire": "Llanelli, United Kingdom",
+  "lippstadt, nrw": "Lippstadt, Germany",
+  "lindau, by": "Lindau, Germany",
+  "limbiate": "Limbiate, Italy",
+  "lille": "Lille, France",
+  "leskovec pri krškem, krško": "Leskovec pri Krškem, Slovenia",
+  "leonberg, baden-württemberg": "Leonberg, Germany",
+  "leipzig, sachsen": "Leipzig, Germany",
+  "leinfelden-echterdingen, baden-württemberg": "Leinfelden-Echterdingen, Germany",
+  "lebanon county, pa": "Lebanon, PA",
+  "laval, qc": "Laval, Canada",
+  "landsberg am lech, bayern": "Landsberg am Lech, Germany",
+  "landau in der pfalz, rp": "Landau in der Pfalz, Germany",
+  "la piedad, qro.": "La Piedad, Mexico",
+  "köping, västmanland county": "Koping, Sweden",
+  "kölleda, th": "Kölleda, Germany",
+  "kyiv, kyiv": "Kyiv, Ukraine",
+  "kurli, mh": "Kurli, India",
+  "krostitz, sn": "Krostitz, Germany",
+  "kronstorf, oberösterreich": "Kronstorf, Austria",
+  "kouvola, kymenlaakso": "Kouvola, Finland",
+  "komatsu, ishikawa": "Komatsu, Japan",
+  "klagenfurt, kärnten": "Klagenfurt, Austria",
+  "klagenfurt am wörthersee, kärnten": "Klagenfurt, Austria",
+  "kisarazu, chiba": "Kisarazu, Japan",
+  "kiruna, norrbotten county": "Kiruna, Sweden",
+  "kirchheim unter teck, baden-württemberg": "Kirchheim unter Teck, Germany",
+  "kingsley field, or": "Klamath Falls, OR",
+  "kings, ny": "Brooklyn, NY",
+  "kilpilahti, uusimaa": "Porvoo, Finland",
+  "kerava, uusimaa": "Kerava, Finland",
+  "katrineholm, södermanland county": "Katrineholm, Sweden",
+  "kashiwa, chiba": "Kashiwa, Japan",
+  "kapfenberg, steiermark": "Kapfenberg, Austria",
+  "kapaʻa, hi": "Kapaa, HI",
+  "kahoku, ishikawa": "Kahoku, Japan",
+  "jordan, jordan": "Amman, Jordan",
+  "joinville, sc": "Joinville, Brazil",
+  "jesewitz, sn": "Jesewitz, Germany",
+  "jawczyce, masovian voivodeship": "Jawczyce, Poland",
+  "jakarta selatan, dki jakarta": "Jakarta, Indonesia",
+  "jacksonville naval hospital, fl": "Jacksonville, FL",
+  "iyava, gj": "Iyava, India",
+  "itupeva, sp": "Itupeva, Brazil",
+  "istanbul, istanbul": "Istanbul, Turkey",
+  "ismaning, bayern": "Ismaning, Germany",
+  "ingolstadt, by": "Ingolstadt, Germany",
+  "immendingen, bw": "Immendingen, Germany",
+  "ilsfeld, baden-württemberg": "Ilsfeld, Germany",
+  "iași, is": "Iași, Romania",
+  "iași": "Iași, Romania",
+  "hồ chí minh": "Ho Chi Minh City, Vietnam",
+  "håpet, troms": "Tromsø, Norway",
+  "hybrid, san francisco": "San Francisco, CA",
+  "huelva, huelva": "Huelva, Spain",
+  "hounslow, middlesex": "Hounslow, United Kingdom",
+  "hoogkerk, groningen": "Groningen, Netherlands",
+  "hoofddorp, nh": "Hoofddorp, Netherlands",
+  "holzkirchen (oberbayern), bayern": "Holzkirchen, Germany",
+  "holzgerlingen, baden-württemberg": "Holzgerlingen, Germany",
+  "hiroshima, hiroshima": "Hiroshima, Japan",
+  "herrenberg, baden-württemberg": "Herrenberg, Germany",
+  "henrico county, va": "Henrico, VA",
+  "helsinki": "Helsinki, Finland",
+  "heilbronn, baden-württemberg": "Heilbronn, Germany",
+  "heidenheim an der brenz, baden-württemberg": "Heidenheim an der Brenz, Germany",
+  "haugesund, rogaland": "Haugesund, Norway",
+  "hasselt, limburg": "Hasselt, Belgium",
+  "hartfoed, ct": "Hartford, CT",
+  "hanam-si, gyeonggi-do": "Hanam, South Korea",
+  "halmstad, halland county": "Halmstad, Sweden",
+  "haeundae, busan": "Busan, South Korea",
+  "ha noi": "Hanoi, Vietnam",
+  "göttingen, nds": "Göttingen, Germany",
+  "görlitz, sn": "Görlitz, Germany",
+  "göppingen, baden-württemberg": "Göppingen, Germany",
+  "góra kalwaria, masovian voivodeship": "Góra Kalwaria, Poland",
+  "gävle, gavleborg county": "Gävle, Sweden",
+  "gurgaon, haryana": "Gurgaon, India",
+  "guidonia montecelio, rome": "Guidonia Montecelio, Italy",
+  "guam, guam": "Guam, US",
+  "großpösna, sn": "Großpösna, Germany",
+  "grenzach-wyhlen, bw": "Grenzach-Wyhlen, Germany",
+  "greater pittsburgh airport, pa": "Pittsburgh, PA",
+  "great lakes naval training center, il": "Great Lakes, IL",
+  "grassobbio": "Grassobbio, Italy",
+  "goyang-si, gyeonggi-do": "Goyang, South Korea",
+  "goslar, nds": "Goslar, Germany",
+  "glasgow, lanarkshire": "Glasgow, United Kingdom",
+  "gjøvik, innlandet": "Gjøvik, Norway",
+  "gent, vlaanderen": "Ghent, Belgium",
+  "gelsenkirchen, nrw": "Gelsenkirchen, Germany",
+  "geel, flanders": "Geel, Belgium",
+  "gdańsk, pomeranian voivodeship": "Gdańsk, Poland",
+  "gauting, bayern": "Gauting, Germany",
+  "garmisch": "Garmisch-Partenkirchen, Germany",
+  "gent": "Ghent, Belgium",
+  "fulda, he": "Fulda, Germany",
+  "ft. thomas, ky": "Fort Thomas, KY",
+  "freising, bayern": "Freising, Germany",
+  "frankfurt an der oder, bb": "Frankfurt an der Oder, Germany",
+  "fort mc clellan, al": "Anniston, AL",
+  "falkenberg, halland county": "Falkenberg, Sweden",
+  "forli'": "Forlì, Italy",
+  "foggia": "Foggia, Italy",
+  "ettlingen, bw": "Ettlingen, Germany",
+  "esslingen am neckar, baden-württemberg": "Esslingen, Germany",
+  "essen, nrw": "Essen, Germany",
+  "eschborn, he": "Eschborn, Germany",
+  "ergolding, by": "Ergolding, Germany",
+  "eppingen, baden-württemberg": "Eppingen, Germany",
+  "ellwangen (jagst), baden-württemberg": "Ellwangen, Germany",
+  "eberswalde, bb": "Eberswalde, Germany",
+  "ebersberg, bayern": "Ebersberg, Germany",
+  "east boston, ma": "Boston, MA",
+  "düsseldorf, nordrhein-westfalen": "Düsseldorf, Germany",
+  "doha, qatar": "Doha, Qatar",
+  "dobbins afb, ga": "Marietta, GA",
+  "dhaka, bd": "Dhaka, Bangladesh",
+  "delta, bc": "Delta, Canada",
+  "debrecen": "Debrecen, Hungary",
+  "dachau, bayern": "Dachau, Germany",
+  "dover, de": "Dover, DE",
+  "cwmbran, blaenau gwent": "Cwmbran, United Kingdom",
+  "culver city": "Culver City, CA",
+  "crailsheim, baden-württemberg": "Crailsheim, Germany",
+  "coventry, west midlands": "Coventry, United Kingdom",
+  "comuna jucu, cj": "Jucu, Romania",
+  "colon, queretaro": "Colon, Mexico",
+  "colmar": "Colmar, France",
+  "ciudad juarez, chihuahua": "Ciudad Juarez, Mexico",
+  "città sant'angelo, pescara": "Città Sant'Angelo, Italy",
+  "chișinău, chisinau": "Chișinău, Moldova",
+  "cherry hill township, nj": "Cherry Hill, NJ",
+  "cheltenham, gloucestershire": "Cheltenham, United Kingdom",
+  "chelmsford, essex": "Chelmsford, United Kingdom",
+  "cernusco sul naviglio, lombardia": "Cernusco sul Naviglio, Italy",
+  "catania, catania": "Catania, Italy",
+  "castellon, comunidad valenciana": "Castellon, Spain",
+  "casablanca, morocco": "Casablanca, Morocco",
+  "casablanca, casablanca-settat": "Casablanca, Morocco",
+  "carlise, uk": "Carlisle, United Kingdom",
+  "campus sacramento": "Sacramento, CA",
+  "campina grande do sul, pr": "Campina Grande do Sul, Brazil",
+  "camp courtney okinawa": "Okinawa, Japan",
+  "calw, baden-württemberg": "Calw, Germany",
+  "bursa, türkiye": "Bursa, Turkey",
+  "bukit jalil, kuala lumpur": "Bukit Jalil, Malaysia",
+  "brugge, vlaanderen": "Brugge, Belgium",
+  "brossard, qc": "Brossard, Canada",
+  "bristol, avon": "Bristol, United Kingdom",
+  "bratislava, bratislava region": "Bratislava, Slovakia",
+  "borås, västra götaland county": "Borås, Sweden",
+  "bonn, nrw": "Bonn, Germany",
+  "boden, norrbotten county": "Boden, Sweden",
+  "biella, biella": "Biella, Italy",
+  "beveren-kruibeke-zwijndrecht, oost-vlaanderen": "Beveren, Belgium",
+  "bergen op zoom, nb": "Bergen op Zoom, Netherlands",
+  "bergamo": "Bergamo, Italy",
+  "belfast, county antrim": "Belfast, United Kingdom",
+  "bayan lepas, bayan lepas": "Bayan Lepas, Malaysia",
+  "batu kawan, pulau pinang": "Batu Kawan, Malaysia",
+  "basel, bs": "Basel, Switzerland",
+  "baden, ag": "Baden, Switzerland",
+  "bad vilbel, he": "Bad Vilbel, Germany",
+  "bacău, bacău": "Bacău, Romania",
+  "backnang, baden-württemberg": "Backnang, Germany",
+  "bologna gran reno": "Bologna, Italy",
+  "augustów, podlaskie voivodeship": "Augustów, Poland",
+  "aprilia, latina": "Aprilia, Italy",
+  "apaseo el grande, guanajuato": "Apaseo el Grande, Mexico",
+  "antofagasta, antofagasta": "Antofagasta, Chile",
+  "ansbach, bayern": "Ansbach, Germany",
+  "an khanh ward, ho chi minh city": "Ho Chi Minh City, Vietnam",
+  "amadora": "Amadora, Portugal",
+  "almaty, almaty region": "Almaty, Kazakhstan",
+  "alcobendas, md": "Alcobendas, Spain",
+  "ajax, on": "Ajax, Canada",
+  "agat, guam": "Agat, GU",
+  "aalst, vlaanderen": "Aalst, Belgium",
+  "aalen, baden-württemberg": "Aalen, Germany",
+  "vishakhapatnam, andhra pradesh": "Visakhapatnam, India",
+  "tulsa, ok": "Tulsa, OK",
+  "stanbul, .": "Istanbul, Turkey",
+  "scottsburg, in": "Scottsburg, IN",
+  "salinas, ca": "Salinas, CA",
+  "roda śląska, lower silesian voivodeship": "Środa Śląska, Poland",
+  "rnsköldsvik, västernorrlands län": "Örnsköldsvik, Sweden",
+  "rnsköldsvik, västernorrland county": "Örnsköldsvik, Sweden",
+  "rebro, örebro län": "Örebro, Sweden",
+  "rebro, örebro county": "Örebro, Sweden",
+  "pomeroy, oh": "Pomeroy, OH",
+  "omża, podlaskie voivodeship": "Łomża, Poland",
+  "newton, ia": "Newton, IA",
+  "monterrey, nuevo leon": "Monterrey, Mexico",
+  "mission viejo, ca": "Mission Viejo, CA",
+  "lubbock, tx": "Lubbock, TX",
+  "locust grove, va": "Locust Grove, VA",
+  "lancaster, pa": "Lancaster, PA",
+  "kochi, india": "Kochi, India",
+  "ibenik, šibenik-knin county": "Šibenik, Croatia",
+  "greer, sc": "Greer, SC",
+  "fort wayne, in": "Fort Wayne, IN",
+  "fall river, ma": "Fall River, MA",
+  "chickasha, ok": "Chickasha, OK",
+  "changwon-si, kp": "Changwon, South Korea",
+  "calicut, india": "Kozhikode, India",
+  "barnwell, sc": "Barnwell, SC",
+  "atco, nj": "Atco, NJ",
+  "ann arbor, mi": "Ann Arbor, MI",
+  "zwickau, sn": "Zwickau, Germany",
+  "zoeterwoude, zh": "Zoeterwoude, Netherlands",
+  "zoetermeer, zuid - holland": "Zoetermeer, Netherlands",
+  "zielonka, masovian voivodeship": "Zielonka, Poland",
+  "zawiercie, silesian voivodeship": "Zawiercie, Poland",
+  "zaragoza, aragón": "Zaragoza, Spain",
+  "zama": "Zama, Japan",
+  "zakopane, województwo małopolskie": "Zakopane, Poland",
+  "zadar, zadarska županija": "Zadar, Croatia",
+  "ytre enebakk, tomter": "Ytre Enebakk, Norway",
+  "ystad, skåne county": "Ystad, Sweden",
+  "yokohama-shi, kanagawa": "Yokohama, Japan",
+  "yokohama-shi tsuzuki-ku, kanagawa": "Yokohama, Japan",
+  "yerevan, armenia": "Yerevan, Armenia",
+  "yeovil, somerset": "Yeovil, United Kingdom",
+  "yeonsu-gu, incheon": "Incheon, South Korea",
+  "yakeshi, inner mongolia": "Yakeshi, China",
+  "youngstown, oh": "Youngstown, OH",
+  "xinyi district, taipei city": "Taipei, Taiwan",
+  "xingya village, taipei city": "Taipei, Taiwan",
+  "xianyang, shaanxi": "Xianyang, China",
+  "xi'an, sx": "Xi'an, China",
+  "węgorzewo, warmian-masurian voivodeship": "Węgorzewo, Poland",
+  "wołomin, województwo mazowieckie": "Wołomin, Poland",
+  "wołomin, masovian voivodeship": "Wołomin, Poland",
+  "worms, rp": "Worms, Germany",
+  "wittenberg, sa": "Wittenberg, Germany",
+  "witten, nrw": "Witten, Germany",
+  "winsen an der aller, nds": "Winsen, Germany",
+  "winchester, hampshire": "Winchester, United Kingdom",
+  "willershausen, niedersachsen": "Willershausen, Germany",
+  "wilkes-barre township, pa": "Wilkes-Barre, PA",
+  "wildau, bb": "Wildau, Germany",
+  "wierzbice, lower silesian voivodeship": "Wierzbice, Poland",
+  "wiener neudorf, niederösterreich": "Wiener Neudorf, Austria",
+  "weymouth, dorset": "Weymouth, United Kingdom",
+  "west vancouver, bc": "West Vancouver, Canada",
+  "wenzhou, zhejiang": "Wenzhou, China",
+  "wendlingen, bw": "Wendlingen, Germany",
+  "wembley, middlesex": "Wembley, United Kingdom",
+  "wels, oberösterreich": "Wels, Austria",
+  "weipa town, qld": "Weipa, Australia",
+  "weinheim, bw": "Weinheim, Germany",
+  "weimar, th": "Weimar, Germany",
+  "weert, li": "Weert, Netherlands",
+  "wedel, sh": "Wedel, Germany",
+  "wavre, wallonia": "Wavre, Belgium",
+  "waterloo, on": "Waterloo, Canada",
+  "wasilków, podlaskie voivodeship": "Wasilków, Poland",
+  "warka, masovian voivodeship": "Warka, Poland",
+  "walldorf, baden-württemberg": "Walldorf, Germany",
+  "wijnegem": "Wijnegem, Belgium",
+  "västervik, kalmar county": "Västervik, Sweden",
+  "värnamo, jönköpings län": "Värnamo, Sweden",
+  "värnamo, jonkoping county": "Värnamo, Sweden",
+  "vlissingen, ze": "Vlissingen, Netherlands",
+  "vishakhapatnam, india": "Visakhapatnam, India",
+  "virje, koprivničko-križevačka županija": "Virje, Croatia",
+  "villach, kärnten": "Villach, Austria",
+  "vignate": "Vignate, Italy",
+  "viernheim, he": "Viernheim, Germany",
+  "victroville, ca": "Victorville, CA",
+  "victoria, vic": "Victoria, Australia",
+  "victoria, au": "Victoria, Australia",
+  "vezzano sul crostolo, emilia-romagna": "Vezzano sul Crostolo, Italy",
+  "verona, veneto": "Verona, Italy",
+  "venlo, li": "Venlo, Netherlands",
+  "venezia, venezia": "Venice, Italy",
+  "venezia": "Venice, Italy",
+  "velika gorica, zagreb county": "Velika Gorica, Croatia",
+  "vaughan, on": "Vaughan, Canada",
+  "valmontone": "Valmontone, Italy",
+  "valladolid, castilla y león": "Valladolid, Spain",
+  "valdez-cordova county, ak": "Valdez, AK",
+  "valbo, gävleborgs län": "Valbo, Sweden",
+  "vaasa, ostrobothnia": "Vaasa, Finland",
+  "venice nave de vero": "Venice, Italy",
+  "uusikaupunki, southwest finland": "Uusikaupunki, Finland",
+  "utsunomiya, tochigi": "Utsunomiya, Japan",
+  "upper mount gravatt, qld": "Upper Mount Gravatt, Australia",
+  "umeå, västerbottens län": "Umeå, Sweden",
+  "umeå, västerbotten county": "Umeå, Sweden",
+  "ulm, baden-württemberg": "Ulm, Germany",
+  "ullern, oslo": "Oslo, Norway",
+  "ulaanbaatar, mongolia": "Ulaanbaatar, Mongolia",
+  "us-rem": "Remote",
+  "us-chicago": "Chicago, IL",
+  "us & ireland": "Ireland",
+  "tønsberg, vestfold": "Tønsberg, Norway",
+  "tököl": "Tököl, Hungary",
+  "tân bình, hồ chí minh": "Ho Chi Minh City, Vietnam",
+  "tuttlingen, baden-württemberg": "Tuttlingen, Germany",
+  "turku, southwest finland": "Turku, Finland",
+  "tunis, tunis governorate": "Tunis, Tunisia",
+  "tulln, niederösterreich": "Tulln, Austria",
+  "trujillo, la libertad": "Trujillo, Peru",
+  "troisdorf, nrw": "Troisdorf, Germany",
+  "trois-rivières, qc": "Trois-Rivières, Canada",
+  "triggiano, bari": "Triggiano, Italy",
+  "triggiano": "Triggiano, Italy",
+  "trieste, friuli-venezia giulia": "Trieste, Italy",
+  "trier, rp": "Trier, Germany",
+  "trelleborg, skåne län": "Trelleborg, Sweden",
+  "trelleborg, skåne county": "Trelleborg, Sweden",
+  "tralee, munster": "Tralee, Ireland",
+  "tours": "Tours, France",
+  "toulouse": "Toulouse, France",
+  "toulon": "Toulon, France",
+  "torreano di martignacco": "Martignacco, Italy",
+  "torino, italy": "Turin, Italy",
+  "torino": "Turin, Italy",
+  "toowoomba city, qld": "Toowoomba, Australia",
+  "tomigusuku, okinawa": "Tomigusuku, Japan",
+  "toluca, mx": "Toluca, Mexico",
+  "tokoname, aichi": "Tokoname, Japan",
+  "tirunelveli, tamilnadu": "Tirunelveli, India",
+  "timisoara": "Timisoara, Romania",
+  "tianjin, tianjin": "Tianjin, China",
+  "thành phố hồ chí minh": "Ho Chi Minh City, Vietnam",
+  "thành phố huế, thành phố huế": "Hue, Vietnam",
+  "thu duc city, ho chi minh": "Thu Duc, Vietnam",
+  "thoiry, auvergne rhone alpes": "Thoiry, France",
+  "thiais, idf": "Thiais, France",
+  "the hague, zh": "The Hague, Netherlands",
+  "thanh xuân, hà nội": "Hanoi, Vietnam",
+  "thalgau, salzburg": "Thalgau, Austria",
+  "teplice 1, ústecký kraj": "Teplice, Czech Republic",
+  "temuco, araucanía": "Temuco, Chile",
+  "temple hill, md": "Temple Hills, MD",
+  "tel-aviv": "Tel Aviv, Israel",
+  "tbilisi, tbilisi": "Tbilisi, Georgia",
+  "tarragona, cataluña": "Tarragona, Spain",
+  "tarczyn, masovian voivodeship": "Tarczyn, Poland",
+  "taranto, taranto": "Taranto, Italy",
+  "taluka sanand district ahmedabad, gujarat": "Sanand, India",
+  "takasaki, gunma": "Takasaki, Japan",
+  "tajęcina, podkarpackie voivodeship": "Tajęcina, Poland",
+  "taipei city": "Taipei, Taiwan",
+  "taichung, tw": "Taichung, Taiwan",
+  "taguig, ncr": "Taguig, Philippines",
+  "turnhout": "Turnhout, Belgium",
+  "söderhamn, gävleborgs län": "Söderhamn, Sweden",
+  "são josé do rio preto, sp": "São José do Rio Preto, Brazil",
+  "szczecin, west pomeranian voivodeship": "Szczecin, Poland",
+  "swansea, swansea": "Swansea, United Kingdom",
+  "surrey, bc": "Surrey, Canada",
+  "sunny isles, fl": "Sunny Isles Beach, FL",
+  "sumida city, tokyo": "Sumida, Japan",
+  "sulz am neckar, baden-württemberg": "Sulz am Neckar, Germany",
+  "suhl, th": "Suhl, Germany",
+  "sugar land, tx": "Sugar Land, TX",
+  "strömstad, västra götaland county": "Strömstad, Sweden",
+  "strängnäs, södermanland county": "Strängnäs, Sweden",
+  "straume, vestland": "Straume, Norway",
+  "strasbourg": "Strasbourg, France",
+  "stovner, oslo": "Oslo, Norway",
+  "stjørdal, trøndelag": "Stjørdal, Norway",
+  "stezzano": "Stezzano, Italy",
+  "stathelle, telemark": "Stathelle, Norway",
+  "stargard, województwo zachodniopomorskie": "Stargard, Poland",
+  "st. veit, kärnten": "St. Veit an der Glan, Austria",
+  "st neots, uk": "St. Neots, United Kingdom",
+  "st geneviève des bois, ile de france": "Sainte-Geneviève-des-Bois, France",
+  "spreitenbach, ag": "Spreitenbach, Switzerland",
+  "split, splitsko-dalmatinska županija": "Split, Croatia",
+  "speyer, rp": "Speyer, Germany",
+  "southampton, hampshire": "Southampton, United Kingdom",
+  "sosnowiec, silesian voivodeship": "Sosnowiec, Poland",
+  "sopron": "Sopron, Hungary",
+  "solna, stockholms län": "Solna, Sweden",
+  "solingen, nrw": "Solingen, Germany",
+  "solakrossen, rogaland": "Sola, Norway",
+  "sokołów podlaski, masovian voivodeship": "Sokołów Podlaski, Poland",
+  "sogndal, vestland": "Sogndal, Norway",
+  "sofia, sofia city province": "Sofia, Bulgaria",
+  "soest, nrw": "Soest, Germany",
+  "sligo, sligo": "Sligo, Ireland",
+  "skoczów, silesian voivodeship": "Skoczów, Poland",
+  "skien, porsgrunn": "Skien, Norway",
+  "ski, akershus": "Ski, Norway",
+  "siracusa, syracuse": "Siracusa, Italy",
+  "sint-niklaas, vlaanderen": "Sint-Niklaas, Belgium",
+  "singen, baden-württemberg": "Singen, Germany",
+  "sindelfingen, baden-württemberg": "Sindelfingen, Germany",
+  "showa, yamanashi": "Showa, Japan",
+  "shinjuku city, tokyo": "Shinjuku, Japan",
+  "shenyang, liaoning": "Shenyang, China",
+  "shah alam, my": "Shah Alam, Malaysia",
+  "seventeen mile rocks, qld": "Seventeen Mile Rocks, Australia",
+  "sete lagoas, mg": "Sete Lagoas, Brazil",
+  "sesto san giovanni, milan": "Sesto San Giovanni, Italy",
+  "sesto san giovanni": "Sesto San Giovanni, Italy",
+  "serock, masovian voivodeship": "Serock, Poland",
+  "sepulveda, ca": "Los Angeles, CA",
+  "seocho district, seoul": "Seoul, South Korea",
+  "seo-gu, daejeon": "Daejeon, South Korea",
+  "sembach": "Sembach, Germany",
+  "seligenstadt, he": "Seligenstadt, Germany",
+  "seinäjoki, south ostrobothnia": "Seinäjoki, Finland",
+  "seberang perai selatan, pulau pinang": "Seberang Perai Selatan, Malaysia",
+  "seberang perai selatan": "Seberang Perai Selatan, Malaysia",
+  "schwäbisch hall, bw": "Schwäbisch Hall, Germany",
+  "schwechat, niederösterreich": "Schwechat, Austria",
+  "schwalbach am taunus, he": "Schwalbach am Taunus, Germany",
+  "schorndorf, bw": "Schorndorf, Germany",
+  "schongau, bayern": "Schongau, Germany",
+  "schmalkalden, th": "Schmalkalden, Germany",
+  "schenectady county, ny": "Schenectady, NY",
+  "schelle, vlaanderen": "Schelle, Belgium",
+  "sayerville, nj": "Sayreville, NJ",
+  "sastamala, pirkanmaa": "Sastamala, Finland",
+  "sasebo naval base": "Sasebo, Japan",
+  "sarıyer, i̇stanbul": "Sarıyer, Turkey",
+  "sarpsborg, østfold": "Sarpsborg, Norway",
+  "sarnen, ow": "Sarnen, Switzerland",
+  "sarasota county, fl": "Sarasota, FL",
+  "sapporo, hokkaido": "Sapporo, Japan",
+  "santo domingo, distrito nacional": "Santo Domingo, Dominican Republic",
+  "santa cruz de tenerife, santa cruz de tenerife": "Santa Cruz de Tenerife, Spain",
+  "sant'antonio, emilia-romagna": "Sant'Antonio, Italy",
+  "sant cugat del vallès, cataluña": "Sant Cugat del Vallès, Spain",
+  "sangli, mh": "Sangli, India",
+  "sandnes, rogaland": "Sandnes, Norway",
+  "sandefjord, vestfold": "Sandefjord, Norway",
+  "san cugat del valles, barcelona": "Sant Cugat del Vallès, Spain",
+  "san mateo": "San Mateo, CA",
+  "san fernando, cadiz": "San Fernando, Spain",
+  "salzwedel, sa": "Salzwedel, Germany",
+  "saltillo, coah.": "Saltillo, Mexico",
+  "saipan, mariana island": "Saipan, Northern Mariana Islands",
+  "saint-nazaire": "Saint-Nazaire, France",
+  "saint-maximin, hauts-de-france": "Saint-Maximin, France",
+  "saint-etienne": "Saint-Étienne, France",
+  "saint albans city, vt": "Saint Albans, VT",
+  "sagamihara housing area": "Sagamihara, Japan",
+  "saarwellingen, sl": "Saarwellingen, Germany",
+  "smithfield, ri": "Smithfield, RI",
+  "s burlington, vt": "South Burlington, VT",
+  "rumst, flanders": "Rumst, Belgium",
+  "rugvica, zagrebačka županija": "Rugvica, Croatia",
+  "rueil-malmaison": "Rueil-Malmaison, France",
+  "rozzano, milano": "Rozzano, Italy",
+  "rovaniemi, lapland": "Rovaniemi, Finland",
+  "rouen": "Rouen, France",
+  "rottweil, baden-württemberg": "Rottweil, Germany",
+  "rottweil, bw": "Rottweil, Germany",
+  "rotterdam": "Rotterdam, Netherlands",
+  "rottenburg am neckar, baden-württemberg": "Rottenburg am Neckar, Germany",
+  "rosemère, qc": "Rosemère, Canada",
+  "roosendaal, nb": "Roosendaal, Netherlands",
+  "roncadelle, lombardia": "Roncadelle, Italy",
+  "roncadelle": "Roncadelle, Italy",
+  "romanel-sur-lausanne, vd": "Romanel-sur-Lausanne, Switzerland",
+  "roma, roma": "Rome, Italy",
+  "roma, italy": "Rome, Italy",
+  "roma rm, italy": "Rome, Italy",
+  "roma est": "Rome, Italy",
+  "rodos, greece": "Rhodes, Greece",
+  "rodengo saiano": "Rodengo Saiano, Italy",
+  "rocky view, ab": "Rocky View, Canada",
+  "robakowo, wielkopolskie": "Robakowo, Poland",
+  "robakowo, wielkopolska": "Robakowo, Poland",
+  "rivas vaciamadrid, madrid": "Rivas-Vaciamadrid, Spain",
+  "rio de janeiro, rio de janeiro": "Rio de Janeiro, Brazil",
+  "rio de janeiro, br": "Rio de Janeiro, Brazil",
+  "ringwood, vic": "Ringwood, Australia",
+  "ringsted, ringsted": "Ringsted, Denmark",
+  "rimini, rimini": "Rimini, Italy",
+  "riihimäki, kanta-häme": "Riihimäki, Finland",
+  "richmond county, ga": "Augusta, GA",
+  "rheinfelden (baden), bw": "Rheinfelden, Germany",
+  "repentigny, qc": "Repentigny, Canada",
+  "remotely in germany": "Remote",
+  "reims": "Reims, France",
+  "redwitz, bayern": "Redwitz an der Rodach, Germany",
+  "redditch, worcestershire": "Redditch, United Kingdom",
+  "rathdrum, ww": "Rathdrum, Ireland",
+  "rastatt, bw": "Rastatt, Germany",
+  "raipur, chattisgarh": "Raipur, India",
+  "raipur, chhattisgarh": "Raipur, India",
+  "radomierz, lower silesian voivodeship": "Radomierz, Poland",
+  "radom, masovian voivodeship": "Radom, Poland",
+  "quận 7, thành phố hồ chí minh": "Ho Chi Minh City, Vietnam",
+  "quito, ecuador": "Quito, Ecuador",
+  "quimper, bretagne": "Quimper, France",
+  "quezon city, ph": "Quezon City, Philippines",
+  "quezon city, ncr": "Quezon City, Philippines",
+  "queretaro, pedro escobedo": "Pedro Escobedo, Mexico",
+  "putzbrunn, by": "Putzbrunn, Germany",
+  "purmerend, nh": "Purmerend, Netherlands",
+  "puerto montt, los lagos": "Puerto Montt, Chile",
+  "pudahuel, región metropolitana": "Pudahuel, Chile",
+  "pt arthur, tx": "Port Arthur, TX",
+  "provincia di bergamo": "Bergamo, Italy",
+  "pringy, auvergne-rhône-alpes": "Pringy, France",
+  "prince george, bc": "Prince George, Canada",
+  "praha 5, stodůlky": "Prague, Czech Republic",
+  "praha 5, hlavní město praha": "Prague, Czech Republic",
+  "praha 15, hlavní město praha": "Prague, Czech Republic",
+  "pozos, s.l.p.": "San Luis Potosí, Mexico",
+  "potrero hill, san francisco": "San Francisco, CA",
+  "potomac mills, va": "Woodbridge, VA",
+  "post fallsi, id": "Post Falls, ID",
+  "porvoo, uusimaa": "Porvoo, Finland",
+  "portsmouth, hampshire": "Portsmouth, United Kingdom",
+  "portogruaro": "Portogruaro, Italy",
+  "pori, satakunta": "Pori, Finland",
+  "pope afb, nc": "Fayetteville, NC",
+  "pomway, ca": "Poway, CA",
+  "pompei": "Pompeii, Italy",
+  "pomerode, santa catarina": "Pomerode, Brazil",
+  "pohang": "Pohang, South Korea",
+  "plymouth, devon": "Plymouth, United Kingdom",
+  "ploiesti, ploiesti": "Ploiești, Romania",
+  "plochingen, bw": "Plochingen, Germany",
+  "plauen, sn": "Plauen, Germany",
+  "platform - culver city, ca": "Culver City, CA",
+  "plaisir, idf": "Plaisir, France",
+  "pitești, ag": "Pitești, Romania",
+  "piteå, norrbotten county": "Piteå, Sweden",
+  "phnom penh, cambodia": "Phnom Penh, Cambodia",
+  "pforzheim, baden-württemberg": "Pforzheim, Germany",
+  "peterborough, cambridgeshire": "Peterborough, United Kingdom",
+  "petaling jaya, 10": "Petaling Jaya, Malaysia",
+  "peschiera borromeo": "Peschiera Borromeo, Italy",
+  "pescara": "Pescara, Italy",
+  "perth, western australia": "Perth, Australia",
+  "perpignan": "Perpignan, France",
+  "perai, pulau pinang": "Perai, Malaysia",
+  "peine, nds": "Peine, Germany",
+  "pedro escobedo, querétaro": "Pedro Escobedo, Mexico",
+  "pavlodar, pavlodar oblısı": "Pavlodar, Kazakhstan",
+  "pavia": "Pavia, Italy",
+  "paucarpata, arequipa": "Paucarpata, Peru",
+  "pau, nouvelle-aquitaine": "Pau, France",
+  "pau": "Pau, France",
+  "patna, bihar": "Patna, India",
+  "parque industrial el marqués, qro.": "El Marqués, Mexico",
+  "parma": "Parma, Italy",
+  "pančevo, vojvodina": "Pančevo, Serbia",
+  "panorama city, ca": "Los Angeles, CA",
+  "panama, panama": "Panama City, Panama",
+  "palmas, to": "Palmas, Brazil",
+  "palma, ib": "Palma, Spain",
+  "palermo": "Palermo, Italy",
+  "pacific palisades, ca": "Los Angeles, CA",
+  "pescara nord": "Pescara, Italy",
+  "ozora, hokkaido": "Ozora, Japan",
+  "ostrołęka, masovian voivodeship": "Ostrołęka, Poland",
+  "oslo, trollåsen": "Oslo, Norway",
+  "oslo, hele landet": "Oslo, Norway",
+  "oslo": "Oslo, Norway",
+  "osijek, osječko-baranjska županija": "Osijek, Croatia",
+  "orléans": "Orléans, France",
+  "orlando naval warfare center, fl": "Orlando, FL",
+  "orkanger, trøndelag": "Orkanger, Norway",
+  "orio al serio": "Orio al Serio, Italy",
+  "oosterhout, nb": "Oosterhout, Netherlands",
+  "olsztyn, warmian-masurian voivodeship": "Olsztyn, Poland",
+  "olen, vlaanderen": "Olen, Belgium",
+  "oldenburg, nds": "Oldenburg, Germany",
+  "okmuglee, ok": "Okmulgee, OK",
+  "ogaki, gifu": "Ogaki, Japan",
+  "offenbach am main, he": "Offenbach am Main, Germany",
+  "off old market square, nottinghamshire": "Nottingham, United Kingdom",
+  "ofallon, il": "O'Fallon, IL",
+  "oeiras, porto salvo": "Oeiras, Portugal",
+  "odense, odense": "Odense, Denmark",
+  "oberursel, he": "Oberursel, Germany",
+  "oberndorf am neckar, baden-württemberg": "Oberndorf am Neckar, Germany",
+  "oakville, on": "Oakville, Canada",
+  "oakbrook, il": "Oak Brook, IL",
+  "nürnberg, bayern": "Nuremberg, Germany",
+  "nîmes": "Nîmes, France",
+  "nässjö, jönköpings län": "Nässjö, Sweden",
+  "nässjö, jonkoping county": "Nässjö, Sweden",
+  "nuevo leon, monterrey": "Monterrey, Mexico",
+  "nowy targ, lesser poland voivodeship": "Nowy Targ, Poland",
+  "novara, novara": "Novara, Italy",
+  "novara": "Novara, Italy",
+  "notodden, telemark": "Notodden, Norway",
+  "norwich, norfolk": "Norwich, United Kingdom",
+  "northeim, nds": "Northeim, Germany",
+  "northampton, northamptonshire": "Northampton, United Kingdom",
+  "norrtälje, stockholm county": "Norrtälje, Sweden",
+  "norrköping, östergötland county": "Norrköping, Sweden",
+  "nordhorn, nds": "Nordhorn, Germany",
+  "nonnweiler, sl": "Nonnweiler, Germany",
+  "nolita, ny": "New York, NY",
+  "noida, uttar pradesh": "Noida, India",
+  "nivelles, wallonia": "Nivelles, Belgium",
+  "nivelles, région wallonne": "Nivelles, Belgium",
+  "nisku, ab": "Nisku, Canada",
+  "ningbo, zhejiang": "Ningbo, China",
+  "niepołomice, lesser poland voivodeship": "Niepołomice, Poland",
+  "nienburg": "Nienburg, Germany",
+  "nicosia, cyprus": "Nicosia, Cyprus",
+  "newmarket, on": "Newmarket, Canada",
+  "newcastle metro, tyne and wear": "Newcastle upon Tyne, United Kingdom",
+  "newbury, west berkshire": "Newbury, United Kingdom",
+  "newbridge, kildare": "Newbridge, Ireland",
+  "new taipei city, tw": "New Taipei City, Taiwan",
+  "new south wales, wyong": "Wyong, Australia",
+  "new port ritchey, fl": "New Port Richey, FL",
+  "nevers, bourgogne-franche-comté": "Nevers, France",
+  "neuville-en-condroz": "Neuville-en-Condroz, Belgium",
+  "neustadt am rübenberge, nds": "Neustadt am Rübenberge, Germany",
+  "neunkirchen, sl": "Neunkirchen, Germany",
+  "neukirchen, sachsen": "Neukirchen, Germany",
+  "nederland, ov": "Nederland, USA",
+  "naval research laboratory, dc": "Washington, DC",
+  "nauen, bb": "Nauen, Germany",
+  "national maritime intelligence center, md": "Suitland, MD",
+  "nashville": "Nashville, TN",
+  "nashik, mh": "Nashik, India",
+  "narva, ida-viru maakond": "Narva, Estonia",
+  "narbonne, occitanie": "Narbonne, France",
+  "nantes, pays de la loire": "Nantes, France",
+  "nanjing, js": "Nanjing, China",
+  "nancy": "Nancy, France",
+  "namsos, trøndelag": "Namsos, Norway",
+  "nam-gu, ulsan": "Ulsan, South Korea",
+  "naka-ku, hiroshima": "Hiroshima, Japan",
+  "nagpur, maharashtra": "Nagpur, India",
+  "nagoya, aichi": "Nagoya, Japan",
+  "naples marcianise": "Marcianise, Italy",
+  "n. miami beach, fl": "North Miami Beach, FL",
+  "n. huntingdon, pa": "North Huntingdon, PA",
+  "n palm beach, fl": "North Palm Beach, FL",
+  "mürzzuschlag, steiermark": "Mürzzuschlag, Austria",
+  "mülheim-kärlich, rp": "Mülheim-Kärlich, Germany",
+  "mühldorf am inn, by": "Mühldorf am Inn, Germany",
+  "mühldorf a. inn, bayern": "Mühldorf am Inn, Germany",
+  "mönchengladbach, nrw": "Mönchengladbach, Germany",
+  "mäntsälä, uusimaa": "Mäntsälä, Finland",
+  "musashimurayama, tokyo": "Musashimurayama, Japan",
+  "muntinlupa, ncr": "Muntinlupa, Philippines",
+  "munro, provincia de buenos aires": "Munro, Argentina",
+  "mudichur, tn": "Mudichur, India",
+  "mt. holly, nc": "Mount Holly, NC",
+  "mount royal, quebec": "Mount Royal, Canada",
+  "mount gravatt, qld": "Mount Gravatt, Australia",
+  "motala, östergötland county": "Motala, Sweden",
+  "moron de la frontera": "Morón de la Frontera, Spain",
+  "montreal, quebec": "Montreal, Canada",
+  "montpellier": "Montpellier, France",
+  "montijo, setúbal": "Montijo, Portugal",
+  "monthey, vs": "Monthey, Switzerland",
+  "monterrey, mx": "Monterrey, Mexico",
+  "monteceneri, ti": "Monteceneri, Switzerland",
+  "montebello della battaglia, pavia": "Montebello della Battaglia, Italy",
+  "mons, wallonia": "Mons, Belgium",
+  "monheim am rhein, nrw": "Monheim am Rhein, Germany",
+  "mongstad, vestland": "Mongstad, Norway",
+  "mongstad, norge": "Mongstad, Norway",
+  "mondsee, oberösterreich": "Mondsee, Austria",
+  "molde, møre og romsdal": "Molde, Norway",
+  "mol, flanders": "Mol, Belgium",
+  "modena": "Modena, Italy",
+  "moan, trøndelag": "Moan, Norway",
+  "mo i rana, nordland": "Mo i Rana, Norway",
+  "mińsk mazowiecki, masovian voivodeship": "Mińsk Mazowiecki, Poland",
+  "miyazaki, miyazaki": "Miyazaki, Japan",
+  "mittenwalde, bb": "Mittenwalde, Germany",
+  "mississauga, ontario": "Mississauga, Canada",
+  "minden, nrw": "Minden, Germany",
+  "millcreek township, pa": "Millcreek, PA",
+  "middlesbrough, cleveland": "Middlesbrough, United Kingdom",
+  "mexicali, baja california": "Mexicali, Mexico",
+  "mex, vaud": "Mex, Switzerland",
+  "metz": "Metz, France",
+  "messancy, waals gewest": "Messancy, Belgium",
+  "meschede, nrw": "Meschede, Germany",
+  "merseburg, sa": "Merseburg, Germany",
+  "merano, trentino-alto adige": "Merano, Italy",
+  "meppel, dr": "Meppel, Netherlands",
+  "melton district, uk": "Melton, United Kingdom",
+  "melilla, melilla": "Melilla, Spain",
+  "mclean, va": "McLean, VA",
+  "mckinney, tx": "McKinney, TX",
+  "matsudo, chiba": "Matsudo, Japan",
+  "matosinhos, porto": "Matosinhos, Portugal",
+  "marsden park, nsw": "Marsden Park, Australia",
+  "marne, sh": "Marne, Germany",
+  "marlow, bkm": "Marlow, United Kingdom",
+  "marghera": "Marghera, Italy",
+  "marcianise, caserta": "Marcianise, Italy",
+  "marcianise": "Marcianise, Italy",
+  "mansoura, dakahlia governorate": "Mansoura, Egypt",
+  "mandaluyong, metro manila": "Mandaluyong, Philippines",
+  "mandal, agder": "Mandal, Norway",
+  "manchester, manchester": "Manchester, United Kingdom",
+  "malmö, skåne county": "Malmö, Sweden",
+  "malaga, wa": "Malaga, Australia",
+  "malaga, andalucía": "Malaga, Spain",
+  "makati, metro manila": "Makati, Philippines",
+  "makati city, ph": "Makati, Philippines",
+  "maidenhead, post-ber": "Maidenhead, United Kingdom",
+  "madiosn, wi": "Madison, WI",
+  "macgregor, qld": "MacGregor, Australia",
+  "maasmechelen, vlaanderen": "Maasmechelen, Belgium",
+  "mx - mexico city": "Mexico City, Mexico",
+  "milan sesto s. giovanni": "Sesto San Giovanni, Italy",
+  "mashantucket, ct": "Mashantucket, CT",
+  "lüdenscheid, nrw": "Lüdenscheid, Germany",
+  "lübben, bb": "Lübben, Germany",
+  "lysekil, västra götaland county": "Lysekil, Sweden",
+  "lyon, auvergne-rhône-alpes": "Lyon, France",
+  "luzern, lu": "Luzern, Switzerland",
+  "lugano, ti": "Lugano, Switzerland",
+  "ludwigsfelde, bb": "Ludwigsfelde, Germany",
+  "ludhiana, punjab": "Ludhiana, India",
+  "loviisa, uusimaa": "Loviisa, Finland",
+  "longford, longford": "Longford, Ireland",
+  "london - 1": "London, United Kingdom",
+  "lonato del garda": "Lonato del Garda, Italy",
+  "livingston, west lothian": "Livingston, United Kingdom",
+  "liverpool, merseyside": "Liverpool, United Kingdom",
+  "lingen (ems), nds": "Lingen, Germany",
+  "lindenhust, ny": "Lindenhurst, NY",
+  "lincoln, lincolnshire": "Lincoln, United Kingdom",
+  "limoges, nouvelle-aquitaine": "Limoges, France",
+  "limerick, lk": "Limerick, Ireland",
+  "limburg, he": "Limburg, Germany",
+  "limbiate, monza and brianza": "Limbiate, Italy",
+  "lillehammer, innlandet": "Lillehammer, Norway",
+  "lieusaint, idf": "Lieusaint, France",
+  "lierskogen, buskerud": "Lierskogen, Norway",
+  "lier, vlaanderen": "Lier, Belgium",
+  "lier, flanders": "Lier, Belgium",
+  "lienz, tirol": "Lienz, Austria",
+  "lidköping, västra götalands län": "Lidköping, Sweden",
+  "león, leon": "León, Spain",
+  "letterkenny army depot, pa": "Chambersburg, PA",
+  "lentate sul seveso": "Lentate sul Seveso, Italy",
+  "lens": "Lens, France",
+  "leicester, leicestershire": "Leicester, United Kingdom",
+  "leibnitz, steiermark": "Leibnitz, Austria",
+  "leer (ostfriesland), nds": "Leer, Germany",
+  "lecce_cavallino": "Lecce, Italy",
+  "le havre": "Le Havre, France",
+  "laufen, bl": "Laufen, Switzerland",
+  "las vegas, nv": "Las Vegas, NV",
+  "las vegas": "Las Vegas, NV",
+  "las piñas, ncr": "Las Piñas, Philippines",
+  "las condes, región metropolitana": "Las Condes, Chile",
+  "larvik, vestfold": "Larvik, Norway",
+  "lappeenranta, south karelia": "Lappeenranta, Finland",
+  "langneset, nordland": "Langneset, Norway",
+  "langhus, viken": "Langhus, Norway",
+  "landshut-ergolding, germany": "Landshut, Germany",
+  "landshut, bayern": "Landshut, Germany",
+  "landsberg am lech, by": "Landsberg am Lech, Germany",
+  "lake havasu, az": "Lake Havasu City, AZ",
+  "lahti, päijät-häme": "Lahti, Finland",
+  "lagrande, or": "La Grande, OR",
+  "lachen, galgenen": "Lachen, Switzerland",
+  "laatzen, nds": "Laatzen, Germany",
+  "la rochelle, nouvelle-aquitaine": "La Rochelle, France",
+  "la roche-sur-yon, pays de la loire": "La Roche-sur-Yon, France",
+  "livorno porta a mare": "Livorno, Italy",
+  "kyiv, 30": "Kyiv, Ukraine",
+  "kwidzyn, pomeranian voivodeship": "Kwidzyn, Poland",
+  "kutno, łódź voivodeship": "Kutno, Poland",
+  "kunming, yn": "Kunming, China",
+  "kungälv, västra götaland county": "Kungälv, Sweden",
+  "kuki, saitama": "Kuki, Japan",
+  "krokstadelva, buskerud": "Krokstadelva, Norway",
+  "kristinehamn, varmland county": "Kristinehamn, Sweden",
+  "kristiansund, møre og romsdal": "Kristiansund, Norway",
+  "krefeld, nrw": "Krefeld, Germany",
+  "koto city, tokyo": "Koto, Japan",
+  "kotka, kymenlaakso": "Kotka, Finland",
+  "koshigaya, saitama": "Koshigaya, Japan",
+  "kortrijk, vlaanderen": "Kortrijk, Belgium",
+  "koropi, attica": "Koropi, Greece",
+  "koprivnica, koprivnica-križevci county": "Koprivnica, Croatia",
+  "konstancin-jeziorna, masovian voivodeship": "Konstancin-Jeziorna, Poland",
+  "kongsberg, buskerud": "Kongsberg, Norway",
+  "kolkata, wb": "Kolkata, India",
+  "kokkola, central ostrobothnia": "Kokkola, Finland",
+  "kochi, kochi": "Kochi, Japan",
+  "kocaeli, kocaeli": "Kocaeli, Turkey",
+  "kobyłka, masovian voivodeship": "Kobyłka, Poland",
+  "koblenz, rp": "Koblenz, Germany",
+  "kobe, hyogo": "Kobe, Japan",
+  "kluang, johor darul ta'zim": "Kluang, Malaysia",
+  "klong toei, ฺิbangkok": "Bangkok, Thailand",
+  "kjeller, akershus": "Kjeller, Norway",
+  "kittilä, lapland": "Kittilä, Finland",
+  "kirkkonummi, uusimaa": "Kirkkonummi, Finland",
+  "kingston-upon-thames, surrey": "Kingston upon Thames, United Kingdom",
+  "kings bay naval base, ga": "Kings Bay, GA",
+  "kielce, świętokrzyskie voivodeship": "Kielce, Poland",
+  "kent, kent": "Kent, United Kingdom",
+  "kempten (allgäu), by": "Kempten, Germany",
+  "kemi, lapland": "Kemi, Finland",
+  "kelsterbach, he": "Kelsterbach, Germany",
+  "kałuszyn, masovian voivodeship": "Kałuszyn, Poland",
+  "kawasaki-ku, kanagawa": "Kawasaki, Japan",
+  "katsushika city, tokyo": "Katsushika, Japan",
+  "katrineholm, södermanlands län": "Katrineholm, Sweden",
+  "katowice, silesian voivodeship": "Katowice, Poland",
+  "kasugai, aichi": "Kasugai, Japan",
+  "kashima, kumamoto": "Kashima, Japan",
+  "karrinyup, wa": "Karrinyup, Australia",
+  "karmsund, rogaland": "Karmsund, Norway",
+  "karlstad, varmland county": "Karlstad, Sweden",
+  "karlsruhe, baden-württemberg": "Karlsruhe, Germany",
+  "karlshamn, blekinge county": "Karlshamn, Sweden",
+  "kaohsiung": "Kaohsiung, Taiwan",
+  "kanpur, up": "Kanpur, India",
+  "kalgoorlie, wa": "Kalgoorlie, Australia",
+  "kalefeld, niedersachsen": "Kalefeld, Germany",
+  "kakamigahara, gifu": "Kakamigahara, Japan",
+  "kajaani, kainuu": "Kajaani, Finland",
+  "kaiserslautern, rp": "Kaiserslautern, Germany",
+  "jönköping, jönköpings län": "Jönköping, Sweden",
+  "jõhvi, ida-viru maakond": "Jõhvi, Estonia",
+  "juarez, mx": "Juarez, Mexico",
+  "joondalup, wa": "Joondalup, Australia",
+  "joinville, santa catarina": "Joinville, Brazil",
+  "johor bahru, my": "Johor Bahru, Malaysia",
+  "jinan, sd": "Jinan, China",
+  "jihlava, kraj vysočina": "Jihlava, Czech Republic",
+  "jihlava 1, kraj vysočina": "Jihlava, Czech Republic",
+  "jerez de la frontera, cadiz": "Jerez de la Frontera, Spain",
+  "jaworzno, województwo śląskie": "Jaworzno, Poland",
+  "jaipur, rajasthan": "Jaipur, India",
+  "jaipur, rj": "Jaipur, India",
+  "jacobo hunter, arequipa": "Jacobo Hunter, Peru",
+  "izegem, vlaanderen": "Izegem, Belgium",
+  "iwata, shizuoka": "Iwata, Japan",
+  "ivanić-grad, zagreb county": "Ivanić-Grad, Croatia",
+  "istanbul": "Istanbul, Turkey",
+  "islip, northamptonshire": "Islip, United Kingdom",
+  "ishinomaki, miyagi": "Ishinomaki, Japan",
+  "iserlohn, nrw": "Iserlohn, Germany",
+  "ipswich, suffolk": "Ipswich, United Kingdom",
+  "inverness, inverness-shire": "Inverness, United Kingdom",
+  "innsbruck, innsbruck": "Innsbruck, Austria",
+  "innere stadt, kärnten": "Innere Stadt, Austria",
+  "ingolstadt, bayern": "Ingolstadt, Germany",
+  "ingelheim am rhein, rp": "Ingelheim am Rhein, Germany",
+  "indore, maharashtra": "Indore, India",
+  "indore, madhya pradesh": "Indore, India",
+  "incoronata, foggia": "Incoronata, Italy",
+  "imabari, ehime": "Imabari, Japan",
+  "ilmenau, th": "Ilmenau, Germany",
+  "ikeja, la": "Ikeja, Nigeria",
+  "ikaalinen, pirkanmaa": "Ikaalinen, Finland",
+  "iasi": "Iasi, Romania",
+  "in-bengaluru": "Bengaluru, India",
+  "ie-dublin": "Dublin, Ireland",
+  "hürth, nrw": "Hürth, Germany",
+  "höxter, nrw": "Höxter, Germany",
+  "hyvinkää, uusimaa": "Hyvinkää, Finland",
+  "hyde park - fl": "Hyde Park, FL",
+  "hybrid in toronto": "Toronto, Canada",
+  "hybrid - nyc": "New York, NY",
+  "husum, sh": "Husum, Germany",
+  "hultsfred, kalmar county": "Hultsfred, Sweden",
+  "huixquilucan de degollado, méx.": "Huixquilucan de Degollado, Mexico",
+  "hudiksvall, gävleborgs län": "Hudiksvall, Sweden",
+  "huddersfield, west yorkshire": "Huddersfield, United Kingdom",
+  "huarte, navarra": "Huarte, Spain",
+  "huangshi, hubei": "Huangshi, China",
+  "huang pu qu, shang hai shi": "Shanghai, China",
+  "houston galleria": "Houston, TX",
+  "horb am neckar, baden-württemberg": "Horb am Neckar, Germany",
+  "horb a. n., bw": "Horb am Neckar, Germany",
+  "hofheim, he": "Hofheim, Germany",
+  "hoan kiem district, ha noi": "Hanoi, Vietnam",
+  "hiratsuka, kanagawa": "Hiratsuka, Japan",
+  "hiezu, tottori": "Hiezu, Japan",
+  "hibbing `, mn": "Hibbing, MN",
+  "hermosillo, son.": "Hermosillo, Mexico",
+  "hereford, herefordshire": "Hereford, United Kingdom",
+  "herber springs, ar": "Heber Springs, AR",
+  "hephizibah, ga": "Hephzibah, GA",
+  "heidelberg, baden-württemberg": "Heidelberg, Germany",
+  "heerhugowaard, nh": "Heerhugowaard, Netherlands",
+  "haßfurt, by": "Haßfurt, Germany",
+  "hayathnagar_khalsa, ts": "Hayathnagar, India",
+  "hasselt, vlaanderen": "Hasselt, Belgium",
+  "hartberg, steiermark": "Hartberg, Austria",
+  "harrogate, north yorkshire": "Harrogate, United Kingdom",
+  "harlow, essex": "Harlow, United Kingdom",
+  "harbin, heilongjiang": "Harbin, China",
+  "hangzhou, zj": "Hangzhou, China",
+  "hammersmith, london": "London, United Kingdom",
+  "hammerfest, finnmark": "Hammerfest, Norway",
+  "hamilton, waikato region": "Hamilton, New Zealand",
+  "hamilton, on": "Hamilton, Canada",
+  "hameln, nds": "Hameln, Germany",
+  "hamar, innlandet": "Hamar, Norway",
+  "hallstadt, by": "Hallstadt, Germany",
+  "hallsberg, örebro county": "Hallsberg, Sweden",
+  "hallbergmoos, bayern": "Hallbergmoos, Germany",
+  "halden, østfold": "Halden, Norway",
+  "hagen, nrw": "Hagen, Germany",
+  "hertfordshire, uk": "Hertfordshire, United Kingdom",
+  "hcm": "Ho Chi Minh City, Vietnam",
+  "hasselt": "Hasselt, Belgium",
+  "göppingen, bw": "Göppingen, Germany",
+  "gävle, gävleborgs län": "Gävle, Sweden",
+  "gänserndorf, niederösterreich": "Gänserndorf, Austria",
+  "gällivare, norrbotten county": "Gällivare, Sweden",
+  "győr": "Győr, Hungary",
+  "guntersvliie, al": "Guntersville, AL",
+  "guimarães, braga": "Guimarães, Portugal",
+  "guildford, surrey": "Guildford, United Kingdom",
+  "guelph, on": "Guelph, Canada",
+  "guadajalara, jalisco": "Guadalajara, Mexico",
+  "grâce-hollogne, wallonia": "Grâce-Hollogne, Belgium",
+  "grugliasco, torino": "Grugliasco, Italy",
+  "grugliasco": "Grugliasco, Italy",
+  "gronau, nrw": "Gronau, Germany",
+  "grodzisk mazowiecki, masovian voivodeship": "Grodzisk Mazowiecki, Poland",
+  "grodków, opole voivodeship": "Grodków, Poland",
+  "grieskirchen, oberösterreich": "Grieskirchen, Austria",
+  "grenoble, auvergne-rhône-alpes": "Grenoble, France",
+  "grenoble": "Grenoble, France",
+  "greenock, renfrewshire": "Greenock, United Kingdom",
+  "gravesend, kent": "Gravesend, United Kingdom",
+  "gravellona toce, piemonte": "Gravellona Toce, Italy",
+  "grand jct., co": "Grand Junction, CO",
+  "grafing bei münchen, by": "Grafing bei München, Germany",
+  "gołdap, warmian-masurian voivodeship": "Gołdap, Poland",
+  "gorinchem, zh": "Gorinchem, Netherlands",
+  "goiânia, go": "Goiânia, Brazil",
+  "glomfjord, nordland": "Glomfjord, Norway",
+  "glebe, nsw": "Glebe, Australia",
+  "giżycko, warmian-masurian voivodeship": "Giżycko, Poland",
+  "gifhorn, nds": "Gifhorn, Germany",
+  "giessen, he": "Giessen, Germany",
+  "gerasdorf bei wien, niederösterreich": "Gerasdorf bei Wien, Austria",
+  "gera, th": "Gera, Germany",
+  "georgetown, penang": "George Town, Malaysia",
+  "georgetown, dc": "Washington, DC",
+  "george town, penang": "George Town, Malaysia",
+  "genk, vlaanderen": "Genk, Belgium",
+  "geldern, nrw": "Geldern, Germany",
+  "gdynia, województwo pomorskie": "Gdynia, Poland",
+  "gangaikondan, tamil nadu": "Gangaikondan, India",
+  "galway": "Galway, Ireland",
+  "førde, vestland": "Førde, Norway",
+  "föhren, rp": "Föhren, Germany",
+  "fuzhou, fj": "Fuzhou, China",
+  "futenma": "Ginowan, Japan",
+  "fuschl am see, salzburg": "Fuschl am See, Austria",
+  "funabashi, chiba": "Funabashi, Japan",
+  "fukuoka, fukuoka": "Fukuoka, Japan",
+  "ft. worth, tx": "Fort Worth, TX",
+  "ft. bragg, nc": "Fort Bragg, NC",
+  "ft myers, fl": "Fort Myers, FL",
+  "ft mill, sc": "Fort Mill, SC",
+  "friedrichshafen, bw": "Friedrichshafen, Germany",
+  "friedberg, bayern": "Friedberg, Germany",
+  "fornebu, akershus": "Fornebu, Norway",
+  "fetsund, akershus": "Fetsund, Norway",
+  "eura, satakunta": "Eura, Finland",
+  "etobicoke, ontario": "Etobicoke, Canada",
+  "eslöv, skåne county": "Eslöv, Sweden",
+  "eskilstuna, södermanlands län": "Eskilstuna, Sweden",
+  "eschenburg, he": "Eschenburg, Germany",
+  "erina, nsw": "Erina, Australia",
+  "erbach, he": "Erbach, Germany",
+  "enschede, overijssel": "Enschede, Netherlands",
+  "emmendingen, bw": "Emmendingen, Germany",
+  "emmen, dr": "Emmen, Netherlands",
+  "emden, nds": "Emden, Germany",
+  "embrach, zh": "Embrach, Switzerland",
+  "ehingen (donau), bw": "Ehingen, Germany",
+  "egg harbor twp, nj": "Egg Harbor Township, NJ",
+  "egelsbach, he": "Egelsbach, Germany",
+  "edinburgh, midlothian": "Edinburgh, United Kingdom",
+  "ebikon, lu": "Ebikon, Switzerland",
+  "eastham, london": "London, United Kingdom",
+  "ealing, london": "London, United Kingdom",
+  "epagny metz-tessy, france": "Epagny Metz-Tessy, France",
+  "dębica, podkarpackie voivodeship": "Dębica, Poland",
+  "düsseldorf - reisholz, nrw": "Düsseldorf, Germany",
+  "düsseldorf - rath, nrw": "Düsseldorf, Germany",
+  "dülmen, nrw": "Dülmen, Germany",
+  "dundee, angus": "Dundee, United Kingdom",
+  "dulles town center, va": "Dulles, VA",
+  "duisburg, nrw": "Duisburg, Germany",
+  "dubrovnik, dubrovačko-neretvanska županija": "Dubrovnik, Croatia",
+  "dubois, pa": "DuBois, PA",
+  "dublin 5, leinster": "Dublin, Ireland",
+  "dublin 1, ie": "Dublin, Ireland",
+  "dresden, sachsen": "Dresden, Germany",
+  "dortmund, nordrhein-westfalen": "Dortmund, Germany",
+  "dormagen, nrw": "Dormagen, Germany",
+  "dordrecht, zh": "Dordrecht, Netherlands",
+  "dong-gu, daegu": "Daegu, South Korea",
+  "doha": "Doha, Qatar",
+  "dobre miasto, warmian-masurian voivodeship": "Dobre Miasto, Poland",
+  "dijon": "Dijon, France",
+  "dietzenbach, he": "Dietzenbach, Germany",
+  "diessenhofen, tg": "Diessenhofen, Switzerland",
+  "dieppe, nb": "Dieppe, Canada",
+  "dhaka, bangladesh": "Dhaka, Bangladesh",
+  "devon, devon": "Devon, United Kingdom",
+  "detmold, nrw": "Detmold, Germany",
+  "dessel, flanders": "Dessel, Belgium",
+  "dessau-roßlau, sa": "Dessau-Roßlau, Germany",
+  "delft, zh": "Delft, Netherlands",
+  "davao city, davao region": "Davao City, Philippines",
+  "dc metro": "Washington, DC",
+  "częstochowa, województwo śląskie": "Częstochowa, Poland",
+  "częstochowa, silesian voivodeship": "Częstochowa, Poland",
+  "czeladź, silesian voivodeship": "Czeladź, Poland",
+  "curno, bergamo": "Curno, Italy",
+  "curno": "Curno, Italy",
+  "cuautitlán izcalli, méx.": "Cuautitlán Izcalli, Mexico",
+  "cuautitlan izcalli, estado de mexico": "Cuautitlán Izcalli, Mexico",
+  "crêches-sur-saône, bourgogne-franche-comté": "Crêches-sur-Saône, France",
+  "crêches sur saone, bourgogne-franche-comté": "Crêches-sur-Saône, France",
+  "crissier, vd": "Crissier, Switzerland",
+  "cremona, cremona": "Cremona, Italy",
+  "cremona": "Cremona, Italy",
+  "craiova, dj": "Craiova, Romania",
+  "craigavon, county armagh": "Craigavon, United Kingdom",
+  "court house, nj": "Cape May Court House, NJ",
+  "cottbus, bb": "Cottbus, Germany",
+  "cordovilla, pamplona": "Cordovilla, Spain",
+  "cordoba, andalucía": "Cordoba, Spain",
+  "coquitlam, bc": "Coquitlam, Canada",
+  "constanta": "Constanta, Romania",
+  "colombo, lk": "Colombo, Sri Lanka",
+  "coimbatore, tamil nadu": "Coimbatore, India",
+  "coeur d'alene, id": "Coeur d'Alene, ID",
+  "cocody abidjan, côte d'ivoire": "Abidjan, Ivory Coast",
+  "coats nc 27521, nc": "Coats, NC",
+  "co. dublin, leinster": "Dublin, Ireland",
+  "clydebank, dunbartonshire": "Clydebank, United Kingdom",
+  "clwyd, wrexham": "Wrexham, United Kingdom",
+  "cluj-napoca, cluj": "Cluj-Napoca, Romania",
+  "clonmel, tipperary": "Clonmel, Ireland",
+  "clermont-ferrand": "Clermont-Ferrand, France",
+  "city of dasmariñas, cavite": "Dasmariñas, Philippines",
+  "cirencester, gloucestershire": "Cirencester, United Kingdom",
+  "cincinnati": "Cincinnati, OH",
+  "cieszyn, silesian voivodeship": "Cieszyn, Poland",
+  "christi corpus, tx": "Corpus Christi, TX",
+  "chinhae": "Jinhae, South Korea",
+  "chievres": "Chievres, Belgium",
+  "chicago - us": "Chicago, IL",
+  "chiba, chiba": "Chiba, Japan",
+  "chiba": "Chiba, Japan",
+  "chester, flintshire": "Chester, United Kingdom",
+  "chester, cheshire": "Chester, United Kingdom",
+  "chelsea, london": "London, United Kingdom",
+  "cheju, jeju-do": "Jeju, South Korea",
+  "chatswood, nsw": "Chatswood, Australia",
+  "charlton, london": "London, United Kingdom",
+  "century city, ca": "Los Angeles, CA",
+  "celle, nds": "Celle, Germany",
+  "celaya, guenajuato": "Celaya, Mexico",
+  "celaya, gto.": "Celaya, Mexico",
+  "celaya, guanajuato": "Celaya, Mexico",
+  "cebu, cebu": "Cebu City, Philippines",
+  "cebu city, cebu": "Cebu City, Philippines",
+  "castlebar, mayo": "Castlebar, Ireland",
+  "castellon, castellon": "Castellón de la Plana, Spain",
+  "casamassima": "Casamassima, Italy",
+  "casalecchio di reno bo, italy": "Casalecchio di Reno, Italy",
+  "casalecchio di reno": "Casalecchio di Reno, Italy",
+  "casablanca, ma": "Casablanca, Morocco",
+  "casablanca, casablanca": "Casablanca, Morocco",
+  "carmel by the sea, ca": "Carmel-by-the-Sea, CA",
+  "carini, palermo": "Carini, Italy",
+  "cardiff, nsw": "Cardiff, Australia",
+  "carapachay, provincia de buenos aires": "Carapachay, Argentina",
+  "capodichino": "Naples, Italy",
+  "cape canaveral afs, fl": "Cape Canaveral, FL",
+  "canon city, co": "Cañon City, CO",
+  "cannington, wa": "Cannington, Australia",
+  "canberra, act": "Canberra, Australia",
+  "canberra": "Canberra, Australia",
+  "campoverde, lombardia": "Campoverde, Italy",
+  "campi bisenzio": "Campi Bisenzio, Italy",
+  "campbelltown, nsw": "Campbelltown, Australia",
+  "camp parks, ca": "Dublin, CA",
+  "camp dodge military reservation, ia": "Johnston, IA",
+  "cambridge, ma usa": "Cambridge, MA",
+  "cambridge, cambridgeshire": "Cambridge, United Kingdom",
+  "callao, callao": "Callao, Peru",
+  "calgary, alberta": "Calgary, Canada",
+  "calgary": "Calgary, Canada",
+  "cagnes-sur-mer, provence-alpes-côte d'azur": "Cagnes-sur-Mer, France",
+  "caen": "Caen, France",
+  "cacía - aveiro": "Cacia, Portugal",
+  "cacía": "Cacia, Portugal",
+  "cacia, aveiro": "Cacia, Portugal",
+  "cacia": "Cacia, Portugal",
+  "clementon, nj": "Clementon, NJ",
+  "böblingen, baden-württemberg": "Böblingen, Germany",
+  "bydgoszcz, kuyavian-pomeranian voivodeship": "Bydgoszcz, Poland",
+  "bury, lancashire": "Bury, United Kingdom",
+  "bury st. edmunds, suffolk": "Bury St Edmunds, United Kingdom",
+  "burton-on-trent, staffordshire": "Burton-on-Trent, United Kingdom",
+  "burnaby, bc": "Burnaby, Canada",
+  "burlington, on": "Burlington, Canada",
+  "bucurești": "Bucharest, Romania",
+  "bucuresti": "Bucharest, Romania",
+  "bucharest": "Bucharest, Romania",
+  "brühl, nrw": "Brühl, Germany",
+  "brwinów, masovian voivodeship": "Brwinów, Poland",
+  "bruges, flanders": "Bruges, Belgium",
+  "broadbeach waters, qld": "Broadbeach Waters, Australia",
+  "brnik - aerodrom, kranj": "Brnik, Slovenia",
+  "brisbane, qld": "Brisbane, Australia",
+  "brisbane, au": "Brisbane, Australia",
+  "brisbane": "Brisbane, Australia",
+  "brindisi, brindisi": "Brindisi, Italy",
+  "brindisi": "Brindisi, Italy",
+  "brest": "Brest, France",
+  "bremerhaven, hb": "Bremerhaven, Germany",
+  "brembate, lombardia": "Brembate, Italy",
+  "brazil, rio de janeiro": "Rio de Janeiro, Brazil",
+  "bray, wicklow": "Bray, Ireland",
+  "braunschweig, nds": "Braunschweig, Germany",
+  "bratislava, bratislavský kraj": "Bratislava, Slovakia",
+  "brasilia": "Brasilia, Brazil",
+  "brantford, on": "Brantford, Canada",
+  "brampton, on": "Brampton, Canada",
+  "bournemouth, dorset": "Bournemouth, United Kingdom",
+  "boulder, co.": "Boulder, CO",
+  "boscombe, dorset": "Boscombe, United Kingdom",
+  "born, limburg": "Born, Netherlands",
+  "borlänge, dalarna county": "Borlänge, Sweden",
+  "borlänge": "Borlänge, Sweden",
+  "bologna": "Bologna, Italy",
+  "bochnia, lesser poland voivodeship": "Bochnia, Poland",
+  "bitterfeld-wolfen, sa": "Bitterfeld-Wolfen, Germany",
+  "biessenhofen, bayern": "Biessenhofen, Germany",
+  "biberach, bw": "Biberach, Germany",
+  "biarritz": "Biarritz, France",
+  "bhubaneshwar, odisha": "Bhubaneswar, India",
+  "bhopal, mp": "Bhopal, India",
+  "bhagalpur, br": "Bhagalpur, India",
+  "beveren, oost-vlaanderen": "Beveren, Belgium",
+  "besançon": "Besançon, France",
+  "bern": "Bern, Switzerland",
+  "beringen, vlaanderen": "Beringen, Belgium",
+  "berchem, antwerpen": "Berchem, Belgium",
+  "bengaluru (prev. bangalore), karnataka": "Bengaluru, India",
+  "bekasi, id": "Bekasi, Indonesia",
+  "beirut, beirut governorate": "Beirut, Lebanon",
+  "bedford, bedfordshire": "Bedford, United Kingdom",
+  "bayreuth, by": "Bayreuth, Germany",
+  "bayonne": "Bayonne, France",
+  "bautzen, sn": "Bautzen, Germany",
+  "bath, somerset": "Bath, United Kingdom",
+  "batam, id": "Batam, Indonesia",
+  "barrie, on": "Barrie, Canada",
+  "barnstaple, devon": "Barnstaple, United Kingdom",
+  "barneveld, ge": "Barneveld, Netherlands",
+  "barberino di mugello": "Barberino di Mugello, Italy",
+  "bandar sunway, petaling jaya": "Petaling Jaya, Malaysia",
+  "banbury, oxfordshire": "Banbury, United Kingdom",
+  "ballerup, hvidovre": "Ballerup, Denmark",
+  "balanga city, central luzon": "Balanga, Philippines",
+  "baku, az": "Baku, Azerbaijan",
+  "bad tölz, by": "Bad Tölz, Germany",
+  "bad säckingen, bw": "Bad Säckingen, Germany",
+  "bad rodach, by": "Bad Rodach, Germany",
+  "bad dürrheim, baden-württemberg": "Bad Dürrheim, Germany",
+  "bad aibling, by": "Bad Aibling, Germany",
+  "bacolod, negros occidental": "Bacolod, Philippines",
+  "ba đình, hà nội": "Hanoi, Vietnam",
+  "bologna villanova": "Bologna, Italy",
+  "bintulu, sarawak": "Bintulu, Malaysia",
+  "betim, minas gerais": "Betim, Brazil",
+  "bari blu": "Bari, Italy",
+  "ayr, ayrshire": "Ayr, United Kingdom",
+  "avignon": "Avignon, France",
+  "aveiro, ovar": "Aveiro, Portugal",
+  "avalon, alpharetta": "Alpharetta, GA",
+  "australia, bengaluru": "Bengaluru, India",
+  "aurangabad, maha": "Aurangabad, India",
+  "augsburg, bayern": "Augsburg, Germany",
+  "auckland, nz": "Auckland, New Zealand",
+  "atsugi naval air facility": "Atsugi, Japan",
+  "atlanic city, nj": "Atlantic City, NJ",
+  "athlone, westmeath": "Athlone, Ireland",
+  "assen, dr": "Assen, Netherlands",
+  "arroyomolinos, madrid": "Arroyomolinos, Spain",
+  "arrecife, las palmas": "Arrecife, Spain",
+  "arnsberg, nrw": "Arnsberg, Germany",
+  "arlington hts., il": "Arlington Heights, IL",
+  "arles, provence-alpes-côte d'azur": "Arles, France",
+  "arendal, agder": "Arendal, Norway",
+  "aranjuez, comunidad de madrid": "Aranjuez, Spain",
+  "apollo beach blvd, fl": "Apollo Beach, FL",
+  "antegnate": "Antegnate, Italy",
+  "annecy": "Annecy, France",
+  "ankney, ia": "Ankeny, IA",
+  "angers": "Angers, France",
+  "angeles, central luzon": "Angeles City, Philippines",
+  "angeles city, pampanga": "Angeles City, Philippines",
+  "andersen air base, guam": "Yigo, Guam",
+  "anderlecht, bruxelles": "Anderlecht, Belgium",
+  "ancona": "Ancona, Italy",
+  "an phuoc commune, dong nai province": "Long Thanh, Vietnam",
+  "an phuoc commune": "Long Thanh, Vietnam",
+  "an khanh, hcmc": "Ho Chi Minh City, Vietnam",
+  "amstetten, niederösterreich": "Amstetten, Austria",
+  "alzey, rp": "Alzey, Germany",
+  "alvelos, braga": "Barcelos, Portugal",
+  "altötting, bayern": "Altötting, Germany",
+  "altenburg, th": "Altenburg, Germany",
+  "almere, fl": "Almere, Netherlands",
+  "alkmaar, nh": "Alkmaar, Netherlands",
+  "alingsås, västra götaland county": "Alingsås, Sweden",
+  "algiers dz-16, dz": "Algiers, Algeria",
+  "aldaya, comunidad valenciana": "Aldaia, Spain",
+  "aldaia (valencia), valencia": "Aldaia, Spain",
+  "alcoi, vc": "Alcoy, Spain",
+  "aladipatti, tn": "Aladipatti, India",
+  "al matar, cairo governorate": "Cairo, Egypt",
+  "al ahmadi, al ahmadi governorate": "Al Ahmadi, Kuwait",
+  "aktobe, aqtöbe oblısı": "Aktobe, Kazakhstan",
+  "akita, akita": "Akita, Japan",
+  "aix-en-provence": "Aix-en-Provence, France",
+  "ahmedabad, ahmedabad": "Ahmedabad, India",
+  "ahmedabad (sanand), gujarat": "Ahmedabad, India",
+  "aguascalientes, aguascalientes": "Aguascalientes, Mexico",
+  "aguadilla, puerto rico": "Aguadilla, PR",
+  "affi, verona": "Affi, Italy",
+  "affi": "Affi, Italy",
+  "achern, bw": "Achern, Germany",
+  "aachen, nrw": "Aachen, Germany",
+  "59872, germany": "Werdohl, Germany",
+  "4020, oberösterreich": "Linz, Austria",
+  "327 n market st, us": "Frederick, MD",
+  "1960 e. broadway, us": "Tempe, AZ",
+  "1160-1, 鳥取県": "Tottori, Japan",
+  "1-1-8 イオンモール船橋, 千葉県": "Funabashi, Japan",
+
+};
+
+/** Canadian province/territory codes — "City, PR, Canada" → "City, Canada" (canonical intl). */
+const CA_PROVINCE_CODES = new Set([
+  "ON", "BC", "AB", "QC", "MB", "SK", "NS", "NB", "NL", "PE", "NT", "YT", "NU",
+]);
+
+/** "Canada, ON" (country before province) — city token is literally "Canada"; map to province + Canada. */
+const CA_PROVINCE_CODE_TO_ENGLISH: Record<string, string> = {
+  ON: "Ontario",
+  BC: "British Columbia",
+  AB: "Alberta",
+  QC: "Quebec",
+  MB: "Manitoba",
+  SK: "Saskatchewan",
+  NS: "Nova Scotia",
+  NB: "New Brunswick",
+  NL: "Newfoundland and Labrador",
+  PE: "Prince Edward Island",
+  NT: "Northwest Territories",
+  YT: "Yukon",
+  NU: "Nunavut",
+};
+
+/** German Bundesland ISO codes (2-letter) — must resolve before US 2-letter fallback (e.g. RP ≠ Rhode Island). */
+const DE_BUNDESLAND_CODE_SET = new Set([
+  "BW", "BY", "BE", "BB", "HB", "HH", "HE", "MV", "NI", "NW", "RP", "SL", "SN", "ST", "SH", "TH",
+]);
+
+/** England / Wales ceremonial counties — "City, Oxfordshire" → United Kingdom */
+const UK_ENG_COUNTIES = new Set([
+  "oxfordshire", "bedfordshire", "buckinghamshire", "cambridgeshire", "cheshire", "cornwall", "cumbria",
+  "derbyshire", "devon", "dorset", "durham", "county durham", "east sussex", "east riding of yorkshire",
+  "essex", "gloucestershire", "greater london", "greater manchester", "hampshire", "herefordshire",
+  "hertfordshire", "kent", "lancashire", "leicestershire", "lincolnshire", "merseyside", "norfolk",
+  "northamptonshire", "northumberland", "nottinghamshire", "shropshire", "somerset", "south yorkshire",
+  "staffordshire", "suffolk", "surrey", "tyne and wear", "warwickshire", "west midlands", "west sussex",
+  "west yorkshire", "wiltshire", "worcestershire", "yorkshire", "north yorkshire", "bristol",
+  "isle of wight", "rutland",
+]);
+
+/** Canadian province full names (Workday / ATS) → City, Canada */
+const CA_PROVINCE_FULL_NAMES = new Set([
+  "ontario",
+  "quebec",
+  "british columbia",
+  "alberta",
+  "manitoba",
+  "saskatchewan",
+  "nova scotia",
+  "new brunswick",
+  "newfoundland and labrador",
+  "newfoundland",
+  "prince edward island",
+  "northwest territories",
+  "yukon",
+  "nunavut",
+]);
+
+/** US trailing noise — always strip. Canonical US form is City, ST (no trailing United States / US). */
+const US_TRAILING_SUFFIX_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/,\s*united states of america\s*$/i, ""],
+  [/,\s*united states\s*$/i, ""],
+  // "Saugerties, NY, US" / "Miami, FL, US" / "Los Angeles, CA, USA"
+  [/^(.+),\s*([A-Z]{2})\s*,\s*US\s*$/i, "$1, $2"],
+  [/^(.+),\s*([A-Z]{2})\s*,\s*USA\s*$/i, "$1, $2"],
+];
+
+/** UK / Ireland region labels → full English country name (never bare "UK"). */
+const UK_IE_TRAILING_SUFFIX_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/,\s*(united kingdom|great britain|england|scotland|wales|northern ireland)\s*$/i, ", United Kingdom"],
+  [/,\s*gb\s*$/i, ", United Kingdom"],
+];
+
+// Country suffixes to strip only when there are ≥2 commas ("City, Region, Country").
+// Avoid stripping "Berlin, Germany" or "Dublin, Ireland" — canonical intl is City, Country.
+const INTL_TRAILING_COUNTRY_STRIPS: Array<[RegExp, string]> = [
+  [/,\s*germany\s*$/i, ""],
+  [/,\s*france\s*$/i, ""],
+  [/,\s*australia\s*$/i, ""],
+  [/,\s*japan\s*$/i, ""],
+  [/,\s*south korea\s*$/i, ""],
+  [/,\s*india\s*$/i, ""],
+  [/,\s*netherlands\s*$/i, ""],
+  [/,\s*the netherlands\s*$/i, ""],
+  [/,\s*spain\s*$/i, ""],
+  [/,\s*italy\s*$/i, ""],
+  [/,\s*taiwan\s*$/i, ""],
+  [/,\s*brazil\s*$/i, ""],
+  [/,\s*singapore\s*$/i, ""],
+  [/,\s*mexico\s*$/i, ""],
+  [/,\s*israel\s*$/i, ""],
+  [/,\s*thailand\s*$/i, ""],
+  [/,\s*indonesia\s*$/i, ""],
+  [/,\s*malaysia\s*$/i, ""],
+  [/,\s*philippines\s*$/i, ""],
+  [/,\s*vietnam\s*$/i, ""],
+  [/,\s*egypt\s*$/i, ""],
+  [/,\s*nigeria\s*$/i, ""],
+  [/,\s*kenya\s*$/i, ""],
+  [/,\s*ghana\s*$/i, ""],
+  [/,\s*colombia\s*$/i, ""],
+  [/,\s*chile\s*$/i, ""],
+  [/,\s*peru\s*$/i, ""],
+  [/,\s*argentina\s*$/i, ""],
+  [/,\s*saudi arabia\s*$/i, ""],
+  [/,\s*(?:united arab emirates|uae)\s*$/i, ""],
+  [/,\s*switzerland\s*$/i, ""],
+  [/,\s*belgium\s*$/i, ""],
+  [/,\s*austria\s*$/i, ""],
+  [/,\s*poland\s*$/i, ""],
+  [/,\s*portugal\s*$/i, ""],
+  [/,\s*czech republic\s*$/i, ""],
+  [/,\s*hungary\s*$/i, ""],
+  [/,\s*romania\s*$/i, ""],
+  [/,\s*sweden\s*$/i, ""],
+  [/,\s*norway\s*$/i, ""],
+  [/,\s*finland\s*$/i, ""],
+  [/,\s*denmark\s*$/i, ""],
+  [/,\s*greece\s*$/i, ""],
+  [/,\s*ukraine\s*$/i, ""],
+  [/,\s*south africa\s*$/i, ""],
+];
+
+// Metadata suffixes/prefixes to strip.
+// Trailing: "- HQ", ", Office", " Hub", "San Francisco Office", etc.
+// We match the word at a word boundary with an optional preceding separator.
+const METADATA_SUFFIX_RE = /(?:(?:,|\s[-–]|\s)\s*|\s+)\b(hq|headquarters|office|offices|hub|campus|location)\b.*$/i;
+// Standalone "City Office" or "City HQ" with no separator (e.g. "New York Office", "Berlin Office")
+const METADATA_BARE_RE = /^(.+?)\s+\b(office|offices|hq|headquarters|hub|campus)\b\s*(-\s*\w+)?$/i;
+
+// Street address patterns — group 1 = street portion, group 2 = city+state.
+// "2032 Oakwood Lane, Duarte, CA 91010" → ["2032 Oakwood Lane", "Duarte, CA"]
+const STREET_ADDRESS_RE  = /^(\d+\s+\S.*?),\s+(.+?,\s+[A-Z]{2})\s*\d{5}(-\d{4})?$/;
+// "1234 Main St, Suite 200, Dallas, TX"  → ["1234 Main St, Suite 200", "Dallas, TX"]
+const STREET_ADDRESS_RE2 = /^(\d+\s+.+?,\s+(?:suite|ste|floor|fl|unit|apt|#)\s*\S+),\s+(.+?,\s+[A-Z]{2})/i;
+
+// REF ID suffixes from Australian ATS sources: "Queensland, REF15267T" → "Queensland"
+const REF_ID_RE = /,\s*REF[A-Z0-9]+\s*$/i;
+// Also plain alphanumeric codes: "Queensland, 25414P"
+const REF_CODE_RE = /,\s*\d+[A-Z]+\s*$/i;
+
+// Industrial estate → extract city name from the end.
+// e.g. "Hemaraj Eastern Seaboard Industrial Estate, RAYONG" → "Rayong"
+const INDUSTRIAL_ESTATE_RE = /^.+\b(?:industrial estate|industrial park|business park|technology park|science park)\b,\s*(.+)$/i;
+
+// Unambiguous ISO-2 country codes → country expansion for "City, XX" patterns.
+// These codes are never used as US state abbreviations, so safe to expand.
+const ISO2_TO_COUNTRY: Record<string, string> = {
+  cn: "China",
+  jp: "Japan",
+  fr: "France",
+  it: "Italy",
+  kr: "South Korea",
+  nl: "Netherlands",
+  vn: "Vietnam",
+  hu: "Hungary",
+  pt: "Portugal",
+  ro: "Romania",
+  rs: "Serbia",
+  be: "Belgium",
+  at: "Austria",
+  ch: "Switzerland",
+  se: "Sweden",
+  no: "Norway",
+  fi: "Finland",
+  dk: "Denmark",
+  pl: "Poland",
+  cz: "Czech Republic",
+  bg: "Bulgaria",
+  hr: "Croatia",
+  sk: "Slovakia",
+  si: "Slovenia",
+  lt: "Lithuania",
+  lv: "Latvia",
+  ee: "Estonia",
+  gr: "Greece",   // resolved below via city set; default to Greece if unknown
+  // Never US state abbreviations — safe to expand in "City, XX" (Gemini often emits ISO here)
+  gb: "United Kingdom",
+  uk: "United Kingdom",
+  es: "Spain",
+  ie: "Ireland",
+  sg: "Singapore",
+  br: "Brazil",
+  mx: "Mexico",
+  au: "Australia",
+  nz: "New Zealand",
+  ru: "Russia",
+  ua: "Ukraine",
+  za: "South Africa",
+  ae: "United Arab Emirates",
+  sa: "Saudi Arabia",
+  tr: "Turkey",
+  eg: "Egypt",
+  ng: "Nigeria",
+  pk: "Pakistan",
+  bd: "Bangladesh",
+  ph: "Philippines",
+  th: "Thailand",
+  // id: Indonesia — handled in 2-letter branch (conflicts with US Idaho)
+  my: "Malaysia",
+  cl: "Chile",
+  pe: "Peru",
+  is: "Iceland",
+  lu: "Luxembourg",
+  cy: "Cyprus",
+  li: "Liechtenstein",
+  mc: "Monaco",
+  sm: "San Marino",
+  ad: "Andorra",
+  // Omit ISO codes that match US state abbreviations (AR, CO, IL, MT, NE, VA, …) — those stay US.
+  // Note: IN = Indiana (US) or India, DE = Delaware (US) or Germany — handled by city sets below
+};
+
+// Indiana cities — used to disambiguate ", IN" as US state vs India
+const INDIANA_CITIES = new Set([
+  "albion", "anderson", "angola", "auburn", "avon", "bloomington", "brazil",
+  "brownsburg", "carmel", "columbus", "corydon", "crane", "crawfordsville",
+  "daleville", "edinburgh", "evansville", "fishers", "floyds knobs",
+  "fort wayne", "franklin", "greenfield", "greenwood", "griffith",
+  "grissom afb", "hammond", "highland", "hobart", "indianapolis",
+  "jeffersonville", "la porte", "lafayette", "lawrenceburg", "marion",
+  "merrillville", "michigan city", "mishawaka", "muncie", "new albany",
+  "paoli", "plainfield", "portage", "porter", "richmond", "salem",
+  "schererville", "scottsburg", "seymour", "shelbyville", "speedway",
+  "terre haute", "valparaiso", "whiteland",
+]);
+
+// Delaware cities — disambiguate ", DE" as US state vs Germany
+const DELAWARE_CITIES = new Set([
+  "bear", "dover", "dover afb", "lewes", "milton", "new castle", "newark", "wilmington",
+]);
+
+// Groningen-area Dutch cities — disambiguate ", GR" as Greece vs Groningen province
+const GRONINGEN_CITIES = new Set([
+  "delfzijl", "eemshaven", "groningen", "winschoten",
+]);
+
+// Idaho cities — ", ID" conflicts with ISO Indonesia; these US cities stay Idaho
+const IDAHO_CITIES = new Set([
+  "ammon", "blackfoot", "boise", "burley", "caldwell", "coeur d'alene", "coeur dalene", "eagle",
+  "hayden", "idaho falls", "jerome", "kuna", "lewiston", "meridian", "moscow", "mountain home",
+  "nampa", "pocatello", "post falls", "rexburg", "sandpoint", "twin falls", "chubbuck", "rathdrum",
+  "star", "middleton", "fruitland", "hailey", "bellevue",
+]);
+
+// ATS job-code / internal-ref patterns to null out entirely
+// Matches "Bosch Corporation_...", "Bosch Coporation_..." (ATS internal job codes)
+const ATS_JUNK_RE = /^bosch\s+co[a-z]*[_,]/i;
+
+// City name aliases: transliteration / legacy names → canonical.
+const CITY_ALIASES: Record<string, string> = {
+  bangalore: "Bengaluru",
+  münchen: "Munich",
+  warszawa: "Warsaw",
+  kraków: "Krakow",
+  köln: "Cologne",
+  zürich: "Zurich",
+  wien: "Vienna",
+  milano: "Milan",
+  "tel aviv-yafo": "Tel Aviv",
+  "ciudad de méxico": "Mexico City",
+  "ho chi minh": "Ho Chi Minh City",
+};
+
+/** Title-case words for no-comma "Tavares FL" / "Pune IN" parsing. */
+function titleCaseLocationWords(s: string): string {
+  return s
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => {
+      if (!w.length) return w;
+      if (w.includes("-")) {
+        return w
+          .split("-")
+          .map((p) => (p.length ? p[0].toUpperCase() + p.slice(1) : p))
+          .join("-");
+      }
+      return w[0].toUpperCase() + w.slice(1);
+    })
+    .join(" ");
+}
+
+/** ALL-CAPS city tokens when paired with a 2-letter US state (MEDFORD, NJ). */
+function displayCityForOutput(cityRaw: string): string {
+  const alias = CITY_ALIASES[cityRaw.toLowerCase()];
+  if (alias) return alias;
+  const cs = cityRaw.trim();
+  if (cs.length <= 3) return cityRaw;
+  if (cs !== cs.toUpperCase()) return cityRaw;
+  if (/['’]/.test(cs)) return cityRaw;
+  if (!/^[A-Z][A-Z\s'-]+$/u.test(cs)) return cityRaw;
+  return titleCaseLocationWords(cs);
+}
+
+/**
+ * Normalize a raw location string to a consistent "City, ST" / "City, Country" / "Remote" format.
+ *
+ * Rules (applied in order):
+ *   1. Split on multi-location separators (•, /, |, ;) → take first segment
+ *   2. If that segment mentions "remote" and not "hybrid" → "Remote"
+ *   3. Non-geocodable bare strings (regions, country-only, etc.) → null
+ *   4. Strip trailing parenthetical modifiers and office/HQ labels
+ *   5. Strip redundant country suffixes (", United States", ", United Kingdom", etc.) — up to two passes
+ *      for chained "City, Region, Country" patterns
+ *   6. Bare city name → canonical form via BARE_CITY_MAP
+ *   7. "City, Full State Name" → abbreviate state
+ *   8. Apply city aliases (Bangalore → Bengaluru, etc.)
+ *   9. Return cleaned string as-is if no rule matched
+ */
+export function normalizeLocation(
+  raw: string | null | undefined,
+  companySlug?: string | null,
+): string | null {
+  if (!raw) return null;
+  let s = raw.trim().replace(/\s+/g, " ");
+  if (!s) return null;
+
+  // 0. ATS / company-specific pre-normalization (Amazon US,ST, Boeing USA -, CVS, …)
+  s = applyLocationPrePipeline(s, companySlug);
+  if (!s) return null;
+
+  // 1. Multi-location split FIRST so "Austin, TX | Remote" → city, not "Remote"
+  const first = s.split(/\s*[•\/|;]\s*/)[0].trim();
+  if (!first) return null;
+  const firstLower = first.toLowerCase();
+
+  // 1b. "… - City, ST" (cross-street / site prefix before metro — dialysis, retail)
+  const dashMetro = first.match(/\s[-–]\s*(.+,\s*[A-Z]{2})\s*$/);
+  if (dashMetro) return normalizeLocation(dashMetro[1].trim(), companySlug);
+
+  // 1c. No comma: "Tavares FL" / "Slave Lake AB" / "Pune IN" (ATS omits comma)
+  if (!first.includes(",")) {
+    const spaceSt = first.match(/^(.+?)\s+([A-Z]{2})\s*$/);
+    if (spaceSt) {
+      const st = spaceSt[2].toUpperCase();
+      const cityPart = spaceSt[1].trim();
+      const cityLower = cityPart.toLowerCase();
+      // "IN" = Indiana (US) or India — resolve before US_STATE_ABBREV_SET (Indiana wins for US cities)
+      if (st === "IN") {
+        if (INDIANA_CITIES.has(cityLower)) return `${titleCaseLocationWords(cityPart)}, IN`;
+        return `${titleCaseLocationWords(cityPart)}, India`;
+      }
+      if (US_STATE_ABBREV_SET.has(st)) return `${titleCaseLocationWords(cityPart)}, ${st}`;
+      if (CA_PROVINCE_CODES.has(st)) return `${titleCaseLocationWords(cityPart)}, Canada`;
+    }
+  }
+
+  // 2. Remote detection on the first segment
+  if (/\bremote\b/.test(firstLower) && !/\bhybrid\b/.test(firstLower)) return "Remote";
+
+  // 2b. Bare US state / territory full name → "State, USA" (region-level geocoding).
+  // Skip: "new york" (usually NYC), "washington" (BARE → DC), "georgia" (same English name as the country Georgia — not "Georgia, USA").
+  if (!first.includes(",")) {
+    if (firstLower === "district of columbia") {
+      return "Washington, DC";
+    }
+    if (firstLower !== "new york" && firstLower !== "washington" && firstLower !== "georgia") {
+      if (US_STATE_ABBREVS[firstLower]) {
+        return `${titleCaseLocationWords(firstLower)}, USA`;
+      }
+    }
+  }
+
+  // 3. Non-geocodable bare strings
+  if (NON_GEOCODABLE.has(firstLower)) return null;
+
+  // 3b. ATS junk patterns (Bosch Corporation internal codes, SA/SH German codes, etc.)
+  if (ATS_JUNK_RE.test(first)) return null;
+  if (firstLower.includes("development.") && firstLower.includes("multiple cities")) return null;
+
+  // 4a. Full street address → extract city+state from tail (group 2; group 1 = street).
+  // RE2 must run first: it handles "street, suite, city, ST" and is more specific.
+  // RE1 would greedily pull the suite into the city group if tried first.
+  const addrMatch = first.match(STREET_ADDRESS_RE2) ?? first.match(STREET_ADDRESS_RE);
+  if (addrMatch) return normalizeLocation(addrMatch[2], companySlug);
+
+  if (/^\d+\s+[A-Za-z]/.test(first)) {
+    const parts = first.split(/,\s*/);
+    if (parts.length >= 3 && /^[A-Z]{2}(\s+\d{5})?$/.test(parts[parts.length - 1].trim())) {
+      const cityState = `${parts[parts.length - 2].trim()}, ${parts[parts.length - 1].trim()}`
+        .replace(/\s*\d{5}(-\d{4})?$/, "").trim();
+      return normalizeLocation(cityState, companySlug);
+    }
+    return null;
+  }
+
+  // 4b. Industrial estate → extract city from end: "Hemaraj ... Estate, RAYONG" → "Rayong"
+  const estateMatch = first.match(INDUSTRIAL_ESTATE_RE);
+  if (estateMatch) return normalizeLocation(estateMatch[1], companySlug);
+
+  // 4c. Strip leading non-alpha garbage and leading HQ/headquarters prefixes
+  //     Also strip "City-HQ" dash-attached suffix
+  let stripped = first
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/^(?:hq|headquarters)\s*[-–:]\s*/i, "")
+    .replace(/-HQ\s*$/i, "")            // "San Francisco-HQ" → "San Francisco"
+    .replace(/-HQ-\w+\s*$/i, "")        // "Benagaluru-HQ-..." → "Bengaluru"
+    .trim();
+
+  // 4d. "City Office", "City HQ", "New York Office - Hybrid" → extract city
+  const bareMetaMatch = stripped.match(METADATA_BARE_RE);
+  if (bareMetaMatch) {
+    stripped = bareMetaMatch[1].trim();
+  }
+
+  // 4e. Strip trailing parens and remaining metadata suffixes
+  stripped = stripped
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .replace(METADATA_SUFFIX_RE, "")
+    .replace(/\s*[-–]\s*Job\s+Posting\s*$/i, "")
+    .trim();
+
+  // 4f. Strip ATS REF IDs: "Queensland, REF15267T" → "Queensland"
+  stripped = stripped.replace(REF_ID_RE, "").replace(REF_CODE_RE, "").trim();
+
+  // 4g. Suite/unit prefix without street number → extract city+state from end
+  if (/^(?:suite|ste|floor|fl|unit|apt|#)\s*\S+,/i.test(stripped)) {
+    const parts = stripped.split(/,\s*/);
+    if (parts.length >= 3 && /^[A-Z]{2}(\s+\d{5})?$/.test(parts[parts.length - 1].trim())) {
+      const cityState = `${parts[parts.length - 2].trim()}, ${parts[parts.length - 1].trim()}`
+        .replace(/\s*\d{5}(-\d{4})?$/, "").trim();
+      return normalizeLocation(cityState, companySlug);
+    }
+  }
+
+  // 4h. Trailing US ZIP on "City, ST 12345" / "City, CA 91306"
+  stripped = stripped.replace(/,\s*([A-Z]{2})\s+\d{5}(-\d{4})?\s*$/i, ", $1").trim();
+
+  // Re-check NON_GEOCODABLE after stripping (catches "LOCATION", bare "HQ", etc.)
+  if (NON_GEOCODABLE.has(stripped.toLowerCase())) return null;
+  if (!stripped) return null;
+
+  // 5. Country / region suffixes — US is always City, ST; intl is City, full English country.
+  let cleaned = stripped;
+  for (const [pattern, replacement] of US_TRAILING_SUFFIX_REPLACEMENTS) {
+    cleaned = cleaned.replace(pattern, replacement).trim().replace(/,\s*$/, "").trim();
+  }
+  // Strip trailing ", US" / ", USA" unless it's a bare US state name (Amazon "US, MN" → "Minnesota, USA").
+  // Do NOT strip "San Francisco, USA" → "San Francisco" (handled by non-membership in US_STATE_FULL_NAME_SET).
+  {
+    const m = cleaned.match(/^(.+),\s*USA?\s*$/i);
+    if (m) {
+      const head = m[1].trim().toLowerCase();
+      if (US_STATE_FULL_NAME_SET.has(head)) {
+        cleaned = `${m[1].trim()}, USA`;
+      } else {
+        cleaned = m[1].trim();
+      }
+    }
+  }
+  for (const [pattern, replacement] of UK_IE_TRAILING_SUFFIX_REPLACEMENTS) {
+    cleaned = cleaned.replace(pattern, replacement).trim().replace(/,\s*$/, "").trim();
+  }
+  // Strip "City, Region, Country" trailing country only when ≥2 commas (not "Berlin, Germany").
+  for (let i = 0; i < 2; i++) {
+    const commaCount = (cleaned.match(/,/g) ?? []).length;
+    if (commaCount < 2) break;
+    let changed = false;
+    for (const [pattern, replacement] of INTL_TRAILING_COUNTRY_STRIPS) {
+      const next = cleaned.replace(pattern, replacement).trim().replace(/,\s*$/, "").trim();
+      if (next !== cleaned) {
+        cleaned = next;
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
+  }
+  // Trailing ISO-2 country code on 3+ part strings only (e.g. "City, ST, DE" → drop DE)
+  if ((cleaned.match(/,/g) ?? []).length >= 2) {
+    cleaned = cleaned.replace(/,\s*[A-Za-z]{2}\s*$/, "").trim().replace(/,\s*$/, "").trim();
+  }
+
+  const cleanedLower = cleaned.toLowerCase();
+
+  // 6. Bare city lookup
+  if (BARE_CITY_MAP[cleanedLower]) return BARE_CITY_MAP[cleanedLower];
+
+  // 7. "City, Qualifier" — normalize US state names and handle region codes
+  const parts = cleaned.split(/,\s*/);
+  if (parts.length >= 2) {
+    const cityRaw = parts[0].trim();
+    let qualifier = parts[1].trim();
+    // "Trier, RP 54290" / "Miami, FL 33131" — ZIP glued to state/region code
+    const qlZip = qualifier.match(/^([A-Z]{2})\s+\d{5}(-\d{4})?$/i);
+    if (qlZip) qualifier = qlZip[1];
+
+    // "Toronto, ON, Canada" / "Lloydminster, AB, Canada" → City, Canada (canonical intl)
+    if (parts.length === 3) {
+      const region = parts[1].trim().toUpperCase();
+      const countryPart = parts[2].trim().toLowerCase();
+      if (countryPart === "canada" && CA_PROVINCE_CODES.has(region)) {
+        const c0 = CITY_ALIASES[cityRaw.toLowerCase()] ?? cityRaw;
+        return `${c0}, Canada`;
+      }
+    }
+
+    // Bare city in BARE_CITY_MAP — skip when the qualifier is a US state (e.g. "Manchester, NH" stays US).
+    const qTrim = qualifier.trim();
+    const qualifierIsUsStateAbbrev =
+      qTrim.length === 2 && US_STATE_ABBREV_SET.has(qTrim.toUpperCase());
+    // "Washington, USA" / "Washington, US" — Washington state (e.g. Amazon), not DC (BARE "washington" → DC).
+    if (cityRaw.toLowerCase() === "washington" && /^(USA|United States|US)$/i.test(qTrim)) {
+      return "Washington, USA";
+    }
+    // "San Jose, Costa Rica" — not San Jose, CA (US BARE); pre-pipeline emits this after country-first flip.
+    if (cityRaw.toLowerCase() === "san jose" && /^costa rica$/i.test(qTrim)) {
+      return "San Jose, Costa Rica";
+    }
+    if (!qualifierIsUsStateAbbrev && BARE_CITY_MAP[cityRaw.toLowerCase()]) {
+      return BARE_CITY_MAP[cityRaw.toLowerCase()];
+    }
+
+    // City alias (e.g. "München, BY" → "Munich, BY")
+    const canonicalCity = CITY_ALIASES[cityRaw.toLowerCase()] ?? cityRaw;
+    const cityLower = cityRaw.toLowerCase();
+
+    // Catalan / Spanish region labels (ATS)
+    const qEarly = qualifier.toLowerCase();
+    if (qEarly === "cataluña" || qEarly === "cataluna" || qEarly === "catalonia") {
+      return `${canonicalCity}, Spain`;
+    }
+
+    // US full state name → abbreviation
+    const usAbbrev = US_STATE_ABBREVS[qualifier.toLowerCase()];
+    if (usAbbrev) {
+      return `${displayCityForOutput(cityRaw)}, ${usAbbrev}`;
+    }
+
+    if (qualifier.length === 2) {
+      const code = qualifier.toUpperCase();
+      const codeLower = qualifier.toLowerCase();
+
+      // Canadian provinces (2-letter) — no overlap with US state abbreviations
+      if (CA_PROVINCE_CODES.has(code)) {
+        if (cityLower === "canada") {
+          const prov = CA_PROVINCE_CODE_TO_ENGLISH[code];
+          if (prov) return `${prov}, Canada`;
+        }
+        return `${canonicalCity}, Canada`;
+      }
+
+      // Ambiguous codes: resolve by city membership
+      if (codeLower === "in") {
+        // IN = Indiana (US) or India
+        if (INDIANA_CITIES.has(cityLower)) return `${canonicalCity}, IN`;
+        return `${canonicalCity}, India`;
+      }
+      if (codeLower === "de") {
+        // DE = Delaware (US) or Germany
+        if (DELAWARE_CITIES.has(cityLower)) return `${canonicalCity}, DE`;
+        return `${canonicalCity}, Germany`;
+      }
+      if (codeLower === "gr") {
+        // GR = Groningen province (NL) or Greece
+        if (GRONINGEN_CITIES.has(cityLower)) return `${canonicalCity}, Netherlands`;
+        return `${canonicalCity}, Greece`;
+      }
+      if (codeLower === "id") {
+        // ID = Idaho (US) or Indonesia (ISO-2)
+        if (IDAHO_CITIES.has(cityLower)) return `${canonicalCity}, ID`;
+        return `${canonicalCity}, Indonesia`;
+      }
+      if (codeLower === "sg") {
+        // Singapore city-state — avoid "Singapore, Singapore"
+        if (cityLower === "singapore") return "Singapore";
+        return `${canonicalCity}, Singapore`;
+      }
+
+      // German Bundesland 2-letter codes (RP, BY, …) — before ISO / US fallback
+      if (DE_BUNDESLAND_CODE_SET.has(code)) {
+        return `${canonicalCity}, Germany`;
+      }
+
+      // Unambiguous ISO-2 country codes → expand to full country name
+      const country = ISO2_TO_COUNTRY[codeLower];
+      if (country) return `${canonicalCity}, ${country}`;
+
+      // Remaining 2-char codes are US states — title-case ALL-CAPS cities (MEDFORD, NJ)
+      return `${displayCityForOutput(cityRaw)}, ${code}`;
+    }
+
+    // ── Rule-based region/state → country normalization ──────────────────────
+
+    const qualUpper = qualifier.toUpperCase();
+    const qualLower = qualifier.toLowerCase();
+
+    if (CA_PROVINCE_FULL_NAMES.has(qualLower)) return `${canonicalCity}, Canada`;
+
+    // ISO English country name (ATS uses "Czechia" — prefer full form)
+    if (qualLower === "czechia") return `${canonicalCity}, Czech Republic`;
+
+    // UK ceremonial counties (Workday / ATS)
+    if (UK_ENG_COUNTIES.has(qualLower)) return `${canonicalCity}, United Kingdom`;
+
+    // Chile regions (ATS)
+    if (qualLower === "santiago metropolitan region") return `${canonicalCity}, Chile`;
+
+    // German Bundesland codes → Germany
+    if (DE_BUNDESLAND_CODE_SET.has(qualUpper)) return `${canonicalCity}, Germany`;
+
+    // German Bundesland full names → Germany
+    const DE_STATES_FULL: Record<string, true> = {
+      "baden-württemberg": true, "bavaria": true, "bayern": true, "berlin": true,
+      "brandenburg": true, "bremen": true, "hamburg": true, "hesse": true, "hessen": true,
+      "mecklenburg-vorpommern": true, "lower saxony": true, "niedersachsen": true,
+      "north rhine-westphalia": true, "nordrhein-westfalen": true, "rhineland-palatinate": true,
+      "rheinland-pfalz": true, "saarland": true, "saxony": true, "sachsen": true,
+      "saxony-anhalt": true, "sachsen-anhalt": true, "schleswig-holstein": true,
+      "thuringia": true, "thüringen": true,
+    };
+    if (DE_STATES_FULL[qualLower]) return `${canonicalCity}, Germany`;
+
+    // Austrian states → Austria
+    const AT_STATES: Record<string, true> = {
+      "tirol": true, "tyrol": true, "steiermark": true, "styria": true,
+      "kärnten": true, "carinthia": true, "oberösterreich": true, "upper austria": true,
+      "niederösterreich": true, "lower austria": true, "vorarlberg": true,
+      "burgenland": true, "salzburg": true, "wien": true,
+    };
+    if (AT_STATES[qualLower]) return `${canonicalCity}, Austria`;
+
+    // Indian states/UTs → India
+    const IN_STATES_SET = new Set([
+      "andhra pradesh","arunachal pradesh","assam","bihar","chhattisgarh","chattisgarh",
+      "goa","gujarat","haryana","himachal pradesh","jharkhand","karnataka","kerala",
+      "madhya pradesh","maharashtra","manipur","meghalaya","mizoram","nagaland","odisha",
+      "orissa","punjab","rajasthan","sikkim","tamil nadu","telangana","telengana",
+      "tripura","uttar pradesh","uttarakhand","uttaranchal","west bengal","delhi",
+      "jammu and kashmir","ladakh","chandigarh","puducherry","pondicherry","dadra and nagar haveli",
+      "daman and diu","lakshadweep","andaman and nicobar",
+    ]);
+    if (IN_STATES_SET.has(qualLower)) return `${canonicalCity}, India`;
+
+    // Chinese provinces/municipalities → China
+    const CN_PROVINCES = new Set([
+      "jiangsu","zhejiang","guangdong","sichuan","hubei","hunan","jilin","liaoning",
+      "shandong","fujian","anhui","jiangxi","shanxi","shaanxi","yunnan","guizhou",
+      "gansu","qinghai","xinjiang","tibet","inner mongolia","heilongjiang","henan",
+      "hebei","hainan","guangxi","chongqing","beijing","shanghai","tianjin",
+    ]);
+    if (CN_PROVINCES.has(qualLower)) return `${canonicalCity}, China`;
+
+    // Brazilian states → Brazil
+    const BR_STATES = new Set([
+      "sp","rj","mg","ba","pr","rs","pe","ce","go","es","am","pa","mt","ms","ma",
+      "pi","al","se","ro","to","ac","ap","rr","pb","rn","sc","df","ac","ap",
+      // full names
+      "são paulo","santa catarina","rio de janeiro","minas gerais","bahia","paraná",
+      "rio grande do sul","pernambuco","ceará","goiás","espírito santo","amazonas",
+      "pará","mato grosso","mato grosso do sul","maranhão","piauí","alagoas","sergipe",
+      "rondônia","tocantins","acre","amapá","roraima","paraíba","rio grande do norte",
+      "distrito federal",
+    ]);
+    if (BR_STATES.has(qualLower) || BR_STATES.has(qualUpper)) return `${canonicalCity}, Brazil`;
+
+    // Australian states → Australia
+    const AU_STATES = new Set([
+      "nsw","vic","qld","sa","wa","tas","act","nt",
+      "new south wales","victoria","queensland","south australia","western australia",
+      "tasmania","australian capital territory","northern territory",
+    ]);
+    if (AU_STATES.has(qualLower) || AU_STATES.has(qualUpper)) return `${canonicalCity}, Australia`;
+
+    // Mexican states → Mexico
+    const MX_STATES = new Set([
+      "jalisco","nuevo leon","nuevo león","estado de mexico","estado de méxico",
+      "ciudad de mexico","ciudad de méxico","baja california","baja california sur",
+      "sonora","chihuahua","coahuila","sinaloa","tamaulipas","veracruz","oaxaca",
+      "guerrero","michoacan","michoacán","puebla","guanajuato","querétaro","queretaro",
+      "morelos","hidalgo","yucatan","yucatán","quintana roo","campeche","tabasco",
+      "chiapas","tlaxcala","nayarit","colima","aguascalientes","zacatecas","durango",
+      "san luis potosi","san luis potosí",
+    ]);
+    if (MX_STATES.has(qualLower)) return `${canonicalCity}, Mexico`;
+
+    // Malaysian states → Malaysia
+    const MY_STATES = new Set([
+      "selangor","pulau pinang","penang","johor","perak","kedah","kelantan",
+      "terengganu","pahang","sabah","sarawak","negeri sembilan","melaka","perlis",
+      "putrajaya","kuala lumpur","labuan","wilayah persekutuan",
+    ]);
+    if (MY_STATES.has(qualLower)) return `${canonicalCity}, Malaysia`;
+
+    // French regions / départements → France (ATS often uses département name as qualifier)
+    const FR_REGIONS = new Set([
+      "nouvelle-aquitaine","auvergne-rhône-alpes","auvergne rhone alpes",
+      "île-de-france","ile-de-france","bretagne","brittany","normandie","normandy",
+      "occitanie","hauts-de-france","pays de la loire","bourgogne-franche-comté",
+      "bourgogne franche-comté","centre-val de loire","grand est","provence-alpes-côte d'azur",
+      "provence-alpes-cote d'azur","paca","corsica","corse",
+      // Île-de-France départements (Workday / EU postings)
+      "yvelines","hauts-de-seine","seine-saint-denis","seine-et-marne","val-de-marne",
+      "essonne","val-d'oise","val-d’oise",
+    ]);
+    if (FR_REGIONS.has(qualLower)) return `${canonicalCity}, France`;
+
+    // Israeli district labels (ATS: "Ness Ziona, Center District")
+    if (qualLower === "center district" || qualLower === "central district") {
+      return `${canonicalCity}, Israel`;
+    }
+
+    // Redundant city-city qualifier (e.g. "Oslo, Oslo" / "Braga, Braga") → look up by city alone
+    if (qualLower === cityLower || qualLower === canonicalCity.toLowerCase()) {
+      const cityOnly = BARE_CITY_MAP[cityLower];
+      if (cityOnly) return cityOnly;
+      // Fall through to return city-only below
+      return canonicalCity;
+    }
+
+    // Multi-char qualifier: keep as-is (German state "Baden-Württemberg", etc.)
+    return `${canonicalCity}, ${qualifier}`;
+  }
+
+  // 8. City alias for bare string
+  if (CITY_ALIASES[cleanedLower]) return CITY_ALIASES[cleanedLower];
+
+  return cleaned || null;
+}
+
+/**
+ * Split multi-location strings (same delimiters as {@link normalizeLocation}) and
+ * normalize each segment. Dedupes case-insensitively while preserving order.
+ * Used at ingest so `jobs.locations` JSON can list every city (e.g. Meta JSON-LD).
+ */
+export function normalizeLocationsList(
+  raw: string | null | undefined,
+  companySlug?: string | null,
+): string[] | null {
+  if (!raw?.trim()) return null;
+  const segments = raw.split(/\s*[•\/|;]\s*/).map((s) => s.trim()).filter(Boolean);
+  if (segments.length === 0) return null;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const seg of segments) {
+    const n = normalizeLocation(seg, companySlug);
+    if (n && !seen.has(n.toLowerCase())) {
+      seen.add(n.toLowerCase());
+      out.push(n);
+    }
+  }
+  return out.length ? out : null;
+}
+
+/** Primary city for geocoding — first normalized segment, or full-string fallback. */
+export function primaryNormalizedLocation(
+  raw: string | null | undefined,
+  companySlug?: string | null,
+): string | null {
+  const list = normalizeLocationsList(raw, companySlug);
+  if (list != null && list.length > 0) return list[0];
+  return normalizeLocation(raw, companySlug);
+}
+
+/** Text passed to embedding API: all cities when multi-location, else single normalized string. */
+export function locationsRawToEmbedString(
+  raw: string | null | undefined,
+  companySlug?: string | null,
+): string | null {
+  const list = normalizeLocationsList(raw, companySlug);
+  if (list != null && list.length > 0) return list.join("; ");
+  return normalizeLocation(raw, companySlug);
+}
+
+/** Join stored locations JSON for embedding text so vectors reflect every listed city. */
+export function locationsJsonToEmbedString(locationsJson: string | null): string | null {
+  if (!locationsJson) return null;
+  try {
+    const arr = JSON.parse(locationsJson) as unknown;
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    const strs = arr.filter((x): x is string => typeof x === "string" && Boolean(x.trim()));
+    return strs.length ? strs.join("; ") : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Date parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parse a date value into a Unix epoch (seconds).
+ * Accepts ISO 8601 strings, millisecond epoch numbers, or second epoch numbers.
+ * Returns null if the value is unparseable.
+ */
+export function parseEpochSeconds(raw: string | number | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+
+  if (typeof raw === "number") {
+    // Distinguish millisecond vs second epoch by magnitude
+    return raw > 1e10 ? Math.floor(raw / 1000) : raw;
+  }
+
+  if (typeof raw === "string") {
+    const n = Date.parse(raw);
+    if (isNaN(n)) return null;
+    return Math.floor(n / 1000);
+  }
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Job ID generation (deterministic)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** FNV-1a 64-bit hash — synchronous, no crypto dependency, collision-resistant. */
+function _fnv1a64(s: string): bigint {
+  let h = 14695981039346656037n;
+  for (let i = 0; i < s.length; i++) {
+    h ^= BigInt(s.charCodeAt(i));
+    h = BigInt.asUintN(64, h * 1099511628211n);
+  }
+  return h;
+}
+
+/**
+ * Produce a deterministic 10-digit numeric job ID from source_id and external_id.
+ *
+ * Format: exactly 10 decimal digits, zero-padded (e.g. "0438291750").
+ *
+ * Properties:
+ *   - Stable: same inputs always produce the same ID.
+ *   - 10 billion possible values — negligible collision risk at any practical scale.
+ *   - URL-safe, digits only, easy to share.
+ *   - No crypto dependency (synchronous FNV-1a 64-bit hash mod 10^10).
+ */
+export function buildJobId(sourceId: string, externalId: string): string {
+  const h = _fnv1a64(`${sourceId}:${externalId}`);
+  return (h % 10000000000n).toString().padStart(10, "0");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UUID v4 (for company and source IDs where determinism isn't needed)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function uuidv4(): string {
+  return crypto.randomUUID();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HTML → plain text (for AI extraction input)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Strip HTML tags from a raw job description before sending to Gemini.
+ * This reduces token usage and avoids leaking HTML markup into AI prompts.
+ * We do this with regex rather than a DOM parser since Workers run in an
+ * edge environment without a full DOM.
+ */
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?(p|div|li|h[1-6]|ul|ol|section|article)[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seniority from experience years
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Derive a SeniorityLevel from a minimum-years-of-experience integer.
+ * Used as a fallback when the AI didn't extract an explicit seniority label.
+ * Thresholds match typical industry conventions:
+ *   0–1  → entry
+ *   2–4  → mid
+ *   5–7  → senior
+ *   8+   → staff
+ */
+export function seniorityFromExperienceYears(years: number): SeniorityLevel {
+  if (years >= 8) return "staff";
+  if (years >= 5) return "senior";
+  if (years >= 2) return "mid";
+  return "entry";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Title-embedded street address extraction
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Many franchise ATSes (Dominos, Jimmy John's, etc.) embed the store's street
+ * address directly in the job title, e.g.:
+ *   "Dishwasher (01272) - 3275 Henry St"
+ *   "General Manager(07682) -491 N Lake Havasu Ave #100"
+ *   "Assistant Manager (06686) - FT Hours - 116 E Edgewood Dr"
+ *
+ * When the structured `locations` field already contains city+state, combining
+ * these gives a full geocodable address — no Places API call needed (Nominatim
+ * handles it for free).
+ *
+ * Returns the raw street portion only (no city/state); caller must append those
+ * from the job's normalized location string.
+ */
+
+// Store-number parenthetical followed (optionally via dashes) by a street number
+const TITLE_STORE_ADDR_RE =
+  /\(\d{2,6}\)\s*[-–]?\s*(?:[A-Za-z][\w\s]*?[-–]\s*)?(\d+\s+(?:[NSEW]{1,2}\s+)?[A-Za-z][\w\s.,#\-/]*(?:St\.?|Ave\.?|Dr\.?|Blvd\.?|Rd\.?|Ln\.?|Way|Ct\.?|Pl\.?|Hwy\.?|Pkwy\.?|Loop|Cir\.?|Ter\.?|Trl\.?|Run|Pike|Row|Sq\.?|Plaza|Place|Street|Avenue|Drive|Boulevard|Road|Lane|Court|Highway|Parkway|Circle|Terrace|Trail)(?:\s+(?:#|Ste\.?|Suite|Unit|Apt\.?)\s*[\w-]+)?)/i;
+
+export function extractTitleStreetAddress(title: string): string | null {
+  const m = title.match(TITLE_STORE_ADDR_RE);
+  if (!m) return null;
+  return m[1].trim().replace(/\s+/g, " ");
+}
+
+/**
+ * When an ATS provides a full street address in the location field
+ * (e.g. "2032 Oakwood Lane, Duarte, CA 91010"), returns the street portion
+ * so it can be stored as `job_address` instead of being silently discarded.
+ *
+ * Returns null when the raw location is just a city/region string.
+ *
+ * "2032 Oakwood Lane, Duarte, CA 91010" → "2032 Oakwood Lane"
+ * "1820 McCarthy Blvd, Suite 100, Milpitas, CA" → "1820 McCarthy Blvd, Suite 100"
+ * "Dallas, TX" → null
+ */
+export function extractLocationStreetAddress(locationRaw: string | null | undefined): string | null {
+  if (!locationRaw) return null;
+  // Try the same parse path as normalizeLocation — work on the first segment
+  const first = locationRaw.trim().split(/[;|]/)[0].trim();
+
+  // RE2 first — same reason as in normalizeLocation (suite bleed prevention)
+  const addrMatch = first.match(STREET_ADDRESS_RE2) ?? first.match(STREET_ADDRESS_RE);
+  if (addrMatch?.[1]) return addrMatch[1].trim();
+
+  // Fallback: "number street, ..., city, ST" split by comma
+  if (/^\d+\s+[A-Za-z]/.test(first)) {
+    const parts = first.split(/,\s*/);
+    if (parts.length >= 3 && /^[A-Z]{2}(\s+\d{5})?$/.test(parts[parts.length - 1].trim())) {
+      // Street is everything except the last two comma-parts (city, state)
+      return parts.slice(0, -2).join(", ").trim();
+    }
+  }
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Full US address embedded in HTML job descriptions (Carvana, Foundever, etc.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Decode entities + strip tags so regex runs on visible text (same idea as
+ * extractSalaryFromText — descriptions are often HTML-escaped in storage).
+ */
+function prepareDescriptionPlainTextForAddressScan(raw: string): string {
+  let t = raw.replace(/\r\n|\r/g, "\n").replace(/[ \t]+/g, " ");
+  t = t
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/&mdash;|&#8212;/g, "—")
+    .replace(/&ndash;|&#8211;/g, "–")
+    .replace(/&#36;/g, "$")
+    .replace(/&nbsp;|&#160;/gi, " ");
+  t = t.replace(/<[^>]+>/g, " ");
+  return t.replace(/\s+/g, " ").trim();
+}
+
+/** "123 Main, Suite 1, Dallas, TX 75201" — suite between street line and city. */
+const DESC_ADDR_SUITE_BETWEEN_RE =
+  /\b(\d{1,6}\s+[\w\s.,#\-/]{1,100}?,\s*(?:Suite|Ste\.?|Unit|#)\s*[\w-]+,\s*[^,\n]{1,60},\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)\b/i;
+
+/**
+ * Standard "123 Main St, City, ST 12345" embedded in prose (not start-anchored;
+ * STREET_ADDRESS_RE is for single-line location fields only).
+ */
+// Trailing suite on the street line is handled by DESC_ADDR_SUITE_BETWEEN_RE instead
+// (nested optional groups here broke the regexp parser with `)?),`).
+// Capture group must include city, ST, and ZIP — geocodeAddress needs the full string.
+const DESC_ADDR_EMBEDDED_RE =
+  /\b(\d{1,6}\s+(?:[NSEW]{1,2}\s+)?[A-Za-z0-9][\w\s.,#\-/]{1,90}(?:St\.?|Ave\.?|Dr\.?|Blvd\.?|Rd\.?|Ln\.?|Way|Ct\.?|Pl\.?|Hwy\.?|Pkwy\.?|Loop|Cir\.?|Street|Avenue|Drive|Boulevard|Road|Lane|Court|Highway|Parkway|Circle|Terrace|Trail),\s*[^,\n]{1,60},\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)\b/i;
+
+const DESC_ADDR_LABEL_HEAD_RES: RegExp[] = [
+  /\b(?:Working\s+Location|Work\s+Location)\s*:\s*/gi,
+  /\b(?:Store\s+Address|Site\s+Address|Job\s+Location|Office\s+Address|Physical\s+Address)\s*:\s*/gi,
+  /\b(?:is\s+)?located\s+at\s*:?\s*/gi,
+];
+
+function normalizeExtractedDescriptionAddress(s: string): string {
+  let t = s.replace(/\s+/g, " ").trim();
+  // Venue suffix after ZIP in copy: " ... MA 01702 (ADESA Boston)"
+  t = t.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  return t;
+}
+
+function findEmbeddedUsAddressInPlain(plain: string): string | null {
+  const m1 = plain.match(DESC_ADDR_SUITE_BETWEEN_RE);
+  if (m1?.[1]) return normalizeExtractedDescriptionAddress(m1[1]);
+  const m2 = plain.match(DESC_ADDR_EMBEDDED_RE);
+  if (m2?.[1]) return normalizeExtractedDescriptionAddress(m2[1]);
+  return null;
+}
+
+/**
+ * Finds a single US mailing-style address inside an HTML job description and
+ * returns the full string suitable for `geocodeAddress` (street, city,
+ * ST ZIP). Used when title / location / AI `job_address` did not yield a street
+ * line (e.g. Carvana "Working Location:", Foundever call-center copy).
+ *
+ * Intentionally conservative: first successful match wins; label-led snippets
+ * are scanned first so "Working Location:" wins over stray addresses in
+ * boilerplate when both appear.
+ */
+export function extractFullUsAddressFromDescription(
+  html: string | null | undefined,
+): string | null {
+  if (!html) return null;
+  const plain = prepareDescriptionPlainTextForAddressScan(html);
+  if (plain.length < 15) return null;
+
+  const head = plain.slice(0, 8000);
+  for (const re of DESC_ADDR_LABEL_HEAD_RES) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(head)) !== null) {
+      const tail = head.slice(m.index + m[0].length, m.index + m[0].length + 550);
+      const hit = findEmbeddedUsAddressInPlain(tail);
+      if (hit) return hit;
+    }
+  }
+  return findEmbeddedUsAddressInPlain(plain);
+}

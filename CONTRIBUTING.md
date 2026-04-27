@@ -24,9 +24,7 @@ If you're contributing, the process is similar to other open source repos: fork 
 ### 2. **Set Up Your Environment**
 
 #### Prerequisites
-- A Framer account (free tier works)
-- Node.js (if running tests locally)
-- A code editor (Claude Code, Codex, or Cursor recommended) 
+- An AI code editor (Claude Code, Codex, or Cursor recommended) 
 
 #### Fork and Clone
 ```bash
@@ -36,11 +34,20 @@ cd curastem
 ```
 
 #### Get Familiar with the Codebase
-- **Main component**: `web.tsx` — This is the heart of Curastem (23,500+ lines)
+- **Main component**: `app/web.tsx` — This is the heart of Curastem
 - **Code standards**: See `.cursorrules` for Framer component best practices
 - **Architecture**: Single Framer code component that powers Curastem.org
 
+#### Firebase (own project vs production)
+
+The repo ships with a `FIREBASE_CONFIG` object in `app/web.tsx` (and a matching relay in `curastem-jobs-api/src/app/auth/popup.ts` for the `/auth/popup` flow). That points at the production Curastem Firebase project. **Publishing the repo is fine**; Web API keys are client-visible by design and must be restricted in Firebase and Google Cloud (authorized domains, API restrictions, App Check as needed).
+
+If you want to **run your own stack** without using the Curastem Firebase project, replace that config with your own Web app settings from the Firebase console, or load it from your build-time environment and keep secrets out of the repo. The relay page must use the **same** project as the Framer client so sign-in and token exchange stay consistent.
+
+Firebase is Auth-only in this repo. Firestore and Firebase Storage rules live under `curastem-jobs-api/firebase/` and intentionally deny every read/write; user data and uploads are stored through the Cloudflare Worker in D1 and R2.
+
 ---
+
 
 ## How to Contribute
 

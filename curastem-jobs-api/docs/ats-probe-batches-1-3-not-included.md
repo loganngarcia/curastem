@@ -13,7 +13,7 @@ Batch 4 (nonprofit and civic orgs) is **not** in this file.
 
 For long “no match” lists, the **reason is the same for every name** and is written once under the heading.
 
-**Source data:** the three JSON outputs under `scripts/` (`ats-probe-output.json`, `ats-probe-batch2-output.json`, `ats-probe-batch3-output.json`). Approved sources are listed in the seed file `src/db/migrate.ts`.
+**Source data:** the three JSON outputs under `scripts/` (`ats-probe-output.json`, `ats-probe-batch2-output.json`, `ats-probe-batch3-output.json`). Approved sources are listed in the seed file `src/shared/db/migrate.ts`.
 
 ---
 
@@ -623,4 +623,4 @@ These are cases where the script found *a* board, but we did not add it to our s
 
 ### Added from batch 3 (210)
 
-Those companies **are** in our source list now. In `src/db/migrate.ts` look for the section titled **Startup list cohort (batch 3 probe, 2026-03)**.
+Those companies **are** in our source list now. In `src/shared/db/migrate.ts` look for the section titled **Startup list cohort (batch 3 probe, 2026-03)**.

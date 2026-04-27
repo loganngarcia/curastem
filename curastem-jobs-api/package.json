@@ -9,12 +9,18 @@
     "db:migrate": "wrangler d1 execute curastem-jobs --local --file=schema.sql",
     "db:migrate:remote": "wrangler d1 execute curastem-jobs --remote --file=schema.sql",
     "db:seed": "bash scripts/seed-d1-remote.sh",
+    "firebase:rules:check": "cd firebase && (npx -y firebase-tools@latest use || firebase use)",
+    "firebase:rules:deploy": "cd firebase && (npx -y firebase-tools@latest deploy --only firestore:rules,storage || firebase deploy --only firestore:rules,storage)",
     "type-check": "tsc --noEmit",
     "test:desc-address": "npx tsx scripts/test-desc-address-extraction.ts",
+    "smoke:education": "npx tsx scripts/smoke-education-sources.ts",
+    "smoke:chronicle": "npx tsx scripts/smoke-chronicle.ts",
     "analyze:locations": "npx tsx scripts/analyze-location-normalization.ts",
     "analyze:metro-footprint": "npx tsx scripts/metro-location-footprint.ts",
     "verify:a16z": "npx tsx scripts/verify-seed-sources-job-count.ts --only cn-a16z-portfolio --timeout-ms 180000 --concurrency 1",
-    "mygreenhouse:handles": "npx tsx scripts/extract-mygreenhouse-greenhouse-handles.ts"
+    "mygreenhouse:handles": "npx tsx scripts/extract-mygreenhouse-greenhouse-handles.ts",
+    "backfill:wikidata-edu": "npx tsx scripts/backfill-wikidata-education-websites.ts",
+    "diag:edu-map": "npx tsx scripts/diag-edu-map-eligibility.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260403.1",

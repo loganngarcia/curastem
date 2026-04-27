@@ -52,6 +52,16 @@ npm run db:migrate
 GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
+### Firebase (auth relay `/auth/popup`)
+
+`src/app/auth/popup.ts` embeds a `FIREBASE_CONFIG` JSON string for the hosted sign-in relay. It must match the same Firebase Web app as your Framer client (`app/web.tsx`).
+
+The repo defaults to the production Curastem Firebase project. **Contributors running their own stack** should replace that config with their Web app values from the Firebase console, or generate the relay HTML at build time from environment variables so it never points at production by accident.
+
+Firebase is Auth-only here. The deployable Firebase config lives in `firebase/` within this package, and both Firestore and Storage rules are deny-all guardrails because app data lives in Cloudflare D1 and R2.
+
+See the root [CONTRIBUTING.md](../CONTRIBUTING.md) section "Firebase (own project vs production)" for the full picture.
+
 ### Create a local test API key
 
 ```bash
@@ -86,17 +96,17 @@ curl http://localhost:8787/jobs \
 
 See [ARCHITECTURE.md — Source registry pattern](./ARCHITECTURE.md#source-registry-pattern).
 
-1. Add the new `SourceType` to `src/types.ts`.
-2. Create `src/ingestion/sources/yourSource.ts` implementing the `JobSource` interface.
-3. Register it in `src/ingestion/registry.ts`.
-4. Add seed rows in `src/db/migrate.ts` and/or insert directly into the DB.
+1. Add the new `SourceType` to `src/shared/types.ts`.
+2. Create `src/shared/ingestion/sources/yourSource.ts` implementing the `JobSource` interface.
+3. Register it in `src/shared/ingestion/registry.ts`.
+4. Add seed rows in `src/shared/db/migrate.ts` and/or insert directly into the DB.
 5. Test locally by triggering the cron: `curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"`
 
 ### Adding a new API endpoint
 
-1. Create `src/routes/yourEndpoint.ts` with a handler function.
-2. Add any new queries to `src/db/queries.ts`.
-3. Register the route in `src/index.ts`.
+1. Create public Jobs API handlers under `src/public/routes/`, or private app handlers under `src/app/`.
+2. Add any new shared queries to `src/shared/db/queries.ts`.
+3. Register public routes in `src/public/router.ts` or private app routes in `src/app/router.ts`.
 4. Document it in `README.md`.
 
 ### Modifying the database schema
@@ -133,7 +143,7 @@ Do not leave `TODO` comments in merged code unless they are tracked issues.
 
 ### SQL
 
-All SQL belongs in `src/db/queries.ts`. No raw SQL in route handlers, ingestion, or enrichment code.
+All shared Jobs API SQL belongs in `src/shared/db/queries.ts`. No raw SQL in route handlers, ingestion, or enrichment code.
 
 ### Error handling in ingestion
 
@@ -152,7 +162,7 @@ for (const item of items) {
 
 ### Logging
 
-Use the structured logger in `src/utils/logger.ts`. Do not use `console.log` directly. Log entries are JSON objects that can be filtered and aggregated in Cloudflare Workers Logs.
+Use the structured logger in `src/shared/utils/logger.ts`. Do not use `console.log` directly. Log entries are JSON objects that can be filtered and aggregated in Cloudflare Workers Logs.
 
 ---
 
@@ -172,7 +182,7 @@ Before submitting:
 
 - [ ] `npx tsc --noEmit` passes with no errors
 - [ ] `npx wrangler deploy --dry-run` succeeds
-- [ ] No SQL outside `src/db/queries.ts`
+- [ ] No shared Jobs API SQL outside `src/shared/db/queries.ts`
 - [ ] No hardcoded company names in source files (they belong in DB rows or `migrate.ts`)
 - [ ] New fields in the public API response are documented in `README.md`
 - [ ] Schema changes are in `schema.sql` with a descriptive comment
