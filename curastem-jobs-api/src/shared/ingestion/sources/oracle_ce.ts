@@ -172,7 +172,8 @@ export const oracleCeFetcher: JobSource = {
       source.company_handle === "marriott" ||
       source.id === "ce-marriott" ||
       source.company_handle === "honeywell" ||
-      source.id === "oc-honeywell";
+      source.id === "oc-honeywell" ||
+      source.id === "oc-pizzahut";
 
     const jobs: NormalizedJob[] = [];
     let offset = 0;

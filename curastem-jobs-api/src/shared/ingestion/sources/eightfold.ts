@@ -19,6 +19,8 @@
  *   https://apply.careers.microsoft.com/careers?domain=microsoft.com
  * Kering hosts PCS on a custom origin:
  *   https://careers.kering.com/careers?domain=kering.com
+ * Estée Lauder Companies:
+ *   https://careers.elcompanies.com/careers?domain=elcompanies.com
  *
  * Some vanity hosts (e.g. join.sephora.com) disable unauthenticated `/api/pcsx/search`
  * ("PCSX is not enabled for this user"), sometimes as HTTP 403 with the same JSON body.
@@ -102,10 +104,11 @@ function parseEightfoldCareersUrl(baseUrl: string): { origin: string; groupDomai
     u.hostname === "eightfold.ai" ||
     u.hostname === "apply.careers.microsoft.com" ||
     u.hostname === "join.sephora.com" ||
-    u.hostname === "careers.kering.com";
+    u.hostname === "careers.kering.com" ||
+    u.hostname === "careers.elcompanies.com";
   if (!hostOk) {
     throw new Error(
-      `eightfold: expected *.eightfold.ai, apply.careers.microsoft.com, join.sephora.com, or careers.kering.com, got ${u.hostname}`
+      `eightfold: unsupported PCS host ${u.hostname} (allowlist: *.eightfold.ai, apply.careers.microsoft.com, join.sephora.com, careers.kering.com, careers.elcompanies.com)`
     );
   }
   return { origin: u.origin, groupDomain };

@@ -74,7 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_companies_slug ON companies (slug);
 CREATE TABLE IF NOT EXISTS sources (
   id              TEXT PRIMARY KEY,   -- UUID v4
   name            TEXT NOT NULL,      -- human-readable, e.g. "Stripe (Greenhouse)"
-  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "edjoin" | "schoolspring" | "k12jobspot" | "higheredjobs" | "chronicle_jobs" | "brassring" | "gusto_recruiting" | "icims_portal" | "lvmh" | "uber" | "shopify" | "hca" | "aramark" | "meta" | "successfactors_rmk" | "symphony_mcloud" | "adp_cx" | "adp_wfn_recruitment" | "activate_careers" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "jazzhr" | "workday" | "smartrecruiters" | "consider" | "getro" | "jobright" | "rss" | ...
+  source_type     TEXT NOT NULL,      -- "greenhouse" | "lever" | "jibe" | "edjoin" | "schoolspring" | "k12jobspot" | "higheredjobs" | "chronicle_jobs" | "brassring" | "gusto_recruiting" | "icims_portal" | "lvmh" | "uber" | "shopify" | "hca" | "aramark" | "meta" | "successfactors_rmk" | "symphony_mcloud" | "adp_cx" | "adp_wfn_recruitment" | "activate_careers" | "taleo" | "oracle_ce" | "brillio" | "globallogic" | "phenom" | "paradox" | "jobvite" | "jazzhr" | "workday" | "smartrecruiters" | "consider" | "getro" | "jobright" | "gem" | "rss" | ...
   company_handle  TEXT NOT NULL,      -- ATS-specific company slug / board name
   base_url        TEXT NOT NULL,      -- canonical API or job-board URL for this source
   enabled         INTEGER NOT NULL DEFAULT 1,    -- 0 = disabled, skip in cron

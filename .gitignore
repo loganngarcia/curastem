@@ -36,6 +36,9 @@ build/
 .cache/
 .wrangler/
 
+# Ad-hoc debug / scrape dumps (not source)
+.tmp_*
+
 # Firebase local/cache/log artifacts. Keep firebase.json and deny-all rules tracked.
 .firebase/
 firebase-debug.log

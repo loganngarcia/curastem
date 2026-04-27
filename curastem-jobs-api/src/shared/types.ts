@@ -471,6 +471,11 @@ export type SourceType =
    */
   | "framer"
   /**
+   * Gem career boards (`jobs.gem.com/{vanityPath}`). Public GraphQL at `/api/public/graphql`.
+   * See gem.ts.
+   */
+  | "gem"
+  /**
    * EasyApply tenant boards (HTML index + schema.org JobPosting JSON-LD per role).
    * `base_url` is the tenant root, e.g. `https://{company}.easyapply.co/`. See easyapply.ts.
    */
@@ -508,6 +513,32 @@ export type SourceType =
    * `base_url` is the listing root (page 1), e.g. `https://careers.amctheatres.com/` (see paradox.ts).
    */
   | "paradox"
+  /**
+   * Paycor career boards (`/career/CareerHome.action` + `JobIntroduction.action`) with HTML listings.
+   * `base_url` should be the public career home page (customer-facing domain) or
+   * `https://recruitingbypaycor.com/career/...` URLs that expose `JobIntroduction.action` detail pages.
+   */
+  | "paycor"
+  /**
+   * Paycom Online ATS (`paycomonline.net/v4/ats/web.php/portal/{guid}/career-page`).
+   * Shell HTML embeds `sessionJWT`; listing `POST .../api/ats/job-posting-previews/search`;
+   * detail `GET .../api/ats/job-postings/{jobId}`. See paycom.ts.
+   */
+  | "paycom"
+  /**
+   * AppOne (myStaffingPro) career portals (`Search.aspx` + ASP.NET postbacks, HTML listings,
+   * per-job `MainInfoReq.asp` pages. Listings often require hidden form payloads and `__EVENTTARGET`
+   * pagination.
+   */
+  | "appone"
+  /**
+   * TalentReef ATS with Elasticsearch search endpoint (`/apply/proxy-es/.../posting/_search`),
+   * usually paired with `clientId` filters and optional `apply/v1/clients/...` detail lookups.
+   * `base_url` should be the public portal and may include optional query parameters
+   * `talentreef_client_ids`, `talentreef_elastic_index`, `talentreef_page_size`,
+   * and `talentreef_apply_url_base`.
+   */
+  | "talentreef"
   /**
    * Jobvite career sites (`jobs.jobvite.com/{slug}/jobs`).
    * Listing: static HTML `<tr>` rows — title + location per job, no pagination.
@@ -569,6 +600,12 @@ export type SourceType =
    */
   | "activate_careers"
   /**
+   * Oracle Taleo InFlight (NLX) — `POST {origin}/careersection/rest/jobboard/searchjobs` (requires
+   * `tz` header on many tenants). `base_url` is the public search shell; add `portals=id1,id2` or
+   * `portal=id` (InFlight portal ids). See taleo.ts.
+   */
+  | "taleo"
+  /**
    * Avature career sites — public `SearchJobs/feed/` RSS (`<item>` title/link/pubDate).
    * `base_url` is the feed URL; locale-prefixed hosts are OK (see avature.ts).
    */
@@ -595,6 +632,11 @@ export type SourceType =
    * `base_url` must be a `careers.google.com/jobs/results/` search URL.
    */
   | "google"
+  /**
+   * Tesla Careers — `www.tesla.com/careers/search` HTML link discovery + `GET /cua-api/careers/job/{id}`.
+   * `base_url` is the filtered search URL (same query string as in the browser).
+   */
+  | "tesla"
   /**
    * Netflix Careers — Eightfold custom deployment at explore.jobs.netflix.net.
    * Fetches sitemap from apply.netflixhouse.com then uses position_details API.

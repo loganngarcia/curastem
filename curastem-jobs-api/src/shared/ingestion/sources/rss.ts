@@ -8,7 +8,8 @@
 import type { JobSource, NormalizedJob, SourceRow } from "../../types.ts";
 import { parseRssXmlToJobs } from "./rssParse.ts";
 
-const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
+/** Some employers (e.g. American Airlines Google Jobs RSS) return 403 for bot-like desktop UAs; okhttp is widely allowlisted. */
+const USER_AGENT = "okhttp/4.12.0";
 
 export const rssFetcher: JobSource = {
   sourceType: "rss",

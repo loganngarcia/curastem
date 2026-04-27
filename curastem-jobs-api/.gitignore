@@ -3,3 +3,9 @@ node_modules/
 .env
 dist/
 *.log
+
+# Playwright/Chromium browser downloads (~hundreds of MB). Never commit.
+# If HOME was accidentally a URL, caches can land in a literal `https:` directory here.
+https:/
+**/ms-playwright/
+**/chromium_headless_shell-*/

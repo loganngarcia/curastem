@@ -113,8 +113,12 @@ const HCA_CAREERS_FETCH_TIMEOUT_MS = 300_000;
 const ORACLE_CE_FETCH_TIMEOUT_MS = 300_000;
 /** Aramark: JSON list + ~5k parallel job-page GETs for JSON-LD descriptions. */
 const ARAMARK_CAREERS_FETCH_TIMEOUT_MS = 300_000;
-/** BrassRing: GET home + paginated PowerSearchJobs POSTs (~50 rows per page). */
-const BRASSRING_FETCH_TIMEOUT_MS = 180_000;
+/** BrassRing: GET home + paginated PowerSearchJobs POSTs (~50 rows per page); large tenants (e.g. Walgreens ~500) need headroom. */
+const BRASSRING_FETCH_TIMEOUT_MS = 300_000;
+/** Jobsyn: paginated listing + optional per-job detail fetches; needs headroom for large tenant crawls. */
+const JOBSYN_FETCH_TIMEOUT_MS = 180_000;
+/** Taleo InFlight: multiple portals × paginated POST searchjobs (list-only, no per-job HTML). */
+const TALEO_FETCH_TIMEOUT_MS = 120_000;
 
 /**
  * Process a single ingestion source.
@@ -188,6 +192,8 @@ async function processSource(
       source.source_type === "oracle_ce" ? ORACLE_CE_FETCH_TIMEOUT_MS :
       source.source_type === "aramark" ? ARAMARK_CAREERS_FETCH_TIMEOUT_MS :
       source.source_type === "brassring" ? BRASSRING_FETCH_TIMEOUT_MS :
+      source.source_type === "jobsyn" ? JOBSYN_FETCH_TIMEOUT_MS :
+      source.source_type === "taleo" ? TALEO_FETCH_TIMEOUT_MS :
       // WFN: list pages + one detail GET per job (parallel batches)
       source.source_type === "adp_wfn_recruitment" ? 150_000 :
       // Avature: RSS + one JobDetail HTML fetch per item (parallel)

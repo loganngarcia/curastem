@@ -23,8 +23,8 @@ import {
 
 const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 
-// Job detail pages only (not /careers index or /careers-kz/...).
-const CAREER_JOB_PATH = /^\/careers\/[^/]+$/;
+// Job detail pages only (not /careers index, thank-you, or /careers-kz/...).
+const CAREER_JOB_PATH = /^\/careers\/(?!thank-you$)[^/]+$/;
 
 interface FramerSearchEntry {
   title?: string;

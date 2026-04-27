@@ -1,15 +1,19 @@
 /**
- * Symphony Talent (Radancy) — WordPress "CWS" job search widget backed by SmartPost.
+ * Symphony Talent (Radancy) — WordPress "CWS" job search widget backed by SmartPost (m-cloud).
  * Public listings use `GET https://jobsapi-internal.m-cloud.io/api/job` with query param
- * `Organization` (numeric org id from `cws_opts.org` in page source). The browser uses JSONP;
- * the same endpoint returns raw JSON without a `callback` param.
+ * `Organization` set to the numeric **SmartPost org** from `cws_opts.smartPost_org` when present,
+ * else `cws_opts.org` (some sites use a non-numeric `org` UUID but keep `smartPost_org` numeric).
+ * The browser often loads JSONP; the same path returns raw JSON without a `callback` param.
  *
- * Apply/detail URLs on the marketing site follow `CWS.seo_url` in `cws.js`:
+ * **Apply ATS** (Taleo, SuccessFactors, etc.) is separate — job pages link out for application;
+ * this fetcher only ingests the SmartPost listing API (`ats_portalid` on rows is informational).
+ *
+ * SEO job URLs on the marketing site follow `CWS.seo_url` in `cws.js`:
  *   `{origin}{job_detail_path}/{id}/{slug}/`
- * e.g. Bath & Body Works: `/en/job/22823497/retail-supervisor-aventura-mall-aventura-fl/`
+ * e.g. Bath & Body Works: `/en/job/23314152/retail-sales-associate-bbw-broadcasting-square/`
  *
  * `base_url` must be any URL on the careers host, with required query param:
- *   `mcloud_org` — Organization id (e.g. `1107` for Bath & Body Works).
+ *   `mcloud_org` — SmartPost organization id (e.g. `1107` Bath & Body Works, `2391` Victoria's Secret).
  * Optional:
  *   `job_path` — job detail path prefix (default `/en/job`).
  *   `mcloud_company_name` — override `company_name` on normalized jobs (API often returns a parent legal name like "L Brands").

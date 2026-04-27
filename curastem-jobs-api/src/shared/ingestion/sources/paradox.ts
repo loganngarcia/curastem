@@ -1,7 +1,8 @@
 /**
  * Paradox AI career sites (SSR job lists + per-job pages with schema.org JobPosting).
  *
- * Listing pages expose `href="/…/job/P{n}-{n}-{n}"` links; pagination is `/page/{n}{search}`.
+ * Listing pages expose job links as `href="/…/job/…"` (e.g. `/bartender/job/P1-…` or Appcast
+ * permalinks `/job/{slug}/{market}/{id}/`); pagination is `/page/{n}{search}`.
  * Job detail HTML embeds `application/ld+json` `@type: JobPosting` (description, dates, location).
  * Some newer Paradox boards expose data only through `window.__PRELOAD_STATE__` and still expose
  * detail pages with schema.org JobPosting JSON-LD.
@@ -23,8 +24,14 @@ const DETAIL_CONCURRENCY = 8;
 const MAX_LISTING_PAGES = 200;
 const MAX_SITEMAP_DISCOVERY_ROUNDS = 2;
 
-/** `href="/bartender/job/P1-2025630-6"` → path + id */
-const JOB_HREF_RE = /href="(\/[^"]*\/job\/(P\d+-\d+-\d+))"/gi;
+/**
+ * Appcast-style boards use pretty permalinks `/job/{title-slug}/{city-st}/{id}/`;
+ * classic Paradox boards use `/bartender/job/P1-2025630-6`.
+ */
+const JOB_HREF_RE = /href="(\/(?:[^"]*\/)?job\/[^"]+)"/gi;
+
+/** Cap sitemap-driven discovery for very large Appcast+Paradox hybrids (detail fetch cost). */
+const PIZZA_HUT_SITEMAP_JOB_CAP = 2500;
 const PRELOAD_STATE_MARKER = "window.__PRELOAD_STATE__ = ";
 
 const SCHEMA_EMPLOYMENT: Record<string, EmploymentType> = {
@@ -96,9 +103,12 @@ function normalizeJobPath(path: string): string | null {
 }
 
 function extractExternalId(path: string): string | null {
-  const match = normalizeJobPath(path)?.match(/\/job\/([^/]+)/);
-  if (!match || !match[1]) return null;
-  return decodeURIComponent(match[1]);
+  const normalized = normalizeJobPath(path);
+  if (!normalized || !normalized.includes("/job/")) return null;
+  const parts = normalized.split("/").filter(Boolean);
+  const last = parts[parts.length - 1];
+  if (!last) return null;
+  return decodeURIComponent(last);
 }
 
 function extractSitemapLocs(xml: string): string[] {
@@ -220,6 +230,9 @@ async function discoverJobPathsFromSitemap(baseOrigin: string, targetCountHint: 
       if (!xml) continue;
 
       for (const loc of extractSitemapLocs(xml)) {
+        if (targetCountHint != null && paths.size >= targetCountHint) {
+          return [...paths];
+        }
         if (/\.xml$/i.test(loc)) {
           if (!visited.has(loc)) {
             visited.add(loc);
@@ -355,6 +368,13 @@ export const paradoxFetcher: JobSource = {
     if (preloadState?.totalJobs != null && preloadState.totalJobs > seenPaths.size) {
       for (const p of await discoverJobPathsFromSitemap(boardOrigin, preloadState.totalJobs)) {
         seenPaths.add(p);
+      }
+    }
+
+    if (source.id === "px-pizzahut") {
+      for (const p of await discoverJobPathsFromSitemap(boardOrigin, PIZZA_HUT_SITEMAP_JOB_CAP)) {
+        seenPaths.add(p);
+        if (seenPaths.size >= PIZZA_HUT_SITEMAP_JOB_CAP) break;
       }
     }
 

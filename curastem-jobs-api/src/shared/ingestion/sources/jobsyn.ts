@@ -6,6 +6,12 @@
  * - list API: `GET /api/v1/solr/search?source={source}&num_items=...&sort=relevance&page=...&q=`
  * - detail API: `GET https://microsites.dejobs.org/{job-folder}/data/{GUID}.json`
  *
+ * You can customize tenant settings with base_url query params:
+ * - jobsyn_source
+ * - jobsyn_job_folder
+ * - jobsyn_apply_origin
+ * - jobsyn_page_size
+ *
  * `base_url` is any concrete job URL from the board, used only as a template for
  * apply URL slug segments.
  */
@@ -24,10 +30,10 @@ const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 
 const LIST_API = "https://prod-search-api.jobsyn.org/api/v1/solr/search";
 const DETAIL_API = "https://microsites.dejobs.org";
-const APPLY_ORIGIN = "https://pearson.jobs";
-const JOBSYN_SOURCE = "pearson-jobs";
-const JOB_FOLDER = "pearson-jobs";
-const LIST_PAGE_SIZE = 15; // API returns 15 even with larger num_items in observed responses.
+const DEFAULT_APPLY_ORIGIN = "https://pearson.jobs";
+const DEFAULT_JOBSYN_SOURCE = "pearson-jobs";
+const DEFAULT_JOB_FOLDER = "pearson-jobs";
+const DEFAULT_LIST_PAGE_SIZE = 15; // API often returns 15 even with larger requested page sizes.
 
 const MAX_JOBS_PER_RUN = 800;
 const DETAIL_FETCH_CONCURRENCY = 8;
@@ -85,6 +91,11 @@ interface JobsynDetail {
 }
 
 interface ParsedBase {
+  maxJobs: number;
+  applyOrigin: string;
+  source: string;
+  jobFolder: string;
+  pageSize: number;
   templateCitySlug: string;
   templateTitleSlug: string;
 }
@@ -113,10 +124,6 @@ function toSlug(input: string): string {
 function parseBaseUrl(baseUrl: string): ParsedBase {
   const u = new URL(baseUrl);
   const parts = u.pathname.split("/").filter(Boolean);
-  if (parts.length === 0) {
-    return { templateCitySlug: DEFAULT_CITY_SLUG, templateTitleSlug: DEFAULT_TITLE_SLUG };
-  }
-
   let citySegment: string | undefined;
   let titleSegment: string | undefined;
 
@@ -135,13 +142,55 @@ function parseBaseUrl(baseUrl: string): ParsedBase {
 
   const templateCitySlug = citySegment ? toSlug(citySegment) : DEFAULT_CITY_SLUG;
   const templateTitleSlug = titleSegment ? toSlug(titleSegment) : DEFAULT_TITLE_SLUG;
-  return { templateCitySlug, templateTitleSlug };
+  const source =
+    u.searchParams.get("jobsyn_source")?.trim()
+    || u.searchParams.get("source")?.trim()
+    || DEFAULT_JOBSYN_SOURCE;
+  const jobFolder =
+    u.searchParams.get("jobsyn_job_folder")?.trim()
+    || u.searchParams.get("job_folder")?.trim()
+    || DEFAULT_JOB_FOLDER;
+  const applyOrigin = normalizeApplyOrigin(
+    u.searchParams.get("jobsyn_apply_origin")?.trim()
+    || u.searchParams.get("apply_origin")?.trim()
+    || DEFAULT_APPLY_ORIGIN,
+  );
+  const rawPageSize =
+    u.searchParams.get("jobsyn_page_size")?.trim()
+    || u.searchParams.get("page_size")?.trim();
+  const parsedPageSize = rawPageSize ? Number(rawPageSize) : DEFAULT_LIST_PAGE_SIZE;
+  const pageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0 && parsedPageSize <= 100
+    ? Math.trunc(parsedPageSize)
+    : DEFAULT_LIST_PAGE_SIZE;
+  const rawMaxJobs = u.searchParams.get("jobsyn_max_jobs")?.trim() || u.searchParams.get("max_jobs")?.trim();
+  const parsedMaxJobs = rawMaxJobs ? Number(rawMaxJobs) : MAX_JOBS_PER_RUN;
+  const maxJobs = Number.isFinite(parsedMaxJobs) && parsedMaxJobs > 0
+    ? Math.min(Math.trunc(parsedMaxJobs), 50000)
+    : MAX_JOBS_PER_RUN;
+
+  return {
+    maxJobs,
+    applyOrigin,
+    source,
+    jobFolder,
+    pageSize,
+    templateCitySlug,
+    templateTitleSlug,
+  };
 }
 
-function buildListUrl(page: number): string {
+function normalizeApplyOrigin(raw: string): string {
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return DEFAULT_APPLY_ORIGIN;
+  }
+}
+
+function buildListUrl(page: number, cfg: ParsedBase): string {
   const params = new URLSearchParams({
-    source: JOBSYN_SOURCE,
-    num_items: String(LIST_PAGE_SIZE),
+    source: cfg.source,
+    num_items: String(cfg.pageSize),
     sort: "relevance",
     q: "",
     page: String(page),
@@ -149,12 +198,12 @@ function buildListUrl(page: number): string {
   return `${LIST_API}?${params.toString()}`;
 }
 
-async function fetchPage(page: number): Promise<JobsynListResponse> {
-  const res = await fetch(buildListUrl(page), {
+async function fetchPage(page: number, cfg: ParsedBase): Promise<JobsynListResponse> {
+  const res = await fetch(buildListUrl(page, cfg), {
     headers: {
       "User-Agent": USER_AGENT,
       Accept: "application/json",
-      "x-origin": APPLY_ORIGIN.replace(/^https?:\/\//, ""),
+      "x-origin": new URL(cfg.applyOrigin).hostname,
     },
   });
   if (!res.ok) {
@@ -163,9 +212,9 @@ async function fetchPage(page: number): Promise<JobsynListResponse> {
   return (await res.json()) as JobsynListResponse;
 }
 
-async function fetchDetail(guid: string): Promise<JobsynDetail | null> {
+async function fetchDetail(guid: string, cfg: ParsedBase): Promise<JobsynDetail | null> {
   try {
-    const res = await fetch(`${DETAIL_API}/${JOB_FOLDER}/data/${guid.toUpperCase()}.json`, {
+    const res = await fetch(`${DETAIL_API}/${cfg.jobFolder}/data/${guid.toUpperCase()}.json`, {
       headers: {
         "User-Agent": USER_AGENT,
         Accept: "application/json",
@@ -228,7 +277,7 @@ function citySlugFromLocation(location: string | null | undefined): string | nul
 function buildApplyUrl(guid: string, citySlug: string | null, titleSlug: string | null, template: ParsedBase): string {
   const city = citySlug || template.templateCitySlug || DEFAULT_CITY_SLUG;
   const title = titleSlug || template.templateTitleSlug || DEFAULT_TITLE_SLUG;
-  return `${APPLY_ORIGIN}/${city}/${title}/${guid}/job/`;
+  return `${template.applyOrigin}/${city}/${title}/${guid}/job/`;
 }
 
 function pickDetailCitySlug(detail: JobsynDetail | null): string | null {
@@ -265,17 +314,17 @@ export const jobsynFetcher: JobSource = {
     const seen = new Set<string>();
     let totalPages = 1;
 
-    for (let page = 1; page <= totalPages && stubs.length < MAX_JOBS_PER_RUN; page++) {
-      const payload = await fetchPage(page);
+    for (let page = 1; page <= totalPages && stubs.length < template.maxJobs; page++) {
+      const payload = await fetchPage(page, template);
       const jobs = payload.jobs ?? [];
       if (jobs.length === 0) break;
 
-      if (Number.isFinite(payload.pagination?.total_pages as number) && payload.pagination?.total_pages) {
+    if (Number.isFinite(payload.pagination?.total_pages as number) && payload.pagination?.total_pages) {
         totalPages = payload.pagination.total_pages;
       }
 
       for (const row of jobs) {
-        if (stubs.length >= MAX_JOBS_PER_RUN) break;
+      if (stubs.length >= template.maxJobs) break;
         const guid = typeof row.guid === "string" ? row.guid.trim() : typeof row.guid === "number" ? String(row.guid) : "";
         if (!guid || !GUID_RE.test(guid) || seen.has(guid)) continue;
 
@@ -322,7 +371,7 @@ export const jobsynFetcher: JobSource = {
 
     const detailResults = await mapWithConcurrency(toEnrich, DETAIL_FETCH_CONCURRENCY, async (idx) => {
       const guid = stubs[idx]!.guid;
-      return { idx, detail: await fetchDetail(guid) };
+      return { idx, detail: await fetchDetail(guid, template) };
     });
 
     const detailsByIdx = new Map<number, JobsynDetail>();

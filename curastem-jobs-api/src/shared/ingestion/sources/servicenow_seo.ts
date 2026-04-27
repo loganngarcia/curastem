@@ -2,10 +2,10 @@
  * ServiceNow Employee / Recruiting portals that publish an SEO sitemap (often linked from
  * `robots.txt`) listing individual job URLs as query-param routes.
  *
- * Best Buy: `robots.txt` → `https://bestbuy.service-now.com/api/93622/seo/sitemap`
- * Job URLs look like `https://jobs.bestbuy.com/bby?id=job_details&req_id=1021539BR`.
- * Each job page is server-rendered with `<title>` and `og:description` (summary text)
- * even though listing is client-driven.
+ * Best Buy lists jobs on `jobs.bestbuy.com` (ServiceNow-backed SEO routes like
+ * `?id=job_details&req_id=…`) while apply flows often land on IBM BrassRing TG
+ * (`sjobs.brassring.com`, `partnerid=25632` / `siteid=5649`). Prefer `brassring.ts`
+ * (`brg-bestbuy`) for full ingest; this fetcher remains for other ServiceNow sitemap tenants.
  *
  * `base_url` must be the full sitemap XML URL (same URL as the `Sitemap:` line in robots.txt).
  */

@@ -5,8 +5,9 @@
  * (description, title, `hiringOrganization`, `jobLocation`, `datePosted`).
  *
  * **List:** RSS (`categoryFeed.cfm` / `rss.cfm`) or **search** (`search.cfm` + `StartRow`) with
- * browser-like HTTP headers. Incapsula may block some IPs; **no Browser Rendering** in this
- * fetcher.
+ * browser-like HTTP headers. When Incapsula blocks direct `fetch` (typical from datacenters), we
+ * fall back to **Jina Reader** (`r.jina.ai`) for the feed and job detail pages — same pattern as
+ * `chronicle_jobs`.
  *
  * `base_url` options:
  * - RSS: `https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=101` (Chemistry, etc.)
@@ -28,8 +29,22 @@ const USER_AGENT = "Curastem-Jobs-Ingestion/1.0 (developers@curastem.org)";
 
 const ORIGIN = "https://www.higheredjobs.com";
 
+/** Jina Reader bypasses Incapsula for RSS and HTML when plain `fetch` gets an interstitial. */
+const JINA_READER_PREFIX = "https://r.jina.ai/";
+
+/**
+ * Jina often returns **403** when `User-Agent` looks like a desktop browser; use a simple bot string
+ * for `r.jina.ai` only.
+ */
+const JINA_FETCH_HEADERS: Record<string, string> = {
+  "User-Agent": "CurastemJobsBot/1.0 (+https://curastem.org)",
+  Accept: "text/plain, text/markdown, */*",
+};
+
 const MAX_JOBS_PER_RUN = 2000;
 const MAX_DETAIL_CONCURRENCY = 12;
+/** Lower concurrency when detail fetches go through Jina (rate limits). */
+const JINA_DETAIL_CONCURRENCY = 4;
 const LIST_PAGE_SIZE = 25;
 
 const HEJ_FOOTER = "Listing source: HigherEdJobs (higher education job board).";
@@ -65,6 +80,117 @@ function isBlockedInterstitial(html: string): boolean {
     (html.includes("Incapsula") && !html.includes("JobPosting")) ||
     (html.length < 1200 && !html.includes("<item") && !html.includes("JobCode="))
   );
+}
+
+function jinaReaderUrlFor(targetUrl: string): string {
+  return `${JINA_READER_PREFIX}${targetUrl}`;
+}
+
+function isUnusableJinaResponse(t: string): boolean {
+  if (!t || t.length < 120) return true;
+  if (/failed to (fetch|load|retrieve)/i.test(t) && t.length < 2_000) return true;
+  if (t.includes("Pardon Our Interruption")) return true;
+  return false;
+}
+
+async function fetchJinaMarkdown(targetUrl: string, attempt = 0): Promise<string | null> {
+  const u = jinaReaderUrlFor(targetUrl);
+  const res = await fetch(u, { headers: JINA_FETCH_HEADERS });
+  if (!res.ok) {
+    if (res.status === 429 && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 1_500 * (attempt + 1)));
+      return fetchJinaMarkdown(targetUrl, attempt + 1);
+    }
+    return null;
+  }
+  const t = await res.text();
+  if (isUnusableJinaResponse(t)) return null;
+  return t;
+}
+
+function jinaTextAfterMarkdownContent(md: string): string {
+  const m = md.match(/Markdown Content:\s*([\s\S]+)/i);
+  if (m) return m[1]!.trim();
+  return md
+    .replace(/^(?:Title|URL Source|Published Time):\s*[^\n]*\n+/gim, "")
+    .trim();
+}
+
+/** Jina’s RSS mirror uses ### headings with `details.cfm?JobCode=` links (same shape as Chronicle). */
+function parseHejJinaFeedMarkdown(md: string): Map<string, { title: string; orgLine: string | null }> {
+  const byCode = new Map<string, { title: string; orgLine: string | null }>();
+  const body = jinaTextAfterMarkdownContent(md);
+  const re =
+    /^###\s+\[([^\]]*)\]\((https:\/\/www\.higheredjobs\.com\/details\.cfm\?JobCode=\d+[^)]*)\)\s*$/gim;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const title = m[1]!.trim() || "Position";
+    const link = m[2]!.trim();
+    const idMatch = link.match(/JobCode=(\d+)/i);
+    if (!idMatch) continue;
+    const code = idMatch[1]!;
+
+    const blockStart = m.index + m[0]!.length;
+    const rest = body.slice(blockStart);
+    const nextH3 = /(^|\n)###\s+\[/m.exec(rest);
+    const block = nextH3 && nextH3.index !== undefined ? rest.slice(0, nextH3.index) : rest;
+
+    let orgLine: string | null = null;
+    for (const line of block.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t) continue;
+      if (t.startsWith("[https://www.higheredjobs.com")) break;
+      orgLine = t;
+      break;
+    }
+    if (!byCode.has(code)) byCode.set(code, { title, orgLine });
+  }
+  return byCode;
+}
+
+function orgAndLocFromFeedLine(orgLine: string | null): { company: string; loc: string } {
+  if (!orgLine || !orgLine.trim() || orgLine.length > 240) {
+    return { company: "College or university", loc: "United States" };
+  }
+  const paren = orgLine.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  if (paren) {
+    return { company: paren[1]!.trim(), loc: paren[2]!.trim() };
+  }
+  return { company: orgLine.trim(), loc: "United States" };
+}
+
+function detailFromHejJinaMarkdown(md: string, feedOrgLine: string | null): {
+  title: string;
+  company: string;
+  loc: string;
+  body: string | null;
+  posted: number | null;
+  remote: boolean;
+} | null {
+  if (isUnusableJinaResponse(md)) return null;
+  const titleLine = md.match(/^Title:\s*(.+)$/m)?.[1]?.trim() ?? "";
+  const timeLine = md.match(/^Published Time:\s*(.+)$/m)?.[1]?.trim() ?? "";
+  let body = jinaTextAfterMarkdownContent(md);
+  body = body.replace(/^!\[[^\]]*]\([^)]+\)\s*/m, "").trim();
+  if (!body || body.length < 40) return null;
+
+  let title = titleLine || "Position";
+  const { company: feedCo, loc: feedLoc } = orgAndLocFromFeedLine(feedOrgLine);
+  let company = feedCo;
+  let loc = feedLoc;
+
+  let postedSec: number | null = null;
+  if (timeLine) {
+    const p = Date.parse(timeLine);
+    if (!Number.isNaN(p)) postedSec = Math.floor(p / 1000);
+  }
+
+  const tLower = (title + body).toLowerCase();
+  const remote =
+    /\b(telecommute|fully remote|work from home|remote work|hybrid)\b/.test(tLower) ||
+    /\bTELECOMMUTE\b/.test(title);
+
+  return { title, company, loc, body, posted: postedSec, remote };
 }
 
 function detailPageUrl(jobCode: string): string {
@@ -136,7 +262,11 @@ function textFromJsonLd(
   return { title, body, company, loc, posted, remote };
 }
 
-async function fetchDetailFromPage(jobCode: string): Promise<{
+async function fetchDetailFromPage(
+  jobCode: string,
+  feedFromJina: boolean,
+  hejOrgLine: string | null
+): Promise<{
   title: string;
   company: string;
   loc: string;
@@ -144,22 +274,29 @@ async function fetchDetailFromPage(jobCode: string): Promise<{
   posted: number | null;
   remote: boolean;
 } | null> {
-  const res = await fetch(detailPageUrl(jobCode), { headers: { ...BROWSER_HEADERS, Accept: "text/html" } });
-  if (!res.ok) return null;
-  const html = await res.text();
-  const j = extractJobPostingJson(html);
-  if (!j) return null;
-  const p = textFromJsonLd(j);
-  const postedSec =
-    p.posted && !Number.isNaN(Date.parse(p.posted)) ? Math.floor(Date.parse(p.posted) / 1000) : null;
-  return {
-    title: p.title,
-    company: p.company,
-    loc: p.loc,
-    body: p.body,
-    posted: postedSec,
-    remote: p.remote,
-  };
+  if (!feedFromJina) {
+    const res = await fetch(detailPageUrl(jobCode), { headers: { ...BROWSER_HEADERS, Accept: "text/html" } });
+    if (res.ok) {
+      const html = await res.text();
+      const j = extractJobPostingJson(html);
+      if (j) {
+        const p = textFromJsonLd(j);
+        const postedSec =
+          p.posted && !Number.isNaN(Date.parse(p.posted)) ? Math.floor(Date.parse(p.posted) / 1000) : null;
+        return {
+          title: p.title,
+          company: p.company,
+          loc: p.loc,
+          body: p.body,
+          posted: postedSec,
+          remote: p.remote,
+        };
+      }
+    }
+  }
+  const md = await fetchJinaMarkdown(detailPageUrl(jobCode));
+  if (!md) return null;
+  return detailFromHejJinaMarkdown(md, hejOrgLine);
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -201,9 +338,12 @@ async function fetchRssXmlOnce(url: string): Promise<string | null> {
   return t;
 }
 
-function jobCodesAndRssMap(xml: string): { codes: string[]; byCode: Map<string, { desc: string | null; title: string }> } {
+function jobCodesAndRssMap(xml: string): {
+  codes: string[];
+  byCode: Map<string, { desc: string | null; title: string; hejOrgLine?: string | null }>;
+} {
   const jobs = parseRssXmlToJobs(xml, "HigherEdJobs");
-  const byCode = new Map<string, { desc: string | null; title: string }>();
+  const byCode = new Map<string, { desc: string | null; title: string; hejOrgLine?: string | null }>();
   const codes: string[] = [];
   for (const j of jobs) {
     const c = jobCodeFromUrl(j.apply_url) || (j.source_url ? jobCodeFromUrl(j.source_url) : null);
@@ -241,7 +381,8 @@ export const higheredjobsFetcher: JobSource = {
     const base = source.base_url.trim();
     const nowSec = Math.floor(Date.now() / 1000);
     let jobCodes: string[] = [];
-    let rssByCode = new Map<string, { desc: string | null; title: string }>();
+    let rssByCode = new Map<string, { desc: string | null; title: string; hejOrgLine?: string | null }>();
+    let feedFromJina = false;
 
     if (isRssUrl(base)) {
       const xml = await fetchRssXmlOnce(base);
@@ -249,6 +390,25 @@ export const higheredjobsFetcher: JobSource = {
         const p = jobCodesAndRssMap(xml);
         jobCodes = p.codes;
         rssByCode = p.byCode;
+      } else {
+        const md = await fetchJinaMarkdown(base);
+        if (!md) {
+          throw new Error(
+            "higheredjobs: RSS blocked (Incapsula) and Jina reader failed. Retry later or check the feed URL."
+          );
+        }
+        const jinaMap = parseHejJinaFeedMarkdown(md);
+        if (jinaMap.size === 0) {
+          throw new Error(
+            "higheredjobs: Jina reader returned no job links. Verify the RSS URL in a browser."
+          );
+        }
+        feedFromJina = true;
+        jobCodes = [...jinaMap.keys()];
+        rssByCode = new Map();
+        for (const [c, v] of jinaMap) {
+          rssByCode.set(c, { title: v.title, desc: v.orgLine, hejOrgLine: v.orgLine });
+        }
       }
     } else {
       jobCodes = await collectSearchJobCodesFetch(base);
@@ -267,8 +427,10 @@ export const higheredjobsFetcher: JobSource = {
         ? await batchGetExistingJobs(env.JOBS_DB, source.id, jobCodes)
         : new Map();
 
-    const details = await mapWithConcurrency(jobCodes, MAX_DETAIL_CONCURRENCY, async (code) => {
-      const d = await fetchDetailFromPage(code);
+    const detailLimit = feedFromJina ? JINA_DETAIL_CONCURRENCY : MAX_DETAIL_CONCURRENCY;
+    const details = await mapWithConcurrency(jobCodes, detailLimit, async (code) => {
+      const orgLine = rssByCode.get(code)?.hejOrgLine ?? null;
+      const d = await fetchDetailFromPage(code, feedFromJina, orgLine);
       return { code, d } as const;
     });
 

@@ -31,6 +31,7 @@ import { saashrFetcher } from "./sources/saashr.ts";
 import { considerFetcher } from "./sources/consider.ts";
 import { jobrightFetcher } from "./sources/single-companies/jobright.ts";
 import { framerFetcher } from "./sources/framer.ts";
+import { gemFetcher } from "./sources/gem.ts";
 import { easyapplyFetcher } from "./sources/easyapply.ts";
 import { metaFetcher } from "./sources/single-companies/meta.ts";
 import { ripplingFetcher } from "./sources/rippling.ts";
@@ -40,6 +41,9 @@ import { brillioFetcher } from "./sources/brillio.ts";
 import { globallogicFetcher } from "./sources/globallogic.ts";
 import { phenomFetcher } from "./sources/phenom.ts";
 import { paradoxFetcher } from "./sources/paradox.ts";
+import { paycorFetcher } from "./sources/paycor.ts";
+import { paycomFetcher } from "./sources/paycom.ts";
+import { apponeFetcher } from "./sources/appone.ts";
 import { jobviteFetcher } from "./sources/jobvite.ts";
 import { jazzhrFetcher } from "./sources/jazzhr.ts";
 import { eightfoldFetcher } from "./sources/eightfold.ts";
@@ -55,6 +59,7 @@ import { ibmCareersFetcher } from "./sources/ibm_careers.ts";
 import { recruiterflowFetcher } from "./sources/recruiterflow.ts";
 import { getroFetcher } from "./sources/getro.ts";
 import { googleFetcher } from "./sources/google.ts";
+import { teslaFetcher } from "./sources/tesla.ts";
 import { netflixFetcher } from "./sources/netflix.ts";
 import { tiktokFetcher } from "./sources/tiktok.ts";
 import { hcaFetcher } from "./sources/single-companies/hca.ts";
@@ -73,6 +78,8 @@ import { higheredjobsFetcher } from "./sources/higheredjobs.ts";
 import { chronicleJobsFetcher } from "./sources/chronicle_jobs.ts";
 import { jobsynFetcher } from "./sources/jobsyn.ts";
 import { hirebridgeFetcher } from "./sources/hirebridge.ts";
+import { taleoFetcher } from "./sources/taleo.ts";
+import { talentreefFetcher } from "./sources/talentreef.ts";
 
 const REGISTRY: Record<SourceType, JobSource> = {
   greenhouse: greenhouseFetcher,
@@ -94,6 +101,7 @@ const REGISTRY: Record<SourceType, JobSource> = {
   consider: considerFetcher,
   jobright: jobrightFetcher,
   framer: framerFetcher,
+  gem: gemFetcher,
   easyapply: easyapplyFetcher,
   meta: metaFetcher,
   rippling: ripplingFetcher,
@@ -103,6 +111,10 @@ const REGISTRY: Record<SourceType, JobSource> = {
   globallogic: globallogicFetcher,
   phenom: phenomFetcher,
   paradox: paradoxFetcher,
+  paycor: paycorFetcher,
+  paycom: paycomFetcher,
+  appone: apponeFetcher,
+  talentreef: talentreefFetcher,
   jobvite: jobviteFetcher,
   jazzhr: jazzhrFetcher,
   eightfold: eightfoldFetcher,
@@ -112,12 +124,14 @@ const REGISTRY: Record<SourceType, JobSource> = {
   icims_portal: icimsPortalFetcher,
   shopify: shopifyFetcher,
   activate_careers: activateCareersFetcher,
+  taleo: taleoFetcher,
   avature: avatureFetcher,
   servicenow_seo: servicenowSeoFetcher,
   ibm_careers: ibmCareersFetcher,
   recruiterflow: recruiterflowFetcher,
   getro: getroFetcher,
   google: googleFetcher,
+  tesla: teslaFetcher,
   netflix: netflixFetcher,
   tiktok: tiktokFetcher,
   hca: hcaFetcher,
@@ -188,6 +202,8 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   jobright: 58,
   // Framer search index (static JSON; same content as the live marketing site)
   framer: 84,
+  // Gem hosted boards — public GraphQL (employer-configured listings; full HTML descriptions)
+  gem: 79,
   // EasyApply JSON-LD on static HTML (tenant-hosted apply flows)
   easyapply: 78,
   // Meta official sitemap + JSON-LD (same trust model as EasyApply)
@@ -205,6 +221,14 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   phenom: 77,
   // Paradox SSR — listing pagination + JSON-LD JobPosting (same trust as Phenom)
   paradox: 76,
+  // Paycor static listing + HTML detail pages on career portal (full descriptions, company-owned ATS)
+  paycor: 82,
+  // Paycom Online portal API (JWT from career shell; previews + per-job JSON detail)
+  paycom: 82,
+  // AppOne (myStaffingPro) ASP.NET posting board (listing + detail pages; employer-owned ATS)
+  appone: 82,
+  // TalentReef proxy Elasticsearch API + job posting payload detail (company-owned ATS)
+  talentreef: 82,
   // Jobvite static HTML listing + per-job description (employer's own ATS — high trust)
   jobvite: 100,
   // JazzHR / ApplyToJob — static listing + JSON-LD JobPosting on each posting (employer ATS)
@@ -224,6 +248,8 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   shopify: 82,
   // Oracle Activate + Taleo apply — structured list + HTML detail
   activate_careers: 82,
+  // Taleo InFlight NLX — JSON list only (no descriptions in search API)
+  taleo: 82,
   // Avature RSS — structured feed; detail pages often blocked by WAF for server-side clients
   avature: 76,
   // ServiceNow SEO sitemap + SSR meta on job pages (employer’s own portal)
@@ -233,6 +259,8 @@ export const SOURCE_PRIORITY: Record<SourceType, number> = {
   recruiterflow: 78,
   // Google Careers AF_initDataCallback HTML parse — direct from careers.google.com
   google: 90,
+  // Tesla — official careers search + cua-api JSON (same trust as other employer-direct portals)
+  tesla: 90,
   // Netflix — Eightfold custom deployment; sitemap + position_details API (direct employer source)
   netflix: 90,
   // TikTok — proprietary lifeattiktok.com API; ~3400 global / 1384 US jobs
