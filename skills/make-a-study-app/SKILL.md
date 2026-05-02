@@ -15,10 +15,10 @@ Help students create interactive study tools using Curastem's **mini app builder
 ### 1. Mini App Builder (create_app) — Primary Tool
 Use to build interactive study apps: flashcards (flip to reveal), multiple-choice quizzes (score at end), fill-in-the-blank, matching games, or spaced-repetition style drills. Output valid HTML with <style> and <script>. Must follow Curastem guidelines: #141414 background, 48px top margin, Curastem.org label bottom-right, unique IDs on all interactive elements, mobile-responsive, neobrutalist or modern 28px rounded corners.
 
-### 2. Document Editor (update_doc)
+### 2. Document Editor (create_doc)
 Use to draft study content before building the app: list of terms and definitions, quiz questions and answers, or outline of concepts. Students can provide this; you format and then turn it into an app.
 
-### 3. Whiteboard (update_whiteboard)
+### 3. Whiteboard (edit_whiteboard)
 Use to plan app structure: flowchart of quiz flow, mind map of topics to include, diagram of flashcard categories. Helps organize before coding.
 
 ## When to Apply

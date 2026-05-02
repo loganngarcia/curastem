@@ -12,10 +12,10 @@ Guide students through the college transfer process using Curastem's tools. Cura
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to create transfer checklists: required courses, GPA requirements, application deadlines. Draft personal statements for transfer applications. Build credit articulation tables (which courses transfer where). Format with headings, lists, and links to assist.org or school catalogs.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize transfer pathways: community college → UC/CSU flow, prerequisite chains, timeline from start to transfer. Diagram the process: complete IGETC/GE → apply → accept → enroll. Map out major prerequisites and critical path.
 
 ### 3. Retrieve Resources

@@ -140,13 +140,13 @@ export async function POST(request: NextRequest) {
     let userMessage = `Error: ${errorMessage}`;
     const collectionName = (process.env.FRAMER_BLOG_COLLECTION || "Services").trim();
     
-    if (errorMessage.includes("Gemini") || errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("Imagen") || errorMessage.includes("image")) {
-      if (errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("not configured")) {
-        userMessage = "Gemini API key not configured. Please add GEMINI_API_KEY in settings.";
+    if (errorMessage.includes("Gemini") || errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("GOOGLE_CLOUD_PROJECT") || errorMessage.includes("Imagen") || errorMessage.includes("image")) {
+      if (errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("GOOGLE_CLOUD_PROJECT") || errorMessage.includes("not configured")) {
+        userMessage = "Agent Platform credentials are not configured. Please add GOOGLE_CLOUD_PROJECT and Google Cloud credentials in settings.";
       } else if (errorMessage.includes("No image")) {
         userMessage = "Image generation completed but no image was returned. Please try again.";
       } else {
-        userMessage = `Image generation failed: ${errorMessage}. Please check your Gemini API key and try again.`;
+        userMessage = `Image generation failed: ${errorMessage}. Please check your Agent Platform credentials and try again.`;
       }
     } else if (errorMessage.includes("Collection")) {
       userMessage = `Framer collection "${collectionName}" not found. ${errorMessage}`;

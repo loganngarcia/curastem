@@ -14,8 +14,8 @@ export const searchJobsTool: McpTool = {
   description: [
     "Search Curastem's job listings by keyword, company, location, job type, seniority, or recency.",
     "Use for ANY industry (retail, finance, healthcare, tech, etc.). Search is semantic — users do NOT need exact job-title wording.",
-    "Role / title text goes in query (+ optional keywords). The API matches job TITLE substrings only for that text — it does not mix company names into the same field. Use company when they name an employer (slug). Never concatenate many job titles into one query.",
-    "Do not add seniority_level, stacks, or resume-derived terms unless they asked. Omit seniority_level unless they explicitly name a level (never infer from profile). Expand abbreviations only; umbrella phrases use neutral roles and/or company slugs.",
+    "Role / title text goes in query (+ optional keywords). The API matches job TITLE substrings only for that text — it does not mix company names into the same field. Preserve negative title terms with a leading dash, e.g. 'software engineer, -senior' excludes titles containing senior. Use company when they name an employer (slug). Never concatenate many job titles into one query unless the user supplied comma-separated roles.",
+    "Do not add seniority_level, stacks, or resume-derived terms unless they asked. Omit seniority_level unless they explicitly name a level as an inclusion filter (never infer from profile). Expand abbreviations only; umbrella phrases use neutral roles and/or company slugs.",
     "Umbrella or vague phrases ('big tech', 'FAANG', 'top retailers'): interpret intent, then one search_jobs with comma-separated company slugs and/or a broad role query — prefer one API call over many.",
     "company MUST be employer slug(s): one slug, or comma-separated for multiple employers (OR). Example FAANG-style: meta,google,apple,amazon,netflix,microsoft. Never pass display names as query. If unsure of slug, try lowercase hyphenated brand.",
     "Add skills or stack to query/keywords only when the user mentioned them — not from profile by default.",
@@ -31,7 +31,7 @@ export const searchJobsTool: McpTool = {
       query: {
         type: "string",
         description:
-          "Job title or role phrase (merged with keywords). Sent as API title= — matches job TITLE text only, separate from company. If they want any role / all jobs, omit. Never merge many titles into one string. Expand shorthand (swe, pm, sre) when applicable.",
+          "Job title or role phrase (merged with keywords). Sent as API title= — matches job TITLE text only, separate from company. Preserve negative title terms with a leading dash, e.g. 'product manager, software engineer, -senior'. If they want any role / all jobs, omit. Never merge many titles into one string unless the user supplied comma-separated roles. Expand shorthand (swe, pm, sre) when applicable.",
       },
       keywords: {
         type: "string",
@@ -139,7 +139,7 @@ export const searchJobsTool: McpTool = {
 
 export interface SearchJobsArgs {
   query?: string;
-  /** Extra tokens merged with query into API title= — skills, tools, stacks. */
+  /** Extra tokens merged with query into API title=; query may include `-term` title exclusions. */
   keywords?: string;
   company?: string;
   location?: string;
@@ -214,7 +214,7 @@ function parseExcludeIds(raw: string | undefined): string[] | undefined {
     .filter((s) => s.length >= 4 && s.length <= 64);
 }
 
-/** Merge query + keywords into GET /jobs `title` (job-title substring only). */
+/** Merge query + keywords into GET /jobs `title`; supports `-term` title exclusions. */
 function buildListJobsTitle(args: SearchJobsArgs): string | undefined {
   const a = args.query?.trim() ?? "";
   const b = args.keywords?.trim() ?? "";

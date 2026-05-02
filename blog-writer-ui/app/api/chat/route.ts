@@ -234,15 +234,15 @@ export async function POST(request: NextRequest) {
     console.error("Chat error:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
 
-    if (errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("not configured")) {
+    if (errorMessage.includes("GOOGLE_CLOUD_PROJECT") || errorMessage.includes("GEMINI_API_KEY") || errorMessage.includes("not configured")) {
       return NextResponse.json(
-        { error: "Gemini API key not configured. Please add GEMINI_API_KEY to environment variables." },
+        { error: "Agent Platform credentials are not configured. Please add GOOGLE_CLOUD_PROJECT and Google Cloud credentials to environment variables." },
         { status: 500 }
       );
     }
     if (errorMessage.includes("401") || errorMessage.includes("Unauthorized")) {
       return NextResponse.json(
-        { error: "Invalid Gemini API key. Please check your GEMINI_API_KEY in settings." },
+        { error: "Invalid Google Cloud credentials. Please check the Agent Platform service account or ADC setup." },
         { status: 401 }
       );
     }

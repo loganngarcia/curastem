@@ -12,10 +12,10 @@ Guide students through completing the Free Application for Federal Student Aid (
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to create FAFSA preparation checklists: documents needed (SSN, tax returns, bank statements, etc.), step-by-step instructions, and draft answers for common questions. Write a pre-application checklist they can work through. Format with clear headings and checkable items.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize the FAFSA timeline: when to start, deadline dates, verification steps, award notification. Create a flowchart of the process: gather docs → create FSA ID → complete form → submit → verification (if selected) → receive SAR. Helps students see the full picture.
 
 ### 3. Retrieve Resources

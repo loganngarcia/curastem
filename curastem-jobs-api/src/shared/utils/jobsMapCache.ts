@@ -7,6 +7,7 @@
 
 /** Match MAP_SPREAD_VIEWPORT_MAX_SPAN_DEG in queries.ts / web.tsx. */
 const SPREAD_SPAN_DEG = 4.2;
+const JOBS_MAP_CACHE_VERSION = "v2";
 
 function gridDegFromSpan(spanMaxDeg: number): number {
   if (spanMaxDeg > 20) return 4;
@@ -67,6 +68,7 @@ export function buildJobsMapCacheKeySearchString(searchParams: URLSearchParams):
   const q = searchParams.get("q")?.trim();
   if (q) p.set("q", q);
 
+  p.set("v", JOBS_MAP_CACHE_VERSION);
   return p.toString();
 }
 

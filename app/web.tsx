@@ -317,7 +317,7 @@ function messageShowsDocToolChip(msg: Message): boolean {
         return true
     const n = msg.functionCall?.name
     return (
-        n === "update_doc" ||
+        n === "create_doc" ||
         n === "create_resume" ||
         n === "create_cover_letter"
     )
@@ -1566,8 +1566,6 @@ async function fetchGeolocationFromAPI(apiBase: string): Promise<LocationInfo | 
     }
 }
 
-const RETRIEVE_RESOURCES_TOOL_NAME = "retrieve_career_and_college_resources"
-
 /** Fallback when stream omits thoughtSignature (Gemini 3 requires it for follow-up). */
 const GEMINI_THOUGHT_SIGNATURE_SKIP = "skip_thought_signature_validator"
 
@@ -1746,63 +1744,6 @@ function stripLeadingMarkdownFence(text: string): string {
         .replace(/```$/i, "")
         .trim()
 }
-
-const CAREER_COLLEGE_RESOURCES_CONTENT = `--- MENTORSHIP & CAREER ---
-• ADPList (adplist.org) – 1:1 long-term mentorship from people at top companies
-• LinkedIn (linkedin.com) – Networking and job search
-• Curastem (curastem.org) – Resumes and mentor connections
-
---- FINANCIAL AID & TUITION ---
-• FAFSA (fafsa.gov) – Free grants and low-interest loans. Avoid private loans and paid scholarships.
-• Department of Rehabilitation (dor.ca.gov) – Tuition up to $80,000; laptops, textbooks, clothes
-• Military veterans disability (va.gov/disability/file-disability-claim-form-21-526ez/introduction) – Up to $80K tuition, $4K/month cash, free housing, clothes
-
---- SCHOOL & TRANSFER ---
-• Assist.org (assist.org) – Check if your classes transfer
-• Rate My Professors (ratemyprofessors.com) – Professor ratings before enrolling
-• College Scoreboard (collegescorecard.ed.gov/search/?page=0&search=example+text) – Salary outcomes after graduating
-
---- JOB SEARCH & INTERNSHIPS ---
-• NewGrad Jobs (newgrad-jobs.com) – Real-time job postings with email alerts
-• New-Grad Positions (github.com/SimplifyJobs/New-Grad-Positions) and Summer 2026 Internships (github.com/SimplifyJobs/Summer2026-Internships) – Early career tech jobs; set alerts
-• Simplify Jobs (chromewebstore.google.com/detail/pbanhockgagggenencehbnadejlgchfc) – Auto-fill job applications with AI
-• Find recruiters (google.com/search?q=site:linkedin.com/in+("Recruiter"+OR+"Talent+Acquisition")+("Google"+OR+"Microsoft")) – Early career recruiters and hiring managers
-
---- EVENTS & NETWORKING ---
-• Luma (luma.com) – Tech and healthcare events in major cities
-
---- AI & PRODUCTIVITY ---
-• ChatGPT (chatgpt.com) – Remembers context better than other AI
-• Otter (otter.ai) – Free live captions and AI meeting summaries
-• ChatGPT Atlas (chatgpt.com/atlas) or Gemini in Chrome (gemini.google/overview/gemini-in-chrome) – AI Browser for homework, applying for jobs, and networking
-
---- WEBSITES & CREATIVE ---
-• Framer (framer.com/marketplace/templates/category/free-website-templates) – Free websites and portfolios with AI
-• Google Gemini (gemini.google) – Professional headshots, images, videos, posters, slideshows
-• Squarespace Domains (squarespace.com) – Domains from $10/year
-• Shopify (shopify.com) and Stripe (stripe.com) – Sell physical and digital products
-• Google Photos (photos.google.com) – Free AI photo editing
-
---- FOOD & SUPPLIES ---
-• EBT Snap (fns.usda.gov/snap/state-directory) – Free groceries up to $400/month per person
-• Amazon (amazon.com) – Free 30-day returns for school supplies
-
---- FREE STUDENT OFFERS ---
-• Microsoft 365 (microsoft.com/en-us/microsoft-365/college-student-pricing) – 1 year free LinkedIn Premium Career ($240) and Microsoft 365 ($240)
-• Google Gemini (gemini.google/students) – 1 year free Gemini AI ($240)
-• Cursor (cursor.com/students) – 1 year free Cursor coding AI ($240)
-• Framer (framer.com/education/students) – Free Framer + custom domain for up to 3 years ($540)
-• Apple Education (apple.com/us-edu/store) – Up to $500 off computers and iPads
-• Apple Music Student (offers.applemusic.apple/student-offer) – Apple Music and Apple TV for $6/month total
-• Amazon Student (amazon.com/Amazon-Student/b?node=668781011) – 6 months free of Amazon Prime + 5% off most purchases
-
---- GENERAL TIPS ---
-• Network on LinkedIn year-round. Connect with note, ask for 15-min call, keep under 300 chars. Expect ~10% reply rate.
-• Apply to jobs even when you don't match perfectly. You are worthy.
-• Peak hiring: February and October. Apply all year.
-• Startups: Email CEO or hiring manager directly. Explain why you like their work and how you can help.
-• Prioritize: verbal communication, fast email replies, texting.
-• Job search order: Find job TITLES → Learn required skills → Apply. Avoid learning generalist skills first.`
 
 /** Extracts concatenated text from a Gemini generateContent response. */
 function extractTextFromGeminiResponse(data: unknown): string {
@@ -2268,7 +2209,7 @@ function recordSearchJobsShownIds(
     }
 }
 
-/** Merge query + keywords into GET /jobs `title` (job title substring — not company name) */
+/** Merge query + keywords into GET /jobs `title`; supports `-term` title exclusions. */
 function buildJobsApiTitle(
     query: unknown,
     keywords: unknown
@@ -25023,6 +24964,14 @@ function readGuestChats(): ChatSession[] {
     })
 }
 
+function readAccountChats(ownerUid: string | null | undefined): ChatSession[] {
+    if (!ownerUid) return []
+    return readStoredChats(SAVED_CHAT_HISTORY_KEY).filter((c) => {
+        const owner = (c as ChatSession & Record<string, unknown>)[CHAT_OWNER_KEY]
+        return owner === ownerUid
+    })
+}
+
 /**
  * Persist savedChats to localStorage and tag each chat with the current
  * owner uid. This is the ONLY function that should write chat history —
@@ -25605,12 +25554,16 @@ function authedFetch(
 const APP_API_PATHS = {
     authFirebase: "/auth/firebase",
     authGeminiToken: "/auth/gemini-token",
+    geminiLiveProxy: "/proxy/gemini-live",
     authMapsKey: "/auth/maps-key",
     authLogout: "/auth/logout",
     authMe: "/auth/me",
     authPending: "/auth/pending",
     authPopup: "/auth/popup",
     authPrefs: "/auth/me/prefs",
+    agentTool: "/agent/tool",
+    agentChat: "/agent/chat",
+    agentTools: "/agent/tools",
     chats: "/chats",
     docs: "/docs",
     apps: "/apps",
@@ -25639,6 +25592,288 @@ function appApiFetch(
 
 function appApiUrl(apiBase: string, path: string): string {
     return `${apiBase}${path}`
+}
+
+const DEFAULT_APP_API_BASE = "https://api.curastem.org"
+
+function resolveAppApiBase(apiBase: string | null | undefined): string {
+    const trimmed = apiBase?.trim().replace(/\/$/, "")
+    if (!trimmed) return DEFAULT_APP_API_BASE
+    try {
+        const url = new URL(trimmed)
+        if (url.protocol === "http:" || url.protocol === "https:") {
+            return trimmed
+        }
+    } catch {}
+    return DEFAULT_APP_API_BASE
+}
+
+function cloudAgentBrowserContext(): string {
+    if (typeof window === "undefined") return "origin=server"
+    const online =
+        typeof navigator !== "undefined" ? String(navigator.onLine) : "unknown"
+    return [
+        `origin=${window.location.origin || "unknown"}`,
+        `href=${window.location.href || "unknown"}`,
+        `referrer=${document.referrer || "none"}`,
+        `online=${online}`,
+    ].join(" ")
+}
+
+// ─── Pure helpers for agent event processing ────────────────────────────────
+
+/** Convert a raw job API response/agent event into the HomepageJob shape. */
+function rawJobToHomepageJob(raw: Record<string, unknown>): HomepageJob {
+    const company =
+        typeof raw.company === "object" && raw.company !== null
+            ? (raw.company as Record<string, unknown>)
+            : {}
+    return {
+        id: String(raw.id),
+        title: String(raw.title),
+        company: {
+            name:
+                String(
+                    company.name || raw.company_name || raw.company || ""
+                ) || "Unknown company",
+            logo_url: (company.logo_url ?? raw.company_logo ?? null) as string | null,
+            description: (company.description ?? null) as string | null,
+            website_url: (company.website_url ?? null) as string | null,
+            linkedin_url: (company.linkedin_url ?? null) as string | null,
+            x_url: (company.x_url ?? null) as string | null,
+            instagram_url: (company.instagram_url ?? null) as string | null,
+            tiktok_url: (company.tiktok_url ?? null) as string | null,
+            github_url: (company.github_url ?? null) as string | null,
+            youtube_url: (company.youtube_url ?? null) as string | null,
+            glassdoor_url: (company.glassdoor_url ?? null) as string | null,
+            crunchbase_url: (company.crunchbase_url ?? null) as string | null,
+            huggingface_url: (company.huggingface_url ?? null) as string | null,
+            facebook_url: (company.facebook_url ?? null) as string | null,
+            employee_count_range: (company.employee_count_range ?? null) as string | null,
+            founded_year: (company.founded_year ?? null) as number | null,
+            headquarters: (company.headquarters ?? null) as HomepageJob["company"]["headquarters"],
+            industry: (company.industry ?? null) as string | null,
+            company_type: (company.company_type ?? null) as string | null,
+            total_funding_usd: (company.total_funding_usd ?? null) as number | null,
+        },
+        posted_at: (raw.posted_at ?? null) as string | null,
+        apply_url: String(raw.apply_url ?? ""),
+        locations: (raw.locations ?? null) as string[] | null,
+        employment_type: (raw.employment_type ?? null) as string | null,
+        workplace_type: (raw.workplace_type ?? null) as string | null,
+        salary: (raw.salary ?? null) as { display: string } | null,
+        job_summary:
+            ((raw.job_summary ?? raw.summary ?? raw.job_description ?? null) as string | null),
+        visa_sponsorship: (raw.visa_sponsorship ?? null) as string | null,
+        seniority_level: (raw.seniority_level ?? null) as string | null,
+        location_lat: (raw.location_lat ?? null) as number | null,
+        location_lng: (raw.location_lng ?? null) as number | null,
+    }
+}
+
+/** Apply doc patch operations to an HTML string. */
+function applyDocPatchOps(html: string, operations: Array<Record<string, unknown>>): string {
+    let next = html
+    for (const op of operations) {
+        if (!op || typeof op !== "object") continue
+        const kind = String(op.op || "")
+        if (kind === "replace_exact" && typeof op.find === "string" && typeof op.replace === "string") {
+            next = next.replace(op.find, op.replace)
+        } else if (kind === "append_html" && typeof op.html === "string") {
+            next += op.html
+        } else if (kind === "prepend_html" && typeof op.html === "string") {
+            next = op.html + next
+        } else if (kind === "set_html" && typeof op.html === "string") {
+            next = op.html
+        }
+    }
+    return next
+}
+
+/** Apply app patch operations to an HTML/JS string. */
+function applyAppPatchOps(code: string, operations: Array<Record<string, unknown>>): string {
+    let next = code
+    for (const op of operations) {
+        if (!op || typeof op !== "object") continue
+        const kind = String(op.op || "")
+        if (kind === "replace_exact" && typeof op.find === "string" && typeof op.replace === "string") {
+            next = next.replace(op.find, op.replace)
+        } else if (kind === "append_code" && typeof op.code === "string") {
+            next += op.code
+        } else if (kind === "prepend_code" && typeof op.code === "string") {
+            next = op.code + next
+        } else if (kind === "set_code" && typeof op.code === "string") {
+            next = op.code
+        }
+    }
+    return next
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
+async function fetchCloudAgentChat(
+    apiBase: string,
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+    logTools: (message: string, channel: "tools") => void
+): Promise<
+    | { ok: true; status: number; events: any[]; url: string }
+    | { ok: false; status?: number; message: string; url: string }
+> {
+    const effectiveApiBase = resolveAppApiBase(apiBase)
+    const url = `${effectiveApiBase}${APP_API_PATHS.agentChat}`
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "X-Curastem-Client": "web",
+    }
+    try {
+        const token = localStorage.getItem(SESSION_TOKEN_KEY)
+        if (token) headers.Authorization = `Bearer ${token}`
+    } catch {}
+
+    logTools(
+        `[cloud agent] -> POST ${url} ${cloudAgentBrowserContext()}`,
+        "tools"
+    )
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            mode: "cors",
+            credentials: "omit",
+            cache: "no-store",
+            headers,
+            body: JSON.stringify(body),
+            signal,
+        })
+        const responseText = await response.text().catch(() => "")
+        let data: any = {}
+        if (responseText) {
+            try {
+                data = JSON.parse(responseText)
+            } catch {
+                data = {}
+            }
+        }
+        if (!response.ok) {
+            const message =
+                data?.error?.message ||
+                data?.error?.code ||
+                responseText.slice(0, 300) ||
+                response.statusText ||
+                "Agent chat request failed"
+            logTools(
+                `[cloud agent] <- HTTP ${response.status} error=${message}`,
+                "tools"
+            )
+            return { ok: false, status: response.status, message, url }
+        }
+        const events = Array.isArray(data?.events) ? data.events : []
+        logTools(
+            `[cloud agent] <- HTTP ${response.status} events=${events.length}`,
+            "tools"
+        )
+        return { ok: true, status: response.status, events, url }
+    } catch (err) {
+        if ((err as Error).name === "AbortError") throw err
+        const message = `${String(err)} ${cloudAgentBrowserContext()}`
+        logTools(`[cloud agent] network error: ${message}`, "tools")
+        return { ok: false, message, url }
+    }
+}
+
+async function executeCloudAgentTool(
+    apiBase: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal
+): Promise<any | null> {
+    try {
+        const requestBody = { ...body }
+        if (
+            typeof requestBody.name === "string" &&
+            /^(retrieve_memories|save_memories|edit_memories)$/.test(
+                requestBody.name
+            ) &&
+            !Array.isArray(requestBody.clientMemories)
+        ) {
+            requestBody.clientMemories = getMemories()
+        }
+        const effectiveApiBase = resolveAppApiBase(apiBase)
+        const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+            "X-Curastem-Client": "web",
+        }
+        try {
+            const token = localStorage.getItem(SESSION_TOKEN_KEY)
+            if (token) headers.Authorization = `Bearer ${token}`
+        } catch {}
+        const resp = await fetch(`${effectiveApiBase}${APP_API_PATHS.agentTool}`, {
+            method: "POST",
+            mode: "cors",
+            credentials: "omit",
+            cache: "no-store",
+            headers,
+            body: JSON.stringify(requestBody),
+            signal,
+        })
+        if (!resp.ok) return null
+        return await resp.json()
+    } catch {
+        return null
+    }
+}
+
+async function fetchCloudAgentToolDeclarations(
+    apiBase: string,
+    signal?: AbortSignal
+): Promise<any[] | null> {
+    try {
+        const effectiveApiBase = resolveAppApiBase(apiBase)
+        const headers: Record<string, string> = {
+            "X-Curastem-Client": "web",
+        }
+        try {
+            const token = localStorage.getItem(SESSION_TOKEN_KEY)
+            if (token) headers.Authorization = `Bearer ${token}`
+        } catch {}
+        const resp = await fetch(`${effectiveApiBase}${APP_API_PATHS.agentTools}`, {
+            method: "GET",
+            mode: "cors",
+            credentials: "omit",
+            cache: "no-store",
+            headers,
+            signal,
+        })
+        if (!resp.ok) return null
+        const data = await resp.json()
+        return Array.isArray(data?.tools?.[0]?.functionDeclarations)
+            ? data.tools[0].functionDeclarations
+            : null
+    } catch {
+        return null
+    }
+}
+
+function compactGeminiLiveToolDeclaration(tool: any): any {
+    const compactSchema = (value: any): any => {
+        if (Array.isArray(value)) return value.map(compactSchema)
+        if (!value || typeof value !== "object") return value
+        const next: Record<string, any> = {}
+        for (const [key, nested] of Object.entries(value)) {
+            // Gemini Live can hang during setup with the full verbose schema set.
+            if (key === "description") continue
+            next[key] = compactSchema(nested)
+        }
+        return next
+    }
+    return {
+        ...tool,
+        description:
+            typeof tool?.description === "string"
+                ? tool.description.slice(0, 220)
+                : tool?.description,
+        parameters: compactSchema(tool?.parameters),
+    }
 }
 
 // routes/sync.ts). These helpers translate between the window.localStorage
@@ -25933,6 +26168,12 @@ type QueuedPatch = QueuedPatchMeta &
               meta?: Record<string, unknown>
               created_at?: number
               updated_at: number
+              docs?: ChatDocEntry[]
+              app?: { code: string; mode: "editor" | "player" }
+              whiteboard?: unknown
+              docEditorLastEdited?: number
+              miniIdeLastEdited?: number
+              whiteboardLastEdited?: number
           }
         | {
               kind: "tombstone"
@@ -26137,12 +26378,14 @@ function messageHasRenderableContent(message: Message): boolean {
         functionCall?: unknown
         toolUsed?: unknown
         attachments?: unknown[]
+        jobs?: unknown[]
     }
     return (
         messageTextForDedupe(message).length > 0 ||
         !!m.functionCall ||
         !!m.toolUsed ||
-        (Array.isArray(m.attachments) && m.attachments.length > 0)
+        (Array.isArray(m.attachments) && m.attachments.length > 0) ||
+        (Array.isArray(m.jobs) && m.jobs.length > 0)
     )
 }
 
@@ -26468,6 +26711,12 @@ function buildChatUpsertPatch(chat: ChatSession): {
     meta: Record<string, unknown>
     created_at: number
     updated_at: number
+    docs?: ChatDocEntry[]
+    app?: { code: string; mode: "editor" | "player" }
+    whiteboard?: unknown
+    docEditorLastEdited?: number
+    miniIdeLastEdited?: number
+    whiteboardLastEdited?: number
 } {
     const docRefs = (chat.docs || []).map((d) => ({
         id: d.id,
@@ -26482,7 +26731,14 @@ function buildChatUpsertPatch(chat: ChatSession): {
     // performs its own /1000 conversion internally. Do NOT pre-convert here or
     // every patch will land with an ~year-1969 timestamp and be silently
     // dropped by the newest-wins check.
-    const tsMs = chat.timestamp || Date.now()
+    const tsMs = Math.max(
+        chat.timestamp || 0,
+        chat.docEditorLastEdited || 0,
+        chat.miniIdeLastEdited || 0,
+        chat.whiteboardLastEdited || 0,
+        ...((chat.docs || []).map((d) => d.lastEdited || 0)),
+        Date.now()
+    )
     const pinnedAtMs =
         typeof chat.pinnedAt === "number"
             ? chat.pinnedAt
@@ -26506,6 +26762,18 @@ function buildChatUpsertPatch(chat: ChatSession): {
                 whiteboard: whiteboardRef,
             },
         },
+        ...(chat.docs?.length ? { docs: chat.docs } : {}),
+        ...(chat.app ? { app: chat.app } : {}),
+        ...(chat.whiteboard != null ? { whiteboard: chat.whiteboard } : {}),
+        ...(chat.docEditorLastEdited
+            ? { docEditorLastEdited: chat.docEditorLastEdited }
+            : {}),
+        ...(chat.miniIdeLastEdited
+            ? { miniIdeLastEdited: chat.miniIdeLastEdited }
+            : {}),
+        ...(chat.whiteboardLastEdited
+            ? { whiteboardLastEdited: chat.whiteboardLastEdited }
+            : {}),
     }
 }
 
@@ -26858,6 +27126,17 @@ function useCurastemSync(
                               meta: p.meta,
                               created_at: p.created_at,
                               updated_at: p.updated_at,
+                              docs: p.docs,
+                              activeDocId: p.meta?.activeDocId,
+                              docType: p.meta?.docType,
+                              docCompany: p.meta?.docCompany,
+                              app: p.app,
+                              whiteboard: p.whiteboard,
+                              docEditorLastEdited:
+                                  p.docEditorLastEdited,
+                              miniIdeLastEdited: p.miniIdeLastEdited,
+                              whiteboardLastEdited:
+                                  p.whiteboardLastEdited,
                           }
                         : null
                 )
@@ -29677,8 +29956,7 @@ export default function OmegleMentorshipUI(props: Props) {
         }
     }, [])
 
-    // forVoice=false: text path — includes <curastem-suggestions> delimiters, parsed in the stream loop.
-    // forVoice=true: audio path — delimiters omitted (Gemini Live would speak them verbatim).
+    // Keep the system prompt small; tools provide resume/doc/job capabilities.
     const getSystemPromptWithContext = React.useCallback(
         (forVoice = false) => {
             if (role === "volunteer") return systemPrompt || ""
@@ -29697,51 +29975,23 @@ export default function OmegleMentorshipUI(props: Props) {
                 }
             }
 
-            // Inject favorite things so AI can personalise without calling retrieve_memories every turn
-            const favorites = getMemories()
-            if (favorites.length > 0) {
-                prompt += `\n\n[User's Favorite Things & Personal Facts]\n${favorites.join("\n")}`
-            }
-
-            // Text chat: do not inline full resume — use retrieve_resume (same storage).
-            // Gemini Live only exposes search_jobs + get_job_details, so voice still needs
-            const resumeText = getResume()?.trim() ?? ""
-            if (resumeText) {
-                if (forVoice) {
-                    prompt += `\n\n[User's Saved Resume]\n${resumeText}`
-                } else {
-                    prompt += `\n\n[Saved resume on device]\nPlain text is stored on-device. Call retrieve_resume when the user's request needs their full work history or skills (e.g. new resume, cover letter, tailored job advice). Do not assume resume content otherwise.`
-                }
-            }
-
-            // Surface only the job ID — the model must call get_job_details to
-            // get the actual data. Pre-injecting title/description would defeat
-            // the purpose of the tool and risk serving stale data.
+            // Surface only the job ID so tools fetch/open the live job record.
+            // Pre-injecting title/description risks serving stale data.
             if (selectedJobRef.current) {
                 const j = selectedJobRef.current
-                prompt += `\n\n[Currently Viewed Job]\nJob ID: ${j.id}\nThe user has a job open in the right sidebar. When they ask about "this job", "it", or "the job", call get_job_details with job_id: "${j.id}" to get the full details before responding.`
+                prompt += `\n\n[Currently Viewed Job]\nJob ID: ${j.id}\nThe user has a job open in the right sidebar. When they ask factual questions about "this job", "it", or "the job", call get_job_details with job_id: "${j.id}" to read the data before responding. When they ask to open, show, display, pull up, or view a job on screen, call open_job_details instead.`
             }
 
             if (forVoice) {
                 // Voice session: natural speech only — no XML tags, no delimiters.
                 // Suggestions are generated separately via fetchAiSuggestions().
-                // App/doc creation is not supported mid-voice; guide the user to text chat.
                 prompt += `
 
 [VOICE SESSION — SPEAK NATURALLY]
 This is a live voice call. Rules:
 - Respond naturally and conversationally — no lists, no headers, no markdown.
 - NEVER output any XML tags such as <curastem-app>, <curastem-doc>, or <curastem-suggestions>. These are text-chat-only features and will be read aloud verbatim if you output them, which is broken.
-- If the user asks you to build an app, create a document, or do anything that requires the app/doc editor, acknowledge warmly and let them know they can send a message in text chat to create it.
 - Keep responses concise and easy to follow by ear.`
-            } else {
-                prompt += `
-
-FOLLOW-UP SUGGESTIONS (required at the end of EVERY response, no exceptions):
-<curastem-suggestions>
-["Short question 1?","Short question 2?","Short question 3?"]
-</curastem-suggestions>
-Rules: always 3–5 suggestions, each under 5 words, specific to what you just said, plain strings only. Do NOT wrap in markdown code fences.`
             }
 
             return prompt
@@ -30669,36 +30919,25 @@ Do not include markdown formatting or explanations.`
         log("startLiveSession called")
         haptic.medium()
 
-        const liveModel = "models/gemini-3.1-flash-live-preview"
+        const liveModel = "gemini-live-2.5-flash-native-audio"
         log(`Using Live Model: ${liveModel}`)
 
         try {
-            const tokenRes = await fetch(appApiUrl(apiBase, APP_API_PATHS.authGeminiToken))
-            if (!tokenRes.ok) {
-                log(`Gemini token fetch failed: ${tokenRes.status}`)
-                return
-            }
-            const tokenJson = (await tokenRes.json()) as {
-                token?: string
-                error?: string
-            }
-            const liveToken = tokenJson.token
-            if (!liveToken) {
-                log("Missing ephemeral token from Worker")
-                return
-            }
-            
-            
-            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(liveToken)}`
-            const ws = new WebSocket(url)
+            const liveUrl = new URL(appApiUrl(apiBase, APP_API_PATHS.geminiLiveProxy))
+            liveUrl.protocol = liveUrl.protocol === "https:" ? "wss:" : "ws:"
+            const ws = new WebSocket(liveUrl.toString())
             liveClientRef.current = ws
 
             ws.onopen = async () => {
-                log("Connected to Gemini Live WebSocket")
+                log("Connected to Agent Platform Live proxy")
                 resetSilenceTimer()
                 const docContext = isDocOpen
                     ? `\n\n[Current Document Content]:\n${docContent}`
                     : ""
+                const liveToolDeclarations =
+                    ((await fetchCloudAgentToolDeclarations(apiBase)) ?? []).map(
+                        compactGeminiLiveToolDeclaration
+                    )
 
                 
                 const deviceLanguageCode =
@@ -30714,9 +30953,6 @@ Do not include markdown formatting or explanations.`
                             model: liveModel,
                             generationConfig: {
                                 responseModalities: ["AUDIO"],
-                                thinkingConfig: {
-                                    thinkingLevel: "minimal",
-                                },
                                 speechConfig: {
                                     voiceConfig: {
                                         prebuiltVoiceConfig: {
@@ -30738,20 +30974,25 @@ Do not include markdown formatting or explanations.`
                                     },
                                 ],
                             },
+                            clientContext: {
+                                memories: getMemories(),
+                            },
                             tools: [
                                 {
-                                    functionDeclarations: [
+                                    functionDeclarations: liveToolDeclarations.length
+                                        ? liveToolDeclarations
+                                        : [
                                         {
                                             name: "search_jobs",
                                             description:
-                                                'Search Curastem job listings. If the user names a role, put it in query; if they want ANY role or all openings, OMIT query and keywords (use location, visa, company, etc. only). Never add seniority, stacks, or resume terms unless asked. Never concatenate many job titles into one query. Omit seniority_level unless they name a level. Expand abbreviations only (swe → software engineer). Umbrella asks: neutral roles and/or company slugs. Pass company when they name an employer. Visa when relevant. For two or more metros at once, use location_or or one location string with "or" between cities. Client excludes already-shown job IDs. Results as cards in chat.',
+                                                'Search Curastem job listings. If the user names a role, put it in query; if they want ANY role or all openings, OMIT query and keywords (use location, visa, company, etc. only). Preserve negative title terms in query with a leading dash, e.g. "product manager, software engineer, -senior" means exclude titles containing senior. Never add seniority, stacks, or resume terms unless asked. Never concatenate many job titles into one query unless the user supplied multiple comma-separated roles. Omit seniority_level unless they name a level as an inclusion filter. Expand abbreviations only (swe → software engineer). Umbrella asks: neutral roles and/or company slugs. Pass company when they name an employer. Visa when relevant. For two or more metros at once, use location_or or one location string with "or" between cities. Client excludes already-shown job IDs. Results as cards in chat.',
                                             parameters: {
                                                 type: "OBJECT",
                                                 properties: {
                                                     query: {
                                                         type: "STRING",
                                                         description:
-                                                            "Job title or role phrase ONLY if they asked for a specific role. Sent as API title= (matches job title text only, not company). If they want any role / all jobs / no title preference, omit (empty). Never invent a title or merge many roles into one string.",
+                                                            'Job title or role phrase ONLY if they asked for a specific role. Sent as API title= (matches job title text only, not company). Preserve negative title terms with a leading dash, e.g. "software engineer, -senior". If they want any role / all jobs / no title preference, omit (empty). Never invent a title or merge many roles into one string unless the user supplied comma-separated roles.',
                                                     },
                                                     keywords: {
                                                         type: "STRING",
@@ -30849,7 +31090,7 @@ Do not include markdown formatting or explanations.`
                                         {
                                             name: "get_job_details",
                                             description:
-                                                "Get full details about a specific job. Use when the user asks about 'this job', 'that job', or wants to know more. If a job is currently open in the sidebar its ID is in the system context — use it directly.",
+                                                "Fetch full details about a specific job for the model to read. This is data-only and does not control or open anything on the user's screen. To visibly show a job in the user's side panel, call open_job_details instead.",
                                             parameters: {
                                                 type: "OBJECT",
                                                 properties: {
@@ -30862,7 +31103,23 @@ Do not include markdown formatting or explanations.`
                                                 required: ["job_id"],
                                             },
                                         },
-                                    ],
+                                        {
+                                            name: "open_job_details",
+                                            description:
+                                                "Control the user's screen by opening the job details side panel for a specific job. Use when the user asks to open, show, view, pull up, or display a listed/current job, including 'the first one' or 'this job'.",
+                                            parameters: {
+                                                type: "OBJECT",
+                                                properties: {
+                                                    job_id: {
+                                                        type: "STRING",
+                                                        description:
+                                                            "The job ID from a search result or from the currently viewed job context",
+                                                    },
+                                                },
+                                                required: [],
+                                            },
+                                        },
+                                        ],
                                 },
                             ],
                             inputAudioTranscription: {},
@@ -31041,6 +31298,258 @@ Do not include markdown formatting or explanations.`
                 }
             }
 
+            const applyLiveCloudAgentEvents = (events: any[]) => {
+                if (!Array.isArray(events) || events.length === 0) return
+
+                const jobsEvent = events.find(
+                    (event: any) => event?.type === "job_cards"
+                )
+                const snippets = Array.isArray(jobsEvent?.jobs)
+                    ? (jobsEvent.jobs as JobSnippet[])
+                    : []
+                if (snippets.length > 0) {
+                    recordSearchJobsShownIds(
+                        searchJobsSeenJobIdsRef.current,
+                        snippets
+                    )
+                    setMessages((prev) => [
+                        ...prev,
+                        { role: "assistant", text: "", jobs: snippets },
+                    ])
+                }
+
+                const screenOpenEvent = events.find(
+                    (event: any) => event?.type === "screen_open"
+                )
+                const jobDetailEvent = events.find(
+                    (event: any) => event?.type === "job_detail"
+                )
+                const detailedJob =
+                    screenOpenEvent?.target === "job_details"
+                        ? screenOpenEvent?.job ?? jobDetailEvent?.job
+                        : null
+                if (detailedJob?.id && detailedJob?.title) {
+                    const jobForSidebar = rawJobToHomepageJob(detailedJob)
+                    setJobDeckExtras((prev) =>
+                        prev.some((job) => job.id === jobForSidebar.id)
+                            ? prev
+                            : [...prev, jobForSidebar]
+                    )
+                    setSelectedJob(jobForSidebar)
+                    setIsJobOpen(true)
+                    setIsDocOpen(false)
+                    setIsWhiteboardOpen(false)
+                    setIsAppOpen(false)
+                    setIsMapOpen(false)
+                } else if (screenOpenEvent?.target === "docs") {
+                    openMostRecentDoc()
+                    setIsDocOpen(true)
+                    setIsAppOpen(false)
+                    setIsWhiteboardOpen(false)
+                    setIsJobOpen(false)
+                    setIsMapOpen(false)
+                    isDocOpenRef.current = true
+                    isAppOpenRef.current = false
+                    isWhiteboardOpenRef.current = false
+                } else if (screenOpenEvent?.target === "maps") {
+                    const company =
+                        typeof screenOpenEvent.company === "string"
+                            ? screenOpenEvent.company
+                            : null
+                    setMapUrlCompany(company)
+                    setIsMapOpen(true)
+                    setIsDocOpen(false)
+                    setIsAppOpen(false)
+                    setIsWhiteboardOpen(false)
+                    setIsJobOpen(false)
+                    isDocOpenRef.current = false
+                    isAppOpenRef.current = false
+                    isWhiteboardOpenRef.current = false
+                } else if (screenOpenEvent?.target === "whiteboard") {
+                    setIsWhiteboardOpen(true)
+                    setHasWhiteboardStarted(true)
+                    setIsDocOpen(false)
+                    setIsAppOpen(false)
+                    setIsJobOpen(false)
+                    setIsMapOpen(false)
+                    isWhiteboardOpenRef.current = true
+                    isDocOpenRef.current = false
+                    isAppOpenRef.current = false
+                } else if (screenOpenEvent?.target === "app_editor") {
+                    setIsAppOpen(true)
+                    setAppMode("editor")
+                    appModeRef.current = "editor"
+                    setIsDocOpen(false)
+                    setIsWhiteboardOpen(false)
+                    setIsJobOpen(false)
+                    setIsMapOpen(false)
+                    isAppOpenRef.current = true
+                    isDocOpenRef.current = false
+                    isWhiteboardOpenRef.current = false
+                }
+
+                const docEvent = events.find(
+                    (event: any) => event?.type === "doc_update"
+                )
+                if (typeof docEvent?.html === "string") {
+                    const nextDocType =
+                        docEvent.docType === "resume" ||
+                        docEvent.docType === "cover_letter"
+                            ? docEvent.docType
+                            : "doc"
+                    upsertDocForTool("new", docEvent.html, nextDocType, "")
+                    setDocContent(docEvent.html)
+                    docContentRef.current = docEvent.html
+                    setDocType(nextDocType)
+                    docTypeRef.current = nextDocType
+                    setIsDocOpen(true)
+                    setIsAppOpen(false)
+                    setIsWhiteboardOpen(false)
+                    isDocOpenRef.current = true
+                    isAppOpenRef.current = false
+                    isWhiteboardOpenRef.current = false
+                    if (dataConnectionsRef.current.size > 0) {
+                        broadcastData({
+                            type: "doc-update",
+                            payload: docEvent.html,
+                        })
+                        broadcastData({
+                            type: "doc-start",
+                            payload: { docType: nextDocType },
+                        })
+                    }
+                }
+
+                const docPatchEvent = events.find(
+                    (event: any) => event?.type === "doc_patch"
+                )
+                if (Array.isArray(docPatchEvent?.operations)) {
+                    const nextDocHtml = applyDocPatchOps(
+                        docContentRef.current || docContent,
+                        docPatchEvent.operations
+                    )
+                    const nextDocType =
+                        docPatchEvent.docType === "resume" ||
+                        docPatchEvent.docType === "cover_letter"
+                            ? docPatchEvent.docType
+                            : docTypeRef.current || docType
+                    upsertDocForTool(
+                        "update",
+                        nextDocHtml,
+                        nextDocType,
+                        docCompanyRef.current || "",
+                        { targetDocId: activeDocIdRef.current }
+                    )
+                    setDocContent(nextDocHtml)
+                    docContentRef.current = nextDocHtml
+                    setDocType(nextDocType)
+                    docTypeRef.current = nextDocType
+                    setIsDocOpen(true)
+                    setIsAppOpen(false)
+                    setIsWhiteboardOpen(false)
+                    isDocOpenRef.current = true
+                    isAppOpenRef.current = false
+                    isWhiteboardOpenRef.current = false
+                }
+
+                const appEvent = events.find(
+                    (event: any) => event?.type === "app_update"
+                )
+                if (typeof appEvent?.html === "string") {
+                    setAppCode(appEvent.html)
+                    setIsAppOpen(true)
+                    setIsDocOpen(false)
+                    setIsWhiteboardOpen(false)
+                    isAppOpenRef.current = true
+                    isDocOpenRef.current = false
+                    isWhiteboardOpenRef.current = false
+                    setAppMode("player")
+                    appModeRef.current = "player"
+                    if (dataConnectionsRef.current.size > 0) {
+                        broadcastData({
+                            type: "app-update",
+                            payload: appEvent.html,
+                        })
+                        broadcastData({ type: "app-start" })
+                    }
+                }
+
+                const appPatchEvent = events.find(
+                    (event: any) => event?.type === "app_patch"
+                )
+                if (Array.isArray(appPatchEvent?.operations)) {
+                    const nextAppCode = applyAppPatchOps(
+                        appCodeRef.current || appCode,
+                        appPatchEvent.operations
+                    )
+                    setAppCode(nextAppCode)
+                    appCodeRef.current = nextAppCode
+                    setIsAppOpen(true)
+                    setAppMode("editor")
+                    appModeRef.current = "editor"
+                    setIsDocOpen(false)
+                    setIsWhiteboardOpen(false)
+                    isAppOpenRef.current = true
+                    isDocOpenRef.current = false
+                    isWhiteboardOpenRef.current = false
+                    if (dataConnectionsRef.current.size > 0) {
+                        broadcastData({
+                            type: "app-update",
+                            payload: nextAppCode,
+                        })
+                        broadcastData({ type: "app-mode-change", payload: "editor" })
+                        broadcastData({ type: "app-start" })
+                    }
+                }
+
+                const resumeEvent = events.find(
+                    (event: any) => event?.type === "resume_update"
+                )
+                if (typeof resumeEvent?.content === "string") {
+                    saveResume(resumeEvent.content)
+                    curastemSyncRef.current?.enqueueProfile({
+                        resume_plain: resumeEvent.content,
+                        resume_doc_html: "",
+                    })
+                }
+
+                const memoryEvent = events.find(
+                    (event: any) => event?.type === "memory_update"
+                )
+                const memoryItems = Array.isArray(
+                    memoryEvent?.result?.memories
+                )
+                    ? memoryEvent.result.memories
+                    : null
+                if (memoryItems && typeof window !== "undefined") {
+                    const memoryText = memoryItems
+                        .filter((item: unknown) => typeof item === "string")
+                        .map((item: string) =>
+                            item.startsWith("- ") ? item : `- ${item}`
+                        )
+                        .join("\n")
+                    localStorage.setItem("you_interests", memoryText)
+                    setYouInterests(memoryText)
+                    youInterestsRef.current = memoryText
+                    curastemSyncRef.current?.enqueueProfile({
+                        you_interests: memoryText,
+                    })
+                }
+
+                if (
+                    events.some(
+                        (event: any) => event?.type === "whiteboard_command"
+                    )
+                ) {
+                    setIsWhiteboardOpen(true)
+                    setIsDocOpen(false)
+                    setIsAppOpen(false)
+                    isWhiteboardOpenRef.current = true
+                    isDocOpenRef.current = false
+                    isAppOpenRef.current = false
+                }
+            }
+
             ws.onmessage = async (event) => {
                 try {
                     let data
@@ -31163,12 +31672,40 @@ Do not include markdown formatting or explanations.`
                     
                     
                     
+                    if (Array.isArray(data.serverToolEvents)) {
+                        applyLiveCloudAgentEvents(data.serverToolEvents)
+                    }
+                    
                     if (data.toolCall?.functionCalls?.length) {
                         for (const fc of data.toolCall.functionCalls) {
                             ;(async () => {
                                 let responsePayload: any = {}
 
-                                if (fc.name === "search_jobs") {
+                                const cloudToolResult =
+                                    await executeCloudAgentTool(apiBase, {
+                                        name: fc.name,
+                                        args: fc.args ?? {},
+                                        selectedJobId:
+                                            selectedJobRef.current?.id ?? null,
+                                    })
+                                if (cloudToolResult) {
+                                    const events = Array.isArray(
+                                        cloudToolResult.events
+                                    )
+                                        ? cloudToolResult.events
+                                        : []
+                                    if (debugPanelRef.current === "tools") {
+                                        log(
+                                            `[live cloud tool] ${fc.name} events=${events.length}`,
+                                            "tools"
+                                        )
+                                    }
+                                    applyLiveCloudAgentEvents(events)
+                                    responsePayload =
+                                        cloudToolResult.functionResponse ?? {
+                                            ok: true,
+                                        }
+                                } else if (fc.name === "search_jobs") {
                                     const args = fc.args ?? {}
                                     const params = new URLSearchParams()
                                     const titleMerged = buildJobsApiTitle(
@@ -31379,7 +31916,7 @@ Do not include markdown formatting or explanations.`
                                                 setMessages((prev) => [
                                                     ...prev,
                                                     {
-                                                        role: "model",
+                                                        role: "assistant",
                                                         text: "",
                                                         jobs: snippets,
                                                     },
@@ -31390,7 +31927,7 @@ Do not include markdown formatting or explanations.`
                                                     .slice(0, 6)
                                                     .map(
                                                         (j, i) =>
-                                                            `${i + 1}. ${j.title} at ${j.company}${j.locations?.[0] ? ` — ${j.locations[0]}` : ""}`
+                                                            `${i + 1}. id=${j.id} - ${j.title} at ${j.company}${j.locations?.[0] ? ` — ${j.locations[0]}` : ""}`
                                                     )
                                                     .join("\n"),
                                                 total: snippets.length,
@@ -32113,11 +32650,72 @@ Do not include markdown formatting or explanations.`
         setCurastemSyncEpoch((e) => e + 1)
     }, [sync.hydrated, auth.user?.id])
 
+    const hydratedLocalAccountCacheForRef = React.useRef<string | null>(null)
+    React.useEffect(() => {
+        if (auth.status !== "signed_in" || !auth.user?.id) return
+        const uid = auth.user.id
+        if (hydratedLocalAccountCacheForRef.current === uid) return
+        hydratedLocalAccountCacheForRef.current = uid
+        currentOwnerUid = uid
+
+        const accountChats = readAccountChats(uid)
+        if (accountChats.length === 0) return
+
+        setSavedChats((prev) => {
+            const mergedById = new Map<string, ChatSession>()
+            for (const chat of accountChats) mergedById.set(chat.id, chat)
+            for (const chat of prev) {
+                const owner = (chat as ChatSession & Record<string, unknown>)[
+                    CHAT_OWNER_KEY
+                ]
+                if (owner && owner !== uid) continue
+                if (!mergedById.has(chat.id)) mergedById.set(chat.id, chat)
+            }
+            const merged = Array.from(mergedById.values()).sort((a, b) => {
+                if (a.isPinned && !b.isPinned) return -1
+                if (!a.isPinned && b.isPinned) return 1
+                if (a.isPinned && b.isPinned)
+                    return (b.pinnedAt || 0) - (a.pinnedAt || 0)
+                return b.timestamp - a.timestamp
+            })
+            persistSavedChats(merged)
+            return merged
+        })
+
+        try {
+            const storedCurrentChatId = localStorage.getItem(CURRENT_CHAT_ID_KEY)
+            const cachedChat = accountChats.find(
+                (chat) => chat.id === storedCurrentChatId
+            )
+            if (cachedChat) {
+                setCurrentChatId(cachedChat.id)
+                setMessages(cachedChat.messages || [])
+                applyChatDocHydration(cachedChat)
+                setAiGeneratedSuggestions(cachedChat.suggestions || [])
+                if (cachedChat.app) {
+                    setAppCode(cachedChat.app.code || "")
+                    setAppMode(cachedChat.app.mode || "editor")
+                }
+                if (cachedChat.whiteboard) {
+                    pendingSnapshotRef.current = cachedChat.whiteboard
+                    if (editorRef.current) {
+                        try {
+                            editorRef.current.store.loadSnapshot(
+                                cachedChat.whiteboard
+                            )
+                        } catch {}
+                    }
+                }
+            }
+        } catch {}
+    }, [auth.status, auth.user?.id, applyChatDocHydration])
+
     const prevAuthStatusRef = React.useRef(auth.status)
     React.useEffect(() => {
         const prev = prevAuthStatusRef.current
         prevAuthStatusRef.current = auth.status
         if (auth.status !== "signed_out") return
+        hydratedLocalAccountCacheForRef.current = null
         setSavedChats(readGuestChats())
         setMessages([])
         setCurrentChatId(Date.now().toString())
@@ -32295,7 +32893,15 @@ Do not include markdown formatting or explanations.`
         let dirty = false
         const orderedMessages = normalizeMessagesForDisplay(messages, true)
         for (let i = 0; i < orderedMessages.length; i++) {
-            const m = orderedMessages[i] as Message & { _cid?: string; _seq?: number }
+            const m = orderedMessages[i] as Message & {
+                _cid?: string
+                _seq?: number
+                _serverCreatedAt?: number
+            }
+            // Messages received from account sync already exist on the server.
+            // Re-uploading them from another open device creates duplicate rows
+            // with fresh seqs and can reorder the active conversation.
+            if (!m._cid && typeof m._serverCreatedAt === "number") continue
             if (!m._cid) {
                 m._cid =
                     typeof crypto !== "undefined" &&
@@ -37089,7 +37695,7 @@ Do not include markdown formatting or explanations.`
                 
                 let hiddenContext = ""
                 const hasYouInfo =
-                    youName || youSchool || youWork || youInterests
+                    youName || youSchool || youWork
                 if (hasYouInfo && messages.length === 0) {
                     const isCall = dataConnectionsRef.current.size > 0 
 
@@ -37103,15 +37709,13 @@ Do not include markdown formatting or explanations.`
                             identityPrefix = `Person: ${youName || "Unknown"}`
                         }
 
-                        const details = []
+                        const details: string[] = []
                         if (youSchool) details.push(`School: ${youSchool}`)
                         if (youWork) details.push(`Work: ${youWork}`)
-                        if (youInterests)
-                            details.push(`Interests: ${youInterests}`)
 
                         hiddenContext = `${identityPrefix}\n${details.join("\n")}\n\n[End of User Context]\n\n`
                     } else {
-                        hiddenContext = `User Context:\nName: ${youName}\nSchool: ${youSchool}\nWork: ${youWork}\nInterests: ${youInterests}\n\n`
+                        hiddenContext = `User Context:\nName: ${youName}\nSchool: ${youSchool}\nWork: ${youWork}\n\n`
                     }
                 }
 
@@ -37158,6 +37762,16 @@ Do not include markdown formatting or explanations.`
                         let textContent = m.text || ""
                         if (m.role === "peer") {
                             textContent = `[Partner]: ${textContent}`
+                        }
+                        if (m.jobs && m.jobs.length > 0) {
+                            const jobLines = m.jobs
+                                .slice(0, 10)
+                                .map(
+                                    (job, index) =>
+                                        `${index + 1}. id=${job.id} - ${job.title} at ${job.company}${job.locations?.[0] ? ` - ${job.locations[0]}` : ""}`
+                                )
+                                .join("\n")
+                            textContent = `${textContent}\n\n[Displayed job results]\n${jobLines}`.trim()
                         }
 
                         if (textContent) {
@@ -37232,505 +37846,33 @@ Do not include markdown formatting or explanations.`
                     })
                 )
 
-                const tools = [
-                    {
-                        functionDeclarations: [
-                            {
-                                name: RETRIEVE_RESOURCES_TOOL_NAME,
-                                description: [
-                                    "Retrieves curated career and college resources: mentorship, financial aid, job search, scholarships, student offers.",
-                                    "Use when the user asks for resources, scholarships, internships, FAFSA, networking, or similar.",
-                                    "Do NOT write intro text before calling — a follow-up response is always generated after the resources are fetched.",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {},
-                                    required: [],
-                                },
-                            },
-                            {
-                                name: "create_app",
-                                description:
-                                    "Creates a mini interactive app (HTML/CSS/JS). ONLY call this when the user explicitly uses words like 'build', 'make', 'create', or 'code' and is clearly requesting an interactive tool, game, quiz, or web app. Do NOT call for explanations, how-to answers, lists, summaries, or anything the user did not explicitly ask to be built as an app.",
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        code: {
-                                            type: "STRING",
-                                            description: `Single self-contained HTML file with embedded CSS and JavaScript. Write EVERY line — never truncate or add placeholder comments. This app must look like it could win Awwwards Site of the Day.
-
-STYLE — match the design language to the app's soul:
-- Productivity/finance/data → flat modern: Space Grotesk or Inter, geometric grids, cool neutrals
-- Social/creative/portfolio → neobrutalist: fat borders, raw contrast, hard #000 box-shadows, heavy type
-- Health/wellness → soft neumorphism: pastel backgrounds, inset+outset shadows, gentle blurs
-- Games/entertainment → maximalist: neon glows, pixel/mono fonts, kinetic energy, saturated palettes
-- Fashion/luxury/editorial → Swiss editorial: extreme whitespace, serif hero (Playfair/Cormorant), quiet luxury
-- Kids/education → playful: bouncy spring animations, saturated primaries, rounded-everything
-- Tech/AI/dev → dark glassmorphism: frosted panels, backdrop-filter blur, colored glow halos, monospace accents
-- Food/lifestyle/travel → warm editorial: earthy tones, organic shapes, editorial serif
-
-TYPOGRAPHY: @import 1–2 Google Fonts matched to the style. Fluid type: clamp(14px,2vw,18px) body, clamp(32px,6vw,80px) hero. Tune letter-spacing and line-height. Animate font-weight via CSS custom properties when variable fonts allow.
-
-ICONS: inline 24×24 SVG with currentColor only. Animate on interaction: stroke-dashoffset draw-in, scale pulse, rotate on toggle.
-
-SHADOWS & DEPTH: far-reaching base shadow 0 40px 100px rgba(0,0,0,0.06); colored accent shadows that echo the element color; 2–3 layered depth levels.
-
-VISUAL FX (pick what fits the style):
-- Animated gradient mesh via CSS custom properties + @keyframes on hue-rotate or background-position
-- SVG feTurbulence noise texture overlay as data URI for grain
-- Glassmorphism: backdrop-filter blur(20px) saturate(180%) + rgba background
-- Canvas confetti/particle burst on success/achievement (rAF loop)
-- CSS sparkle ::before/::after stars with staggered animation-delay
-- Ambient shimmer: slow-moving radial gradient overlay at ~4% opacity
-
-MICRO-INTERACTIONS (every element needs at least one):
-- Buttons: translateY(-3px) + shadow lift on hover; scale(0.96) on :active
-- Inputs: border glow pulse + floating label transition on focus
-- Cards: JS mouse-tracking CSS perspective tilt (rotateX/Y ±6deg) on hover
-- Nav items: underline animates in from left via scaleX transform
-- List items: stagger in with animation-delay: calc(var(--i) * 60ms)
-- Loading: skeleton shimmer matching the palette
-
-ANIMATIONS: spring cubic-bezier(0.34,1.56,0.64,1); premium cubic-bezier(0.16,1,0.3,1); IntersectionObserver for scroll-triggered entry; rAF for canvas; never abrupt state jumps.
-
-DARK/LIGHT MODE: CSS custom properties for every color token (--bg, --surface, --text, --text-muted, --accent, --border). prefers-color-scheme sets :root variables. Smooth transition: background 0.3s ease, color 0.3s ease on :root *.
-
-FEATURES — always exceed what was asked:
-- Quiz/flashcards → score tracking, progress bar, categories, localStorage, animated feedback
-- Portfolio/resume → smooth scroll nav, project cards with hover FX, contact form, animated hero
-- Game → high score (localStorage), AudioContext SFX, difficulty levels, particle effects
-- Notes/journal → rich text, tags, search, mood tracker, export .txt
-- Finance/budget → canvas charts, categories, monthly summaries, localStorage persistence
-- Study tool → spaced repetition logic, streak tracking, progress rings, session history
-- Always add: keyboard shortcuts, ARIA labels, empty states with illustrations, error/success states, localStorage persistence
-
-CONSTRAINTS (non-negotiable):
-- Unique id="" on EVERY interactive element (buttons, inputs, clickable divs, canvas)
-- Mobile + desktop responsive; 56px top padding always for toolbar clearance
-- All links: target="_blank" rel="noopener noreferrer"
-- No external JS libraries; all assets inline SVG or data URIs
-- Write every line of code — a great app takes thousands of lines`,
-                                        },
-                                    },
-                                    required: ["code"],
-                                },
-                            },
-                            {
-                                name: "update_doc",
-                                description:
-                                    "Creates or updates a document in the doc editor. ONLY call this when the user explicitly asks to WRITE, DRAFT, or CREATE a specific document — e.g. 'write my resume', 'draft a cover letter', 'write an email to my professor'. Do NOT call for general answers, explanations, resource lists, bullet-point summaries, or anything the user did not explicitly ask to be saved as a document.",
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        content: {
-                                            type: "STRING",
-                                            description:
-                                                "The full HTML content. " +
-                                                DOC_EDITOR_HTML_BLOCK_RULES +
-                                                " Optional <i>/<em>. Never truncate.",
-                                        },
-                                    },
-                                    required: ["content"],
-                                },
-                            },
-                            {
-                                name: "draw_whiteboard",
-                                description: `Adds NEW shapes to the tldraw 2.1 whiteboard. Use this for diagrams, flowcharts, or any new visual content. Only three shape types are supported — any other type crashes tldraw.
-
-STEP 1 — PLAN LAYOUT FIRST (mandatory):
-Assign every shape a variable: id, x, y, w, h. Compute all values before writing JSON.
-Min gap between shapes: 40px horizontal, 40px vertical.
-
-STEP 2 — BOX SIZING (critical — prevents ugly text wrapping):
-Set w wide enough to fit the text on 1–2 lines. Rules:
-- Short label (1–3 words): w=160, h=60
-- Medium label (4–8 words or a short sentence): w=200, h=80
-- Long label (multi-line bullet list): w=220, h=120, use \\n between bullets
-Never let tldraw wrap text by making boxes too narrow.
-
-STEP 3 — ARROW PLACEMENT (exact formula, always use this):
-Given source box at (sx, sy, sw, sh) and target box at (tx, ty, tw, th):
-  start = { type:"point", x: sx+sw,   y: sy+sh/2 }   ← right-edge midpoint of source
-  end   = { type:"point", x: tx,      y: ty+th/2 }   ← left-edge midpoint of target
-For vertical flow (source above target):
-  start = { type:"point", x: sx+sw/2, y: sy+sh  }    ← bottom-edge midpoint
-  end   = { type:"point", x: tx+tw/2, y: ty      }   ← top-edge midpoint
-Arrow x/y must be 0,0 — coordinates live inside start/end, not on the shape itself.
-
-GEO (box/circle/diamond):
-{"id":"shape:box1","typeName":"shape","type":"geo","x":100,"y":100,"rotation":0,"isLocked":false,"opacity":1,"parentId":"page:page","index":"a1","props":{"w":200,"h":80,"geo":"rectangle","color":"black","size":"m","fill":"none","dash":"draw","text":"Label text here","labelColor":"black","font":"draw","align":"middle","verticalAlign":"middle","growY":0,"url":""}}
-geo values: "rectangle"|"ellipse"|"diamond"|"triangle"|"star"
-
-TEXT (standalone label, auto-sizes):
-{"id":"shape:txt1","typeName":"shape","type":"text","x":100,"y":200,"rotation":0,"isLocked":false,"opacity":1,"parentId":"page:page","index":"a2","props":{"text":"Heading","color":"black","size":"m","font":"draw","align":"start","autoSize":true,"scale":1,"w":200}}
-
-ARROW:
-{"id":"shape:arr1","typeName":"shape","type":"arrow","x":0,"y":0,"rotation":0,"isLocked":false,"opacity":1,"parentId":"page:page","index":"a3","props":{"start":{"type":"point","x":300,"y":140},"end":{"type":"point","x":500,"y":140},"arrowheadStart":"none","arrowheadEnd":"arrow","color":"black","size":"m","fill":"none","dash":"draw","bend":0,"labelColor":"black","font":"draw"}}
-
-Hard rules: index unique per shape ("a1","a2"…); x/y/w/h finite numbers, w/h > 0; never add fields not in the examples above — unknown fields crash tldraw.`,
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        shapes: {
-                                            type: "ARRAY",
-                                            description:
-                                                "Array of new shape records to create.",
-                                            items: { type: "OBJECT" },
-                                        },
-                                    },
-                                    required: ["shapes"],
-                                },
-                            },
-                            {
-                                name: "edit_whiteboard",
-                                description: `Patches or removes EXISTING shapes on the tldraw whiteboard. Use this when the user asks to fix, move, resize, recolor, relabel, or delete specific shapes. Look up shape IDs from the canvas snapshot in the user message.
-
-PATCH — send only the id + fields to change (tldraw merges, untouched fields stay):
-Change label: {"id":"shape:box1","props":{"text":"New label"}}
-Resize:       {"id":"shape:box1","props":{"w":240,"h":120}}
-Move:         {"id":"shape:box1","x":400,"y":200}
-Recolor:      {"id":"shape:box1","props":{"color":"blue"}}
-color values: "black"|"grey"|"light-violet"|"violet"|"blue"|"light-blue"|"yellow"|"orange"|"green"|"light-green"|"light-red"|"red"
-
-DELETE — ids to remove: ["shape:box1","shape:arr1"]
-Never send fields not in the original shape schema — unknown fields crash tldraw.`,
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        patches: {
-                                            type: "ARRAY",
-                                            description:
-                                                "Array of patch objects. Each must have 'id' plus only the fields to change.",
-                                            items: { type: "OBJECT" },
-                                        },
-                                        remove: {
-                                            type: "ARRAY",
-                                            description:
-                                                "Array of shape ID strings to delete.",
-                                            items: { type: "STRING" },
-                                        },
-                                    },
-                                    required: [],
-                                },
-                            },
-                            {
-                                name: "erase_whiteboard",
-                                description: `Deletes specific shapes from the whiteboard. You decide WHICH shapes to erase based on the canvas snapshot in the user message. Pass their exact IDs in the 'ids' array.
-
-When the user asks to "clear everything" or "start over", pass ALL shape IDs from the snapshot.
-When the user asks to remove specific content (e.g. "erase the arrows", "delete the left diagram"), pass only the IDs of those shapes.
-Look up IDs from the [CANVAS STATE] snapshot that is injected into the user message.
-Never guess IDs — only use IDs that appear in the snapshot.`,
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        ids: {
-                                            type: "ARRAY",
-                                            description:
-                                                'Array of shape ID strings to delete (e.g. ["shape:box1", "shape:arr1"]). Must be IDs from the canvas snapshot.',
-                                            items: { type: "STRING" },
-                                        },
-                                    },
-                                    required: ["ids"],
-                                },
-                            },
-                            {
-                                name: "search_jobs",
-                                description: [
-                                    "Search Curastem job listings. If the user names a role, set query; if they want ANY role or all openings, OMIT query and keywords — use only location, visa, company, filters.",
-                                    "Never concatenate many job titles into one query. Do not add seniority, stacks, or resume/profile terms unless they asked for that.",
-                                    "Omit seniority_level unless they explicitly name a level (e.g. senior PM, entry level). Never infer seniority from resume or profile.",
-                                    "Expand abbreviations only (swe → software engineer, pm → product manager) when they named a role.",
-                                    "Umbrella phrases ('big tech', retail): neutral role terms and/or company slugs — not the user's resume headline unless they asked.",
-                                    "Pass company slug when they name an employer. Keywords only for skills they mentioned this turn.",
-                                    "Visa: visa_sponsorship yes when relevant. More jobs: client excludes already-shown IDs. Company 0 results: retry without company.",
-                                    'Multiple metros in one ask: location_or or one location with "or" between places — one call, not one search per city.',
-                                    "Do NOT call for general career advice — only when the user wants listings.",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        query: {
-                                            type: "STRING",
-                                            description:
-                                                "Job title or role phrase if they asked for a specific role. Sent as API title= (job title substring only). If any role / all jobs, omit (empty). Never invent a title or merge many roles into one string.",
-                                        },
-                                        keywords: {
-                                            type: "STRING",
-                                            description:
-                                                "Only if the user named skills/stacks in this message. Omit by default — do not pull from resume or profile.",
-                                        },
-                                        company: {
-                                            type: "STRING",
-                                            description:
-                                                "Employer slug(s): one or comma-separated OR list (e.g. meta,google,apple). Lowercase-hyphenated. If 0 results, retry without company.",
-                                        },
-                                        location: {
-                                            type: "STRING",
-                                            description:
-                                                'Short city or region when not using near_lat/near_lng. The API matches location text on postings. For "near me" the client uses GET /geo and IP only (no browser GPS). Leave empty for all locations or use country alone. For multiple metros, prefer location_or or one string with "or" between places.',
-                                        },
-                                        location_or: {
-                                            type: "STRING",
-                                            description:
-                                                'Comma-separated place names when the user names two or more metros in one turn. Matches jobs in ANY listed place (one request). Example: San Francisco,New York. Omit for a single place or "near me".',
-                                        },
-                                        employment_type: {
-                                            type: "STRING",
-                                            description:
-                                                "Type of employment: full_time, part_time, contract, internship, or temporary.",
-                                        },
-                                        workplace_type: {
-                                            type: "STRING",
-                                            description:
-                                                "Work arrangement: remote, hybrid, or on_site.",
-                                        },
-                                        seniority_level: {
-                                            type: "STRING",
-                                            description:
-                                                "Omit unless the user explicitly asked for a band. Never infer from resume. new_grad, entry, mid, senior, staff, manager, director, executive.",
-                                        },
-                                        posted_within_days: {
-                                            type: "NUMBER",
-                                            description:
-                                                "Optional: 1–30. Omit for newest-first with no strict cutoff. Set when the user names a window (e.g. 7 this week, 30 this month).",
-                                        },
-                                        salary_min: {
-                                            type: "NUMBER",
-                                            description:
-                                                "Minimum annual salary (USD). Only returns jobs where salary is known and meets this threshold. Examples: 100000 for $100k+, 150000 for $150k+.",
-                                        },
-                                        visa_sponsorship: {
-                                            type: "STRING",
-                                            description:
-                                                "Set 'yes' for jobs that sponsor work visas (H-1B, sponsorship requests). Set 'no' only if the user wants postings that explicitly state no sponsorship. Omit if not relevant.",
-                                        },
-                                        description_language: {
-                                            type: "STRING",
-                                            description:
-                                                "ISO 639-1 language of posting (en, es, de). Omit unless the user asks for a specific language.",
-                                        },
-                                        country: {
-                                            type: "STRING",
-                                            description:
-                                                "ISO 3166-1 alpha-2 country filter (US, GB). Jobs in that country or remote.",
-                                        },
-                                        exclude_ids: {
-                                            type: "STRING",
-                                            description:
-                                                "Comma-separated job IDs to exclude (already shown).",
-                                        },
-                                        near_lat: {
-                                            type: "NUMBER",
-                                            description:
-                                                "Latitude for nearby jobs — use with near_lng when passing coordinates explicitly (chat uses /geo + IP for near me without browser GPS).",
-                                        },
-                                        near_lng: {
-                                            type: "NUMBER",
-                                            description:
-                                                "Longitude for nearby jobs — required with near_lat.",
-                                        },
-                                        radius_km: {
-                                            type: "NUMBER",
-                                            description:
-                                                "Radius in km for near_lat/near_lng. Default 50.",
-                                        },
-                                        exclude_remote: {
-                                            type: "BOOLEAN",
-                                            description:
-                                                "With geo search: false includes remote jobs; true (default) excludes remote-only roles.",
-                                        },
-                                        limit: {
-                                            type: "NUMBER",
-                                            description:
-                                                "Number of results to return (default 6, max 20).",
-                                        },
-                                        cursor: {
-                                            type: "STRING",
-                                            description:
-                                                "Pagination cursor from a previous search_jobs response to fetch the next page.",
-                                        },
-                                    },
-                                    required: [],
-                                },
-                            },
-                            {
-                                name: "get_job_details",
-                                description: [
-                                    "Fetch full details about a specific job: responsibilities, qualifications, salary, company info.",
-                                    "Use when the user asks for more details about a job, wants to know if they're a good fit, or asks to write a cover letter for a specific posting.",
-                                    "If the user is currently viewing a job in the sidebar and asks about 'this job' or 'it', use that job's ID from the system context — do NOT ask the user to provide the ID.",
-                                    "When they also asked for a cover letter or resume for that job, output create_cover_letter or create_resume in the same turn after you receive the job details (the client runs chained tools).",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        job_id: {
-                                            type: "STRING",
-                                            description:
-                                                "The job ID from a previous search_jobs result or from the [Currently Viewed Job] system context.",
-                                        },
-                                    },
-                                    required: ["job_id"],
-                                },
-                            },
-                            {
-                                name: "save_resume",
-                                description: [
-                                    "Saves the user's own resume to on-device storage so future sessions can personalise responses and create tailored resumes.",
-                                    "ONLY call this when: (1) the user uploads a file AND explicitly says it is their resume, OR (2) the user says something like 'save this as my resume' / 'use this resume', OR (3) you are highly confident the document belongs to the user (e.g. their name appears in it).",
-                                    "NEVER call this for AI-generated resumes (create_resume output) or for resumes that clearly belong to someone else.",
-                                    "The content parameter should be the full plain-text extracted from the uploaded document.",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        content: {
-                                            type: "STRING",
-                                            description:
-                                                "Full plain-text content of the user's resume.",
-                                        },
-                                    },
-                                    required: ["content"],
-                                },
-                            },
-                            {
-                                name: "retrieve_resume",
-                                description: [
-                                    "Retrieves the user's saved resume from on-device storage.",
-                                    "Call ONLY when: (1) the user asks you to create a new resume or cover letter and you need their work/education history, OR (2) the user's request genuinely requires full job history or skills to give a useful answer (e.g. 'what jobs should I apply for?').",
-                                    "Do NOT call on every message — only when resume content would meaningfully improve your response.",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {},
-                                    required: [],
-                                },
-                            },
-                            {
-                                name: "create_resume",
-                                description: [
-                                    "Creates a polished AI-generated resume and opens it in the doc editor.",
-                                    "Call when the user explicitly asks to create, write, or build a resume.",
-                                    "Write the full resume content in the content parameter — include all standard sections: summary, experience, education, skills.",
-                                    "When [Currently Viewed Job] or other job details are in context, tailor the Skills section to that role (requirements, title, company) and drop skills that do not fit.",
-                                    "Experience bullets may be rephrased for clarity and role/keyword fit; keep all real figures (%, $, counts, ranges) accurate and do not strip metrics.",
-                                    "Use contact info the user actually gave (e.g. retrieve_resume); do not invent emails or links.",
-                                    "Do NOT call save_resume after this — AI-generated resumes are not the user's real resume.",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        content: {
-                                            type: "STRING",
-                                            description:
-                                                CREATE_RESUME_HTML_FORMAT_INSTRUCTIONS,
-                                        },
-                                    },
-                                    required: ["content"],
-                                },
-                            },
-                            {
-                                name: "create_cover_letter",
-                                description: [
-                                    "Creates a cover letter and opens it in the doc editor.",
-                                    "Call when the user explicitly asks to create, write, or draft a cover letter.",
-                                    "Write the full cover letter in the content parameter — address it to the employer if known, personalise it to the role.",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        content: {
-                                            type: "STRING",
-                                            description: `The full HTML cover letter. ${DOC_EDITOR_HTML_BLOCK_RULES}
-
-Follow this structure (use real company and candidate names when known):
-
-1. <h1 class="doc-block-title">Hi team [Company Name]!</h1> or <h1>Hi team [Company Name]!</h1> (or "Hi team!" if the company is unknown)
-2. One <p> with a 2–3 sentence direct-talk summary of who the candidate is and why this role fits
-3. <h1 class="doc-block-section">What I've done</h1> then a <ul> with 2–5 <li> bullets (concrete wins, skills, or experience — full sentences, not placeholders)
-4. <h1 class="doc-block-section">What I can do for [Company Name]</h1> then a <ul> with 2–5 <li> bullets tied to that company and role
-5. <h1 class="doc-block-section">How to contact me</h1> then a <ul> with 1–4 <li> bullets for GitHub, LinkedIn, portfolio, and/or email as relevant. Use <a href="..."> only for real links from User Context or chat — never invent URLs. Fewer bullets is fine if that is all you know
-6. <p>Thank you,<br/>[Candidate Name]</p>
-
-Write the complete letter with real bullet text — never empty bullets. PDF export formats to one page when downloaded.`,
-                                        },
-                                    },
-                                    required: ["content"],
-                                },
-                            },
-                            {
-                                name: "retrieve_memories",
-                                description: [
-                                    "Retrieves the user's 'favorite things' — personal facts, interests, and hobbies they've shared — to personalise your response.",
-                                    "Call ONLY when the user's request would genuinely benefit from knowing their personal background (e.g. career goals, interests, hobbies, life context).",
-                                    "Do NOT call on every message — only when these details would meaningfully improve the answer.",
-                                    "Each item is returned with a numeric index [0], [1], etc. used for editing.",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {},
-                                    required: [],
-                                },
-                            },
-                            {
-                                name: "save_memories",
-                                description: [
-                                    "Adds a new item to the user's 'Your favorite things' list — personal facts, interests, hobbies, or goals they share during conversation.",
-                                    "ONLY call for things the user reveals that are meaningful and durable — e.g. a hobby, career goal, favourite subject, challenge they mentioned.",
-                                    "ALWAYS call retrieve_memories first (in a prior turn or the same session) to avoid saving duplicates.",
-                                    "NEVER save: things already in system context (name, school, work), content from retrieve_resume, temporary preferences, one-off questions, or trivial details.",
-                                    "One item per call. Keep it concise (1 sentence, written as a fact).",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        memory: {
-                                            type: "STRING",
-                                            description:
-                                                "A concise factual statement to add to the user's favorite things (1 sentence, no leading dash — that is added automatically).",
-                                        },
-                                    },
-                                    required: ["memory"],
-                                },
-                            },
-                            {
-                                name: "edit_memories",
-                                description: [
-                                    "Edits or deletes an item in the user's 'Your favorite things' list by its numeric index.",
-                                    "Use to update outdated information or remove something the user wants deleted.",
-                                    "Omit new_text to delete the item entirely.",
-                                    "Always call retrieve_memories first so you know the correct indexes.",
-                                ].join(" "),
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        id: {
-                                            type: "STRING",
-                                            description:
-                                                "The numeric index (as a string, e.g. '0', '2') of the item to edit or delete.",
-                                        },
-                                        new_text: {
-                                            type: "STRING",
-                                            description:
-                                                "Replacement text for the item (no leading dash). Omit or leave empty to delete it.",
-                                        },
-                                    },
-                                    required: ["id"],
-                                },
-                            },
-                        ],
-                    },
-                ]
-
-                const userText = userContent?.[0]?.parts?.[0]?.text || ""
+                // Text chat tools are declared and executed by /agent/chat.
+                const userText = userContent
+                    .map((part: any) =>
+                        typeof part?.text === "string" ? part.text : ""
+                    )
+                    .join("\n")
+                    .trim()
                 const isWhiteboardIntent =
                     /draw|whiteboard|diagram|chart|mind map|flowchart/i.test(
                         userText
                     )
+                const shouldUseCloudAgent = true
                 
                 
                 
+                const shouldSendDocContext =
+                    activeAgentChipRef.current === "doc" ||
+                    (isDocOpenRef.current &&
+                        /\b(?:edit|change|update|replace|remove|add|shorten|rewrite|revise|tweak|fix|bullet|section|document|doc|resume|cover letter)\b/i.test(
+                            userText
+                        ))
+                const shouldSendAppContext =
+                    activeAgentChipRef.current === "app" ||
+                    (isAppOpenRef.current &&
+                        /\b(?:edit|change|update|replace|remove|add|shorten|rewrite|revise|tweak|fix|button|style|layout|app|code|html|css|javascript|js)\b/i.test(
+                            userText
+                        ))
                 const useThinking =
                     isWhiteboardOpenRef.current || isWhiteboardIntent
 
@@ -37739,6 +37881,28 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 
                 
                 let augmentedUserContent = userContent
+                if (shouldSendDocContext) {
+                    augmentedUserContent = [
+                        ...augmentedUserContent,
+                        {
+                            text:
+                                `\n\n[CURRENT DOCUMENT]\n` +
+                                `docType: ${docTypeRef.current || docType}\n` +
+                                `html:\n${docContentRef.current || docContent}`,
+                        },
+                    ]
+                }
+                if (shouldSendAppContext) {
+                    augmentedUserContent = [
+                        ...augmentedUserContent,
+                        {
+                            text:
+                                `\n\n[CURRENT APP]\n` +
+                                `mode: ${appModeRef.current || appMode}\n` +
+                                `html:\n${appCodeRef.current || appCode}`,
+                        },
+                    ]
+                }
                 if (
                     (isWhiteboardOpenRef.current || isWhiteboardIntent) &&
                     editorRef.current
@@ -37795,7 +37959,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                 : `\n\n[CANVAS STATE — empty]`
 
                         augmentedUserContent = [
-                            ...userContent,
+                            ...augmentedUserContent,
                             { text: snapshotText },
                         ]
                     } catch (e) {
@@ -37808,7 +37972,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         ...history,
                         { role: "user", parts: augmentedUserContent },
                     ],
-                    tools: tools,
                     generationConfig: {
                         temperature: 1.0,
                         maxOutputTokens: 8192,
@@ -37837,6 +38000,526 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 if (getSystemPromptWithContext().trim()) {
                     payload.systemInstruction = {
                         parts: [{ text: getSystemPromptWithContext() }],
+                    }
+                }
+
+                const DELIM_SUGG_OPEN = "<curastem-suggestions>"
+                const DELIM_SUGG_CLOSE = "</curastem-suggestions>"
+
+                function computeDisplayText(text: string): string {
+                    const suggPos = text.indexOf(DELIM_SUGG_OPEN)
+                    return suggPos !== -1
+                        ? text.substring(0, suggPos).trimEnd()
+                        : text
+                }
+
+                const applyCloudAgentEvents = (events: any[]): boolean => {
+                    if (!events.length) {
+                        log("[cloud agent] no events returned", "tools")
+                        setMessages((prev) => [
+                            ...prev,
+                            {
+                                role: "model",
+                                text: "Cloud tools returned no events. Please try again.",
+                            },
+                        ])
+                        return false
+                    }
+                    // Log every event type to the Tools & MCP debug panel
+                    for (const ev of events) {
+                        if (!ev?.type) continue
+                        if (ev.type === "assistant_text") {
+                            log(
+                                `[cloud agent] assistant_text ${String(ev.text ?? "").length}b`,
+                                "tools"
+                            )
+                            continue
+                        }
+                        let detail = ev.type
+                        if (ev.type === "doc_update") detail = `doc_update docType=${ev.docType} html=${String(ev.html ?? "").length}b`
+                        else if (ev.type === "doc_patch") detail = `doc_patch ops=${Array.isArray(ev.operations) ? ev.operations.length : 0}`
+                        else if (ev.type === "app_update") detail = `app_update html=${String(ev.html ?? "").length}b`
+                        else if (ev.type === "app_patch") detail = `app_patch ops=${Array.isArray(ev.operations) ? ev.operations.length : 0}`
+                        else if (ev.type === "whiteboard_command") detail = `whiteboard_command tool=${(ev.command || {}).name}`
+                        else if (ev.type === "job_cards") detail = `job_cards count=${Array.isArray(ev.jobs) ? ev.jobs.length : 0}`
+                        else if (ev.type === "job_detail") detail = `job_detail id=${ev.job?.id}`
+                        else if (ev.type === "screen_open") detail = `screen_open target=${ev.target}`
+                        else if (ev.type === "tool_error") detail = `tool_error tool=${ev.tool}: ${ev.message}`
+                        else if (ev.type === "resume_update") detail = `resume_update`
+                        else if (ev.type === "memory_update") detail = `memory_update`
+                        else if (ev.type === "resources") detail = `resources count=${Array.isArray(ev.resources) ? ev.resources.length : 0}`
+                        log(`[cloud agent] ${detail}`, "tools")
+                    }
+                    const text = events
+                        .filter(
+                            (event: any) =>
+                                event?.type === "assistant_text" &&
+                                typeof event.text === "string"
+                        )
+                        .map((event: any) => event.text)
+                        .join("\n\n")
+                        .trim()
+                    const jobsEvent = events.find(
+                        (event: any) => event?.type === "job_cards"
+                    )
+                    const jobs = Array.isArray(jobsEvent?.jobs)
+                        ? (jobsEvent.jobs as JobSnippet[])
+                        : undefined
+                    const docEvent = events.find(
+                        (event: any) => event?.type === "doc_update"
+                    )
+                    const docPatchEvent = events.find(
+                        (event: any) => event?.type === "doc_patch"
+                    )
+                    const screenOpenEvent = events.find(
+                        (event: any) => event?.type === "screen_open"
+                    )
+                    const jobDetailEvent = events.find(
+                        (event: any) => event?.type === "job_detail"
+                    )
+                    const detailedJob =
+                        screenOpenEvent?.target === "job_details"
+                            ? screenOpenEvent?.job ?? jobDetailEvent?.job
+                            : null
+                    if (detailedJob?.id && detailedJob?.title) {
+                        const jobForSidebar = rawJobToHomepageJob(detailedJob)
+                        setJobDeckExtras((prev) =>
+                            prev.some((job) => job.id === jobForSidebar.id)
+                                ? prev
+                                : [...prev, jobForSidebar]
+                        )
+                        setSelectedJob(jobForSidebar)
+                        setIsJobOpen(true)
+                        setIsDocOpen(false)
+                        setIsWhiteboardOpen(false)
+                        setIsAppOpen(false)
+                        setIsMapOpen(false)
+                    } else if (screenOpenEvent?.target === "docs") {
+                        openMostRecentDoc()
+                        setIsDocOpen(true)
+                        setIsAppOpen(false)
+                        setIsWhiteboardOpen(false)
+                        setIsJobOpen(false)
+                        setIsMapOpen(false)
+                        isDocOpenRef.current = true
+                        isAppOpenRef.current = false
+                        isWhiteboardOpenRef.current = false
+                    } else if (screenOpenEvent?.target === "maps") {
+                        const company =
+                            typeof screenOpenEvent.company === "string"
+                                ? screenOpenEvent.company
+                                : null
+                        setMapUrlCompany(company)
+                        setIsMapOpen(true)
+                        setIsDocOpen(false)
+                        setIsAppOpen(false)
+                        setIsWhiteboardOpen(false)
+                        setIsJobOpen(false)
+                        isDocOpenRef.current = false
+                        isAppOpenRef.current = false
+                        isWhiteboardOpenRef.current = false
+                    } else if (screenOpenEvent?.target === "whiteboard") {
+                        setIsWhiteboardOpen(true)
+                        setHasWhiteboardStarted(true)
+                        setIsDocOpen(false)
+                        setIsAppOpen(false)
+                        setIsJobOpen(false)
+                        setIsMapOpen(false)
+                        isWhiteboardOpenRef.current = true
+                        isDocOpenRef.current = false
+                        isAppOpenRef.current = false
+                    } else if (screenOpenEvent?.target === "app_editor") {
+                        setIsAppOpen(true)
+                        setAppMode("editor")
+                        appModeRef.current = "editor"
+                        setIsDocOpen(false)
+                        setIsWhiteboardOpen(false)
+                        setIsJobOpen(false)
+                        setIsMapOpen(false)
+                        isAppOpenRef.current = true
+                        isDocOpenRef.current = false
+                        isWhiteboardOpenRef.current = false
+                    }
+                    let docId: string | undefined
+                    if (
+                        docEvent?.html &&
+                        typeof docEvent.html === "string"
+                    ) {
+                        const docType =
+                            docEvent.docType === "resume" ||
+                            docEvent.docType === "cover_letter"
+                                ? docEvent.docType
+                                : "doc"
+                        let docHtml = docEvent.html
+                        if (docType === "resume" && resumeJobIdRef.current) {
+                            const captured = resumeCapturedItemsRef.current
+                            const used = capturedOrbitWordsInHtml(
+                                docEvent.html,
+                                captured.map((item) => item.word)
+                            )
+                            docHtml = markKeywordsInHtml(docEvent.html, used)
+                            resumeCache.current.set(
+                                resumeJobIdRef.current,
+                                docEvent.html
+                            )
+                            setResumeUsedKeywords(used)
+                            if (captured.length > 0) {
+                                setResumeAnimPhase("landing")
+                            } else {
+                                setResumeAnimPhase("idle")
+                                setResumeCapturedItems([])
+                            }
+                            resumeJobIdRef.current = null
+                            if (dataConnectionsRef.current.size > 0) {
+                                broadcastData({
+                                    type: "resume-anim-land",
+                                    payload: {
+                                        markedContent: docHtml,
+                                        usedKeywords: used,
+                                    },
+                                })
+                            }
+                        }
+                        docId = upsertDocForTool(
+                            "new",
+                            docHtml,
+                            docType,
+                            ""
+                        )
+                        setDocType(docType)
+                        setIsDocOpen(true)
+                        setIsAppOpen(false)
+                        setIsWhiteboardOpen(false)
+                        isDocOpenRef.current = true
+                        isAppOpenRef.current = false
+                        isWhiteboardOpenRef.current = false
+                        if (dataConnectionsRef.current.size > 0) {
+                            broadcastData({
+                                type: "doc-update",
+                                payload: docEvent.html,
+                            })
+                            broadcastData({
+                                type: "doc-start",
+                                payload: { docType },
+                            })
+                        }
+                    }
+                    if (
+                        Array.isArray(docPatchEvent?.operations) &&
+                        docPatchEvent.operations.length > 0
+                    ) {
+                        const nextDocHtml = applyDocPatchOps(
+                            docContentRef.current || docContent,
+                            docPatchEvent.operations
+                        )
+                        const nextDocType =
+                            docPatchEvent.docType === "resume" ||
+                            docPatchEvent.docType === "cover_letter"
+                                ? docPatchEvent.docType
+                                : docTypeRef.current || docType
+                        docId = upsertDocForTool(
+                            "update",
+                            nextDocHtml,
+                            nextDocType,
+                            docCompanyRef.current || "",
+                            { targetDocId: activeDocIdRef.current }
+                        )
+                        setDocContent(nextDocHtml)
+                        docContentRef.current = nextDocHtml
+                        setDocType(nextDocType)
+                        docTypeRef.current = nextDocType
+                        setIsDocOpen(true)
+                        setIsAppOpen(false)
+                        setIsWhiteboardOpen(false)
+                        isDocOpenRef.current = true
+                        isAppOpenRef.current = false
+                        isWhiteboardOpenRef.current = false
+                        if (dataConnectionsRef.current.size > 0) {
+                            broadcastData({
+                                type: "doc-update",
+                                payload: nextDocHtml,
+                            })
+                            broadcastData({
+                                type: "doc-start",
+                                payload: { docType: nextDocType },
+                            })
+                        }
+                    }
+                    const appEvent = events.find(
+                        (event: any) => event?.type === "app_update"
+                    )
+                    if (
+                        appEvent?.html &&
+                        typeof appEvent.html === "string"
+                    ) {
+                        setAppCode(appEvent.html)
+                        setIsAppOpen(true)
+                        setIsDocOpen(false)
+                        setIsWhiteboardOpen(false)
+                        isAppOpenRef.current = true
+                        isDocOpenRef.current = false
+                        isWhiteboardOpenRef.current = false
+                        setAppMode("player")
+                        appModeRef.current = "player"
+                        if (dataConnectionsRef.current.size > 0) {
+                            broadcastData({
+                                type: "app-update",
+                                payload: appEvent.html,
+                            })
+                            broadcastData({ type: "app-start" })
+                        }
+                    }
+                    const appPatchEvent = events.find(
+                        (event: any) => event?.type === "app_patch"
+                    )
+                    if (Array.isArray(appPatchEvent?.operations)) {
+                        const nextAppCode = applyAppPatchOps(
+                            appCodeRef.current || appCode,
+                            appPatchEvent.operations
+                        )
+                        setAppCode(nextAppCode)
+                        appCodeRef.current = nextAppCode
+                        setIsAppOpen(true)
+                        setAppMode("editor")
+                        appModeRef.current = "editor"
+                        setIsDocOpen(false)
+                        setIsWhiteboardOpen(false)
+                        isAppOpenRef.current = true
+                        isDocOpenRef.current = false
+                        isWhiteboardOpenRef.current = false
+                        if (dataConnectionsRef.current.size > 0) {
+                            broadcastData({
+                                type: "app-update",
+                                payload: nextAppCode,
+                            })
+                            broadcastData({
+                                type: "app-mode-change",
+                                payload: "editor",
+                            })
+                            broadcastData({ type: "app-start" })
+                        }
+                    }
+                    const resourcesEvent = events.find(
+                        (event: any) => event?.type === "resources"
+                    )
+                    const resources = Array.isArray(resourcesEvent?.resources)
+                        ? resourcesEvent.resources
+                        : undefined
+                    const resumeEvent = events.find(
+                        (event: any) => event?.type === "resume_update"
+                    )
+                    if (typeof resumeEvent?.content === "string") {
+                        saveResume(resumeEvent.content)
+                        curastemSyncRef.current?.enqueueProfile({
+                            resume_plain: resumeEvent.content,
+                            resume_doc_html: "",
+                        })
+                    }
+                    const memoryEvent = events.find(
+                        (event: any) => event?.type === "memory_update"
+                    )
+                    const memoryItems = Array.isArray(
+                        memoryEvent?.result?.memories
+                    )
+                        ? memoryEvent.result.memories
+                        : undefined
+                    if (
+                        memoryItems &&
+                        typeof window !== "undefined"
+                    ) {
+                        const memoryText = memoryItems
+                            .filter((item: unknown) => typeof item === "string")
+                            .map((item: string) =>
+                                item.startsWith("- ") ? item : `- ${item}`
+                            )
+                            .join("\n")
+                        localStorage.setItem("you_interests", memoryText)
+                        setYouInterests(memoryText)
+                        youInterestsRef.current = memoryText
+                        curastemSyncRef.current?.enqueueProfile({
+                            you_interests: memoryText,
+                        })
+                    }
+                    const toolErrors = events
+                        .filter((event: any) => event?.type === "tool_error")
+                        .map((event: any) => event?.message)
+                        .filter((message: unknown) => typeof message === "string")
+                    for (const wbEvent of events.filter(
+                        (event: any) =>
+                            event?.type === "whiteboard_command"
+                    )) {
+                        const command = wbEvent.command || {}
+                        const toolName = command.name
+                        const args = command.args || {}
+                        if (!isWhiteboardOpenRef.current) {
+                            setIsWhiteboardOpen(true)
+                            setIsDocOpen(false)
+                            setIsAppOpen(false)
+                            isWhiteboardOpenRef.current = true
+                            isDocOpenRef.current = false
+                            isAppOpenRef.current = false
+                        }
+                        if (editorRef.current) {
+                            editorRef.current.batch(() => {
+                                if (toolName === "erase_whiteboard") {
+                                    ;(args.ids || []).forEach(
+                                        (id: string) => {
+                                            const sid =
+                                        wbSanitizeId(id)
+                                            if (
+                                        editorRef.current.getShape(
+                                            sid
+                                        )
+                                            )
+                                        editorRef.current.deleteShapes(
+                                            [sid]
+                                        )
+                                        }
+                                    )
+                                } else if (
+                                    toolName === "draw_whiteboard"
+                                ) {
+                                    ;(args.shapes || [])
+                                        .map(wbValidateShape)
+                                        .filter(Boolean)
+                                        .forEach((s: any) => {
+                                            if (
+                                        editorRef.current.getShape(
+                                            s.id
+                                        )
+                                            )
+                                        editorRef.current.updateShapes(
+                                            [s]
+                                        )
+                                            else
+                                        editorRef.current.createShapes(
+                                            [s]
+                                        )
+                                        })
+                                } else if (
+                                    toolName === "edit_whiteboard"
+                                ) {
+                                    ;(args.patches || [])
+                                        .filter((s: any) => s?.id)
+                                        .map(wbApplyToPatch)
+                                        .forEach((s: any) => {
+                                            if (
+                                        editorRef.current.getShape(
+                                            s.id
+                                        )
+                                            )
+                                        editorRef.current.updateShapes(
+                                            [s]
+                                        )
+                                        })
+                                    ;(args.remove || []).forEach(
+                                        (id: string) => {
+                                            const sid =
+                                        wbSanitizeId(id)
+                                            if (
+                                        editorRef.current.getShape(
+                                            sid
+                                        )
+                                            )
+                                        editorRef.current.deleteShapes(
+                                            [sid]
+                                        )
+                                        }
+                                    )
+                                }
+                            })
+                        } else {
+                            pendingWhiteboardUpdates.current.push({
+                                toolName,
+                                args,
+                            })
+                        }
+                    }
+                    if (jobs?.length) {
+                        recordSearchJobsShownIds(
+                            searchJobsSeenJobIdsRef.current,
+                            jobs
+                        )
+                    }
+                    const fallbackText = docEvent?.html
+                        ? "Done — I created the document."
+                        : appEvent?.html
+                          ? "Done — I created the app."
+                          : events.some(
+                                (event: any) =>
+                                    event?.type === "whiteboard_command"
+                            )
+                            ? "Done — I updated the whiteboard."
+                          : resources?.length
+                            ? "Here are the career and college resources I found."
+                            : toolErrors.length
+                              ? toolErrors.join("\n")
+                              : jobs?.length
+                                ? "Here are some matching jobs!"
+                                : ""
+                    setMessages((prev) => [
+                        ...prev,
+                        {
+                            role: "model",
+                            text:
+                                computeDisplayText(text) || fallbackText,
+                            ...(jobs && { jobs }),
+                            ...(docId && { docId }),
+                            ...(docEvent?.docType && {
+                                toolUsed: docEvent.docType,
+                            }),
+                        },
+                    ])
+                    if (dataConnectionsRef.current.size > 0) {
+                        broadcastData({
+                            type: "ai-response",
+                            payload: { text, ...(jobs && { jobs }) },
+                        })
+                    }
+                    return true
+                }
+
+                if (shouldUseCloudAgent) {
+                    try {
+                        const cloudResult = await fetchCloudAgentChat(
+                            apiBase,
+                            {
+                                contents: payload.contents,
+                                systemInstruction: payload.systemInstruction,
+                                generationConfig: payload.generationConfig,
+                                clientContext: {
+                                    selectedJobId:
+                                        selectedJobRef.current?.id ?? null,
+                                    memories: getMemories(),
+                                },
+                            },
+                            controller.signal,
+                            log
+                        )
+                        if (cloudResult.ok) {
+                            return applyCloudAgentEvents(cloudResult.events)
+                        }
+                        const errorText =
+                            `Cloud tools could not connect, so I did not fall back to plain text.\n\n` +
+                            `Request: ${cloudResult.url}\n` +
+                            `Error: ${cloudResult.message}`
+                        setMessages((prev) => [
+                            ...prev,
+                            { role: "model", text: errorText },
+                        ])
+                        return false
+                    } catch (err) {
+                        if ((err as Error).name === "AbortError") return false
+                        log(`[cloud agent] error: ${String(err)}`, "tools")
+                        setMessages((prev) => [
+                            ...prev,
+                            {
+                                role: "model",
+                                text:
+                                    "Cloud tools were interrupted before a usable response. I did not fall back to plain text.",
+                            },
+                        ])
+                        return false
                     }
                 }
 
@@ -37893,15 +38576,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 const decoder = new TextDecoder()
                 let buffer = ""
                 let accumulatedText = ""
-                let accumulatedFunctionCall: any = null
-                let accumulatedThoughtSignature: string | undefined
-                
-                let accumulatedJobSnippets: JobSnippet[] | null = null
 
                 
                 
-                const DELIM_SUGG_OPEN = "<curastem-suggestions>"
-                const DELIM_SUGG_CLOSE = "</curastem-suggestions>"
                 let inSuggBlock = false
                 let suggBlockContentStart = -1
 
@@ -37928,11 +38605,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             if (candidate) {
                                 const parts = candidate.content?.parts || []
                                 for (const part of parts) {
-                                    
-                                    const sig =
-                                        (part as any).thoughtSignature ||
-                                        (part as any).thought_signature
-                                    if (sig) accumulatedThoughtSignature = sig
                                     if (part.text) {
                                         accumulatedText += part.text
 
@@ -38074,99 +38746,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                         })
                                     }
                                     
-                                    const fnCall =
-                                        part.functionCall ||
-                                        (part as any).function_call
-
-                                    if (fnCall) {
-                                        if (!accumulatedFunctionCall) {
-                                            accumulatedFunctionCall = {
-                                                name: "",
-                                                args: {},
-                                            }
-                                        }
-
-                                        if (fnCall.name) {
-                                            accumulatedFunctionCall.name =
-                                                fnCall.name
-                                        }
-
-                                        
-                                        
-                                        
-                                        const newArgs =
-                                            (fnCall as any).partial_args ||
-                                            fnCall.args
-                                        if (newArgs) {
-                                            accumulatedFunctionCall.args =
-                                                newArgs
-                                        }
-
-                                        const toolName =
-                                            accumulatedFunctionCall.name ||
-                                            fnCall.name
-
-                                        if (toolName === "create_app") {
-                                            if (!isAppOpenRef.current) {
-                                                setIsAppOpen(true)
-                                                setIsDocOpen(false)
-                                                setIsWhiteboardOpen(false)
-                                                isAppOpenRef.current = true
-                                            }
-                                            if (
-                                                appModeRef.current !== "editor"
-                                            ) {
-                                                setAppMode("editor")
-                                                appModeRef.current = "editor"
-                                            }
-                                            const newCode =
-                                                (
-                                                    accumulatedFunctionCall.args as any
-                                                )?.code || ""
-                                            if (newCode) setAppCode(newCode)
-                                        }
-
-                                        
-                                        if (
-                                            toolName === "update_doc" ||
-                                            toolName === "create_resume" ||
-                                            toolName === "create_cover_letter"
-                                        ) {
-                                            if (!isDocOpenRef.current) {
-                                                setIsDocOpen(true)
-                                                isDocOpenRef.current = true
-                                            }
-                                            if (toolName === "create_resume")
-                                                setDocType("resume")
-                                            else if (
-                                                toolName ===
-                                                "create_cover_letter"
-                                            )
-                                                setDocType("cover_letter")
-                                            else setDocType("doc")
-                                            const newContent =
-                                                (
-                                                    accumulatedFunctionCall.args as any
-                                                )?.content || ""
-                                            if (newContent)
-                                                setDocContent(newContent)
-                                        }
-
-                                        if (
-                                            toolName === "draw_whiteboard" ||
-                                            toolName === "edit_whiteboard" ||
-                                            toolName === "erase_whiteboard"
-                                        ) {
-                                            if (!isWhiteboardOpenRef.current) {
-                                                setIsWhiteboardOpen(true)
-                                                isWhiteboardOpenRef.current = true
-                                                setIsDocOpen(false)
-                                                setIsAppOpen(false)
-                                                isDocOpenRef.current = false
-                                                isAppOpenRef.current = false
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         } catch (e) {
@@ -38178,13 +38757,6 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 
                 
                 
-                const computeDisplayText = (text: string): string => {
-                    const suggPos = text.indexOf(DELIM_SUGG_OPEN)
-                    return suggPos !== -1
-                        ? text.substring(0, suggPos).trimEnd()
-                        : text
-                }
-
                 const parseSuggestionsFrom = (text: string): void => {
                     const open = text.indexOf(DELIM_SUGG_OPEN)
                     if (open === -1) return
@@ -38220,1745 +38792,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     }
                 }
 
-                if (accumulatedFunctionCall) {
-                    if (debugPanelRef.current === "tools") {
-                        try {
-                            log(
-                                `[tool] ${accumulatedFunctionCall.name} args=${JSON.stringify(accumulatedFunctionCall.args)}`,
-                                "tools"
-                            )
-                        } catch {
-                            log(
-                                `[tool] ${accumulatedFunctionCall.name} (args not JSON-serializable)`,
-                                "tools"
-                            )
-                        }
-                    }
-                    if (accumulatedFunctionCall.name === "create_app") {
-                        const code =
-                            (accumulatedFunctionCall.args as any)?.code || ""
-                        setAppCode(code)
-                        if (!isAppOpen) {
-                            setIsAppOpen(true)
-                            setIsDocOpen(false)
-                            setIsWhiteboardOpen(false)
-                        }
-                        if (code.trim().length > 20) {
-                            setAppMode("player")
-                            appModeRef.current = "player"
-                        }
-                        if (
-                            !isMobileLayout &&
-                            dataConnectionsRef.current.size > 0
-                        ) {
-                            broadcastData({ type: "app-update", payload: code })
-                            broadcastData({
-                                type: "app-mode-change",
-                                payload: appModeRef.current,
-                            })
-                            broadcastData({ type: "app-start" })
-                        }
-                        
-                        
-                        
-                        try {
-                            const { response: followUpRes } =
-                                await geminiProxyFetch(
-                                    model,
-                                    "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify({
-                                        contents: [
-                                            {
-                                                role: "user",
-                                                parts: [
-                                                    {
-                                                        text: `The user asked you to build a personal use app: "${userText}". You just built a very simple version of it. In 1–2 sentences, describe what you created and ask one specific question about features or improvements. Be friendly and enthusiastic. Max 40 words.`,
-                                                    },
-                                                ],
-                                            },
-                                        ],
-                                        generationConfig: {
-                                            temperature: 1.0,
-                                            maxOutputTokens: 100,
-                                            thinkingConfig: {
-                                                thinkingBudget: 0,
-                                            },
-                                        },
-                                    }),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const followUpData = await followUpRes
-                                .json()
-                                .catch(() => ({}))
-                            const followUpText = followUpRes.ok
-                                ? extractTextFromGeminiResponse(followUpData)
-                                : ""
-                            accumulatedText =
-                                computeDisplayText(followUpText) ||
-                                accumulatedText ||
-                                "Here's your app!"
-                            parseSuggestionsFrom(followUpText)
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError")
-                                console.error("create_app follow-up:", err)
-                            accumulatedText =
-                                accumulatedText || "Here's your app!"
-                        }
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "create_app",
-                                        response: {
-                                            content:
-                                                "App created successfully.",
-                                        },
-                                    },
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (accumulatedFunctionCall.name === "update_doc") {
-                        const newContent =
-                            (accumulatedFunctionCall.args as any)?.content || ""
-                        const docIdForUpdateMsg = upsertDocForTool(
-                            "update",
-                            newContent,
-                            "doc",
-                            ""
-                        )
-                        if (!isDocOpen) setIsDocOpen(true)
-                        if (
-                            !isMobileLayout &&
-                            dataConnectionsRef.current.size > 0
-                        ) {
-                            broadcastData({
-                                type: "doc-update",
-                                payload: newContent,
-                            })
-                            broadcastData({ type: "doc-start" })
-                        }
-                        
-                        try {
-                            const { response: followUpRes } =
-                                await geminiProxyFetch(
-                                    model,
-                                    "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify({
-                                        contents: [
-                                            {
-                                                role: "user",
-                                                parts: [
-                                                    {
-                                                        text: `The user asked you to write a document: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.`,
-                                                    },
-                                                ],
-                                            },
-                                        ],
-                                        generationConfig: {
-                                            temperature: 1.0,
-                                            maxOutputTokens: 100,
-                                            thinkingConfig: {
-                                                thinkingBudget: 0,
-                                            },
-                                        },
-                                    }),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const followUpData = await followUpRes
-                                .json()
-                                .catch(() => ({}))
-                            const followUpText = followUpRes.ok
-                                ? extractTextFromGeminiResponse(followUpData)
-                                : ""
-                            accumulatedText =
-                                computeDisplayText(followUpText) ||
-                                accumulatedText ||
-                                "Here's your document!"
-                            parseSuggestionsFrom(followUpText)
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError")
-                                console.error("update_doc follow-up:", err)
-                            accumulatedText =
-                                accumulatedText || "Here's your document!"
-                        }
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "update_doc",
-                                        response: {
-                                            content:
-                                                "Document created successfully.",
-                                        },
-                                    },
-                                    toolUsed: "doc",
-                                    docId: docIdForUpdateMsg,
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (
-                        accumulatedFunctionCall.name ===
-                        RETRIEVE_RESOURCES_TOOL_NAME
-                    ) {
-                        
-                        
-                        
-                        
-                        
-                        const modelPart = {
-                            functionCall: {
-                                name: accumulatedFunctionCall.name,
-                                args: accumulatedFunctionCall.args,
-                            },
-                            thoughtSignature:
-                                accumulatedThoughtSignature ??
-                                GEMINI_THOUGHT_SIGNATURE_SKIP,
-                        }
-                        
-                        
-                        
-                        const resourcesWithLinkDirective =
-                            "For every resource you mention, include a clickable markdown hyperlink formatted as [Resource Name](https://full-url). " +
-                            "Use the exact URLs provided below — do not shorten or omit them.\n\n" +
-                            CAREER_COLLEGE_RESOURCES_CONTENT
+                // Tool calls are handled by the Cloud Agent Runtime; the fallback stream is text-only.
 
-                        const followUpPayload = {
-                            contents: [
-                                ...history,
-                                { role: "user" as const, parts: userContent },
-                                { role: "model" as const, parts: [modelPart] },
-                                {
-                                    role: "user" as const,
-                                    parts: [
-                                        {
-                                            functionResponse: {
-                                                name: RETRIEVE_RESOURCES_TOOL_NAME,
-                                                response: {
-                                                    content:
-                                                        resourcesWithLinkDirective,
-                                                },
-                                            },
-                                        },
-                                    ],
-                                },
-                            ],
-                            tools,
-                            generationConfig: payload.generationConfig,
-                            ...(getSystemPromptWithContext().trim() && {
-                                systemInstruction: payload.systemInstruction,
-                            }),
-                        }
-                        
-                        
-                        
-                        const introText = computeDisplayText(accumulatedText)
-
-                        let followUpRaw = ""
-                        try {
-                            const { response: res } = await geminiProxyFetch(
-                                model,
-                                "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify(followUpPayload),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const data = await res.json().catch(() => ({}))
-                            followUpRaw = res.ok
-                                ? extractTextFromGeminiResponse(data)
-                                : ""
-                            if (!followUpRaw) {
-                                followUpRaw = CAREER_COLLEGE_RESOURCES_CONTENT
-                            }
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError") {
-                                console.error("Resources tool follow-up:", err)
-                            }
-                            followUpRaw =
-                                followUpRaw || CAREER_COLLEGE_RESOURCES_CONTENT
-                        }
-
-                        
-                        
-                        parseSuggestionsFrom(followUpRaw)
-
-                        
-                        const followUpDisplay = computeDisplayText(followUpRaw)
-                        const fullText = introText
-                            ? `${introText}\n\n${followUpDisplay}`
-                            : followUpDisplay
-
-                        
-                        
-                        accumulatedText = fullText
-
-                        const functionResponse = {
-                            name: RETRIEVE_RESOURCES_TOOL_NAME,
-                            response: {
-                                content: CAREER_COLLEGE_RESOURCES_CONTENT,
-                            },
-                        }
-                        setMessages((prev) => {
-                            const arr = [...prev]
-                            const last = arr[arr.length - 1]
-                            if (last?.role === "model") {
-                                arr[arr.length - 1] = {
-                                    ...last,
-                                    text: fullText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse,
-                                }
-                            }
-                            return arr
-                        })
-                    } else if (accumulatedFunctionCall.name === "save_resume") {
-                        const content =
-                            (accumulatedFunctionCall.args as any)?.content || ""
-                        if (content) saveResume(content)
-                        accumulatedText =
-                            "Got it — I've saved your resume. I'll use it to personalise future responses and create tailored resumes for you."
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "save_resume",
-                                        response: { saved: true },
-                                    },
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (
-                        accumulatedFunctionCall.name === "retrieve_resume"
-                    ) {
-                        let docIdForResumeRetrieveMsg: string | undefined
-                        const resume = getResume()
-                        const resumeContent = resume || "No resume saved yet."
-                        const modelPart = {
-                            functionCall: { name: "retrieve_resume", args: {} },
-                            thoughtSignature:
-                                accumulatedThoughtSignature ??
-                                GEMINI_THOUGHT_SIGNATURE_SKIP,
-                        }
-                        const followUpPayload = {
-                            contents: [
-                                ...history,
-                                { role: "user" as const, parts: userContent },
-                                { role: "model" as const, parts: [modelPart] },
-                                {
-                                    role: "user" as const,
-                                    parts: [
-                                        {
-                                            functionResponse: {
-                                                name: "retrieve_resume",
-                                                response: {
-                                                    content: resumeContent,
-                                                },
-                                            },
-                                        },
-                                    ],
-                                },
-                            ],
-                            tools,
-                            toolConfig: {
-                                functionCallingConfig: {
-                                    mode: "AUTO",
-                                },
-                            },
-                            generationConfig: payload.generationConfig,
-                            ...(getSystemPromptWithContext().trim() && {
-                                systemInstruction: payload.systemInstruction,
-                            }),
-                        }
-                        const introTextRetrieve =
-                            computeDisplayText(accumulatedText)
-                        let displayFunctionCallRetrieve: any =
-                            accumulatedFunctionCall
-                        let displayFunctionResponseRetrieve: any = {
-                            name: "retrieve_resume",
-                            response: { content: resumeContent },
-                        }
-                        let displayToolUsedRetrieve:
-                            | "resume"
-                            | "cover_letter"
-                            | undefined
-                        try {
-                            const { response: res } = await geminiProxyFetch(
-                                model,
-                                "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify(followUpPayload),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const data = await res.json().catch(() => ({}))
-                            const followUpTextRaw = res.ok
-                                ? extractTextFromGeminiResponse(data)
-                                : ""
-                            const chainedFcRetrieve =
-                                extractFunctionCallFromGeminiResponse(data)
-
-                            if (
-                                chainedFcRetrieve &&
-                                (chainedFcRetrieve.name === "create_resume" ||
-                                    chainedFcRetrieve.name ===
-                                        "create_cover_letter")
-                            ) {
-                                const toolName = chainedFcRetrieve.name
-                                if (debugPanelRef.current === "tools") {
-                                    try {
-                                        log(
-                                            `[tool] ${toolName} (chained after retrieve_resume) args=${summarizeToolArgsForDebug(chainedFcRetrieve.args)}`,
-                                            "tools"
-                                        )
-                                    } catch {
-                                        log(
-                                            `[tool] ${toolName} (chained after retrieve_resume) (args not JSON-serializable)`,
-                                            "tools"
-                                        )
-                                    }
-                                }
-                                displayFunctionCallRetrieve = {
-                                    name: toolName,
-                                    args: chainedFcRetrieve.args,
-                                }
-                                displayFunctionResponseRetrieve = {
-                                    name: toolName,
-                                    response: {
-                                        content: "Created successfully.",
-                                    },
-                                }
-                                displayToolUsedRetrieve =
-                                    toolName === "create_resume"
-                                        ? "resume"
-                                        : "cover_letter"
-                                const newContent =
-                                    (chainedFcRetrieve.args as any)?.content ||
-                                    ""
-                                const company =
-                                    selectedJobRef.current?.company?.name?.trim() ||
-                                    docCompanyRef.current ||
-                                    ""
-                                let displayHtml = newContent
-                                if (
-                                    toolName === "create_resume" &&
-                                    resumeAnimPhaseRef.current !== "idle" &&
-                                    resumeAnimPhaseRef.current !== "done"
-                                ) {
-                                    const used = capturedOrbitWordsInHtml(
-                                        newContent,
-                                        resumeCapturedItemsRef.current.map(
-                                            (c) => c.word
-                                        )
-                                    )
-                                    displayHtml = markKeywordsInHtml(
-                                        newContent,
-                                        used
-                                    )
-                                    setResumeUsedKeywords(used)
-                                    setResumeAnimPhase("landing")
-                                    if (dataConnectionsRef.current.size > 0) {
-                                        broadcastData({
-                                            type: "resume-anim-land",
-                                            payload: {
-                                                markedContent: displayHtml,
-                                                usedKeywords: used,
-                                            },
-                                        })
-                                    }
-                                }
-
-                                docIdForResumeRetrieveMsg = upsertDocForTool(
-                                    "new",
-                                    displayHtml,
-                                    toolName === "create_resume"
-                                        ? "resume"
-                                        : "cover_letter",
-                                    company
-                                )
-
-                                if (!isDocOpen) setIsDocOpen(true)
-                                isDocOpenRef.current = true
-
-                                if (
-                                    toolName === "create_resume" &&
-                                    newContent &&
-                                    resumeJobIdRef.current
-                                ) {
-                                    resumeCache.current.set(
-                                        resumeJobIdRef.current,
-                                        newContent
-                                    )
-                                }
-                                if (dataConnectionsRef.current.size > 0) {
-                                    broadcastData({
-                                        type: "doc-update",
-                                        payload: displayHtml,
-                                    })
-                                    broadcastData({
-                                        type: "doc-start",
-                                        payload: {
-                                            docType:
-                                                toolName === "create_resume"
-                                                    ? "resume"
-                                                    : "cover_letter",
-                                        },
-                                    })
-                                }
-                                const isResume = toolName === "create_resume"
-                                let ackCombinedRetrieve = followUpTextRaw
-                                parseSuggestionsFrom(followUpTextRaw)
-                                try {
-                                    const { response: followUpRes } =
-                                        await geminiProxyFetch(
-                                            model,
-                                            "generateContent",
-                                        {
-                                            method: "POST",
-                                            headers: {
-                                                "Content-Type":
-                                                    "application/json",
-                                            },
-                                            body: JSON.stringify({
-                                                contents: [
-                                                    {
-                                                        role: "user",
-                                                        parts: [
-                                                            {
-                                                                text: `The user asked you to write a ${isResume ? "resume" : "cover letter"}: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.`,
-                                                            },
-                                                        ],
-                                                    },
-                                                ],
-                                                generationConfig: {
-                                                    temperature: 1.0,
-                                                    maxOutputTokens: 100,
-                                                    thinkingConfig: {
-                                                        thinkingBudget: 0,
-                                                    },
-                                                },
-                                            }),
-                                            signal: controller.signal,
-                                        }
-                                    )
-                                    const followUpData = await followUpRes
-                                        .json()
-                                        .catch(() => ({}))
-                                    const ack = followUpRes.ok
-                                        ? extractTextFromGeminiResponse(
-                                              followUpData
-                                          )
-                                        : ""
-                                    ackCombinedRetrieve =
-                                        computeDisplayText(ack) ||
-                                        followUpTextRaw ||
-                                        (isResume
-                                            ? "Here's your resume!"
-                                            : "Here's your cover letter!")
-                                    parseSuggestionsFrom(ack)
-                                } catch (err) {
-                                    if ((err as Error).name !== "AbortError")
-                                        console.error(
-                                            `${toolName} post-retrieve_resume follow-up:`,
-                                            err
-                                        )
-                                    ackCombinedRetrieve =
-                                        followUpTextRaw ||
-                                        (isResume
-                                            ? "Here's your resume!"
-                                            : "Here's your cover letter!")
-                                }
-                                const followUpDisplayRetrieve =
-                                    computeDisplayText(ackCombinedRetrieve)
-                                accumulatedText = introTextRetrieve
-                                    ? `${introTextRetrieve}\n\n${followUpDisplayRetrieve}`
-                                    : followUpDisplayRetrieve
-                            } else {
-                                const followUpDisplayOnly =
-                                    computeDisplayText(followUpTextRaw)
-                                accumulatedText = introTextRetrieve
-                                    ? `${introTextRetrieve}\n\n${followUpDisplayOnly}`
-                                    : followUpDisplayOnly ||
-                                      accumulatedText ||
-                                      ""
-                                parseSuggestionsFrom(followUpTextRaw)
-                            }
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError")
-                                console.error("retrieve_resume follow-up:", err)
-                        }
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: displayFunctionCallRetrieve,
-                                    functionResponse:
-                                        displayFunctionResponseRetrieve,
-                                    ...(displayToolUsedRetrieve && {
-                                        toolUsed: displayToolUsedRetrieve,
-                                    }),
-                                    ...(docIdForResumeRetrieveMsg && {
-                                        docId: docIdForResumeRetrieveMsg,
-                                    }),
-                                }
-                            }
-                            return newArr
-                        })
-                        accumulatedFunctionCall = displayFunctionCallRetrieve
-                    } else if (
-                        accumulatedFunctionCall.name === "create_resume" ||
-                        accumulatedFunctionCall.name === "create_cover_letter"
-                    ) {
-                        const toolName = accumulatedFunctionCall.name
-                        const newContent =
-                            (accumulatedFunctionCall.args as any)?.content || ""
-                        const company =
-                            selectedJobRef.current?.company?.name?.trim() ||
-                            docCompanyRef.current ||
-                            ""
-                        let displayHtml = newContent
-                        if (
-                            toolName === "create_resume" &&
-                            resumeAnimPhaseRef.current !== "idle" &&
-                            resumeAnimPhaseRef.current !== "done"
-                        ) {
-                            const used = capturedOrbitWordsInHtml(
-                                newContent,
-                                resumeCapturedItemsRef.current.map(
-                                    (c) => c.word
-                                )
-                            )
-                            displayHtml = markKeywordsInHtml(newContent, used)
-                            setResumeUsedKeywords(used)
-                            setResumeAnimPhase("landing")
-                            if (dataConnectionsRef.current.size > 0) {
-                                broadcastData({
-                                    type: "resume-anim-land",
-                                    payload: {
-                                        markedContent: displayHtml,
-                                        usedKeywords: used,
-                                    },
-                                })
-                            }
-                        }
-
-                        const docIdForCreateMsg = upsertDocForTool(
-                            "new",
-                            displayHtml,
-                            toolName === "create_resume"
-                                ? "resume"
-                                : "cover_letter",
-                            company
-                        )
-
-                        if (!isDocOpen) setIsDocOpen(true)
-                        isDocOpenRef.current = true
-
-                        
-                        
-                        if (
-                            toolName === "create_resume" &&
-                            newContent &&
-                            resumeJobIdRef.current
-                        ) {
-                            resumeCache.current.set(
-                                resumeJobIdRef.current,
-                                newContent
-                            )
-                        }
-                        if (dataConnectionsRef.current.size > 0) {
-                            broadcastData({
-                                type: "doc-update",
-                                payload: displayHtml,
-                            })
-                            broadcastData({
-                                type: "doc-start",
-                                payload: {
-                                    docType:
-                                        toolName === "create_resume"
-                                            ? "resume"
-                                            : "cover_letter",
-                                },
-                            })
-                        }
-                        const isResume = toolName === "create_resume"
-                        try {
-                            const { response: followUpRes } =
-                                await geminiProxyFetch(
-                                    model,
-                                    "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify({
-                                        contents: [
-                                            {
-                                                role: "user",
-                                                parts: [
-                                                    {
-                                                        text: `The user asked you to write a ${isResume ? "resume" : "cover letter"}: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.`,
-                                                    },
-                                                ],
-                                            },
-                                        ],
-                                        generationConfig: {
-                                            temperature: 1.0,
-                                            maxOutputTokens: 100,
-                                            thinkingConfig: {
-                                                thinkingBudget: 0,
-                                            },
-                                        },
-                                    }),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const followUpData = await followUpRes
-                                .json()
-                                .catch(() => ({}))
-                            const followUpText = followUpRes.ok
-                                ? extractTextFromGeminiResponse(followUpData)
-                                : ""
-                            accumulatedText =
-                                computeDisplayText(followUpText) ||
-                                accumulatedText ||
-                                `Here's your ${isResume ? "resume" : "cover letter"}!`
-                            parseSuggestionsFrom(followUpText)
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError")
-                                console.error(`${toolName} follow-up:`, err)
-                            accumulatedText =
-                                accumulatedText ||
-                                `Here's your ${isResume ? "resume" : "cover letter"}!`
-                        }
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: toolName,
-                                        response: {
-                                            content: "Created successfully.",
-                                        },
-                                    },
-                                    toolUsed:
-                                        accumulatedFunctionCall.name ===
-                                        "create_resume"
-                                            ? "resume"
-                                            : accumulatedFunctionCall.name ===
-                                                "create_cover_letter"
-                                              ? "cover_letter"
-                                              : "doc",
-                                    docId: docIdForCreateMsg,
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (
-                        accumulatedFunctionCall.name === "retrieve_memories"
-                    ) {
-                        
-                        const lines = getMemories()
-                        const memoriesContent =
-                            lines.length > 0
-                                ? lines.map((l, i) => `[${i}] ${l}`).join("\n")
-                                : "No favorite things saved yet."
-                        const modelPart = {
-                            functionCall: {
-                                name: "retrieve_memories",
-                                args: {},
-                            },
-                            thoughtSignature:
-                                accumulatedThoughtSignature ??
-                                GEMINI_THOUGHT_SIGNATURE_SKIP,
-                        }
-                        const followUpPayload = {
-                            contents: [
-                                ...history,
-                                { role: "user" as const, parts: userContent },
-                                { role: "model" as const, parts: [modelPart] },
-                                {
-                                    role: "user" as const,
-                                    parts: [
-                                        {
-                                            functionResponse: {
-                                                name: "retrieve_memories",
-                                                response: {
-                                                    favorites: memoriesContent,
-                                                },
-                                            },
-                                        },
-                                    ],
-                                },
-                            ],
-                            tools,
-                            generationConfig: payload.generationConfig,
-                            ...(getSystemPromptWithContext().trim() && {
-                                systemInstruction: payload.systemInstruction,
-                            }),
-                        }
-                        try {
-                            const { response: res } = await geminiProxyFetch(
-                                model,
-                                "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify(followUpPayload),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const data = await res.json().catch(() => ({}))
-                            const followUpText = res.ok
-                                ? extractTextFromGeminiResponse(data)
-                                : ""
-                            accumulatedText =
-                                computeDisplayText(followUpText) ||
-                                accumulatedText ||
-                                ""
-                            parseSuggestionsFrom(followUpText)
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError")
-                                console.error(
-                                    "retrieve_memories follow-up:",
-                                    err
-                                )
-                        }
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "retrieve_memories",
-                                        response: {
-                                            favorites: memoriesContent,
-                                        },
-                                    },
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (
-                        accumulatedFunctionCall.name === "save_memories"
-                    ) {
-                        const memoryText =
-                            (accumulatedFunctionCall.args as any)?.memory || ""
-                        if (memoryText) {
-                            const updated = saveMemory(memoryText)
-                            
-                            setYouInterests(updated)
-                        }
-                        accumulatedText =
-                            computeDisplayText(accumulatedText) || ""
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "save_memories",
-                                        response: { saved: true },
-                                    },
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (
-                        accumulatedFunctionCall.name === "edit_memories"
-                    ) {
-                        const { id, new_text } =
-                            (accumulatedFunctionCall.args as any) || {}
-                        if (id !== undefined && id !== "") {
-                            const idx = parseInt(id, 10)
-                            if (!isNaN(idx)) {
-                                const updated = updateMemory(
-                                    idx,
-                                    new_text || null
-                                )
-                                setYouInterests(updated)
-                            }
-                        }
-                        accumulatedText =
-                            computeDisplayText(accumulatedText) || ""
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "edit_memories",
-                                        response: { updated: true },
-                                    },
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (
-                        accumulatedFunctionCall.name === "draw_whiteboard" ||
-                        accumulatedFunctionCall.name === "edit_whiteboard" ||
-                        accumulatedFunctionCall.name === "erase_whiteboard"
-                    ) {
-                        const toolName = accumulatedFunctionCall.name
-                        const args = accumulatedFunctionCall.args as any
-
-                        
-                        if (
-                            !isWhiteboardOpenRef.current &&
-                            !hasWhiteboardStarted
-                        ) {
-                            setHasWhiteboardStarted(true)
-                            setIsWhiteboardOpen(true)
-                            setIsDocOpen(false)
-                            if (
-                                !isMobileLayout &&
-                                dataConnectionsRef.current.size > 0
-                            ) {
-                                broadcastData({ type: "tldraw-start" })
-                            }
-                        }
-
-                        if (editorRef.current) {
-                            editorRef.current.batch(() => {
-                                if (toolName === "erase_whiteboard") {
-                                    ;(args.ids || []).forEach((id: string) => {
-                                        try {
-                                            const sid = wbSanitizeId(id)
-                                            if (editorRef.current.getShape(sid))
-                                                editorRef.current.deleteShapes([
-                                                    sid,
-                                                ])
-                                        } catch (e) {
-                                            console.error(
-                                                "[Whiteboard] erase failed:",
-                                                id,
-                                                e
-                                            )
-                                        }
-                                    })
-                                } else if (toolName === "draw_whiteboard") {
-                                    ;(args.shapes || [])
-                                        .map(wbValidateShape)
-                                        .filter(Boolean)
-                                        .forEach((s: any) => {
-                                            try {
-                                                if (
-                                                    editorRef.current.getShape(
-                                                        s.id
-                                                    )
-                                                )
-                                                    editorRef.current.updateShapes(
-                                                        [s]
-                                                    )
-                                                else
-                                                    editorRef.current.createShapes(
-                                                        [s]
-                                                    )
-                                            } catch (e) {
-                                                console.error(
-                                                    "[Whiteboard] draw failed:",
-                                                    s.id,
-                                                    e
-                                                )
-                                            }
-                                        })
-                                } else if (toolName === "edit_whiteboard") {
-                                    ;(args.patches || [])
-                                        .filter((s: any) => s?.id)
-                                        .map(wbApplyToPatch)
-                                        .forEach((s: any) => {
-                                            try {
-                                                if (
-                                                    editorRef.current.getShape(
-                                                        s.id
-                                                    )
-                                                )
-                                                    editorRef.current.updateShapes(
-                                                        [s]
-                                                    )
-                                            } catch (e) {
-                                                console.error(
-                                                    "[Whiteboard] patch failed:",
-                                                    s.id,
-                                                    e
-                                                )
-                                            }
-                                        })
-                                    ;(args.remove || []).forEach(
-                                        (id: string) => {
-                                            try {
-                                                const sid = wbSanitizeId(id)
-                                                if (
-                                                    editorRef.current.getShape(
-                                                        sid
-                                                    )
-                                                )
-                                                    editorRef.current.deleteShapes(
-                                                        [sid]
-                                                    )
-                                            } catch (e) {
-                                                console.error(
-                                                    "[Whiteboard] remove failed:",
-                                                    id,
-                                                    e
-                                                )
-                                            }
-                                        }
-                                    )
-                                }
-                            })
-                        } else {
-                            pendingWhiteboardUpdates.current.push({
-                                toolName,
-                                args,
-                            })
-                        }
-
-                        
-                        const whiteboardFollowUpPrompt =
-                            toolName === "erase_whiteboard"
-                                ? `The user asked you to erase something on the whiteboard: "${userText}". You just removed those shapes. In 1 sentence confirm what you erased and offer a helpful next step. Be concise. Max 30 words.`
-                                : toolName === "edit_whiteboard"
-                                  ? `The user asked you to edit the whiteboard: "${userText}". You just updated those shapes. In 1 sentence confirm what you changed and invite a follow-up. Be concise. Max 30 words.`
-                                  : `The user asked you to draw on the whiteboard: "${userText}". You just added the diagram. In 1–2 sentences describe what you drew and ask one question to refine it. Be friendly. Max 40 words.`
-                        try {
-                            const { response: wbRes } = await geminiProxyFetch(
-                                model,
-                                "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify({
-                                        contents: [
-                                            {
-                                                role: "user",
-                                                parts: [
-                                                    {
-                                                        text: whiteboardFollowUpPrompt,
-                                                    },
-                                                ],
-                                            },
-                                        ],
-                                        generationConfig: {
-                                            temperature: 1.0,
-                                            maxOutputTokens: 80,
-                                            thinkingConfig: {
-                                                thinkingBudget: 0,
-                                            },
-                                        },
-                                    }),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const wbData = await wbRes.json().catch(() => ({}))
-                            const wbText = wbRes.ok
-                                ? extractTextFromGeminiResponse(wbData)
-                                : ""
-                            accumulatedText =
-                                computeDisplayText(wbText) ||
-                                accumulatedText ||
-                                "Check out the whiteboard!"
-                            parseSuggestionsFrom(wbText)
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError")
-                                console.error("whiteboard follow-up:", err)
-                            accumulatedText =
-                                accumulatedText || "Check out the whiteboard!"
-                        }
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: toolName,
-                                        response: { result: "ok" },
-                                    },
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (accumulatedFunctionCall.name === "search_jobs") {
-                        
-                        const args = accumulatedFunctionCall.args as any
-                        const params = new URLSearchParams()
-                        const titleStream = buildJobsApiTitle(
-                            args.query,
-                            args.keywords
-                        )
-                        if (titleStream) params.set("title", titleStream)
-                        if (args.company) params.set("company", args.company)
-                        {
-                            const locOrStream =
-                                deriveLocationOrForJobsParams(args)
-                            if (locOrStream) {
-                                params.set("location_or", locOrStream)
-                            } else if (args.location) {
-                                params.set("location", args.location)
-                            }
-                        }
-                        if (args.employment_type)
-                            params.set("employment_type", args.employment_type)
-                        if (args.workplace_type)
-                            params.set("workplace_type", args.workplace_type)
-                        if (args.seniority_level)
-                            params.set("seniority_level", args.seniority_level)
-                        {
-                            const sinceStream =
-                                postedSinceUnixFromSearchJobsArg(
-                                    args.posted_within_days
-                                )
-                            if (sinceStream != null) {
-                                params.set("since", String(sinceStream))
-                            }
-                        }
-                        if (args.salary_min != null)
-                            params.set("salary_min", String(args.salary_min))
-                        if (
-                            args.visa_sponsorship === "yes" ||
-                            args.visa_sponsorship === "no"
-                        )
-                            params.set(
-                                "visa_sponsorship",
-                                args.visa_sponsorship
-                            )
-                        if (args.description_language)
-                            params.set(
-                                "description_language",
-                                args.description_language
-                            )
-                        if (args.country)
-                            params.set(
-                                "country",
-                                String(args.country).toUpperCase().slice(0, 2)
-                            )
-                        if (
-                            args.near_lat != null &&
-                            !Number.isNaN(Number(args.near_lat))
-                        )
-                            params.set("near_lat", String(args.near_lat))
-                        if (
-                            args.near_lng != null &&
-                            !Number.isNaN(Number(args.near_lng))
-                        )
-                            params.set("near_lng", String(args.near_lng))
-                        if (args.radius_km != null)
-                            params.set("radius_km", String(args.radius_km))
-                        if (args.exclude_remote === false)
-                            params.set("exclude_remote", "false")
-                        if (args.cursor) params.set("cursor", args.cursor)
-                        applySearchJobsExcludeIds(
-                            params,
-                            searchJobsSeenJobIdsRef.current,
-                            args.exclude_ids
-                        )
-                        params.set(
-                            "limit",
-                            String(Math.min(args.limit ?? 6, 20))
-                        )
-                        await applySearchJobsGeoResolution(
-                            params,
-                            args,
-                            userText,
-                            ipGeoFromLocationInfo(locationInfo),
-                            { jobsProxyGeoRef },
-                            jobsApiUrl
-                        )
-                        if (debugPanelRef.current === "tools") {
-                            log(
-                                `[tool] search_jobs GET ${jobsApiUrl}/jobs?${params.toString()}`,
-                                "tools"
-                            )
-                        }
-
-                        let jobSnippets: JobSnippet[] = []
-                        let searchError = false
-                        try {
-                            const jobsRes = await fetch(
-                                `${jobsApiUrl}/jobs?${params}`,
-                                { signal: controller.signal }
-                            )
-                            const jobsCacheHdr = jobsRes.headers.get(
-                                "X-Curastem-Jobs-Cache"
-                            )
-                            const jobsCacheStatus =
-                                jobsCacheHdr === "HIT" || jobsCacheHdr === "MISS"
-                                    ? jobsCacheHdr
-                                    : "?"
-                            if (debugPanelRef.current === "tools") {
-                                log(
-                                    `[tool] search_jobs HTTP ${jobsRes.status} cache=${jobsCacheStatus}`,
-                                    "tools"
-                                )
-                            }
-                            if (jobsRes.ok) {
-                                const jobsData = await jobsRes.json()
-                                const rows = dedupeJobRowsById(jobsData.data)
-                                jobSnippets = rows.map(
-                                    (j: any): JobSnippet => ({
-                                        id: j.id,
-                                        title: j.title,
-                                        company: j.company?.name ?? "",
-                                        company_logo:
-                                            j.company?.logo_url ?? null,
-                                        locations: j.locations ?? null,
-                                        employment_type:
-                                            j.employment_type ?? null,
-                                        workplace_type:
-                                            j.workplace_type ?? null,
-                                        seniority_level:
-                                            j.seniority_level ?? null,
-                                        posted_at: j.posted_at ?? null,
-                                        apply_url: j.apply_url ?? null,
-                                        summary: j.job_summary ?? null,
-                                        salary: j.salary?.display ?? null,
-                                        visa_sponsorship:
-                                            j.visa_sponsorship ?? null,
-                                    })
-                                )
-                                recordSearchJobsShownIds(
-                                    searchJobsSeenJobIdsRef.current,
-                                    jobSnippets
-                                )
-                                if (debugPanelRef.current === "tools") {
-                                    log(
-                                        `[tool] search_jobs rows=${jobSnippets.length} cache=${jobsCacheStatus}`,
-                                        "tools"
-                                    )
-                                }
-                            }
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError") {
-                                console.error("search_jobs fetch:", err)
-                                searchError = true
-                            }
-                        }
-
-                        
-                        
-                        
-                        const jobSummaryForModel =
-                            jobSnippets.length > 0
-                                ? `Found ${jobSnippets.length} jobs. Job cards are already shown to the user in the chat UI — DO NOT list them again as text. Write 1 short sentence acknowledging the results and inviting them to tap a card or refine the search.`
-                                : "No jobs found matching those criteria."
-
-                        const modelPart = {
-                            functionCall: {
-                                name: "search_jobs",
-                                args: accumulatedFunctionCall.args,
-                            },
-                            thoughtSignature:
-                                accumulatedThoughtSignature ??
-                                GEMINI_THOUGHT_SIGNATURE_SKIP,
-                        }
-                        const followUpPayload = {
-                            contents: [
-                                ...history,
-                                { role: "user" as const, parts: userContent },
-                                { role: "model" as const, parts: [modelPart] },
-                                {
-                                    role: "user" as const,
-                                    parts: [
-                                        {
-                                            functionResponse: {
-                                                name: "search_jobs",
-                                                response: {
-                                                    result: jobSummaryForModel,
-                                                },
-                                            },
-                                        },
-                                    ],
-                                },
-                            ],
-                            tools,
-                            generationConfig: payload.generationConfig,
-                            ...(getSystemPromptWithContext().trim() && {
-                                systemInstruction: payload.systemInstruction,
-                            }),
-                        }
-                        const introText = computeDisplayText(accumulatedText)
-                        try {
-                            const { response: res } = await geminiProxyFetch(
-                                model,
-                                "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify(followUpPayload),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const data = await res.json().catch(() => ({}))
-                            const followUpText = res.ok
-                                ? extractTextFromGeminiResponse(data)
-                                : ""
-                            const followUpDisplay =
-                                computeDisplayText(followUpText)
-                            accumulatedText = introText
-                                ? `${introText}\n\n${followUpDisplay}`
-                                : followUpDisplay ||
-                                  (searchError
-                                      ? "I had trouble reaching the jobs API — please try again."
-                                      : jobSnippets.length === 0
-                                        ? "No jobs found for that search. Try different keywords or location."
-                                        : "Here are some matching jobs!")
-                            parseSuggestionsFrom(followUpText)
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError")
-                                console.error("search_jobs follow-up:", err)
-                            accumulatedText =
-                                accumulatedText ||
-                                (jobSnippets.length > 0
-                                    ? "Here are some matching jobs!"
-                                    : "No jobs found for that search.")
-                        }
-                        accumulatedJobSnippets = jobSnippets
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: accumulatedFunctionCall,
-                                    functionResponse: {
-                                        name: "search_jobs",
-                                        response: { count: jobSnippets.length },
-                                    },
-                                    jobs: jobSnippets,
-                                }
-                            }
-                            return newArr
-                        })
-                    } else if (
-                        accumulatedFunctionCall.name === "get_job_details"
-                    ) {
-                        
-                        const args = accumulatedFunctionCall.args as any
-                        
-                        const jobId =
-                            args.job_id || selectedJobRef.current?.id || null
-
-                        let jobDetail: any = null
-                        if (jobId) {
-                            const cached = readJobDetailCache(jobId, jobsApiUrl)
-                            
-                            if (cached?.aiDone) {
-                                jobDetail = {
-                                    id: jobId,
-                                    job_description: cached.desc,
-                                    job_summary: cached.detailSummary,
-                                    visa_sponsorship:
-                                        cached.detailVisaSponsorship,
-                                    company: {
-                                        description: cached.detailCompanyDesc,
-                                    },
-                                    keywords: cached.apiKeywords,
-                                    experience_years_min:
-                                        cached.detailExperienceYearsMin,
-                                    job_city: cached.detailJobCity,
-                                    job_state: cached.detailJobState,
-                                    job_country: cached.detailJobCountry,
-                                }
-                            } else {
-                                try {
-                                    const detailRes = await fetch(
-                                        `${jobsApiUrl}/jobs/${jobId}`,
-                                        { signal: controller.signal }
-                                    )
-                                    if (detailRes.ok)
-                                        jobDetail = await detailRes.json()
-                                } catch (err) {
-                                    if ((err as Error).name !== "AbortError")
-                                        console.error(
-                                            "get_job_details fetch:",
-                                            err
-                                        )
-                                }
-                            }
-                        }
-
-                        const detailContent = jobDetail
-                            ? JSON.stringify({
-                                  id: jobDetail.id,
-                                  title: jobDetail.title,
-                                  company: jobDetail.company?.name,
-                                  locations: jobDetail.locations ?? null,
-                                  employment_type: jobDetail.employment_type,
-                                  workplace_type: jobDetail.workplace_type,
-                                  summary: jobDetail.job_summary,
-                                  salary: jobDetail.salary,
-                                  description: jobDetail.job_description,
-                                  company_description:
-                                      jobDetail.company?.description,
-                                  apply_url: jobDetail.apply_url,
-                              })
-                            : jobId
-                              ? "Job details could not be retrieved."
-                              : "No job ID provided and no job is currently open."
-
-                        const modelPart = {
-                            functionCall: {
-                                name: "get_job_details",
-                                args: { job_id: jobId ?? "" },
-                            },
-                            thoughtSignature:
-                                accumulatedThoughtSignature ??
-                                GEMINI_THOUGHT_SIGNATURE_SKIP,
-                        }
-                        const followUpPayload = {
-                            contents: [
-                                ...history,
-                                { role: "user" as const, parts: userContent },
-                                { role: "model" as const, parts: [modelPart] },
-                                {
-                                    role: "user" as const,
-                                    parts: [
-                                        {
-                                            functionResponse: {
-                                                name: "get_job_details",
-                                                response: {
-                                                    job: detailContent,
-                                                },
-                                            },
-                                        },
-                                    ],
-                                },
-                            ],
-                            tools,
-                            generationConfig: payload.generationConfig,
-                            ...(getSystemPromptWithContext().trim() && {
-                                systemInstruction: payload.systemInstruction,
-                            }),
-                        }
-                        const introText = computeDisplayText(accumulatedText)
-                        let displayFunctionCall: any = accumulatedFunctionCall
-                        let displayFunctionResponse: any = {
-                            name: "get_job_details",
-                            response: { fetched: !!jobDetail },
-                        }
-                        let displayToolUsed:
-                            | "resume"
-                            | "cover_letter"
-                            | undefined
-                        let docIdForJobDetailChain: string | undefined
-                        try {
-                            const { response: res } = await geminiProxyFetch(
-                                model,
-                                "generateContent",
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                    },
-                                    body: JSON.stringify(followUpPayload),
-                                    signal: controller.signal,
-                                }
-                            )
-                            const data = await res.json().catch(() => ({}))
-                            const followUpTextRaw = res.ok
-                                ? extractTextFromGeminiResponse(data)
-                                : ""
-                            const chainedFc =
-                                extractFunctionCallFromGeminiResponse(data)
-
-                            if (
-                                chainedFc &&
-                                (chainedFc.name === "create_cover_letter" ||
-                                    chainedFc.name === "create_resume")
-                            ) {
-                                const toolName = chainedFc.name
-                                if (debugPanelRef.current === "tools") {
-                                    try {
-                                        log(
-                                            `[tool] ${toolName} (chained after get_job_details) args=${summarizeToolArgsForDebug(chainedFc.args)}`,
-                                            "tools"
-                                        )
-                                    } catch {
-                                        log(
-                                            `[tool] ${toolName} (chained after get_job_details) (args not JSON-serializable)`,
-                                            "tools"
-                                        )
-                                    }
-                                }
-                                displayFunctionCall = {
-                                    name: toolName,
-                                    args: chainedFc.args,
-                                }
-                                displayFunctionResponse = {
-                                    name: toolName,
-                                    response: {
-                                        content: "Created successfully.",
-                                    },
-                                }
-                                displayToolUsed =
-                                    toolName === "create_resume"
-                                        ? "resume"
-                                        : "cover_letter"
-                                const newContent =
-                                    (chainedFc.args as any)?.content || ""
-                                const company =
-                                    selectedJobRef.current?.company?.name?.trim() ||
-                                    docCompanyRef.current ||
-                                    ""
-                                let displayHtml = newContent
-                                if (
-                                    toolName === "create_resume" &&
-                                    resumeAnimPhaseRef.current !== "idle" &&
-                                    resumeAnimPhaseRef.current !== "done"
-                                ) {
-                                    const used = capturedOrbitWordsInHtml(
-                                        newContent,
-                                        resumeCapturedItemsRef.current.map(
-                                            (c) => c.word
-                                        )
-                                    )
-                                    displayHtml = markKeywordsInHtml(
-                                        newContent,
-                                        used
-                                    )
-                                    setResumeUsedKeywords(used)
-                                    setResumeAnimPhase("landing")
-                                    if (dataConnectionsRef.current.size > 0) {
-                                        broadcastData({
-                                            type: "resume-anim-land",
-                                            payload: {
-                                                markedContent: displayHtml,
-                                                usedKeywords: used,
-                                            },
-                                        })
-                                    }
-                                }
-
-                                docIdForJobDetailChain = upsertDocForTool(
-                                    "new",
-                                    displayHtml,
-                                    toolName === "create_resume"
-                                        ? "resume"
-                                        : "cover_letter",
-                                    company
-                                )
-
-                                if (!isDocOpen) setIsDocOpen(true)
-                                isDocOpenRef.current = true
-
-                                if (
-                                    toolName === "create_resume" &&
-                                    newContent &&
-                                    resumeJobIdRef.current
-                                ) {
-                                    resumeCache.current.set(
-                                        resumeJobIdRef.current,
-                                        newContent
-                                    )
-                                }
-                                if (dataConnectionsRef.current.size > 0) {
-                                    broadcastData({
-                                        type: "doc-update",
-                                        payload: displayHtml,
-                                    })
-                                    broadcastData({
-                                        type: "doc-start",
-                                        payload: {
-                                            docType:
-                                                toolName === "create_resume"
-                                                    ? "resume"
-                                                    : "cover_letter",
-                                        },
-                                    })
-                                }
-                                const isResume = toolName === "create_resume"
-                                let ackCombined = followUpTextRaw
-                                parseSuggestionsFrom(followUpTextRaw)
-                                try {
-                                    const { response: followUpRes } =
-                                        await geminiProxyFetch(
-                                            model,
-                                            "generateContent",
-                                        {
-                                            method: "POST",
-                                            headers: {
-                                                "Content-Type":
-                                                    "application/json",
-                                            },
-                                            body: JSON.stringify({
-                                                contents: [
-                                                    {
-                                                        role: "user",
-                                                        parts: [
-                                                            {
-                                                                text: `The user asked you to write a ${isResume ? "resume" : "cover letter"}: "${userText}". You just wrote it. In 1–2 sentences, describe what you created and ask one specific question about how to improve or personalise it. Be friendly and encouraging. Max 40 words.`,
-                                                            },
-                                                        ],
-                                                    },
-                                                ],
-                                                generationConfig: {
-                                                    temperature: 1.0,
-                                                    maxOutputTokens: 100,
-                                                    thinkingConfig: {
-                                                        thinkingBudget: 0,
-                                                    },
-                                                },
-                                            }),
-                                            signal: controller.signal,
-                                        }
-                                    )
-                                    const followUpData = await followUpRes
-                                        .json()
-                                        .catch(() => ({}))
-                                    const ack = followUpRes.ok
-                                        ? extractTextFromGeminiResponse(
-                                              followUpData
-                                          )
-                                        : ""
-                                    ackCombined =
-                                        computeDisplayText(ack) ||
-                                        followUpTextRaw ||
-                                        (isResume
-                                            ? "Here's your resume!"
-                                            : "Here's your cover letter!")
-                                    parseSuggestionsFrom(ack)
-                                } catch (err) {
-                                    if ((err as Error).name !== "AbortError")
-                                        console.error(
-                                            `${toolName} post-job follow-up:`,
-                                            err
-                                        )
-                                    ackCombined =
-                                        followUpTextRaw ||
-                                        (isResume
-                                            ? "Here's your resume!"
-                                            : "Here's your cover letter!")
-                                }
-                                const followUpDisplay =
-                                    computeDisplayText(ackCombined)
-                                accumulatedText = introText
-                                    ? `${introText}\n\n${followUpDisplay}`
-                                    : followUpDisplay
-                            } else {
-                                const followUpDisplay =
-                                    computeDisplayText(followUpTextRaw)
-                                accumulatedText = introText
-                                    ? `${introText}\n\n${followUpDisplay}`
-                                    : followUpDisplay ||
-                                      "Here are the job details!"
-                                parseSuggestionsFrom(followUpTextRaw)
-                            }
-                        } catch (err) {
-                            if ((err as Error).name !== "AbortError")
-                                console.error("get_job_details follow-up:", err)
-                            accumulatedText =
-                                accumulatedText || "Here are the job details!"
-                        }
-                        setMessages((prev) => {
-                            const newArr = [...prev]
-                            if (
-                                newArr.length > 0 &&
-                                newArr[newArr.length - 1].role === "model"
-                            ) {
-                                newArr[newArr.length - 1] = {
-                                    ...newArr[newArr.length - 1],
-                                    text: accumulatedText,
-                                    functionCall: displayFunctionCall,
-                                    functionResponse: displayFunctionResponse,
-                                    ...(displayToolUsed && {
-                                        toolUsed: displayToolUsed,
-                                    }),
-                                    ...(docIdForJobDetailChain && {
-                                        docId: docIdForJobDetailChain,
-                                    }),
-                                }
-                            }
-                            return newArr
-                        })
-                    }
-                }
-
-                
-                if (!accumulatedText && !accumulatedFunctionCall) {
+                if (!accumulatedText) {
                     setMessages((prev) => {
                         const newArr = [...prev]
                         if (
@@ -39970,25 +38806,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         }
                         return newArr
                     })
-                } else if (
-                    (accumulatedText || accumulatedFunctionCall) &&
-                    dataConnectionsRef.current.size > 0
-                ) {
+                } else if (dataConnectionsRef.current.size > 0) {
                     broadcastData({
                         type: "ai-response",
                         payload: {
                             text: computeDisplayText(accumulatedText) || "",
-                            functionCall: accumulatedFunctionCall,
-                            functionResponse: accumulatedFunctionCall
-                                ? {
-                                      name: accumulatedFunctionCall.name,
-                                      response: {},
-                                  }
-                                : undefined,
-                            
-                            ...(accumulatedJobSnippets !== null && {
-                                jobs: accumulatedJobSnippets,
-                            }),
                         },
                     })
                 }
@@ -40024,6 +38846,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             }
         },
         [
+            apiBase,
             messages,
             systemPrompt,
             model,
@@ -40365,11 +39188,11 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             
             const chipHint =
                 activeAgentChipRef.current === "doc"
-                    ? "[Intent: use the update_doc tool to fulfill this request as a document.]"
+                    ? "[Docs mode selected: fulfill the request in the document editor when it creates or changes a document artifact.]"
                     : activeAgentChipRef.current === "app"
-                      ? "[Intent: use the create_app tool to fulfill this request as an interactive app.]"
+                      ? "[App mode selected: fulfill the request in the app editor when it creates or changes an app.]"
                       : activeAgentChipRef.current === "whiteboard"
-                        ? "[Intent: use the draw_whiteboard or edit_whiteboard tool to fulfill this request on the whiteboard.]"
+                        ? "[Whiteboard mode selected: fulfill the request on the whiteboard when it creates or changes canvas content.]"
                         : null
             if (chipHint) {
                 textToSend = textToSend
@@ -41490,7 +40313,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     })
                 }
                 return setTimeout(() => {
-                    setResumeAnimPhase("orbiting")
+                    if (resumeAnimPhaseRef.current === "fading") {
+                        setResumeAnimPhase("orbiting")
+                    }
                 }, 250)
             }
 
@@ -41543,9 +40368,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
 
             const displayText = `Create a resume for this job`
             const aiText =
-                `Call create_resume immediately with a complete, tailored HTML resume.\n\n` +
                 contextParts.join("\n\n") +
-                `\n\nWrite every section in full — do not ask questions, do not call any other tools first. The candidate is applying TO GET this job. In Skills, only include items that fit this posting and role (and reasonable inferences from title and company); omit unrelated skills.`
+                `\n\nCreate a tailored resume document for the currently viewed job. Write every section in full. The candidate is applying TO GET this job. In Skills, only include items that fit this posting and role (and reasonable inferences from title and company); omit unrelated skills.`
 
             const orbitTimer = startResumeOrbitAnimation()
             const sentOk = await handleSendMessage(displayText, aiText)
@@ -42737,6 +41561,9 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
             auth.status === "signed_in" &&
             !!currentChatId &&
             loadingSelectedCloudChatId === currentChatId
+        const isSavedChatSelected = savedChats.some(
+            (chat) => chat.id === currentChatId
+        )
 
         const adIndices = React.useMemo(() => {
             const indices = new Set<number>()
@@ -42796,6 +41623,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                     {/** Homepage — shown when no messages and not in/waiting for a call or Gemini Live session */}
                     {!hasMessages &&
                         !isLoadingSelectedCloudChat &&
+                        !isSavedChatSelected &&
                         status === "idle" &&
                         !isLiveMode &&
                         !role &&
@@ -44112,9 +42940,10 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                 style={{
                     left: 8,
                     top: 8,
-                    position: "absolute",
+                    position: "fixed",
                     
-                    zIndex: !isMobileLayout && isMapOpen ? 15 : 100,
+                    zIndex: !isMobileLayout && isMapOpen ? 15 : 20001,
+                    pointerEvents: isSidebarOpen ? "none" : "auto",
                     cursor: "ew-resize",
                     background: isSidebarBtnHovered
                         ? themeColors.hover.medium
@@ -44229,6 +43058,7 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                         className="LeftSidebar"
                         role="navigation"
                         aria-label="Main navigation"
+                        aria-hidden={!isSidebarOpen}
                         style={{
                             x: sidebarX,
                             width: isMobileLayout
@@ -44248,7 +43078,8 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                             alignItems: "flex-start",
                             gap: 0,
                             display: "inline-flex",
-                            zIndex: 10000,
+                            zIndex: 20000,
+                            pointerEvents: isSidebarOpen ? "auto" : "none",
                         }}
                         onPan={(event, info) => {
                             if (!isMobileLayout) return
@@ -45229,20 +44060,24 @@ Write the complete letter with real bullet text — never empty bullets. PDF exp
                                                             .fetchOlderMessages(
                                                                 chat.id
                                                             )
-                                                            .finally(() => {
-                                                                setTimeout(
-                                                                    () => {
-                                                                        setLoadingSelectedCloudChatId(
-                                                                            (
-                                                                                cur
-                                                                            ) =>
-                                                                                cur ===
-                                                                                chat.id
-                                                                                    ? null
-                                                                                    : cur
-                                                                        )
-                                                                    },
-                                                                    800
+                                                            .then((added) => {
+                                                                if (added > 0)
+                                                                    return
+                                                                setLoadingSelectedCloudChatId(
+                                                                    (cur) =>
+                                                                        cur ===
+                                                                        chat.id
+                                                                            ? null
+                                                                            : cur
+                                                                )
+                                                            })
+                                                            .catch(() => {
+                                                                setLoadingSelectedCloudChatId(
+                                                                    (cur) =>
+                                                                        cur ===
+                                                                        chat.id
+                                                                            ? null
+                                                                            : cur
                                                                 )
                                                             })
                                                     } else {

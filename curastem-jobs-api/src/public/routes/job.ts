@@ -13,7 +13,7 @@
  * ai_generated_at is cleared (by upsertJob), causing regeneration on the
  * next request to this endpoint.
  *
- * If GEMINI_API_KEY is not set or if AI extraction fails, the response
+ * If Agent Platform credentials are not set or if AI extraction fails, the response
  * still returns the job with null AI fields rather than erroring.
  */
 
@@ -166,7 +166,7 @@ export async function handleGetJob(
 
   // Check whether AI fields need to be generated (lazy, cached)
   const needsAi =
-    env.GEMINI_API_KEY &&
+    env.GOOGLE_APPLICATION_CREDENTIALS_JSON &&
     row.description_raw &&
     (row.ai_generated_at === null || row.job_description === null);
 
@@ -178,7 +178,7 @@ export async function handleGetJob(
         ? (() => { try { return JSON.parse(row.locations) as string[]; } catch { return []; } })()
         : [];
       const extracted = await extractJobFields(
-        env.GEMINI_API_KEY,
+        env,
         row.company_name,
         row.title,
         row.description_raw!,

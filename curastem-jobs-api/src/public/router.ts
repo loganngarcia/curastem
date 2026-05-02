@@ -8,11 +8,14 @@ import {
 import { handleGetJob } from "./routes/job.ts";
 import { handleListJobs } from "./routes/jobs.ts";
 import { handleGetStats } from "./routes/stats.ts";
+import { handleDeveloperAdminRoute } from "./routes/developers.ts";
+import { handlePublicAgentTool, handlePublicAgentTools } from "./routes/agent.ts";
 import type { Env } from "../shared/types.ts";
 import { jsonOk } from "../shared/utils/errors.ts";
 import { jobsMapCacheKeyRequest } from "../shared/utils/jobsMapCache.ts";
 
 const JOB_ID_PATTERN = /^\/jobs\/([^/]+)$/;
+const DEVELOPER_ADMIN_PATTERN = /^\/admin\/(?:developer-accounts|api-keys)(?:\/.*)?$/;
 const JOBS_MAP_CACHE_HDR = "X-Curastem-Jobs-Map-Cache";
 
 export function isKnownPublicRoute(path: string): boolean {
@@ -20,6 +23,9 @@ export function isKnownPublicRoute(path: string): boolean {
     path === "/jobs" ||
     path === "/jobs/map" ||
     path === "/stats" ||
+    path === "/v1/agent/tools" ||
+    path === "/v1/agent/tool" ||
+    DEVELOPER_ADMIN_PATTERN.test(path) ||
     JOB_ID_PATTERN.test(path)
   );
 }
@@ -32,6 +38,17 @@ export async function handlePublicRoute(
   path: string,
   method: string
 ): Promise<Response | null> {
+  const developerAdminResp = await handleDeveloperAdminRoute(request, env, path, method);
+  if (developerAdminResp) return developerAdminResp;
+
+  if (path === "/v1/agent/tools" && method === "GET") {
+    return handlePublicAgentTools();
+  }
+
+  if (path === "/v1/agent/tool" && method === "POST") {
+    return handlePublicAgentTool(request, env, ctx);
+  }
+
   if (path === "/stats" && method === "GET") {
     return handleGetStats(request, env, ctx);
   }

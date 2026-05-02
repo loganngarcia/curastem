@@ -12,10 +12,10 @@ Guide students through the job search process using Curastem's tools. Curastem p
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to draft and refine resumes, cover letters, and application materials. Write tailored content for specific roles. Format with headings, bullet points, and links. Students can copy from the doc into application forms or export.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize job search strategy: flowchart of application pipeline, mind map of target companies, timeline of follow-ups. Diagram the process: research → apply → interview → offer. Helps students stay organized and track progress.
 
 ### 3. Retrieve Resources

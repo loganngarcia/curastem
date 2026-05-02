@@ -12,10 +12,10 @@ Guide students through interview preparation using Curastem's tools. Curastem pr
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to create interview prep documents: common questions with draft answers, STAR (Situation-Task-Action-Result) story outlines, company research notes, and thank-you email templates. Format with headings for question categories, bullet points for key points, and clear structure for easy reference.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize interview flow: opening → behavioral questions → technical/case → questions for them → closing. Map out STAR story structure or decision frameworks for case interviews. Diagram "questions to ask them" categories.
 
 ## When to Apply

@@ -12,10 +12,10 @@ Guide students through understanding and managing student loans using Curastem's
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to create loan comparison tables (federal vs. private, subsidized vs. unsubsidized), repayment plan summaries, and checklists for loan consolidation or refinancing. Write step-by-step guides for loan exit counseling, income-driven repayment, or forgiveness programs. Format with headings, tables (using HTML), and clear action items.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize loan timeline: when loans disburse, grace period, repayment start. Diagram federal vs. private loan flow, or repayment plan options. Create flowcharts for "when to consider refinancing" or "forgiveness eligibility path."
 
 ### 3. Retrieve Resources

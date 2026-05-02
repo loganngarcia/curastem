@@ -6,7 +6,7 @@
  * ──────────────────────────────────────────────────────────────────────────
  *   GET  /health          Unauthenticated health check. Returns { status: "ok" }.
  *   GET  /auth/maps-key   Framer: Maps JS key (GOOGLE_MAPS_API_KEY; restrict by HTTP referrer).
- *   GET  /auth/gemini-token  Framer: ephemeral Gemini Live token (GEMINI_API_KEY server-side).
+ *   GET  /proxy/gemini-live  Framer: Agent Platform Gemini Live WebSocket proxy.
  *   POST /proxy/gemini    Framer: Gemini REST/SSE proxy (?model=&action=&alt=sse).
  *   GET  /stats           Aggregate market stats (counts, top companies, etc.).
  *   GET  /jobs            Paginated, filterable job listing.
@@ -88,7 +88,7 @@ async function handleRequest(
   // keep the permissive wildcard behaviour used by external API consumers.
   if (method === "OPTIONS") {
     if (isAppRoute(path)) {
-      return appCorsPreflight(request);
+      return appCorsPreflight(request, path);
     }
     return new Response(null, {
       headers: {
@@ -120,7 +120,7 @@ async function handleRequest(
   }
 
   const appResp = await handleAppRoute(request, env, ctx, path, method);
-  if (appResp) return appResp;
+  if (appResp) return withAppCors(request, appResp, path);
 
   const publicResp = await handlePublicRoute(request, env, ctx, url, path, method);
   if (publicResp) return publicResp;
@@ -294,14 +294,14 @@ async function handleRequest(
   // ?limit=N  override the per-call batch size (default 50, max 50).
   // Safe to call repeatedly — idempotent UPDATEs, stops when no stale companies remain.
   if (path === "/admin/enrich-logos" && method === "POST") {
-    if (!env.GEMINI_API_KEY) {
-      return new Response(JSON.stringify({ error: "GEMINI_API_KEY not set" }), {
+    if (!env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+      return new Response(JSON.stringify({ error: "Agent Platform credentials not set" }), {
         status: 503, headers: { "Content-Type": "application/json" },
       });
     }
     const batchLimit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 50);
     try {
-      const processed = await runCompanyEnrichment(env.JOBS_DB, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN, batchLimit);
+      const processed = await runCompanyEnrichment(env, env.JOBS_DB, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN, batchLimit);
 
       // remaining = how many google-favicon companies still exist (may never reach 0 for niche companies not in Logo.dev)
       // processed = how many were actually enriched this call — loop should stop when this is 0

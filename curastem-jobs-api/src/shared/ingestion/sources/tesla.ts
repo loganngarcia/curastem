@@ -62,9 +62,9 @@ function idFromJobPath(fullPath: string): string | null {
 
 function titleGuessFromSlug(slug: string): string {
   const p = slug.replace(/^\/+/, "").replace(/\/$/, "");
-  const slug = p.replace(/-(\d{5,})$/, "").replace(/^\d{5,}$/, "");
-  if (!slug) return "Tesla job posting";
-  return slug
+  const titleSlug = p.replace(/-(\d{5,})$/, "").replace(/^\d{5,}$/, "");
+  if (!titleSlug) return "Tesla job posting";
+  return titleSlug
     .split("-")
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())

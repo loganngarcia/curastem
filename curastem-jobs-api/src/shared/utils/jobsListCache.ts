@@ -15,7 +15,7 @@
  */
 
 /** Bump when response shape or filtering semantics change so stale entries retire. */
-export const JOBS_LIST_CACHE_VERSION = "v2";
+export const JOBS_LIST_CACHE_VERSION = "v3";
 
 /** Edge TTL. 1h matches the ingestion cron cadence — new jobs surface within an hour. */
 export const JOBS_LIST_CACHE_MAX_AGE_SECONDS = 3600;

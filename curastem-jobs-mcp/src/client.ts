@@ -23,9 +23,9 @@ export class JobsApiError extends Error {
 }
 
 export interface ListJobsParams {
-  /** Broad search (Vectorize + SQL). Prefer `title` for role-only matching. */
+  /** Broad search (Vectorize + SQL). Supports `-term` title exclusions. Prefer `title` for role-only matching. */
   q?: string | undefined;
-  /** Substring match on job title only — no company slug / vector noise. */
+  /** Job title match only — supports comma-separated roles and `-term` exclusions. */
   title?: string | undefined;
   location?: string | undefined;
   /** Comma-separated — match if job locations contain ANY term (multi-metro). */
@@ -139,5 +139,34 @@ export class JobsApiClient {
    */
   async getStats(): Promise<MarketStatsResponse> {
     return this.request<MarketStatsResponse>("/stats");
+  }
+
+  async callAgentTool(name: string, args: unknown): Promise<unknown> {
+    return this.post<unknown>("/v1/agent/tool", { name, args });
+  }
+
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: this.authHeader,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "curastem-jobs-mcp/1.0",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let code = "API_ERROR";
+      let message = `Jobs API returned ${res.status}`;
+      try {
+        const errBody = (await res.json()) as { error?: { code?: string; message?: string } };
+        code = errBody.error?.code ?? code;
+        message = errBody.error?.message ?? message;
+      } catch {}
+      throw new JobsApiError(res.status, code, message);
+    }
+    return res.json() as Promise<T>;
   }
 }

@@ -275,6 +275,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
   id                    TEXT PRIMARY KEY,   -- UUID v4
   key_hash              TEXT NOT NULL UNIQUE,  -- SHA-256 hex of the raw bearer token
   owner_email           TEXT NOT NULL,
+  account_id            TEXT REFERENCES developer_accounts(id),
+  name                  TEXT,
+  key_prefix            TEXT,
+  scopes                TEXT,                  -- JSON array of allowed scopes; null = legacy/all
+  daily_limit_usd_micros INTEGER,
+  monthly_limit_usd_micros INTEGER,
   description           TEXT,                  -- optional note about who / what this key is for
   rate_limit_per_minute INTEGER NOT NULL DEFAULT 60,
   active                INTEGER NOT NULL DEFAULT 1,   -- 0 = revoked
@@ -286,6 +292,73 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys (key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys (active);
 -- Auth path: WHERE key_hash = ? AND active = 1 — smaller partial index
 CREATE INDEX IF NOT EXISTS idx_api_keys_active_hash ON api_keys (key_hash) WHERE active = 1;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- PUBLIC DEVELOPER PLATFORM
+-- Dollar-denominated usage billing. Balances and charges are stored as integer
+-- micro-USD (1 USD = 1,000,000) to avoid floating point accounting drift.
+-- Raw provider cost is multiplied by charge_multiplier (default 5x) and deducted
+-- from the developer account balance. API keys are still stored hashed only.
+-- ──────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS developer_accounts (
+  id                      TEXT PRIMARY KEY,
+  name                    TEXT NOT NULL,
+  owner_email             TEXT NOT NULL,
+  status                  TEXT NOT NULL DEFAULT 'active', -- active|suspended
+  created_at              INTEGER NOT NULL,
+  updated_at              INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_developer_accounts_owner_email
+  ON developer_accounts (owner_email);
+
+CREATE TABLE IF NOT EXISTS developer_account_balances (
+  account_id              TEXT PRIMARY KEY REFERENCES developer_accounts(id) ON DELETE CASCADE,
+  balance_usd_micros      INTEGER NOT NULL DEFAULT 0,
+  updated_at              INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS developer_balance_transactions (
+  id                      TEXT PRIMARY KEY,
+  account_id              TEXT NOT NULL REFERENCES developer_accounts(id) ON DELETE CASCADE,
+  type                    TEXT NOT NULL, -- top_up|adjustment|usage_debit|refund
+  amount_usd_micros       INTEGER NOT NULL,
+  balance_after_usd_micros INTEGER NOT NULL,
+  description             TEXT,
+  admin_actor             TEXT,
+  created_at              INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_developer_balance_transactions_account
+  ON developer_balance_transactions (account_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS public_usage_ledger (
+  id                      TEXT PRIMARY KEY,
+  account_id              TEXT NOT NULL REFERENCES developer_accounts(id) ON DELETE CASCADE,
+  api_key_id              TEXT NOT NULL REFERENCES api_keys(id),
+  request_id              TEXT NOT NULL,
+  route                   TEXT NOT NULL,
+  tool_name               TEXT,
+  status                  TEXT NOT NULL, -- succeeded|failed|rejected
+  provider                TEXT,
+  model                   TEXT,
+  input_tokens            INTEGER NOT NULL DEFAULT 0,
+  output_tokens           INTEGER NOT NULL DEFAULT 0,
+  total_tokens            INTEGER NOT NULL DEFAULT 0,
+  raw_cost_usd_micros     INTEGER NOT NULL DEFAULT 0,
+  charge_multiplier       REAL NOT NULL DEFAULT 5,
+  charged_usd_micros      INTEGER NOT NULL DEFAULT 0,
+  balance_after_usd_micros INTEGER,
+  metadata_json           TEXT,
+  created_at              INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_public_usage_ledger_request
+  ON public_usage_ledger (request_id);
+CREATE INDEX IF NOT EXISTS idx_public_usage_ledger_account
+  ON public_usage_ledger (account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_public_usage_ledger_key
+  ON public_usage_ledger (api_key_id, created_at DESC);
 
 -- ──────────────────────────────────────────────────────────────────────────────
 -- USER ACCOUNTS (auth + cross-device sync)

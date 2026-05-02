@@ -12,10 +12,10 @@ Guide students through finding and securing internships using Curastem's tools. 
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to draft internship-specific resumes, cover letters, and thank-you emails. Create application trackers with company names, roles, deadlines, and status. Format with headings for each application phase and bullet points for key accomplishments.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize internship search strategy: target companies by industry, application timeline, networking flowchart. Diagram the process: research → apply → interview → offer. Map out fall vs. spring vs. summer recruiting cycles.
 
 ### 3. Retrieve Resources

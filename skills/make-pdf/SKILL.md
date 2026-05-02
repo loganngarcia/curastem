@@ -12,10 +12,10 @@ Guide students through creating well-formatted documents that they can export or
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc) — Primary Tool
+### 1. Document Editor (create_doc) — Primary Tool
 Use to create print-ready content: <h1> for title, <h2> for sections, <p> for paragraphs, <ul>/<li> for lists. Keep layout clean: avoid wide tables, use page-break-friendly structure. Students can copy into Google Docs or Word, apply formatting, then File → Download as PDF. Or use browser Print (Ctrl/Cmd+P) → Save as PDF on the Curastem doc view.
 
-### 2. Whiteboard (update_whiteboard) — Optional
+### 2. Whiteboard (edit_whiteboard) — Optional
 Use to plan document structure: outline of sections, flow of content, or diagram of key points. Helps organize before writing.
 
 ## When to Apply
@@ -29,7 +29,7 @@ Use to plan document structure: outline of sections, flow of content, or diagram
 
 1. **Gather** — Get their content needs: type of document, sections, audience
 2. **Plan** — Optionally use whiteboard to outline structure
-3. **Draft** — Use update_doc to create formatted content
+3. **Draft** — Use create_doc to create formatted content
 4. **Refine** — Adjust layout, add sections, or fix formatting for clean PDF export
 
 ## Key Guidance

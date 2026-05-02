@@ -287,7 +287,7 @@ export async function handleGenerateChatTitle(
   let title = fallbackChatTitleFromMessage(firstMessageText);
   const quota = await reserveGeminiQuota(env.RATE_LIMIT_KV, "app_chat_title");
   if (quota.allowed) {
-    title = await generateChatTitle(env.GEMINI_API_KEY, firstMessageText);
+    title = await generateChatTitle(env, firstMessageText);
   }
   const nowSec = Math.floor(Date.now() / 1000);
   const meta = parseMeta(existing.meta_json);
@@ -440,11 +440,11 @@ async function markUserDirty(kv: KVNamespace, userId: string): Promise<void> {
   }
 }
 
-async function generateChatTitle(apiKey: string, firstMessageText: string): Promise<string> {
+async function generateChatTitle(env: Env, firstMessageText: string): Promise<string> {
   const fallback = fallbackChatTitleFromMessage(firstMessageText);
-  if (!apiKey) return fallback;
+  if (!env.GOOGLE_APPLICATION_CREDENTIALS_JSON) return fallback;
   const prompt = `Summarize this message into a short title (3-5 words). Just the title, no quotes: "${firstMessageText}"`;
-  const resp = await fetchGeminiWithFallback(apiKey, CHAT_TITLE_MODEL, "generateContent", {
+  const resp = await fetchGeminiWithFallback(env, CHAT_TITLE_MODEL, "generateContent", {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 1.0, maxOutputTokens: 20 },
       safetySettings: CHAT_TITLE_SAFETY_SETTINGS,

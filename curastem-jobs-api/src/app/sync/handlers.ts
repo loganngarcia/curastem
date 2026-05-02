@@ -367,17 +367,59 @@ export async function handleSyncDelta(request: Request, env: Env): Promise<Respo
       for (const r of results ?? []) existingMap.set(r.id, r);
     }
     const toWrite: ChatRow[] = [];
+    const docsToWrite: DocRow[] = [];
+    const appsToWrite: AppRow[] = [];
+    const nowSec = Math.floor(Date.now() / 1000);
     for (const patch of body.chats) {
       const row = await buildChatRowFromPatch(userId, patch, existingMap.get(patch.id));
       if (row) toWrite.push(row);
+      if (
+        Array.isArray(patch.docs) ||
+        patch.app ||
+        patch.whiteboard != null
+      ) {
+        try {
+          const extracted = await extractChatSession(
+            {
+              id: patch.id,
+              title: patch.title ?? undefined,
+              timestamp: patch.updated_at ?? patch.created_at ?? Date.now(),
+              messages: [],
+              notes:
+                typeof patch.meta?.notes === "string"
+                  ? patch.meta.notes
+                  : undefined,
+              docType: patch.docType,
+              docCompany: patch.docCompany,
+              docs: patch.docs,
+              activeDocId: patch.activeDocId,
+              app: patch.app,
+              whiteboard: patch.whiteboard,
+              docEditorLastEdited: patch.docEditorLastEdited,
+              miniIdeLastEdited: patch.miniIdeLastEdited,
+              whiteboardLastEdited: patch.whiteboardLastEdited,
+            },
+            userId,
+            nowSec
+          );
+          docsToWrite.push(...extracted.docs);
+          appsToWrite.push(...extracted.apps);
+        } catch (err) {
+          logger.warn("extract_delta_artifacts_failed", {
+            chat_id: patch.id,
+            error: String(err),
+          });
+        }
+      }
     }
     await persistChats(env.JOBS_DB, toWrite);
-    accepted += toWrite.length;
+    await persistDocs(env.JOBS_DB, docsToWrite);
+    await persistApps(env.JOBS_DB, appsToWrite);
+    accepted += toWrite.length + docsToWrite.length + appsToWrite.length;
   }
 
   if (Array.isArray(body.messages) && body.messages.length > 0) {
     const rows: ChatMessageRow[] = [];
-    const receivedAtMs = Date.now();
     for (const p of body.messages) {
       if (
         !p ||
@@ -393,7 +435,7 @@ export async function handleSyncDelta(request: Request, env: Env): Promise<Respo
         chat_id: p.chat_id,
         user_id: userId,
         seq: p.seq,
-        created_at: receivedAtMs + rows.length,
+        created_at: p.created_at,
         role: p.role,
         content_json: contentJson,
         content_hash: contentHash,
@@ -436,17 +478,18 @@ export async function handleSyncDelta(request: Request, env: Env): Promise<Respo
         await persistChats(env.JOBS_DB, stubs);
       }
     }
-    await persistChatMessages(env.JOBS_DB, rows);
-    accepted += rows.length;
+    const resolvedRows = await resolveDeltaMessageSeqConflicts(env.JOBS_DB, userId, rows);
+    await persistChatMessages(env.JOBS_DB, resolvedRows);
+    accepted += resolvedRows.length;
 
     // Touch chats.updated_at for every chat that just received new messages.
     // Without this, loadChatsChangedSince (used by SSE and delta) won't return
     // those chats to other devices — they'd receive the messages but not the
     // chat summary, causing messages to be silently discarded on the receiving
     // device (since applyServerChanges ignores messages for unknown chats).
-    if (rows.length > 0) {
+    if (resolvedRows.length > 0) {
       const nowSec = Math.floor(Date.now() / 1000);
-      const touchedChatIds = [...new Set(rows.map((r) => r.chat_id))];
+      const touchedChatIds = [...new Set(resolvedRows.map((r) => r.chat_id))];
       await env.JOBS_DB.batch(
         touchedChatIds.map((id) =>
           env.JOBS_DB
@@ -529,6 +572,71 @@ export async function handleSyncDelta(request: Request, env: Env): Promise<Respo
   });
 }
 
+async function resolveDeltaMessageSeqConflicts(
+  db: D1Database,
+  userId: string,
+  rows: ChatMessageRow[]
+): Promise<ChatMessageRow[]> {
+  if (rows.length === 0) return rows;
+  const chatIds = [...new Set(rows.map((r) => r.chat_id))];
+  const placeholders = chatIds.map(() => "?").join(",");
+  const existing = await db
+    .prepare(
+      `SELECT chat_id, seq, content_hash
+         FROM chat_messages
+        WHERE user_id = ? AND chat_id IN (${placeholders})`
+    )
+    .bind(userId, ...chatIds)
+    .all<{ chat_id: string; seq: number; content_hash: string }>();
+
+  const occupiedSeqs = new Map<string, Set<number>>();
+  const hashesByChat = new Map<string, Set<string>>();
+  const hashByChatSeq = new Map<string, string>();
+  const nextSeqByChat = new Map<string, number>();
+
+  for (const row of existing.results ?? []) {
+    const seqs = occupiedSeqs.get(row.chat_id) ?? new Set<number>();
+    seqs.add(row.seq);
+    occupiedSeqs.set(row.chat_id, seqs);
+
+    const hashes = hashesByChat.get(row.chat_id) ?? new Set<string>();
+    hashes.add(row.content_hash);
+    hashesByChat.set(row.chat_id, hashes);
+
+    hashByChatSeq.set(`${row.chat_id}:${row.seq}`, row.content_hash);
+    nextSeqByChat.set(
+      row.chat_id,
+      Math.max(nextSeqByChat.get(row.chat_id) ?? 1, row.seq + 1)
+    );
+  }
+
+  const resolved: ChatMessageRow[] = [];
+  for (const row of rows) {
+    const hashes = hashesByChat.get(row.chat_id) ?? new Set<string>();
+    if (hashes.has(row.content_hash)) continue;
+
+    const seqs = occupiedSeqs.get(row.chat_id) ?? new Set<number>();
+    const existingHashAtSeq = hashByChatSeq.get(`${row.chat_id}:${row.seq}`);
+    let seq = row.seq;
+
+    if (seqs.has(seq) && existingHashAtSeq !== row.content_hash) {
+      seq = nextSeqByChat.get(row.chat_id) ?? 1;
+      while (seqs.has(seq)) seq++;
+    }
+
+    seqs.add(seq);
+    occupiedSeqs.set(row.chat_id, seqs);
+    hashes.add(row.content_hash);
+    hashesByChat.set(row.chat_id, hashes);
+    hashByChatSeq.set(`${row.chat_id}:${seq}`, row.content_hash);
+    nextSeqByChat.set(row.chat_id, Math.max(nextSeqByChat.get(row.chat_id) ?? 1, seq + 1));
+
+    resolved.push({ ...row, seq });
+  }
+
+  return resolved;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // KV dirty-flag helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -608,6 +716,15 @@ interface ChatPatch {
   created_at?: number;          // millis
   updated_at?: number;          // millis
   meta?: Record<string, unknown>;
+  docs?: ClientChatSession["docs"];
+  activeDocId?: string;
+  docType?: ClientChatSession["docType"];
+  docCompany?: string;
+  app?: ClientChatSession["app"];
+  whiteboard?: unknown;
+  docEditorLastEdited?: number;
+  miniIdeLastEdited?: number;
+  whiteboardLastEdited?: number;
 }
 
 interface MessagePatch {

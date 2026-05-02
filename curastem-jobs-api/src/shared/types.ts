@@ -38,8 +38,26 @@ export interface Env {
   JOBS_DB: D1Database;
   /** KV namespace for rate limiter sliding-window counters */
   RATE_LIMIT_KV: KVNamespace;
-  /** Google Gemini API key — used for AI extraction and embedding generation */
-  GEMINI_API_KEY: string;
+  /** Agent Platform project for Gemini/embedding calls. */
+  GOOGLE_CLOUD_PROJECT: string;
+  /** Agent Platform location for Gemini text calls. */
+  GOOGLE_CLOUD_LOCATION?: string;
+  /** Agent Platform location for embedding calls. */
+  GOOGLE_CLOUD_EMBEDDING_LOCATION?: string;
+  /** Agent Platform embedding model ID. */
+  GOOGLE_CLOUD_EMBEDDING_MODEL?: string;
+  /** Agent Platform location for Gemini Live calls. */
+  GOOGLE_CLOUD_LIVE_LOCATION?: string;
+  /** Agent Platform Gemini Live model ID. */
+  GOOGLE_CLOUD_LIVE_MODEL?: string;
+  /** Service account JSON used to mint OAuth tokens for Agent Platform. */
+  GOOGLE_APPLICATION_CREDENTIALS_JSON: string;
+  /** Admin-only secret for public developer account/key management routes. */
+  ADMIN_API_SECRET?: string;
+  /** Override raw provider pricing in USD per 1M input tokens for the agent model. */
+  AGENT_MODEL_INPUT_USD_PER_1M?: string;
+  /** Override raw provider pricing in USD per 1M output tokens for the agent model. */
+  AGENT_MODEL_OUTPUT_USD_PER_1M?: string;
   /**
    * Cloudflare Vectorize index for semantic job search.
    * Embeddings are generated via Gemini Embedding API (768-dimensional, cosine).
@@ -271,11 +289,53 @@ export interface ApiKeyRow {
   id: string;
   key_hash: string;
   owner_email: string;
+  account_id: string | null;
+  name: string | null;
+  key_prefix: string | null;
+  scopes: string | null;
+  daily_limit_usd_micros: number | null;
+  monthly_limit_usd_micros: number | null;
   description: string | null;
   rate_limit_per_minute: number;
   active: number;
   created_at: number;
   last_used_at: number | null;
+}
+
+export interface DeveloperAccountRow {
+  id: string;
+  name: string;
+  owner_email: string;
+  status: "active" | "suspended";
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DeveloperAccountBalanceRow {
+  account_id: string;
+  balance_usd_micros: number;
+  updated_at: number;
+}
+
+export interface PublicUsageLedgerRow {
+  id: string;
+  account_id: string;
+  api_key_id: string;
+  request_id: string;
+  route: string;
+  tool_name: string | null;
+  status: "succeeded" | "failed" | "rejected";
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  raw_cost_usd_micros: number;
+  charge_multiplier: number;
+  charged_usd_micros: number;
+  balance_after_usd_micros: number | null;
+  metadata_json: string | null;
+  created_at: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -137,8 +137,6 @@ function parseDetailPage(html: string, listing: PaycorListing): PaycorDetail {
 
   const lines = toLines(html);
   const rawPositionLine = findLine(lines, /^Position:$/i);
-  const rawLocationLine = findLine(lines, /^Location:$/i);
-  const rawTitleLine = findLine(lines, /^Title:$/i);
   const openingsLine = findLine(lines, /^# of Openings:?$/i);
   const qualificationsLine = findLine(lines, /Qualifications\/\s*Education\/\s*Experience:/i);
   const responsibilitiesLine = findLine(lines, /Summary of Key Responsibilities/i);
@@ -150,11 +148,6 @@ function parseDetailPage(html: string, listing: PaycorListing): PaycorDetail {
   const title = rawPositionLine >= 0 && lines[rawPositionLine + 1]
     ? lines[rawPositionLine + 1]
     : listing.title;
-  const listedLocation = rawLocationLine >= 0 && lines[rawLocationLine + 1]
-    ? lines[rawLocationLine + 1]
-    : listing.location;
-  const fallbackLocation = rawTitleLine >= 0 && lines[rawTitleLine + 1] ? lines[rawTitleLine + 1] : null;
-
   let descriptionStart = openingsLine >= 0
     ? Math.max(openingsLine + 3, 0)
     : rawPositionLine >= 0
@@ -167,7 +160,6 @@ function parseDetailPage(html: string, listing: PaycorListing): PaycorDetail {
   const descriptionLines = lines.slice(Math.max(0, descriptionStart));
   const filteredDescription = descriptionLines.filter((line) => line !== title && line !== listing.location);
   const descriptionRaw = normalizeDescriptionLines(filteredDescription);
-  const location = normalizeLocation(listedLocation || fallbackLocation || listing.location);
   const employmentType = normalizeEmploymentType(
     [title, listing.location, descriptionRaw].filter(Boolean).join(" ")
   ) ?? inferEmploymentFromText(`${title}\n${listing.location}\n${descriptionRaw}`);

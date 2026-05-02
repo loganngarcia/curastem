@@ -12,10 +12,10 @@ Guide students through finding and applying for scholarships using Curastem's to
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to draft scholarship essays, personal statements, and short-answer responses. Create tracking tables or lists of scholarships with deadlines and requirements. Format with headings for each scholarship, bullet points for criteria, and links to application portals.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize scholarship strategy: timeline of deadlines, mind map of scholarship categories (merit, need-based, demographic, major-specific), flowchart of application steps. Diagram the process from search → shortlist → apply → follow-up.
 
 ### 3. Retrieve Resources

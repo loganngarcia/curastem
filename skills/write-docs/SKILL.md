@@ -12,10 +12,10 @@ Guide students through creating documents using Curastem's **document editor**. 
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc) — Primary Tool
+### 1. Document Editor (create_doc) — Primary Tool
 Use to write, structure, and format documents. Create sections with <h2>, paragraphs with <p>, lists with <ul>/<li>, emphasis with <b> or <i>, links with <a>. Supports essays, reports, meeting notes, letters, outlines, and study guides. Students edit in place and copy into Word, Google Docs, or applications.
 
-### 2. Whiteboard (update_whiteboard) — Optional
+### 2. Whiteboard (edit_whiteboard) — Optional
 Use to plan before writing: outline structure, mind map of ideas, or flowchart of sections. Helps organize thoughts and flow.
 
 ## When to Apply
@@ -29,7 +29,7 @@ Use to plan before writing: outline structure, mind map of ideas, or flowchart o
 
 1. **Gather** — Get their topic, purpose, and key points
 2. **Plan** — Optionally use whiteboard to outline structure
-3. **Draft** — Use update_doc to create the document
+3. **Draft** — Use create_doc to create the document
 4. **Refine** — Edit content, add sections, or improve clarity based on feedback
 
 ## Key Guidance

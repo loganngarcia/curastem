@@ -49,7 +49,7 @@ npm run db:migrate
 ### Create a local `.dev.vars` file (gitignored)
 
 ```
-GEMINI_API_KEY=your_gemini_api_key_here
+GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account",...}
 ```
 
 ### Firebase (auth relay `/auth/popup`)

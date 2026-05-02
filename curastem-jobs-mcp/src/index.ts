@@ -23,7 +23,8 @@
  * Detail & comparison:
  *   get_job_details      — full job with AI-enriched structured description
  *   get_job_keywords     — skill/tech keywords extracted from a job description
- *   suggest_similar_jobs — jobs similar to one the user is viewing
+ *   create_resume       — one-page resume HTML + downloadable PDF payload
+ *   create_cover_letter — one-page cover letter HTML + downloadable PDF payload
  *
  * Market context:
  *   get_market_overview  — aggregate stats: counts, top companies, breakdowns
@@ -56,16 +57,18 @@ import { JobsApiClient, JobsApiError } from "./client.ts";
 // Tool definitions (JSON Schema for tools/list)
 import { getJobDetailsTool } from "./tools/getJobDetails.ts";
 import { searchJobsTool } from "./tools/searchJobs.ts";
-import { suggestSimilarJobsTool } from "./tools/suggestSimilarJobs.ts";
 import { getMarketOverviewTool } from "./tools/getMarketOverview.ts";
 import { getJobKeywordsTool } from "./tools/getJobKeywords.ts";
+import { createResumeTool } from "./tools/createResume.ts";
+import { createCoverLetterTool } from "./tools/createCoverLetter.ts";
 
 // Tool runners (called on tools/call)
-import { runGetJobDetails, type GetJobDetailsArgs } from "./tools/getJobDetails.ts";
-import { runSearchJobs, type SearchJobsArgs } from "./tools/searchJobs.ts";
-import { runSuggestSimilarJobs, type SuggestSimilarJobsArgs } from "./tools/suggestSimilarJobs.ts";
+import type { GetJobDetailsArgs } from "./tools/getJobDetails.ts";
+import type { SearchJobsArgs } from "./tools/searchJobs.ts";
 import { runGetMarketOverview } from "./tools/getMarketOverview.ts";
 import { runGetJobKeywords, type GetJobKeywordsArgs } from "./tools/getJobKeywords.ts";
+import { runCreateResume, type CreateResumeArgs } from "./tools/createResume.ts";
+import { runCreateCoverLetter, type CreateCoverLetterArgs } from "./tools/createCoverLetter.ts";
 
 import type {
   Env,
@@ -87,8 +90,9 @@ import { McpErrorCode } from "./types.ts";
 const ALL_TOOLS = [
   searchJobsTool,
   getJobDetailsTool,
+  createResumeTool,
+  createCoverLetterTool,
   getJobKeywordsTool,
-  suggestSimilarJobsTool,
   getMarketOverviewTool,
 ];
 
@@ -145,7 +149,7 @@ async function handleToolCall(
 
     switch (name) {
       case "search_jobs":
-        result = await runSearchJobs(client, args as SearchJobsArgs);
+        result = await client.callAgentTool("search_jobs", args as SearchJobsArgs);
         break;
 
       case "get_job_details": {
@@ -153,16 +157,16 @@ async function handleToolCall(
         if (!detailArgs.job_id) {
           return rpcError(req.id, McpErrorCode.InvalidParams, "job_id is required");
         }
-        result = await runGetJobDetails(client, detailArgs);
+        result = await client.callAgentTool("get_job_details", detailArgs);
         break;
       }
 
-      case "suggest_similar_jobs": {
-        const similarArgs = args as unknown as SuggestSimilarJobsArgs;
-        if (!similarArgs.job_id) {
-          return rpcError(req.id, McpErrorCode.InvalidParams, "job_id is required");
-        }
-        result = await runSuggestSimilarJobs(client, similarArgs);
+      case "create_resume":
+        result = await runCreateResume(client, args as CreateResumeArgs);
+        break;
+
+      case "create_cover_letter": {
+        result = await runCreateCoverLetter(client, args as CreateCoverLetterArgs);
         break;
       }
 

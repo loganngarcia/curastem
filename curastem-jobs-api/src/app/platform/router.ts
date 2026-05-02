@@ -1,5 +1,6 @@
 import { handleAuthPopup } from "../auth/popup.ts";
 import {
+  handleGeminiLiveProxy,
   handleGeminiProxy,
   handleGeminiToken,
   handleMapsKey,
@@ -51,6 +52,9 @@ export async function handlePlatformRoute(
   }
   if (path === "/auth/gemini-token" && method === "GET") {
     return handleGeminiToken(env);
+  }
+  if (path === "/proxy/gemini-live" && method === "GET") {
+    return handleGeminiLiveProxy(request, env);
   }
   if (path === "/proxy/gemini" && method === "POST") {
     return handleGeminiProxy(request, env);

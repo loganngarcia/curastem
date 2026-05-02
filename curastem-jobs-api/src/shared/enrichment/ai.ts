@@ -18,7 +18,7 @@
  * this module focused on the Gemini call itself.
  */
 
-import type { JobDescriptionExtracted, PublicSalary, SalaryPeriod } from "../types.ts";
+import type { Env, JobDescriptionExtracted, PublicSalary, SalaryPeriod } from "../types.ts";
 import {
   htmlToText,
   normalizeLocation,
@@ -26,14 +26,19 @@ import {
   sanitizeSeniorityLevelFromAgeNoise,
 } from "../utils/normalize.ts";
 import { fetchGeminiWithFallback } from "../utils/geminiFetch.ts";
-
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+import {
+  agentPlatformHost,
+  agentPlatformModelName,
+  getAgentPlatformAccessToken,
+  getAgentPlatformEmbeddingLocation,
+  getAgentPlatformEmbeddingModel,
+} from "../utils/agentPlatform.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Embedding model
 //
-// gemini-embedding-2-preview: Google's latest multimodal embedding model.
-// https://ai.google.dev/gemini-api/docs/embeddings
+// gemini-embedding-001 on Agent Platform. It returns 3072 dimensions by default;
+// we request 768 below to match the existing Vectorize index.
 //
 // We use 768-dimensional output (down from the 3072 default) via the MRL
 // (Matryoshka Representation Learning) technique — MTEB benchmark shows 768
@@ -46,50 +51,62 @@ const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 // Using the correct task type is critical for retrieval quality.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EMBEDDING_MODEL = "gemini-embedding-2-preview";
 const EMBEDDING_DIMENSIONS = 768;
 /** Embedding input only — AI lazy-load extraction uses full `description_raw` in callers. */
 const JOB_EMBED_DESCRIPTION_MAX_CHARS = 4000;
 
-interface GeminiEmbedRequest {
-  model: string;
-  content: { parts: Array<{ text: string }> };
-  taskType: string;
-  outputDimensionality: number;
+interface AgentPlatformEmbedRequest {
+  instances: Array<{
+    content: string;
+    task_type: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY";
+  }>;
+  parameters: {
+    outputDimensionality: number;
+    autoTruncate: boolean;
+  };
 }
 
-interface GeminiEmbedResponse {
-  embedding?: { values: number[] };
+interface AgentPlatformEmbedResponse {
+  predictions?: Array<{
+    embeddings?: { values?: number[] };
+  }>;
 }
 
 async function callGeminiEmbed(
-  apiKey: string,
+  env: Env,
   text: string,
   taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY"
 ): Promise<number[]> {
-  const url = `${GEMINI_API_BASE}/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
-  const body: GeminiEmbedRequest = {
-    model: `models/${EMBEDDING_MODEL}`,
-    content: { parts: [{ text }] },
-    taskType,
-    outputDimensionality: EMBEDDING_DIMENSIONS,
+  const location = getAgentPlatformEmbeddingLocation(env);
+  const model = getAgentPlatformEmbeddingModel(env);
+  const url = `https://${agentPlatformHost(location)}/v1/${agentPlatformModelName(env, model, location)}:predict`;
+  const body: AgentPlatformEmbedRequest = {
+    instances: [{ content: text, task_type: taskType }],
+    parameters: {
+      outputDimensionality: EMBEDDING_DIMENSIONS,
+      autoTruncate: true,
+    },
   };
+  const accessToken = await getAgentPlatformAccessToken(env);
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Authorization": `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Gemini Embedding API error ${res.status}: ${err}`);
+    throw new Error(`Agent Platform Embedding API error ${res.status}: ${err}`);
   }
 
-  const data = (await res.json()) as GeminiEmbedResponse;
-  const values = data.embedding?.values;
+  const data = (await res.json()) as AgentPlatformEmbedResponse;
+  const values = data.predictions?.[0]?.embeddings?.values;
   if (!values || values.length === 0) {
-    throw new Error("Gemini Embedding returned empty vector");
+    throw new Error("Agent Platform Embedding returned empty vector");
   }
   return values;
 }
@@ -119,14 +136,14 @@ function buildJobEmbedText(
  * Call this at ingestion time whenever a job is new or its description changed.
  */
 export async function embedJob(
-  apiKey: string,
+  env: Env,
   title: string,
   companyName: string,
   location: string | null,
   descriptionRaw: string | null
 ): Promise<number[]> {
   const text = buildJobEmbedText(title, companyName, location, descriptionRaw);
-  return callGeminiEmbed(apiKey, text, "RETRIEVAL_DOCUMENT");
+  return callGeminiEmbed(env, text, "RETRIEVAL_DOCUMENT");
 }
 
 /**
@@ -134,10 +151,10 @@ export async function embedJob(
  * Call this at search time when q= is provided in GET /jobs.
  */
 export async function embedQuery(
-  apiKey: string,
+  env: Env,
   query: string
 ): Promise<number[]> {
-  return callGeminiEmbed(apiKey, query, "RETRIEVAL_QUERY");
+  return callGeminiEmbed(env, query, "RETRIEVAL_QUERY");
 }
 
 /**
@@ -150,8 +167,8 @@ export async function embedQuery(
  * (pulling structured facts out of existing text, never creative generation).
  * Intelligence ceiling matters far less than token cost and latency here.
  *
- * Called on Cloudflare Workers via direct REST to the Gemini API endpoint.
- * No Cloudflare AI binding is needed — the API key is injected as a secret.
+ * Called on Cloudflare Workers via Agent Platform REST with a service account
+ * secret. No Cloudflare AI binding is needed.
  *
  * To upgrade the model: change this constant only. All prompts and JSON
  * response parsing are model-agnostic and will work with any Gemini variant.
@@ -178,7 +195,7 @@ interface GeminiResponse {
   }>;
 }
 
-async function callGemini(apiKey: string, prompt: string, maxOutputTokens = 900): Promise<string> {
+async function callGemini(env: Env, prompt: string, maxOutputTokens = 900): Promise<string> {
   const body: GeminiRequest = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
@@ -193,7 +210,7 @@ async function callGemini(apiKey: string, prompt: string, maxOutputTokens = 900)
     },
   };
 
-  const res = await fetchGeminiWithFallback(apiKey, MODEL, "generateContent", body);
+  const res = await fetchGeminiWithFallback(env, MODEL, "generateContent", body);
 
   if (!res.ok) {
     const err = await res.text();
@@ -380,7 +397,7 @@ function reconcileWorkplaceType(
  * description text. Single Gemini call with delimiter-wrapped JSON response.
  */
 export async function extractJobFields(
-  apiKey: string,
+  env: Env,
   companyName: string,
   jobTitle: string,
   descriptionRaw: string,
@@ -389,7 +406,7 @@ export async function extractJobFields(
   const descriptionText = htmlToText(descriptionRaw);
   const prompt = JOB_EXTRACTION_PROMPT(companyName, jobTitle, descriptionText, sourceLocations);
   // 900 tokens covers the full JSON response with headroom; actual output is ~300-500 tokens.
-  const raw = await callGemini(apiKey, prompt, 900);
+  const raw = await callGemini(env, prompt, 900);
 
   const cleaned = extractJsonFromResponse(raw);
 
@@ -550,13 +567,13 @@ Return ONLY valid JSON:
  * Used by the enrichment layer when a company record lacks a description.
  */
 export async function extractCompanyDescription(
-  apiKey: string,
+  env: Env,
   companyName: string,
   contextText: string
 ): Promise<string> {
   const text = htmlToText(contextText);
   const prompt = COMPANY_DESCRIPTION_PROMPT(companyName, text);
-  const raw = await callGemini(apiKey, prompt);
+  const raw = await callGemini(env, prompt);
 
   const cleaned = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
 

@@ -103,7 +103,11 @@ export async function readSession(
             u.id AS u_id, u.email AS u_email, u.google_sub AS u_google_sub,
             u.firebase_uid AS u_firebase_uid, u.display_name AS u_display_name,
             u.photo_url AS u_photo_url, u.created_at AS u_created_at,
-            u.last_login_at AS u_last_login_at
+            u.last_login_at AS u_last_login_at,
+            u.scheduled_delete_at AS u_scheduled_delete_at,
+            u.email_job_alerts AS u_email_job_alerts,
+            u.email_local_events AS u_email_local_events,
+            u.email_announcements AS u_email_announcements
        FROM sessions s
        JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ?`
@@ -147,6 +151,10 @@ export async function readSession(
       photo_url: row.u_photo_url,
       created_at: row.u_created_at,
       last_login_at: row.u_last_login_at,
+      scheduled_delete_at: row.u_scheduled_delete_at,
+      email_job_alerts: row.u_email_job_alerts,
+      email_local_events: row.u_email_local_events,
+      email_announcements: row.u_email_announcements,
     },
     session: {
       token_hash: row.token_hash,
@@ -174,6 +182,10 @@ interface SessionJoinRow {
   u_photo_url: string | null;
   u_created_at: number;
   u_last_login_at: number;
+  u_scheduled_delete_at: number | null;
+  u_email_job_alerts: number;
+  u_email_local_events: number;
+  u_email_announcements: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

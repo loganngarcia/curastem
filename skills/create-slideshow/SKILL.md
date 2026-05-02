@@ -12,13 +12,13 @@ Guide students through creating presentations and slide decks. Use Curastem's **
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc) — Primary Tool
+### 1. Document Editor (create_doc) — Primary Tool
 Use to draft slide content with clear structure: <h2> for each slide title, <ul>/<li> for bullet points, <b> for emphasis. Add speaker notes in parentheses or a separate section. Students copy into Google Slides, PowerPoint, or Canva. Format for easy copy-paste: one slide per section, concise bullets.
 
 ### 2. Mini App Builder (create_app) — Interactive Option
 Use to build a simple in-browser slideshow: one slide per view, next/previous buttons, optional slide counter. Output valid HTML with <style> and <script>. Follow Curastem guidelines: #141414 background, 48px top margin, Curastem.org label bottom-right, unique IDs on all interactive elements, mobile-responsive.
 
-### 3. Whiteboard (update_whiteboard) — Optional
+### 3. Whiteboard (edit_whiteboard) — Optional
 Use to plan presentation flow: outline of slides, story arc, or mind map of key messages. Helps students organize before writing.
 
 ## When to Apply
@@ -32,7 +32,7 @@ Use to plan presentation flow: outline of slides, story arc, or mind map of key 
 
 1. **Gather** — Get their topic, audience, and key messages
 2. **Plan** — Optionally use whiteboard to outline slide order
-3. **Draft** — Use update_doc to create slide content with clear structure
+3. **Draft** — Use create_doc to create slide content with clear structure
 4. **Refine** — Add more slides, tighten bullets, or adjust flow based on feedback
 
 ## Key Guidance

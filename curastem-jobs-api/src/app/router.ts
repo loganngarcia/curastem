@@ -6,6 +6,7 @@
  * separate from the public API product surface.
  */
 import { handleAuthRoute } from "./auth/router.ts";
+import { handleAgentRoute } from "./agent/router.ts";
 import { handleChatRoute } from "./chats/router.ts";
 import { handlePlatformRoute } from "./platform/router.ts";
 import { appCorsPreflight, isAppRoute, withAppCors } from "./security.ts";
@@ -25,6 +26,7 @@ export async function handleAppRoute(
 ): Promise<Response | null> {
   return (
     (await handlePlatformRoute(request, env, path, method)) ??
+    (await handleAgentRoute(request, env, path, method)) ??
     (await handleAuthRoute(request, env, path, method)) ??
     (await handleSyncRoute(request, env, path, method)) ??
     (await handleChatRoute(request, env, path, method)) ??

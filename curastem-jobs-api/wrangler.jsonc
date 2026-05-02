@@ -27,7 +27,7 @@
   ],
 
   // Secrets (set via `wrangler secret put`):
-  //   GEMINI_API_KEY        — Google Gemini API key for AI extraction + embeddings
+  //   GOOGLE_APPLICATION_CREDENTIALS_JSON — Google Cloud service account JSON for Agent Platform
   //   BRANDFETCH_CLIENT_ID  — Brandfetch fallback (logo if Logo.dev misses; social links)
   //                           Free tier: 500 req/day — brandfetch.com/developers
   //   USAJOBS_API_KEY       — USAJOBS API key for federal jobs (free at developer.usajobs.gov)
@@ -35,7 +35,14 @@
   //   MAPBOX_ACCESS_TOKEN   — Mapbox Geocoding v6 (major-metro company+city); temporary tier + D1 cache
   //   FIREBASE_PROJECT_ID   — Firebase project id ("curastem"); validates aud/iss on Firebase ID tokens
   //   SESSION_SIGNING_KEY   — 32+ random bytes (base64) used to derive session token_hash
-  "vars": {},
+  "vars": {
+    "GOOGLE_CLOUD_PROJECT": "propane-dogfish-492710-c4",
+    "GOOGLE_CLOUD_LOCATION": "global",
+    "GOOGLE_CLOUD_EMBEDDING_LOCATION": "global",
+    "GOOGLE_CLOUD_EMBEDDING_MODEL": "gemini-embedding-001",
+    "GOOGLE_CLOUD_LIVE_LOCATION": "us-central1",
+    "GOOGLE_CLOUD_LIVE_MODEL": "gemini-live-2.5-flash-native-audio"
+  },
 
   // R2 bucket storing per-user uploads (resume files). Private — all access
   // goes through presigned URLs minted by app/uploads/handlers.ts so the Worker

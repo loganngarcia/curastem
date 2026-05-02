@@ -20,7 +20,8 @@
     "verify:a16z": "npx tsx scripts/verify-seed-sources-job-count.ts --only cn-a16z-portfolio --timeout-ms 180000 --concurrency 1",
     "mygreenhouse:handles": "npx tsx scripts/extract-mygreenhouse-greenhouse-handles.ts",
     "backfill:wikidata-edu": "npx tsx scripts/backfill-wikidata-education-websites.ts",
-    "diag:edu-map": "npx tsx scripts/diag-edu-map-eligibility.ts"
+    "diag:edu-map": "npx tsx scripts/diag-edu-map-eligibility.ts",
+    "smoke:agent-tools": "npx tsx scripts/smoke-agent-tools.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260403.1",

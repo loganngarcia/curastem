@@ -12,10 +12,10 @@ Support students in managing stress using Curastem's tools. Curastem provides: t
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to create stress-management plans: daily routines, breathing exercise scripts, task breakdowns for overwhelming projects, and reflection prompts. Write step-by-step guides for grounding, time management, or saying no. Format with clear headings and actionable steps.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize stress-reduction strategies: prioritization matrix (urgent/important), mind map of coping options, flowchart for "when I'm stressed I can..." Create diagrams for breathing cycles (4-7-8, box breathing) or task decomposition.
 
 ## When to Apply

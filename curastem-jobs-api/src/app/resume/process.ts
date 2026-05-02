@@ -38,6 +38,8 @@ profileJobTitles rules:
 - Base titles on the resume, with 0-2 relevant inferred roles if clearly supported by skills or trajectory.
 - Do not include seniority or specialty variants of the same role; use one broad title (e.g. "Product Manager", not also "Senior Product Manager" or "Technical Product Manager").
 - Convert internships, campus jobs, and side roles into career-facing titles when appropriate.
+- If seniorityLevel is intern, new_grad, or entry and the resume does not clearly target senior/staff/leadership roles, append negative title filters to profileJobTitles after the positive titles. Always include "-senior" and "-staff"; include "-principal", "-manager", or "-director" too if they fit within the max 6 items. These are search filters, not job titles.
+- Do not add negative filters for mid, senior, staff, manager, director, or executive profiles.
 - Keep titles plain, recognizable, deduped, strongest fit first, max 6.
 
 Keep emails, phones, and URLs in resumeText exactly as printed in the document.`;
@@ -138,8 +140,8 @@ function geminiText(data: GeminiResponse): string {
   );
 }
 
-async function callGemini(apiKey: string, body: unknown): Promise<string> {
-  const res = await fetchGeminiWithFallback(apiKey, RESUME_MODEL, "generateContent", body);
+async function callGemini(env: Env, body: unknown): Promise<string> {
+  const res = await fetchGeminiWithFallback(env, RESUME_MODEL, "generateContent", body);
   if (!res.ok) {
     const err = await res.text().catch(() => "");
     throw new Error(`Gemini resume API error ${res.status}: ${err.slice(0, 300)}`);
@@ -245,7 +247,7 @@ async function extractResumeProfileFields(
   const fileBytes = await obj.arrayBuffer();
   const base64 = arrayBufferToBase64(fileBytes);
   const mimeType = row.resume_file_mime || "application/pdf";
-  const extractRaw = await callGemini(env.GEMINI_API_KEY, {
+  const extractRaw = await callGemini(env, {
     contents: [
       {
         parts: [
@@ -305,8 +307,8 @@ export async function processResumeForUser(
   userId: string,
   expectedResumeKey?: string
 ): Promise<ResumeProcessResult> {
-  if (!env.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY not configured");
+  if (!env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+    throw new Error("Agent Platform credentials not configured");
   }
 
   const row = await env.JOBS_DB.prepare(
@@ -360,7 +362,7 @@ Use the plain text for all resume content. These hints are only for <h1> if the 
 Plain resume:
 ${resumeText}`;
 
-    const rawHtml = await callGemini(env.GEMINI_API_KEY, {
+    const rawHtml = await callGemini(env, {
       contents: [{ parts: [{ text: formatPrompt }] }],
       generationConfig: { temperature: 0, maxOutputTokens: 8192 },
       safetySettings: RESUME_GEMINI_SAFETY_SETTINGS,

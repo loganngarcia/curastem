@@ -12,13 +12,13 @@ Guide students through creating spreadsheets, tables, and data trackers. Use Cur
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc) — Primary Tool
+### 1. Document Editor (create_doc) — Primary Tool
 Use to create structured tables with <table>, <thead>, <tbody>, <tr>, <th>, <td>. Add headers, rows, and columns. Format for budgets, trackers, schedules, grade calculators, or lists. Students copy into Google Sheets or Excel for full spreadsheet features. Use <h2> for section labels, multiple tables for different sheets.
 
 ### 2. Mini App Builder (create_app) — Interactive Option
 Use to build interactive data tools: budget calculator, grade tracker, habit tracker, or simple CRM. Output valid HTML with <style> and <script>. Include input fields, buttons for add/delete, and display of totals or summaries. Follow Curastem guidelines: #141414 background, 48px top margin, Curastem.org label bottom-right, unique IDs on all interactive elements, mobile-responsive.
 
-### 3. Whiteboard (update_whiteboard) — Optional
+### 3. Whiteboard (edit_whiteboard) — Optional
 Use to plan structure: columns needed, formulas, or data flow. Diagram relationships between fields.
 
 ## When to Apply
@@ -32,7 +32,7 @@ Use to plan structure: columns needed, formulas, or data flow. Diagram relations
 
 1. **Gather** — Get their data needs: columns, rows, calculations, or use case
 2. **Plan** — Optionally use whiteboard to map structure
-3. **Build** — Use update_doc for static tables or create_app for interactive
+3. **Build** — Use create_doc for static tables or create_app for interactive
 4. **Refine** — Add columns, fix formulas, or adjust layout based on feedback
 
 ## Key Guidance

@@ -389,9 +389,9 @@ export async function runExaEnrichment(
 // ─── Logo.dev + Brandfetch + AI pass ──────────────────────────────────────────
 
 async function enrichCompany(
+  env: Env,
   db: D1Database,
   company: CompanyRow,
-  geminiApiKey: string,
   brandfetchClientId: string | undefined,
   logoDevToken?: string
 ): Promise<void> {
@@ -443,7 +443,7 @@ async function enrichCompany(
       const context = await getCompanyJobContext(db, company.id);
       if (context) {
         try {
-          const description = await extractCompanyDescription(geminiApiKey, company.name, context);
+          const description = await extractCompanyDescription(env, company.name, context);
           if (description) fields.description = description;
         } catch (aiErr) {
           logger.warn("company_description_ai_failed", { company_id: company.id, error: String(aiErr) });
@@ -575,8 +575,8 @@ export async function runWordmarkUpgrade(
 }
 
 export async function runCompanyEnrichment(
+  env: Env,
   db: D1Database,
-  geminiApiKey: string,
   brandfetchClientId?: string,
   logoDevToken?: string,
   limit = 50
@@ -598,7 +598,7 @@ export async function runCompanyEnrichment(
     const slice = companies.slice(i, i + ENRICH_COMPANY_CONCURRENCY);
     await Promise.all(
       slice.map((company) =>
-        enrichCompany(db, company, geminiApiKey, brandfetchClientId, logoDevToken)
+        enrichCompany(env, db, company, brandfetchClientId, logoDevToken)
       )
     );
   }
@@ -646,7 +646,5 @@ export async function enrichCompanyById(env: Env, companyId: string): Promise<vo
     }
   }
 
-  if (env.GEMINI_API_KEY) {
-    await enrichCompany(db, company, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN);
-  }
+  await enrichCompany(env, db, company, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN);
 }

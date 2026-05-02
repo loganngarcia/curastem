@@ -2,44 +2,45 @@ import { GoogleGenAI, Type, type FunctionDeclaration } from "@google/genai";
 
 // ---------------------------------------------------------------------------
 // Client initialisation
-// 1) GEMINI_API_KEY — Gemini Developer API (simplest for Vercel; set in env secrets)
-// 2) Else Vertex: GOOGLE_APPLICATION_CREDENTIALS_JSON + GOOGLE_CLOUD_PROJECT
-//    (serverless writes JSON to /tmp and sets GOOGLE_APPLICATION_CREDENTIALS)
+// Prefer Agent Platform (formerly Vertex AI) through Google Cloud credentials.
+// GEMINI_API_KEY remains only as a local fallback while deployments migrate.
 // ---------------------------------------------------------------------------
-import { writeFileSync, existsSync } from "fs";
+import { writeFileSync } from "fs";
 
 const CREDS_TMP_PATH = "/tmp/gcp-sa-credentials.json";
+const DEFAULT_AGENT_PLATFORM_LOCATION = "global";
 
 function getClient(): GoogleGenAI {
+  const credsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
+  const project = process.env.GOOGLE_CLOUD_PROJECT?.trim();
+  const location = process.env.GOOGLE_CLOUD_LOCATION?.trim() || DEFAULT_AGENT_PLATFORM_LOCATION;
+
+  if (project) {
+    if (credsJson) {
+      writeFileSync(CREDS_TMP_PATH, credsJson, "utf8");
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = CREDS_TMP_PATH;
+    }
+
+    return new GoogleGenAI({
+      vertexai: true,
+      project,
+      location,
+    });
+  }
+
   const apiKey = (process.env.GEMINI_API_KEY || "").trim();
   if (apiKey) {
     return new GoogleGenAI({ apiKey });
   }
 
-  const credsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
-  const project = process.env.GOOGLE_CLOUD_PROJECT?.trim();
-
-  if (credsJson && project) {
-    if (!existsSync(CREDS_TMP_PATH)) {
-      writeFileSync(CREDS_TMP_PATH, credsJson, "utf8");
-    }
-    process.env.GOOGLE_APPLICATION_CREDENTIALS = CREDS_TMP_PATH;
-
-    return new GoogleGenAI({
-      vertexai: true,
-      project,
-      location: "global", // gemini-3-flash-preview is only available in the global region
-    });
-  }
-
   throw new Error(
-    "No credentials: set GEMINI_API_KEY (recommended) or GOOGLE_APPLICATION_CREDENTIALS_JSON + GOOGLE_CLOUD_PROJECT"
+    "No credentials: set GOOGLE_CLOUD_PROJECT with ADC or GOOGLE_APPLICATION_CREDENTIALS_JSON for Agent Platform"
   );
 }
 
 export const GEMINI_MODELS = {
-  // Text / chat — Gemini 3 Flash (Public Preview on Vertex AI, region: global)
-  FLASH: "gemini-3-flash-preview",
+  // Text / chat — lowest-cost Gemini 3.1 text model available to this project on Agent Platform.
+  FLASH: "gemini-3.1-flash-lite-preview",
   // Image generation — Gemini 3.1 Flash Image = Nano Banana 2 (Feb 26 2026)
   NANO_BANANA_2: "gemini-3.1-flash-image-preview",
 } as const;
@@ -308,7 +309,7 @@ export async function* streamChatWithTools(
 
 // ---------------------------------------------------------------------------
 // Image generation via Gemini 3.1 Flash Image — "Nano Banana 2"
-// Uses same auth as getClient() (API key or Vertex).
+// Uses the same Agent Platform credentials as getClient().
 // Returns a base64 data URL ready to upload to Framer.
 // ---------------------------------------------------------------------------
 export async function generateImageViaImagen(

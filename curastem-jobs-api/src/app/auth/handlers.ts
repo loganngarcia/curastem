@@ -234,6 +234,10 @@ async function upsertUser(env: Env, input: UpsertInput): Promise<UserRow> {
     photo_url: input.photoUrl,
     created_at: now,
     last_login_at: now,
+    scheduled_delete_at: null,
+    email_job_alerts: 1,
+    email_local_events: 1,
+    email_announcements: 1,
   };
 }
 

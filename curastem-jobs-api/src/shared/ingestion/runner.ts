@@ -678,7 +678,7 @@ async function processSource(
       !skipEmbeddings &&
       needsEmbedding &&
       env.JOBS_VECTORS &&
-      env.GEMINI_API_KEY
+      env.GOOGLE_APPLICATION_CREDENTIALS_JSON
     ) {
       embedTasks.push({ jobId: nonDupMetas[i].jobId, normalized: nonDupMetas[i].normalized });
     }
@@ -689,7 +689,7 @@ async function processSource(
     const settled = await Promise.allSettled(
       chunk.map(({ jobId, normalized }) =>
         embedJob(
-          env.GEMINI_API_KEY!,
+          env,
           normalized.title,
           normalized.company_name,
           locationsRawToEmbedString(normalized.location),
@@ -790,8 +790,8 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
   failed: number;
   total: number;
 }> {
-  if (!env.JOBS_VECTORS || !env.GEMINI_API_KEY) {
-    logger.warn("embedding_backfill_skipped", { reason: "Vectorize or GEMINI_API_KEY not configured" });
+  if (!env.JOBS_VECTORS || !env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+    logger.warn("embedding_backfill_skipped", { reason: "Vectorize or Agent Platform credentials not configured" });
     return { succeeded: 0, failed: 0, total: 0 };
   }
 
@@ -818,7 +818,7 @@ export async function backfillEmbeddings(env: Env, limit = EMBEDDING_BACKFILL_BA
       batch.map((job) => {
         const locText = locationsJsonToEmbedString(job.locations) ?? job.location_primary;
         return embedJob(
-          env.GEMINI_API_KEY!,
+          env,
           job.title,
           job.company_name,
           locText,
@@ -971,14 +971,14 @@ export async function runBackfillPipelineBody(env: Env): Promise<void> {
     logger.warn("exa_enrichment_skipped", { reason: "EXA_API_KEY not set" });
   }
 
-  if (env.GEMINI_API_KEY) {
+  if (env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
     try {
-      await runCompanyEnrichment(env.JOBS_DB, env.GEMINI_API_KEY, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN, 50);
+      await runCompanyEnrichment(env, env.JOBS_DB, env.BRANDFETCH_CLIENT_ID, env.LOGO_DEV_TOKEN, 50);
     } catch (err) {
       logger.error("company_enrichment_cron_failed", { error: String(err) });
     }
   } else {
-    logger.warn("company_enrichment_skipped", { reason: "GEMINI_API_KEY not set" });
+    logger.warn("company_enrichment_skipped", { reason: "Agent Platform credentials not set" });
   }
 
   try {

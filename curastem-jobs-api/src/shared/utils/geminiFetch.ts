@@ -1,20 +1,18 @@
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+import type { Env } from "../types.ts";
+import { fetchAgentPlatform } from "./agentPlatform.ts";
+
 const GEMINI_FALLBACK_MODEL = "gemini-2.5-flash-lite";
 const GEMINI_FALLBACK_STATUSES = new Set([400, 404, 429, 500, 502, 503, 504]);
 
 export async function fetchGeminiWithFallback(
-  apiKey: string,
+  env: Env,
   primaryModel: string,
-  action: string,
-  body: unknown
+  action: "generateContent" | "streamGenerateContent" | "countTokens",
+  body: unknown,
+  alt?: string
 ): Promise<Response> {
   const fetchModel = (model: string) => {
-    const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:${action}?key=${apiKey}`;
-    return fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    return fetchAgentPlatform(env, { model, action, body, alt });
   };
 
   let primary: Response;

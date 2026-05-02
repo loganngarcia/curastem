@@ -12,10 +12,10 @@ Support students experiencing anxiety or stress using Curastem's tools. Curastem
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use to create coping plans, journal prompts, grounding scripts, and structured reflection exercises. Write step-by-step guides for breathing, reframing thoughts, or breaking down overwhelming tasks. Format with clear headings and actionable lists.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use to visualize calming techniques: breathing cycle diagrams (inhale-hold-exhale), mind maps of coping strategies, flowcharts for "when I feel anxious I can..." paths. Create visual anchors that students can reference. Simple shapes and arrows work well.
 
 ## When to Apply

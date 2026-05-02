@@ -210,6 +210,7 @@ function hitToJob(hit: TalentreefHit, cfg: ParsedConfig, companyName: string): N
   const normalizedLocation = buildLocation(source);
   const descriptionRaw = parseDescription(source.description ?? null);
   const applyUrl = toAbsoluteUrl(source.url, cfg.applyUrlBase);
+  if (!applyUrl) return null;
   const workplaceType = normalizeWorkplaceType(source.positionType ?? undefined, normalizedLocation);
   const employmentType = detectEmploymentType(title, source.positionType ?? null);
 

@@ -12,13 +12,13 @@ Guide students through creating flashcard sets for effective studying. Use Curas
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc) — Quick Option
+### 1. Document Editor (create_doc) — Quick Option
 Use to create a formatted list of term/definition pairs. Structure: <h2> for topic, <ul>/<li> for each card with <b>term</b>: definition. Students can copy into Notion, print, or use as a study sheet. Best for fast creation or when they prefer text over an app.
 
 ### 2. Mini App Builder (create_app) — Interactive Option
 Use to build an interactive flashcard app: front shows term, back shows definition on click. Include next/previous buttons, flip animation, and optional shuffle. Output valid HTML with <style> and <script>. Follow Curastem guidelines: #141414 background, 48px top margin, Curastem.org label bottom-right, unique IDs on all interactive elements, mobile-responsive.
 
-### 3. Whiteboard (update_whiteboard) — Optional
+### 3. Whiteboard (edit_whiteboard) — Optional
 Use to plan flashcard structure: mind map of topics to cover, grouping of related terms, or prioritization of high-value cards. Helps students organize before creating.
 
 ## When to Apply
@@ -32,7 +32,7 @@ Use to plan flashcard structure: mind map of topics to cover, grouping of relate
 
 1. **Gather** — Get their content: subject, terms, definitions, or source material
 2. **Plan** — Optionally use whiteboard to group and prioritize
-3. **Create** — Use update_doc for text format or create_app for interactive
+3. **Create** — Use create_doc for text format or create_app for interactive
 4. **Refine** — Add more cards, fix definitions, or adjust format based on feedback
 
 ## Key Guidance

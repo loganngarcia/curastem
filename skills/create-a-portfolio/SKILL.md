@@ -8,14 +8,14 @@ metadata:
 
 # Create a Portfolio
 
-Guide students through building a professional portfolio using Curastem's built-in tools. Curastem provides three core capabilities you must use: the **document editor** (update_doc) for written content, the **whiteboard** (update_whiteboard) for visual planning, and the **mini app builder** (create_app) for interactive portfolio sites.
+Guide students through building a professional portfolio using Curastem's built-in tools. Curastem provides three core capabilities you must use: the **document editor** (create_doc) for written content, the **whiteboard** (edit_whiteboard) for visual planning, and the **mini app builder** (create_app) for interactive portfolio sites.
 
 ## Curastem Tools to Use
 
-### 1. Document Editor (update_doc)
+### 1. Document Editor (create_doc)
 Use for drafting portfolio copy, about sections, project descriptions, and contact information. The doc supports full HTML: headings, lists, links, bold, italics. Perfect for writing and editing text before moving to the portfolio app.
 
-### 2. Whiteboard (update_whiteboard)
+### 2. Whiteboard (edit_whiteboard)
 Use for planning portfolio structure: mind maps of sections, flowcharts of user journey, wireframe sketches of layout. Create visual diagrams showing homepage → projects → about → contact flow. Helps students organize before building.
 
 ### 3. Mini App Builder (create_app)

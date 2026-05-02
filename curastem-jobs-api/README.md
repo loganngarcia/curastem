@@ -385,7 +385,13 @@ curl -X GET "http://localhost:8787/__scheduled?cron=0+*+*+*+*" \
 
 ```bash
 # For local dev, add to .dev.vars (gitignored):
-echo "GEMINI_API_KEY=your_key_here" >> .dev.vars
+python3 - <<'PY' >> .dev.vars
+import json
+from pathlib import Path
+
+path = Path.home() / ".config/gcloud/curastem-agent-platform-sa.json"
+print("GOOGLE_APPLICATION_CREDENTIALS_JSON=" + json.dumps(path.read_text()))
+PY
 ```
 
 ### Create a test API key
@@ -409,7 +415,7 @@ VALUES (
 ```bash
 # Create remote D1 database and KV namespace first, then:
 npm run db:migrate:remote
-wrangler secret put GEMINI_API_KEY
+wrangler secret put GOOGLE_APPLICATION_CREDENTIALS_JSON
 npm run deploy
 ```
 

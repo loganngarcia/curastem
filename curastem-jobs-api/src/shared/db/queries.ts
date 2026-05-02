@@ -25,7 +25,10 @@ import type { VectorizeIndex } from "@cloudflare/workers-types";
 import type {
   ApiKeyRow,
   CompanyRow,
+  DeveloperAccountBalanceRow,
+  DeveloperAccountRow,
   NormalizedJob,
+  PublicUsageLedgerRow,
   SourceRow,
 } from "../types.ts";
 import { CRUNCHBASE_SOURCE_ID, CRUNCHBASE_SOURCE_LEGACY_ID } from "./sourceIds.ts";
@@ -33,6 +36,7 @@ import { normalizeLocationForGeocode } from "../utils/placesGeocode.ts";
 import {
   companySlugFromSearchQuery,
   companySlugsFromFilterParam,
+  excludedTitleSearchTokensFromQ,
   jobSearchPhrasesFromQ,
   titleSearchTokensForSql,
 } from "../utils/jobSearchQuery.ts";
@@ -647,6 +651,85 @@ export async function ensureJobIndexes(db: D1Database): Promise<void> {
   for (const sql of stmts) {
     await db.prepare(sql).run();
   }
+}
+
+/** Self-healing public developer platform schema for open-source/self-hosted D1s. */
+export async function ensurePublicDeveloperPlatformSchema(db: D1Database): Promise<void> {
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS developer_accounts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`
+  ).run();
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS developer_account_balances (
+      account_id TEXT PRIMARY KEY REFERENCES developer_accounts(id) ON DELETE CASCADE,
+      balance_usd_micros INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    )`
+  ).run();
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS developer_balance_transactions (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES developer_accounts(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      amount_usd_micros INTEGER NOT NULL,
+      balance_after_usd_micros INTEGER NOT NULL,
+      description TEXT,
+      admin_actor TEXT,
+      created_at INTEGER NOT NULL
+    )`
+  ).run();
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS public_usage_ledger (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES developer_accounts(id) ON DELETE CASCADE,
+      api_key_id TEXT NOT NULL REFERENCES api_keys(id),
+      request_id TEXT NOT NULL,
+      route TEXT NOT NULL,
+      tool_name TEXT,
+      status TEXT NOT NULL,
+      provider TEXT,
+      model TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      raw_cost_usd_micros INTEGER NOT NULL DEFAULT 0,
+      charge_multiplier REAL NOT NULL DEFAULT 5,
+      charged_usd_micros INTEGER NOT NULL DEFAULT 0,
+      balance_after_usd_micros INTEGER,
+      metadata_json TEXT,
+      created_at INTEGER NOT NULL
+    )`
+  ).run();
+
+  const info = await db.prepare("PRAGMA table_info(api_keys)").all<{ name: string }>();
+  const names = new Set((info.results ?? []).map((r) => r.name));
+  const missing: Array<[string, string]> = [
+    ["account_id", "TEXT"],
+    ["name", "TEXT"],
+    ["key_prefix", "TEXT"],
+    ["scopes", "TEXT"],
+    ["daily_limit_usd_micros", "INTEGER"],
+    ["monthly_limit_usd_micros", "INTEGER"],
+  ];
+  for (const [col, type] of missing) {
+    if (!names.has(col)) await db.prepare(`ALTER TABLE api_keys ADD COLUMN ${col} ${type}`).run();
+  }
+
+  const indexes = [
+    `CREATE INDEX IF NOT EXISTS idx_developer_accounts_owner_email ON developer_accounts (owner_email)`,
+    `CREATE INDEX IF NOT EXISTS idx_developer_balance_transactions_account ON developer_balance_transactions (account_id, created_at DESC)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_public_usage_ledger_request ON public_usage_ledger (request_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_public_usage_ledger_account ON public_usage_ledger (account_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_public_usage_ledger_key ON public_usage_ledger (api_key_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_api_keys_account ON api_keys (account_id)`,
+  ];
+  for (const sql of indexes) await db.prepare(sql).run();
 }
 
 /**
@@ -1951,6 +2034,49 @@ function appendCompanySlugConditions(
   }
 }
 
+function appendNegativeTitleTokenConditions(
+  conditions: string[],
+  bindings: unknown[],
+  q: string | undefined
+): void {
+  for (const token of excludedTitleSearchTokensFromQ(q ?? "")) {
+    conditions.push("j.title NOT LIKE ?");
+    bindings.push(`%${token}%`);
+  }
+}
+
+function appendRoleTitleSearchConditions(
+  conditions: string[],
+  bindings: unknown[],
+  q: string | undefined,
+  allowCompanySlug: boolean
+): void {
+  const phrases = jobSearchPhrasesFromQ(q ?? "");
+  const phraseSql: string[] = [];
+
+  for (const phrase of phrases) {
+    const tokens = titleSearchTokensForSql(phrase);
+    if (tokens.length === 0) continue;
+    phraseSql.push(`(${tokens.map(() => "j.title LIKE ?").join(" AND ")})`);
+    for (const token of tokens) bindings.push(`%${token}%`);
+  }
+
+  if (phraseSql.length === 1 && allowCompanySlug) {
+    const raw = phrases[0]!;
+    const slug = companySlugFromSearchQuery(raw);
+    if (slug.length >= 2) {
+      conditions.push(`(${phraseSql[0]} OR c.slug = ?)`);
+      bindings.push(slug);
+    } else {
+      conditions.push(phraseSql[0]!);
+    }
+  } else if (phraseSql.length > 0) {
+    conditions.push(`(${phraseSql.join(" OR ")})`);
+  }
+
+  appendNegativeTitleTokenConditions(conditions, bindings, q);
+}
+
 export async function listJobs(
   db: D1Database,
   filter: ListJobsFilter
@@ -1959,36 +2085,11 @@ export async function listJobs(
   const bindings: unknown[] = [];
 
   if (filter.title) {
-    const raw = filter.title.trim();
-    if (raw) {
-      for (const t of titleSearchTokensForSql(raw)) {
-        conditions.push("j.title LIKE ?");
-        bindings.push(`%${t}%`);
-      }
-    }
+    appendRoleTitleSearchConditions(conditions, bindings, filter.title, false);
   } else if (filter.q) {
-    const phrases = jobSearchPhrasesFromQ(filter.q);
-    if (phrases.length === 1) {
-      const raw = phrases[0];
-      const pattern = `%${raw}%`;
-      const slug = companySlugFromSearchQuery(raw);
-      // Title + exact company slug only — never c.name LIKE (substring matches
-      // "Product" in "Consumer Product Safety Commission" for role queries).
-      if (slug.length >= 2) {
-        conditions.push("(j.title LIKE ? OR c.slug = ?)");
-        bindings.push(pattern, slug);
-      } else {
-        conditions.push("j.title LIKE ?");
-        bindings.push(pattern);
-      }
-    } else if (phrases.length > 1) {
-      const orParts: string[] = [];
-      for (const raw of phrases) {
-        orParts.push("j.title LIKE ?");
-        bindings.push(`%${raw}%`);
-      }
-      conditions.push(`(${orParts.join(" OR ")})`);
-    }
+    // Title + exact company slug only — never c.name LIKE (substring matches
+    // "Product" in "Consumer Product Safety Commission" for role queries).
+    appendRoleTitleSearchConditions(conditions, bindings, filter.q, true);
   }
   if (filter.location) {
     const locPatterns = expandLocationLikePatterns(filter.location);
@@ -2243,26 +2344,7 @@ function appendMapJobsTitleQFilters(
 ): void {
   const trimmed = q?.trim();
   if (!trimmed) return;
-  const phrases = jobSearchPhrasesFromQ(trimmed);
-  if (phrases.length === 1) {
-    const raw = phrases[0]!;
-    const pattern = `%${raw}%`;
-    const slug = companySlugFromSearchQuery(raw);
-    if (slug.length >= 2) {
-      sqlPieces.push("(j.title LIKE ? OR c.slug = ?)");
-      bindings.push(pattern, slug);
-    } else {
-      sqlPieces.push("j.title LIKE ?");
-      bindings.push(pattern);
-    }
-  } else if (phrases.length > 1) {
-    const orParts: string[] = [];
-    for (const raw of phrases) {
-      orParts.push("j.title LIKE ?");
-      bindings.push(`%${raw}%`);
-    }
-    sqlPieces.push(`(${orParts.join(" OR ")})`);
-  }
+  appendRoleTitleSearchConditions(sqlPieces, bindings, trimmed, true);
 }
 
 export async function listJobsForMap(
@@ -3838,31 +3920,9 @@ export async function listJobsNear(
     conditions.push("(j.workplace_type IS NULL OR j.workplace_type != 'remote')");
   }
   if (titleNear && titleNear.trim()) {
-    for (const t of titleSearchTokensForSql(titleNear.trim())) {
-      conditions.push("j.title LIKE ?");
-      bindings.push(`%${t}%`);
-    }
+    appendRoleTitleSearchConditions(conditions, bindings, titleNear, false);
   } else if (q && q.trim()) {
-    const phrases = jobSearchPhrasesFromQ(q);
-    if (phrases.length === 1) {
-      const raw = phrases[0];
-      const pattern = `%${raw}%`;
-      const slug = companySlugFromSearchQuery(raw);
-      if (slug.length >= 2) {
-        conditions.push("(j.title LIKE ? OR c.slug = ?)");
-        bindings.push(pattern, slug);
-      } else {
-        conditions.push("j.title LIKE ?");
-        bindings.push(pattern);
-      }
-    } else if (phrases.length > 1) {
-      const orParts: string[] = [];
-      for (const raw of phrases) {
-        orParts.push("j.title LIKE ?");
-        bindings.push(`%${raw}%`);
-      }
-      conditions.push(`(${orParts.join(" OR ")})`);
-    }
+    appendRoleTitleSearchConditions(conditions, bindings, q, true);
   }
   if (exclude_ids && exclude_ids.length > 0) {
     const valid = exclude_ids.filter(
@@ -4433,6 +4493,245 @@ export async function touchApiKeyLastUsed(
     .prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?")
     .bind(now, id)
     .run();
+}
+
+export interface CreateDeveloperAccountInput {
+  id: string;
+  name: string;
+  owner_email: string;
+  initial_balance_usd_micros: number;
+  admin_actor: string | null;
+  now: number;
+}
+
+export async function createDeveloperAccount(
+  db: D1Database,
+  input: CreateDeveloperAccountInput
+): Promise<DeveloperAccountRow> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  await db.batch([
+    db.prepare(
+      `INSERT INTO developer_accounts (id, name, owner_email, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'active', ?, ?)`
+    ).bind(input.id, input.name, input.owner_email, input.now, input.now),
+    db.prepare(
+      `INSERT INTO developer_account_balances (account_id, balance_usd_micros, updated_at)
+       VALUES (?, ?, ?)`
+    ).bind(input.id, input.initial_balance_usd_micros, input.now),
+  ]);
+  if (input.initial_balance_usd_micros !== 0) {
+    await insertDeveloperBalanceTransaction(db, {
+      id: crypto.randomUUID(),
+      account_id: input.id,
+      type: "top_up",
+      amount_usd_micros: input.initial_balance_usd_micros,
+      balance_after_usd_micros: input.initial_balance_usd_micros,
+      description: "Initial balance",
+      admin_actor: input.admin_actor,
+      created_at: input.now,
+    });
+  }
+  return (await db.prepare("SELECT * FROM developer_accounts WHERE id = ?").bind(input.id).first<DeveloperAccountRow>())!;
+}
+
+export async function listDeveloperAccounts(db: D1Database): Promise<Array<DeveloperAccountRow & { balance_usd_micros: number }>> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  const result = await db.prepare(
+    `SELECT a.*, COALESCE(b.balance_usd_micros, 0) AS balance_usd_micros
+       FROM developer_accounts a
+       LEFT JOIN developer_account_balances b ON b.account_id = a.id
+      ORDER BY a.created_at DESC`
+  ).all<DeveloperAccountRow & { balance_usd_micros: number }>();
+  return result.results ?? [];
+}
+
+export async function getDeveloperAccount(
+  db: D1Database,
+  accountId: string
+): Promise<(DeveloperAccountRow & DeveloperAccountBalanceRow) | null> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  const row = await db.prepare(
+    `SELECT a.*, COALESCE(b.balance_usd_micros, 0) AS balance_usd_micros, COALESCE(b.updated_at, a.updated_at) AS updated_at
+       FROM developer_accounts a
+       LEFT JOIN developer_account_balances b ON b.account_id = a.id
+      WHERE a.id = ?`
+  ).bind(accountId).first<DeveloperAccountRow & DeveloperAccountBalanceRow>();
+  return row ?? null;
+}
+
+export interface InsertApiKeyInput {
+  id: string;
+  key_hash: string;
+  key_prefix: string;
+  account_id: string;
+  owner_email: string;
+  name: string | null;
+  description: string | null;
+  scopes: string | null;
+  rate_limit_per_minute: number;
+  daily_limit_usd_micros: number | null;
+  monthly_limit_usd_micros: number | null;
+  now: number;
+}
+
+export async function insertDeveloperApiKey(db: D1Database, input: InsertApiKeyInput): Promise<ApiKeyRow> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  await db.prepare(
+    `INSERT INTO api_keys (
+      id, key_hash, owner_email, account_id, name, key_prefix, scopes, description,
+      rate_limit_per_minute, daily_limit_usd_micros, monthly_limit_usd_micros,
+      active, created_at, last_used_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)`
+  ).bind(
+    input.id,
+    input.key_hash,
+    input.owner_email,
+    input.account_id,
+    input.name,
+    input.key_prefix,
+    input.scopes,
+    input.description,
+    input.rate_limit_per_minute,
+    input.daily_limit_usd_micros,
+    input.monthly_limit_usd_micros,
+    input.now
+  ).run();
+  return (await db.prepare("SELECT * FROM api_keys WHERE id = ?").bind(input.id).first<ApiKeyRow>())!;
+}
+
+export async function listDeveloperApiKeys(db: D1Database, accountId?: string): Promise<ApiKeyRow[]> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  const stmt = accountId
+    ? db.prepare("SELECT * FROM api_keys WHERE account_id = ? ORDER BY created_at DESC").bind(accountId)
+    : db.prepare("SELECT * FROM api_keys ORDER BY created_at DESC");
+  const result = await stmt.all<ApiKeyRow>();
+  return result.results ?? [];
+}
+
+export async function revokeDeveloperApiKey(db: D1Database, keyId: string): Promise<void> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  await db.prepare("UPDATE api_keys SET active = 0 WHERE id = ?").bind(keyId).run();
+}
+
+export interface BalanceTransactionInput {
+  id: string;
+  account_id: string;
+  type: string;
+  amount_usd_micros: number;
+  balance_after_usd_micros: number;
+  description: string | null;
+  admin_actor: string | null;
+  created_at: number;
+}
+
+export async function insertDeveloperBalanceTransaction(
+  db: D1Database,
+  input: BalanceTransactionInput
+): Promise<void> {
+  await db.prepare(
+    `INSERT INTO developer_balance_transactions
+      (id, account_id, type, amount_usd_micros, balance_after_usd_micros, description, admin_actor, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    input.id,
+    input.account_id,
+    input.type,
+    input.amount_usd_micros,
+    input.balance_after_usd_micros,
+    input.description,
+    input.admin_actor,
+    input.created_at
+  ).run();
+}
+
+export async function adjustDeveloperBalance(
+  db: D1Database,
+  accountId: string,
+  amountUsdMicros: number,
+  type: string,
+  description: string | null,
+  adminActor: string | null,
+  now: number
+): Promise<number> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  await db.prepare(
+    `INSERT INTO developer_account_balances (account_id, balance_usd_micros, updated_at)
+     VALUES (?, 0, ?)
+     ON CONFLICT(account_id) DO NOTHING`
+  ).bind(accountId, now).run();
+  await db.prepare(
+    `UPDATE developer_account_balances
+        SET balance_usd_micros = balance_usd_micros + ?, updated_at = ?
+      WHERE account_id = ?`
+  ).bind(amountUsdMicros, now, accountId).run();
+  const balance = await db.prepare(
+    "SELECT balance_usd_micros FROM developer_account_balances WHERE account_id = ?"
+  ).bind(accountId).first<{ balance_usd_micros: number }>();
+  const after = balance?.balance_usd_micros ?? 0;
+  await insertDeveloperBalanceTransaction(db, {
+    id: crypto.randomUUID(),
+    account_id: accountId,
+    type,
+    amount_usd_micros: amountUsdMicros,
+    balance_after_usd_micros: after,
+    description,
+    admin_actor: adminActor,
+    created_at: now,
+  });
+  return after;
+}
+
+export async function debitDeveloperBalance(
+  db: D1Database,
+  accountId: string,
+  amountUsdMicros: number,
+  now: number
+): Promise<number | null> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  const result = await db.prepare(
+    `UPDATE developer_account_balances
+        SET balance_usd_micros = balance_usd_micros - ?, updated_at = ?
+      WHERE account_id = ? AND balance_usd_micros >= ?`
+  ).bind(amountUsdMicros, now, accountId, amountUsdMicros).run();
+  if ((result.meta.changes ?? 0) < 1) return null;
+  const row = await db.prepare(
+    "SELECT balance_usd_micros FROM developer_account_balances WHERE account_id = ?"
+  ).bind(accountId).first<{ balance_usd_micros: number }>();
+  return row?.balance_usd_micros ?? 0;
+}
+
+export async function insertPublicUsageLedger(
+  db: D1Database,
+  row: PublicUsageLedgerRow
+): Promise<void> {
+  await ensurePublicDeveloperPlatformSchema(db);
+  await db.prepare(
+    `INSERT INTO public_usage_ledger (
+      id, account_id, api_key_id, request_id, route, tool_name, status,
+      provider, model, input_tokens, output_tokens, total_tokens,
+      raw_cost_usd_micros, charge_multiplier, charged_usd_micros,
+      balance_after_usd_micros, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    row.id,
+    row.account_id,
+    row.api_key_id,
+    row.request_id,
+    row.route,
+    row.tool_name,
+    row.status,
+    row.provider,
+    row.model,
+    row.input_tokens,
+    row.output_tokens,
+    row.total_tokens,
+    row.raw_cost_usd_micros,
+    row.charge_multiplier,
+    row.charged_usd_micros,
+    row.balance_after_usd_micros,
+    row.metadata_json,
+    row.created_at
+  ).run();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

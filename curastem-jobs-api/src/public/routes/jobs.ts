@@ -62,6 +62,7 @@ import {
 } from "../../shared/db/queries.ts";
 import { enrichLocationsWithCountry } from "../../shared/utils/locationsDisplay.ts";
 import {
+  jobSearchPhrasesFromQ,
   jobTitleMatchesCommaSeparatedQuery,
   MAX_JOB_SEARCH_PHRASES,
   normalizeJobSearchQuery,
@@ -450,7 +451,7 @@ export async function handleListJobs(
   // Skip when we resolved to a company — SQL path handles company queries.
   // Skip when title= is set — role searches use deterministic title LIKE only.
   // Wrapped in try-catch so any Gemini/Vectorize failure falls through to SQL.
-  if (q && !titleForSearch && !company && env.JOBS_VECTORS && env.GEMINI_API_KEY) {
+  if (q && !titleForSearch && !company && env.JOBS_VECTORS && env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
     try {
       // Determine offset for paginated vector results
       const vectorOffset = cursor ? (decodeVectorCursor(cursor) ?? 0) : 0;
@@ -459,11 +460,8 @@ export async function handleListJobs(
       // title independently (parallel + individually KV-cached), then average
       // into a centroid vector. One Vectorize query covers all titles at once
       // without adding extra round-trips compared to a single-title search.
-      const titles = (qForVector ?? q)
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean)
-        .slice(0, MAX_JOB_SEARCH_PHRASES);
+      const titles = jobSearchPhrasesFromQ(qForVector ?? q).slice(0, MAX_JOB_SEARCH_PHRASES);
+      if (titles.length === 0) throw new Error("no positive query terms for vector search");
 
       const getEmbedding = async (title: string): Promise<number[]> => {
         const key = `qembed:${title.toLowerCase()}`;
@@ -473,7 +471,7 @@ export async function handleListJobs(
         if (!quota.allowed) {
           throw new Error(`Gemini embedding quota limited: ${quota.reason}`);
         }
-        const vec = await embedQuery(env.GEMINI_API_KEY, title);
+        const vec = await embedQuery(env, title);
         ctx.waitUntil(
           env.RATE_LIMIT_KV.put(key, JSON.stringify(vec), {
             expirationTtl: EMBED_CACHE_TTL_SECONDS,
