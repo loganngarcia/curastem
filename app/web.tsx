@@ -985,6 +985,63 @@ function cleanDisplayUrl(url: string): string {
     return clean
 }
 
+// Feature: chat's AI-written resume download links route to the synced doc PDF export.
+function isResumeDownloadChatLink(href: string, label: string): boolean {
+    const rawHref = href.trim()
+    if (!rawHref) return false
+
+    const lowerHref = rawHref.toLowerCase()
+    if (lowerHref.startsWith("mailto:") || lowerHref.startsWith("tel:")) {
+        return false
+    }
+
+    const localHref =
+        !/^[a-z][a-z0-9+.-]*:/i.test(rawHref) && !rawHref.startsWith("//")
+    const labelText = label.toLowerCase()
+    const labelMentionsResume = /\b(resume|cv)\b/.test(labelText)
+    const labelMentionsDownload = /\b(download|save|export|get|open)\b/.test(
+        labelText
+    )
+
+    const hrefWithoutQuery = lowerHref.split(/[?#]/)[0]
+    let normalizedHref = hrefWithoutQuery
+        .replace(/^\.?\//, "")
+        .replace(/^\/+/, "")
+    let isPlaceholderHttpResume = false
+
+    if (/^https?:\/\//i.test(rawHref)) {
+        try {
+            const url = new URL(rawHref)
+            const host = url.hostname.toLowerCase().replace(/^www\./, "")
+            isPlaceholderHttpResume =
+                /\.pdf$/.test(host) && /(?:resume|cv)/.test(host)
+            normalizedHref = url.pathname.replace(/^\/+/, "") || host
+        } catch {
+            normalizedHref = hrefWithoutQuery.replace(/^https?:\/\/(?:www\.)?/, "")
+            isPlaceholderHttpResume =
+                !normalizedHref.includes("/") &&
+                /\.pdf$/.test(normalizedHref) &&
+                /(?:resume|cv)/.test(normalizedHref)
+        }
+    }
+
+    const normalizedAction = normalizedHref.replace(/_/g, "-")
+    const hrefLooksLikeResumeFile =
+        (localHref || isPlaceholderHttpResume) &&
+        /(^|\/)(?:[^/]*resume[^/]*|cv)\.pdf$/.test(normalizedHref)
+    const hrefLooksLikeDownloadAction =
+        localHref &&
+        /^(?:download(?:-resume)?|resume(?:-download)?|download\/resume|resume\/download)$/.test(
+            normalizedAction
+        )
+
+    return (
+        hrefLooksLikeResumeFile ||
+        hrefLooksLikeDownloadAction ||
+        (localHref && labelMentionsResume && labelMentionsDownload)
+    )
+}
+
 const applyInlineFormatting = (
     textSegment: string,
     keyPrefix: string,
@@ -11374,59 +11431,6 @@ function jobDetailInitialState(
 
 
 
-const FALLBACK_QUERIES = [
-    "software engineer",
-    "frontend developer",
-    "backend engineer",
-    "full stack developer",
-    "data scientist",
-    "data analyst",
-    "machine learning engineer",
-    "product manager",
-    "product designer",
-    "UX designer",
-    "graphic designer",
-    "marketing manager",
-    "digital marketing specialist",
-    "content writer",
-    "social media manager",
-    "account executive",
-    "sales representative",
-    "business development manager",
-    "customer success manager",
-    "customer support specialist",
-    "operations manager",
-    "project manager",
-    "program manager",
-    "financial analyst",
-    "accountant",
-    "human resources manager",
-    "recruiter",
-    "registered nurse",
-    "medical assistant",
-    "physical therapist",
-    "elementary school teacher",
-    "high school teacher",
-    "administrative assistant",
-    "office manager",
-    "warehouse associate",
-    "logistics coordinator",
-    "supply chain analyst",
-    "delivery driver",
-    "retail store associate",
-    "restaurant manager",
-    "line cook",
-    "electrician",
-    "plumber",
-    "automotive mechanic",
-    "civil engineer",
-    "mechanical engineer",
-    "electrical engineer",
-    "DevOps engineer",
-    "cybersecurity analyst",
-    "cloud architect",
-]
-
 function jobTimeAgo(iso: string | null): string {
     if (!iso) return ""
     const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
@@ -11913,15 +11917,17 @@ const StackedJobCard = ({
     onClick,
     themeColors,
     isMobile = false,
+    titleFontSize,
 }: {
     job: HomepageJob | null
     onClick?: () => void
     themeColors: typeof darkColors
     isMobile?: boolean
+    titleFontSize?: number
 }) => {
     const px = isMobile ? 20 : 24
     const py = isMobile ? 16 : 20
-    const titleFs = isMobile ? 15 : 16
+    const titleFs = titleFontSize ?? (isMobile ? 15 : 16)
     const metaFs = isMobile ? 12 : 14
     return (
         <div
@@ -11939,6 +11945,7 @@ const StackedJobCard = ({
                 alignItems: "flex-start",
                 gap: 12,
                 display: "flex",
+                flexShrink: 0,
                 cursor: job ? "pointer" : "default",
             }}
         >
@@ -19265,13 +19272,17 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     )
 })
 
+function homepageCompanyKey(job: HomepageJob): string {
+    return job.company.name.trim().toLowerCase()
+}
+
 /** Prefer one job per company, then backfill with more rows from the same pool (same company… */
 function dedupeByCompany(jobs: HomepageJob[], limit: number): HomepageJob[] {
     const seenCo = new Set<string>()
     const usedIds = new Set<string>()
     const out: HomepageJob[] = []
     for (const j of jobs) {
-        const key = j.company.name.trim().toLowerCase()
+        const key = homepageCompanyKey(j)
         if (!seenCo.has(key)) {
             seenCo.add(key)
             out.push(j)
@@ -19293,11 +19304,79 @@ function dedupeByCompany(jobs: HomepageJob[], limit: number): HomepageJob[] {
 function topPicksFromPoolAfterNear(
     pooled: HomepageJob[],
     near: HomepageJob[],
-    byNewestJobs: (jobs: HomepageJob[]) => HomepageJob[]
+    byNewestJobs: (jobs: HomepageJob[]) => HomepageJob[],
+    limit = 10
 ): HomepageJob[] {
     const nearIds = new Set(near.map((j) => j.id))
-    const rest = byNewestJobs(pooled).filter((j) => !nearIds.has(j.id))
-    return dedupeByCompany(rest, 10)
+    const nearCompanies = new Set(near.map(homepageCompanyKey))
+    const ordered = byNewestJobs(pooled)
+    const strict = ordered.filter(
+        (j) => !nearIds.has(j.id) && !nearCompanies.has(homepageCompanyKey(j))
+    )
+    const out = dedupeByCompany(strict, limit)
+    const usedIds = new Set(out.map((j) => j.id))
+
+    // Prefer company uniqueness, but do not leave Top Picks blank when the
+    // nearby response is concentrated around the same few companies.
+    for (const job of ordered) {
+        if (out.length >= limit) break
+        if (nearIds.has(job.id) || usedIds.has(job.id)) continue
+        out.push(job)
+        usedIds.add(job.id)
+    }
+    return out
+}
+
+const TOP_PICKS_PAGE_SIZE = 10
+const TOP_PICKS_MAX = 100
+const TOP_PICKS_LOADING_MORE_SKELETONS = 3
+
+function positiveTopPicksQuery(query: string): string {
+    return query
+        .split(/[\s,]+/)
+        .map((part) => part.trim())
+        .filter((part) => part && !part.startsWith("-"))
+        .join(" ")
+}
+
+const FALLBACK_QUERIES = [
+    "engineer",
+    "developer",
+    "scientist",
+    "analyst",
+    "manager",
+    "designer",
+    "specialist",
+    "writer",
+    "sales",
+    "accountant",
+    "recruiter",
+    "nurse",
+    "assistant",
+    "teacher",
+    "associate",
+    "mechanic",
+    "architect",
+]
+
+function randomFallbackQuery(): string {
+    return [...FALLBACK_QUERIES].sort(() => Math.random() - 0.5).join(", ")
+}
+
+function appendUniqueHomepageJobs(
+    existing: HomepageJob[],
+    candidates: HomepageJob[],
+    limit: number
+): HomepageJob[] {
+    const next = existing.slice(0, limit)
+    const seen = new Set(next.map((job) => job.id))
+    for (const job of candidates) {
+        if (next.length >= limit) break
+        if (seen.has(job.id)) continue
+        seen.add(job.id)
+        next.push(job)
+    }
+    return next
 }
 
 // ─── MAP PREVIEW CARD ─────────────────────────────────────────────────────────
@@ -19444,9 +19523,18 @@ const HomepageJobs = React.memo(function HomepageJobs({
     const [topJobs, setTopJobs] = React.useState<HomepageJob[]>([])
     const topJobsRef = React.useRef<HomepageJob[]>([])
     topJobsRef.current = topJobs
+    const topPicksCandidatePoolRef = React.useRef<HomepageJob[]>([])
     /** How many Top picks rows were filled from the near-effect pool (0–10) */
     const topPicksPrefillCountRef = React.useRef(0)
     const [loadingPicks, setLoadingPicks] = React.useState(true)
+    const [loadingMorePicks, setLoadingMorePicks] = React.useState(false)
+    const loadingMorePicksRef = React.useRef(false)
+    const [topPicksHasMore, setTopPicksHasMore] = React.useState(true)
+    const topPicksHasMoreRef = React.useRef(true)
+    const topPicksRequestKeyRef = React.useRef("")
+    const topPicksExactQueryEmptyRef = React.useRef(false)
+    const topPicksFallbackQueryRef = React.useRef<string | null>(null)
+    const topPicksLoadTriggerRef = React.useRef<HTMLDivElement>(null)
     const [loadingNear, setLoadingNear] = React.useState(true)
     const [nearbyBasedOnLocation, setNearbyBasedOnLocation] =
         React.useState(true) 
@@ -19459,6 +19547,25 @@ const HomepageJobs = React.memo(function HomepageJobs({
         lng: number
     } | null>(null)
     const topPicksTriggered = true
+
+    React.useEffect(() => {
+        loadingMorePicksRef.current = loadingMorePicks
+    }, [loadingMorePicks])
+
+    React.useEffect(() => {
+        topPicksHasMoreRef.current = topPicksHasMore
+    }, [topPicksHasMore])
+
+    React.useEffect(() => {
+        topPicksRequestKeyRef.current = `${jobsApiUrl}\n${userQuery.trim()}`
+        setLoadingMorePicks(false)
+        setTopPicksHasMore(true)
+        loadingMorePicksRef.current = false
+        topPicksHasMoreRef.current = true
+        topPicksExactQueryEmptyRef.current = false
+        topPicksCandidatePoolRef.current = []
+        topPicksFallbackQueryRef.current = null
+    }, [jobsApiUrl, userQuery])
 
     
     
@@ -19608,22 +19715,33 @@ const HomepageJobs = React.memo(function HomepageJobs({
                     }
                 }
             }
+            const fallbackQuery =
+                topPicksFallbackQueryRef.current ?? randomFallbackQuery()
+            topPicksFallbackQueryRef.current = fallbackQuery
 
             if (!hasCoords) {
                 setNearbyBasedOnLocation(false)
-                const first = await apiMeta(new URLSearchParams(), 50, country)
-                const firstFallback =
-                    first.data.length < 8 && country
-                        ? await apiMeta(new URLSearchParams(), 50)
-                        : null
-                const poolData = firstFallback ? firstFallback.data : first.data
+                const fallbackParams = new URLSearchParams()
+                fallbackParams.set("q", fallbackQuery)
+                const first = country
+                    ? await apiMeta(fallbackParams, 50, country)
+                    : { data: [] as HomepageJob[], next_cursor: null }
+                const noTitle = first.data.length
+                    ? null
+                    : country
+                      ? await apiMeta(new URLSearchParams(), 50, country)
+                      : null
+                const poolData = noTitle ? noTitle.data : first.data
                 const near = dedupeByCompany(byNewestJobs(poolData), 8)
-                const top = topPicksFromPoolAfterNear(
+                const allTop = topPicksFromPoolAfterNear(
                     poolData,
                     near,
-                    byNewestJobs
+                    byNewestJobs,
+                    TOP_PICKS_MAX
                 )
+                const top = allTop.slice(0, TOP_PICKS_PAGE_SIZE)
                 if (!cancelled) {
+                    topPicksCandidatePoolRef.current = allTop
                     setNearJobs(near)
                     setTopJobs(top)
                     setLoadingNear(false)
@@ -19641,6 +19759,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 exclude_remote: "true",
                 since: String(since7d),
             })
+            nearP.set("q", fallbackQuery)
             const primaryRes = await apiMeta(nearP, 24)
             if (cancelled) return
 
@@ -19649,24 +19768,68 @@ const HomepageJobs = React.memo(function HomepageJobs({
             mergeIds(pooled, seen, primaryRes.data)
 
             let near = dedupeByCompany(byNewestJobs(pooled), 8)
-            let top = topPicksFromPoolAfterNear(pooled, near, byNewestJobs)
-            const needGlobal =
-                near.length < 8 ||
-                top.length < 10 ||
-                primaryRes.data.length < 20
-
-            if (needGlobal) {
-                const g1 = await apiMeta(new URLSearchParams(), 50, country)
-                if (!cancelled) mergeIds(pooled, seen, g1.data)
-                if (g1.data.length < 5 && country) {
-                    const g2 = await apiMeta(new URLSearchParams(), 50)
-                    if (!cancelled) mergeIds(pooled, seen, g2.data)
+            let allTop = topPicksFromPoolAfterNear(
+                pooled,
+                near,
+                byNewestJobs,
+                TOP_PICKS_MAX
+            )
+            let top = allTop.slice(0, TOP_PICKS_PAGE_SIZE)
+            if (primaryRes.data.length === 0) {
+                for (const radiusKm of [100, 250]) {
+                    const widerNear = new URLSearchParams({
+                        near_lat: String(lat),
+                        near_lng: String(lng),
+                        radius_km: String(radiusKm),
+                        exclude_remote: "true",
+                        since: String(since7d),
+                    })
+                    widerNear.set("q", fallbackQuery)
+                    const widerRes = await apiMeta(widerNear, 50)
+                    if (cancelled) return
+                    mergeIds(pooled, seen, widerRes.data)
+                    near = dedupeByCompany(byNewestJobs(pooled), 8)
+                    allTop = topPicksFromPoolAfterNear(
+                        pooled,
+                        near,
+                        byNewestJobs,
+                        TOP_PICKS_MAX
+                    )
+                    top = allTop.slice(0, TOP_PICKS_PAGE_SIZE)
+                    if (widerRes.data.length > 0) {
+                        break
+                    }
                 }
-                near = dedupeByCompany(byNewestJobs(pooled), 8)
-                top = topPicksFromPoolAfterNear(pooled, near, byNewestJobs)
+            }
+
+            if (pooled.length === 0) {
+                for (const radiusKm of [50, 100, 250]) {
+                    const nearbyAny = new URLSearchParams({
+                        near_lat: String(lat),
+                        near_lng: String(lng),
+                        radius_km: String(radiusKm),
+                        exclude_remote: "true",
+                        since: String(since7d),
+                    })
+                    const fallbackRes = await apiMeta(nearbyAny, 50)
+                    if (cancelled) return
+                    mergeIds(pooled, seen, fallbackRes.data)
+                    near = dedupeByCompany(byNewestJobs(pooled), 8)
+                    allTop = topPicksFromPoolAfterNear(
+                        pooled,
+                        near,
+                        byNewestJobs,
+                        TOP_PICKS_MAX
+                    )
+                    top = allTop.slice(0, TOP_PICKS_PAGE_SIZE)
+                    if (fallbackRes.data.length > 0) {
+                        break
+                    }
+                }
             }
 
             if (!cancelled) {
+                topPicksCandidatePoolRef.current = allTop
                 setNearJobs(near)
                 setTopJobs(top)
                 setLoadingNear(false)
@@ -19778,42 +19941,26 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 return p.toString()
             }
 
-            const globalQParams = () => {
-                const p = new URLSearchParams({ since: String(since7d) })
-                if (userQuery.trim()) p.set("q", userQuery.trim())
-                return p.toString()
-            }
-
-            const fallbackQParams = () => {
-                const fb =
-                    FALLBACK_QUERIES[
-                        Math.floor(Math.random() * FALLBACK_QUERIES.length)
-                    ]
-                const p = new URLSearchParams({ since: String(since7d) })
-                p.set("q", fb)
-                return p.toString()
-            }
-
             
             if (!hasCoords) {
                 setNearbyBasedOnLocation(false)
-                const global = await api(globalQParams(), 24)
-                if (cancelled) return []
-                let pooledNt = [...global]
-                let near = dedupeByCompany(byNewestJobs(pooledNt), 8)
-                if (near.length < 8) {
-                    const fb = await api(fallbackQParams(), 16)
-                    if (!cancelled) {
-                        pooledNt = [...global, ...fb]
-                        near = dedupeByCompany(byNewestJobs(pooledNt), 8)
-                    }
+                const p = new URLSearchParams({ since: String(since7d) })
+                if (userQuery.trim()) {
+                    p.set("q", positiveTopPicksQuery(userQuery.trim()))
                 }
-                const topNt = topPicksFromPoolAfterNear(
+                const countryRows = await api(p.toString(), 24, since7d, coords?.country ?? undefined)
+                if (cancelled) return []
+                const pooledNt = [...countryRows]
+                let near = dedupeByCompany(byNewestJobs(pooledNt), 8)
+                const allTopNt = topPicksFromPoolAfterNear(
                     pooledNt,
                     near,
-                    byNewestJobs
+                    byNewestJobs,
+                    TOP_PICKS_MAX
                 )
+                const topNt = allTopNt.slice(0, TOP_PICKS_PAGE_SIZE)
                 if (!cancelled) {
+                    topPicksCandidatePoolRef.current = allTopNt
                     setNearJobs(near)
                     setTopJobs(topNt)
                     topPicksPrefillCountRef.current = topNt.length
@@ -19834,24 +19981,51 @@ const HomepageJobs = React.memo(function HomepageJobs({
             
             let near = dedupeByCompany(byNewestJobs(pooled), 8)
             if (near.length < 8) {
-                const global = await api(globalQParams(), 40)
-                if (!cancelled) mergeInto(pooled, seenIds, global)
+                const widerLocal = await api(buildNearParams(100), 40)
+                if (!cancelled) mergeInto(pooled, seenIds, widerLocal)
                 near = dedupeByCompany(byNewestJobs(pooled), 8)
             }
 
             
             if (near.length < 8) {
-                const fb = await api(fallbackQParams(), 16)
-                if (!cancelled) mergeInto(pooled, seenIds, fb)
+                const widestLocal = await api(buildNearParams(250), 40)
+                if (!cancelled) mergeInto(pooled, seenIds, widestLocal)
                 near = dedupeByCompany(byNewestJobs(pooled), 8)
             }
 
-            const topFromPool = topPicksFromPoolAfterNear(
+            let allTopFromPool = topPicksFromPoolAfterNear(
                 pooled,
                 near,
-                byNewestJobs
+                byNewestJobs,
+                TOP_PICKS_MAX
             )
+            let topFromPool = allTopFromPool.slice(0, TOP_PICKS_PAGE_SIZE)
+            if (topFromPool.length < TOP_PICKS_PAGE_SIZE) {
+                const fallback = randomFallbackQuery()
+                for (const radiusKm of [50, 100, 250]) {
+                    const fallbackParams = new URLSearchParams({
+                        near_lat: String(lat),
+                        near_lng: String(lng),
+                        radius_km: String(radiusKm),
+                        exclude_remote: "true",
+                        since: String(since7d),
+                    })
+                    fallbackParams.set("q", fallback)
+                    const fallbackRows = await api(fallbackParams.toString(), 40)
+                    if (!cancelled) mergeInto(pooled, seenIds, fallbackRows)
+                    near = dedupeByCompany(byNewestJobs(pooled), 8)
+                    allTopFromPool = topPicksFromPoolAfterNear(
+                        pooled,
+                        near,
+                        byNewestJobs,
+                        TOP_PICKS_MAX
+                    )
+                    topFromPool = allTopFromPool.slice(0, TOP_PICKS_PAGE_SIZE)
+                    if (topFromPool.length >= TOP_PICKS_PAGE_SIZE) break
+                }
+            }
             if (!cancelled) {
+                topPicksCandidatePoolRef.current = allTopFromPool
                 setNearJobs(near)
                 setTopJobs(topFromPool)
                 topPicksPrefillCountRef.current = topFromPool.length
@@ -19956,8 +20130,10 @@ const HomepageJobs = React.memo(function HomepageJobs({
         const picksPromise = (async (): Promise<HomepageJob[]> => {
             
             const existing = topJobsRef.current
+            const exactQuery = userQuery.trim()
+            const positiveQuery = positiveTopPicksQuery(exactQuery)
             let primary = await api(
-                buildQParams(since7d, userQuery.trim(), true),
+                buildQParams(since7d, exactQuery, true),
                 28
             )
             if (cancelled) return []
@@ -19974,23 +20150,25 @@ const HomepageJobs = React.memo(function HomepageJobs({
             if (cancelled) return deduped
             const country = geoResult?.country ?? null
             const wider = await api(
-                buildQParams(since14d, userQuery.trim(), true),
+                buildQParams(since14d, exactQuery, true),
                 24,
                 since14d,
                 country || undefined
             )
             if (cancelled) return deduped
+            if (primary.length === 0 && wider.length === 0) {
+                topPicksExactQueryEmptyRef.current = true
+            }
             deduped = dedupeByCompany([...deduped, ...wider], 10)
             if (!cancelled) {
                 setTopJobs(deduped)
                 setLoadingPicks(false)
             }
             if (deduped.length >= 10) return deduped
-            const fb =
-                FALLBACK_QUERIES[
-                    Math.floor(Math.random() * FALLBACK_QUERIES.length)
-                ]
-            const fallback = await api(buildQParams(since7d, fb, true), 12)
+            const fallbackQuery = positiveQuery || exactQuery
+            const fallback = fallbackQuery
+                ? await api(buildQParams(since7d, fallbackQuery, true), 24)
+                : []
             if (cancelled) return deduped
             const final = dedupeByCompany([...deduped, ...fallback], 10)
             if (!cancelled) {
@@ -20042,7 +20220,23 @@ const HomepageJobs = React.memo(function HomepageJobs({
     const nearList = nearListFull.slice(0, 5)
     const nextList = nearListFull.slice(5, 8)
     
-    const topList = pad(topJobs, 10, loadingPicks)
+    const topList: (HomepageJob | null)[] = loadingPicks
+        ? Array(TOP_PICKS_PAGE_SIZE).fill(null)
+        : topJobs.slice(0, TOP_PICKS_MAX)
+    const loadingMoreTopList: (HomepageJob | null)[] = loadingMorePicks
+        ? Array(
+              Math.min(
+                  TOP_PICKS_LOADING_MORE_SKELETONS,
+                  Math.max(0, TOP_PICKS_MAX - topJobs.length)
+              )
+          ).fill(null)
+        : []
+    const displayedTopList: (HomepageJob | null)[] = [
+        ...(loadingPicks
+            ? topList
+            : topList.filter((j): j is HomepageJob => j !== null)),
+        ...loadingMoreTopList,
+    ]
 
     
     
@@ -20083,6 +20277,328 @@ const HomepageJobs = React.memo(function HomepageJobs({
         fontWeight: 500,
         lineHeight: 1,
     }
+
+    const setTopJobsKeepingScroll = React.useCallback(
+        (next: HomepageJob[]) => {
+            const scrollEl =
+                typeof document !== "undefined"
+                    ? (document.querySelector(
+                          "[data-doc-scroll]"
+                      ) as HTMLElement | null)
+                    : null
+            const scrollTop = scrollEl?.scrollTop ?? null
+            const windowX =
+                typeof window !== "undefined" ? window.scrollX : null
+            const windowY =
+                typeof window !== "undefined" ? window.scrollY : null
+
+            setTopJobs(next)
+
+            if (typeof window === "undefined") return
+            window.requestAnimationFrame(() => {
+                if (scrollEl && scrollTop != null) {
+                    scrollEl.scrollTop = scrollTop
+                } else if (windowX != null && windowY != null) {
+                    window.scrollTo(windowX, windowY)
+                }
+            })
+        },
+        []
+    )
+
+    const loadMoreTopPicks = React.useCallback(async () => {
+        if (
+            !jobsApiUrl ||
+            loadingPicks ||
+            loadingMorePicksRef.current ||
+            !topPicksHasMoreRef.current
+        ) {
+            return
+        }
+
+        const requestKey = `${jobsApiUrl}\n${userQuery.trim()}`
+        const existing = topJobsRef.current
+        const targetCount = Math.min(
+            TOP_PICKS_MAX,
+            Math.max(TOP_PICKS_PAGE_SIZE, existing.length + TOP_PICKS_PAGE_SIZE)
+        )
+        if (existing.length >= TOP_PICKS_MAX) {
+            topPicksHasMoreRef.current = false
+            setTopPicksHasMore(false)
+            return
+        }
+
+        const buffered = topPicksCandidatePoolRef.current
+        if (buffered.length > existing.length) {
+            const next = appendUniqueHomepageJobs(existing, buffered, targetCount)
+            const didGrow = next.length > existing.length
+            const hasMore =
+                next.length < TOP_PICKS_MAX &&
+                (buffered.length > next.length || didGrow)
+            if (didGrow) setTopJobsKeepingScroll(next)
+            topPicksHasMoreRef.current = hasMore
+            setTopPicksHasMore(hasMore)
+            return
+        }
+
+        loadingMorePicksRef.current = true
+        setLoadingMorePicks(true)
+
+        const since7d = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
+        const exactQuery = userQuery.trim()
+        const positiveQuery = positiveTopPicksQuery(exactQuery)
+        const searchText = topPicksExactQueryEmptyRef.current
+            ? positiveQuery
+            : exactQuery
+
+        const fetchNearbyJobs = async (
+            qText: string,
+            limit: number,
+            since: number,
+            radiusKm: number
+        ): Promise<HomepageJob[]> => {
+            const geoResult = await getGeo()
+            const lat = geoResult?.lat ?? NaN
+            const lng = geoResult?.lng ?? NaN
+            const hasCoords =
+                !isNaN(lat) &&
+                !isNaN(lng) &&
+                lat >= -90 &&
+                lat <= 90 &&
+                lng >= -180 &&
+                lng <= 180
+            if (!hasCoords) return []
+
+            const u = new URL(`${jobsApiUrl}/jobs`)
+            u.searchParams.set("near_lat", String(lat))
+            u.searchParams.set("near_lng", String(lng))
+            u.searchParams.set("radius_km", String(radiusKm))
+            u.searchParams.set("exclude_remote", "true")
+            u.searchParams.set("limit", String(limit))
+            u.searchParams.set("since", String(since))
+            if (qText) u.searchParams.set("q", qText)
+
+            const excludeIds = [
+                ...nearJobsExcludeRef.current.map((j) => j.id),
+                ...topJobsRef.current.map((j) => j.id),
+            ]
+                .filter(Boolean)
+                .slice(0, TOP_PICKS_MAX + 16)
+            if (excludeIds.length) {
+                u.searchParams.set("exclude_ids", excludeIds.join(","))
+            }
+
+            const urlStr = u.toString()
+            const ctrl = new AbortController()
+            const timeout = setTimeout(() => ctrl.abort(), 10000)
+            return fetch(urlStr, { signal: ctrl.signal })
+                .then(async (response) => {
+                    const cacheStatus = parseJobsCacheStatus(response)
+                    if (!response.ok) {
+                        emitJobsQuery(urlStr, 0, cacheStatus)
+                        return [] as HomepageJob[]
+                    }
+                    const payload = await response.json()
+                    const rows = (Array.isArray(payload.data)
+                        ? payload.data
+                        : []) as HomepageJob[]
+                    emitJobsQuery(urlStr, rows.length, cacheStatus)
+                    return rows
+                })
+                .catch(() => {
+                    emitJobsQuery(urlStr, 0, "?")
+                    return [] as HomepageJob[]
+                })
+                .finally(() => clearTimeout(timeout))
+        }
+
+        const fillFromNearby = async (
+            current: HomepageJob[],
+            qText: string,
+            stopAfterAnyRows = false
+        ): Promise<{ jobs: HomepageJob[]; foundRows: boolean }> => {
+            let next = current
+            let foundRows = false
+            const nearCompanies = new Set(
+                nearJobsExcludeRef.current.map(homepageCompanyKey)
+            )
+            for (const radiusKm of [50, 100, 250]) {
+                if (next.length >= targetCount) break
+                const batch = await fetchNearbyJobs(qText, 50, since7d, radiusKm)
+                if (topPicksRequestKeyRef.current !== requestKey) {
+                    return { jobs: next, foundRows }
+                }
+                if (batch.length > 0) foundRows = true
+                const beforeMergeLength = next.length
+                const nearIds = new Set(nearJobsExcludeRef.current.map((j) => j.id))
+                const existingIds = new Set(next.map((j) => j.id))
+                const unseenCompanies = batch.filter(
+                    (job) => !nearCompanies.has(homepageCompanyKey(job))
+                )
+                next = appendUniqueHomepageJobs(
+                    next,
+                    unseenCompanies,
+                    TOP_PICKS_MAX
+                )
+                if (next.length === beforeMergeLength && batch.length > 0) {
+                    const backfill = batch.filter(
+                        (job) =>
+                            !nearIds.has(job.id) && !existingIds.has(job.id)
+                    )
+                    next = appendUniqueHomepageJobs(
+                        next,
+                        backfill,
+                        TOP_PICKS_MAX
+                    )
+                }
+                if (stopAfterAnyRows && foundRows) break
+            }
+            return { jobs: next, foundRows }
+        }
+
+        try {
+            let next = existing
+            if (!exactQuery) {
+                const fallbackQuery =
+                    topPicksFallbackQueryRef.current ?? randomFallbackQuery()
+                topPicksFallbackQueryRef.current = fallbackQuery
+                const fallbackFill = await fillFromNearby(
+                    next,
+                    fallbackQuery,
+                    true
+                )
+                next = fallbackFill.jobs
+                if (!fallbackFill.foundRows && next.length < targetCount) {
+                    const noTitleFill = await fillFromNearby(next, "", true)
+                    next = noTitleFill.jobs
+                }
+                if (topPicksRequestKeyRef.current !== requestKey) return
+                const visibleNext = next.slice(0, targetCount)
+                const didGrow = visibleNext.length > existing.length
+                const hasMore =
+                    visibleNext.length < TOP_PICKS_MAX &&
+                    (next.length > visibleNext.length || didGrow)
+                topPicksCandidatePoolRef.current = next
+                if (didGrow) setTopJobsKeepingScroll(visibleNext)
+                topPicksHasMoreRef.current = hasMore
+                setTopPicksHasMore(hasMore)
+                return
+            }
+
+            const beforeExact = next.length
+            const exactFill = await fillFromNearby(next, searchText)
+            next = exactFill.jobs
+            if (topPicksRequestKeyRef.current !== requestKey) return
+            if (next.length === beforeExact && exactQuery) {
+                topPicksExactQueryEmptyRef.current = true
+            }
+
+            if (
+                exactQuery &&
+                positiveQuery &&
+                positiveQuery !== searchText &&
+                next.length < targetCount
+            ) {
+                const positive = await fillFromNearby(next, positiveQuery)
+                if (topPicksRequestKeyRef.current !== requestKey) return
+                next = positive.jobs
+            }
+
+            if (next.length < targetCount) {
+                const fallbackFill = await fillFromNearby(
+                    next,
+                    randomFallbackQuery()
+                )
+                if (topPicksRequestKeyRef.current !== requestKey) return
+                next = fallbackFill.jobs
+            }
+
+            if (topPicksRequestKeyRef.current !== requestKey) return
+            const visibleNext = next.slice(0, targetCount)
+            const didGrow = visibleNext.length > existing.length
+            const hasMore =
+                visibleNext.length < TOP_PICKS_MAX &&
+                (next.length > visibleNext.length || didGrow)
+            topPicksCandidatePoolRef.current = next
+            if (didGrow) setTopJobsKeepingScroll(visibleNext)
+            topPicksHasMoreRef.current = hasMore
+            setTopPicksHasMore(hasMore)
+        } finally {
+            loadingMorePicksRef.current = false
+            setLoadingMorePicks(false)
+        }
+    }, [jobsApiUrl, loadingPicks, userQuery, getGeo, setTopJobsKeepingScroll])
+
+    React.useEffect(() => {
+        if (
+            loadingPicks ||
+            !topPicksHasMore ||
+            topJobs.length >= TOP_PICKS_MAX ||
+            typeof window === "undefined" ||
+            typeof document === "undefined"
+        ) {
+            return
+        }
+
+        const trigger = topPicksLoadTriggerRef.current
+        if (!trigger) return
+
+        const scrollParents: HTMLElement[] = []
+        let parent = trigger.parentElement
+        while (parent && parent !== document.body) {
+            const style = window.getComputedStyle(parent)
+            if (/(auto|scroll|overlay)/.test(`${style.overflowY} ${style.overflow}`)) {
+                scrollParents.push(parent)
+            }
+            parent = parent.parentElement
+        }
+
+        const docScroll = document.querySelector(
+            "[data-doc-scroll]"
+        ) as HTMLElement | null
+        if (docScroll && !scrollParents.includes(docScroll)) {
+            scrollParents.push(docScroll)
+        }
+
+        const viewportBottom = () => {
+            const bottoms = [
+                window.innerHeight,
+                ...scrollParents.map((el) => el.getBoundingClientRect().bottom),
+            ]
+            return Math.min(...bottoms)
+        }
+
+        let frame = 0
+        const checkTrigger = () => {
+            frame = 0
+            const trigger = topPicksLoadTriggerRef.current
+            if (!trigger) return
+            if (trigger.getBoundingClientRect().top <= viewportBottom() + 160) {
+                loadMoreTopPicks()
+            }
+        }
+        const onOuterScroll = () => {
+            if (frame) return
+            frame = window.requestAnimationFrame(checkTrigger)
+        }
+
+        window.addEventListener("scroll", onOuterScroll, { passive: true })
+        document.addEventListener("scroll", onOuterScroll, {
+            passive: true,
+            capture: true,
+        })
+        scrollParents.forEach((el) =>
+            el.addEventListener("scroll", onOuterScroll, { passive: true })
+        )
+        return () => {
+            if (frame) window.cancelAnimationFrame(frame)
+            window.removeEventListener("scroll", onOuterScroll)
+            document.removeEventListener("scroll", onOuterScroll, true)
+            scrollParents.forEach((el) =>
+                el.removeEventListener("scroll", onOuterScroll)
+            )
+        }
+    }, [loadMoreTopPicks, loadingPicks, topPicksHasMore, topJobs.length])
 
     return (
         <div
@@ -20396,60 +20912,37 @@ const HomepageJobs = React.memo(function HomepageJobs({
                 style={{
                     alignSelf: "stretch",
                     flexDirection: "column",
-                    gap: m ? 24 : 48,
+                    gap: 24,
                     display: "flex",
                 }}
             >
                 <div style={sectionTitleStyle}>Top picks for you</div>
-                {m ? (
-                    // Mobile: up to 10 stacked cards; filter nulls when done loading
-                    // so we don't show ghost skeleton cards if fewer than 10 were found.
+                {/* Up to 100 stacked cards; filter nulls when done loading so
+                    we don't show ghost skeleton cards if fewer were found. */}
+                <div
+                    style={{
+                        alignSelf: "stretch",
+                        flexDirection: "column",
+                        gap: 12,
+                        display: "flex",
+                    }}
+                >
+                    {displayedTopList.map((job, i) => (
+                        <StackedJobCard
+                            key={job?.id ?? i}
+                            job={job}
+                            onClick={job ? () => openJob(job) : undefined}
+                            themeColors={themeColors}
+                            isMobile
+                            titleFontSize={m ? undefined : 16}
+                        />
+                    ))}
                     <div
-                        style={{
-                            alignSelf: "stretch",
-                            flexDirection: "column",
-                            gap: 12,
-                            display: "flex",
-                        }}
-                    >
-                        {(loadingPicks
-                            ? topList
-                            : topList.filter(
-                                  (j): j is HomepageJob => j !== null
-                              )
-                        ).map((job, i) => (
-                            <StackedJobCard
-                                key={job?.id ?? i}
-                                job={job}
-                                onClick={job ? () => openJob(job) : undefined}
-                                themeColors={themeColors}
-                                isMobile
-                            />
-                        ))}
-                    </div>
-                ) : (
-                    
-                    <div
-                        style={{
-                            alignSelf: "stretch",
-                            justifyContent: "center",
-                            alignItems: "stretch",
-                            gap: 12,
-                            display: "flex",
-                        }}
-                    >
-                        {topList.slice(0, 3).map((job, i) => (
-                            <BigJobCard
-                                key={job?.id ?? i}
-                                job={job}
-                                borderRadius={48}
-                                style={{ flex: "1 1 0", minHeight: 234 }}
-                                onClick={job ? () => openJob(job) : undefined}
-                                themeColors={themeColors}
-                            />
-                        ))}
-                    </div>
-                )}
+                        ref={topPicksLoadTriggerRef}
+                        aria-hidden
+                        style={{ width: "100%", height: 1 }}
+                    />
+                </div>
             </div>
         </div>
     )
@@ -21781,6 +22274,7 @@ const MessageBubble = React.memo(
         docCallType,
         onJobClick,
         onJobChipClick,
+        onResumeDownload,
     }: {
         msg: Message
         isMobileLayout: boolean
@@ -21804,6 +22298,7 @@ const MessageBubble = React.memo(
         docCallType?: "doc" | "resume" | "cover_letter"
         onJobClick?: (job: JobSnippet) => void
         onJobChipClick?: (jobId: string) => void
+        onResumeDownload?: (docId?: string) => void
     }) => {
         // Memoize base styles to avoid recreation
         const baseTextStyle = React.useMemo(
@@ -21852,6 +22347,37 @@ const MessageBubble = React.memo(
         }
 
         const hoverBackground = themeColors.hover.subtle
+
+        const handleAssistantMarkdownClick = React.useCallback(
+            (event: React.MouseEvent<HTMLDivElement>) => {
+                if (
+                    !onResumeDownload ||
+                    msg.role === "user" ||
+                    msg.role === "peer"
+                ) {
+                    return
+                }
+
+                const target = event.target as HTMLElement | null
+                const anchor = target?.closest?.("a")
+                if (
+                    !anchor ||
+                    !(anchor instanceof HTMLAnchorElement) ||
+                    !event.currentTarget.contains(anchor)
+                ) {
+                    return
+                }
+
+                const href = anchor.getAttribute("href") || ""
+                const label = anchor.textContent || ""
+                if (!isResumeDownloadChatLink(href, label)) return
+
+                event.preventDefault()
+                event.stopPropagation()
+                onResumeDownload(msg.docId)
+            },
+            [msg.docId, msg.role, onResumeDownload]
+        )
 
         const handleShare = React.useCallback(async () => {
             if (
@@ -22841,6 +23367,7 @@ const MessageBubble = React.memo(
                     {/** Text content */}
                     {msg.text && (
                         <div
+                            onClick={handleAssistantMarkdownClick}
                             style={{
                                 padding:
                                     msg.role === "user" || msg.role === "peer"
@@ -29332,6 +29859,46 @@ export default function OmegleMentorshipUI(props: Props) {
         document.body.removeChild(link)
         setResumeMenuOpen(false)
     }, [resumeFile])
+
+    const handleChatResumeDownload = React.useCallback(
+        async (docId?: string) => {
+            const doc = docId
+                ? chatDocsRef.current.find((item) => item.id === docId)
+                : [...chatDocsRef.current]
+                      .filter((item) => item.docType === "resume")
+                      .sort((a, b) => b.lastEdited - a.lastEdited)[0]
+
+            if (doc?.docType !== "resume" || !doc.content.trim()) {
+                console.warn("No synced resume document found for chat download.")
+                return
+            }
+
+            haptic.light()
+            try {
+                const pdfBytes = await docHtmlToOnePagePdfBytes(
+                    doc.content,
+                    false
+                )
+                const blob = new Blob([pdfBytes as unknown as BlobPart], {
+                    type: "application/pdf",
+                })
+                const url = URL.createObjectURL(blob)
+                const link = document.createElement("a")
+                const company = doc.docCompany || ""
+                link.href = url
+                link.download = `${profileNameStem(youName) || "resume"}${
+                    company ? `_${company.replace(/\s+/g, "_").slice(0, 30)}` : ""
+                }.pdf`
+                document.body.appendChild(link)
+                link.click()
+                document.body.removeChild(link)
+                setTimeout(() => URL.revokeObjectURL(url), 5000)
+            } catch (e) {
+                console.error("resume PDF export failed:", e)
+            }
+        },
+        [youName]
+    )
 
     const handleResumeDelete = React.useCallback(() => {
         haptic.light()
@@ -41761,6 +42328,7 @@ Do not include markdown formatting or explanations.`
                                         const stored = readJobChipStore()[jobId]
                                         if (stored) openJobDetail(stored)
                                     }}
+                                    onResumeDownload={handleChatResumeDownload}
                                 />
                                 {shouldShowAd && (
                                     <AdCarousel

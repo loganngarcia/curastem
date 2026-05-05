@@ -14,7 +14,7 @@
  * **any** phrase (see {@link jobTitleMatchesCommaSeparatedQuery}). Prefix a token with
  * `-` to exclude titles containing it (e.g. `Software Engineer, -Senior`).
  */
-export const MAX_JOB_SEARCH_PHRASES = 5;
+export const MAX_JOB_SEARCH_PHRASES = 24;
 
 export function normalizeJobSearchQuery(q: string): string {
   return q.trim().replace(/\s+/g, " ");
