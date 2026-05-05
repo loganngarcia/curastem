@@ -6750,6 +6750,8 @@ interface ChatInputProps {
     onStop?: () => void
     onEndCall: () => void
     onFileSelect: () => void
+    onResumeUpload?: () => void
+    showResumeUploadAction?: boolean
     onScreenShare?: () => void
     onReport?: () => void
     placeholder?: string
@@ -7123,6 +7125,8 @@ const ChatInput = React.memo(function ChatInput({
     onStop,
     onEndCall,
     onFileSelect,
+    onResumeUpload,
+    showResumeUploadAction = false,
     onScreenShare,
     onReport,
     placeholder = "Ask anything",
@@ -8355,6 +8359,45 @@ const ChatInput = React.memo(function ChatInput({
             })
         }
 
+        const showUploadResume =
+            showResumeUploadAction &&
+            onResumeUpload &&
+            status === "idle" &&
+            !role &&
+            !isLiveMode
+
+        if (showUploadResume) {
+            items.push({
+                id: "upload-resume",
+                label: "Upload resume",
+                icon: (
+                    <svg
+                        width="15"
+                        height="15"
+                        viewBox="0 0 15 15"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                    >
+                        <path
+                            d="M0.75 10.6674V11.5078C0.75 12.1791 1.01668 12.823 1.49139 13.2977C1.96609 13.7724 2.60992 14.0391 3.28125 14.0391H11.7188C12.3901 14.0391 13.0339 13.7724 13.5086 13.2977C13.9833 12.823 14.25 12.1791 14.25 11.5078V10.6641M7.5 10.2422V0.960938M7.5 0.960938L10.4531 3.91406M7.5 0.960938L4.54688 3.91406"
+                            stroke={themeColors.text.primary}
+                            strokeWidth="1.26562"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
+                    </svg>
+                ),
+                onClick: () => {
+                    haptic.light()
+                    onResumeUpload()
+                    setShowMenu(false)
+                },
+                className: "UploadResume",
+                isDestructive: false,
+                hasSeparator: false,
+            })
+        }
+
         items.push({
             id: "files",
             label: "Add photos & files",
@@ -8545,6 +8588,8 @@ const ChatInput = React.memo(function ChatInput({
         isMapOpen,
         isConnected,
         onFileSelect,
+        onResumeUpload,
+        showResumeUploadAction,
         onScreenShare,
         toggleWhiteboard,
         toggleDoc,
@@ -30141,6 +30186,10 @@ export default function OmegleMentorshipUI(props: Props) {
         [resumeFileSignature]
     )
 
+    const handleResumeUploadRequest = React.useCallback(() => {
+        resumeFileInputRef.current?.click()
+    }, [])
+
     const handleResumeDownload = React.useCallback(async () => {
         haptic.light()
         const html = getProfileResumeDocHtml()?.trim()
@@ -41386,6 +41435,8 @@ Do not include markdown formatting or explanations.`
                     onStop={handleStop}
                     onEndCall={() => cleanup(true)}
                     onFileSelect={handleFileSelect}
+                    onResumeUpload={handleResumeUploadRequest}
+                    showResumeUploadAction={!resumeFile && !isProcessingResume}
                     onScreenShare={toggleScreenShare}
                     onReport={handleReport}
                     placeholder={overlayPlaceholder}
@@ -42377,6 +42428,10 @@ Do not include markdown formatting or explanations.`
                                     onStop={handleStop}
                                     onEndCall={() => cleanup(true)}
                                     onFileSelect={handleFileSelect}
+                                    onResumeUpload={handleResumeUploadRequest}
+                                    showResumeUploadAction={
+                                        !resumeFile && !isProcessingResume
+                                    }
                                     onScreenShare={toggleScreenShare}
                                     onReport={handleReport}
                                     placeholder="Ask anything"
@@ -42831,6 +42886,8 @@ Do not include markdown formatting or explanations.`
                         onStop={handleStop}
                         onEndCall={() => cleanup(true)}
                         onFileSelect={handleFileSelect}
+                        onResumeUpload={handleResumeUploadRequest}
+                        showResumeUploadAction={!resumeFile && !isProcessingResume}
                         onScreenShare={toggleScreenShare}
                         onReport={handleReport}
                         placeholder="Ask anything"
