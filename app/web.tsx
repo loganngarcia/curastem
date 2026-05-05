@@ -11203,6 +11203,116 @@ interface MapCompanyEntry {
     job_count: number
 }
 
+type MapJumpTarget = {
+    lat: number
+    lng: number
+    label?: string
+    zoom?: number
+    seq: number
+}
+
+const FREE_GEOCODE_CACHE_KEY = "curastem_free_geocode_cache_v1"
+
+function isValidLatLng(lat: unknown, lng: unknown): lat is number {
+    return (
+        typeof lat === "number" &&
+        typeof lng === "number" &&
+        Number.isFinite(lat) &&
+        Number.isFinite(lng) &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lng >= -180 &&
+        lng <= 180
+    )
+}
+
+function readFreeGeocodeCache(
+    query: string
+): { lat: number; lng: number } | null {
+    if (typeof localStorage === "undefined") return null
+    try {
+        const raw = localStorage.getItem(FREE_GEOCODE_CACHE_KEY)
+        if (!raw) return null
+        const root = JSON.parse(raw) as Record<string, { lat: number; lng: number }>
+        const hit = root[query.trim().toLowerCase()]
+        return isValidLatLng(hit?.lat, hit?.lng)
+            ? { lat: hit.lat, lng: hit.lng }
+            : null
+    } catch {
+        return null
+    }
+}
+
+function writeFreeGeocodeCache(
+    query: string,
+    coords: { lat: number; lng: number }
+): void {
+    if (typeof localStorage === "undefined") return
+    try {
+        const raw = localStorage.getItem(FREE_GEOCODE_CACHE_KEY)
+        const root = raw
+            ? (JSON.parse(raw) as Record<string, { lat: number; lng: number }>)
+            : {}
+        root[query.trim().toLowerCase()] = coords
+        localStorage.setItem(FREE_GEOCODE_CACHE_KEY, JSON.stringify(root))
+    } catch {
+        /** cache is opportunistic */
+    }
+}
+
+async function geocodeLocationFree(
+    query: string
+): Promise<{ lat: number; lng: number } | null> {
+    const trimmed = query.trim()
+    if (!trimmed || /^remote(\s*[\(\-/]|$)/i.test(trimmed)) return null
+    const cached = readFreeGeocodeCache(trimmed)
+    if (cached) return cached
+
+    try {
+        const params = new URLSearchParams({ q: trimmed, limit: "1" })
+        const res = await fetch(`https://photon.komoot.io/api/?${params}`)
+        if (res.ok) {
+            const data = (await res.json()) as {
+                features?: Array<{
+                    geometry?: { coordinates?: [number, number] }
+                }>
+            }
+            const coords = data.features?.[0]?.geometry?.coordinates
+            if (coords && isValidLatLng(coords[1], coords[0])) {
+                const out = { lat: coords[1], lng: coords[0] }
+                writeFreeGeocodeCache(trimmed, out)
+                return out
+            }
+        }
+    } catch {
+        /** fall through to Nominatim */
+    }
+
+    try {
+        const params = new URLSearchParams({
+            q: trimmed,
+            format: "json",
+            limit: "1",
+        })
+        const res = await fetch(
+            `https://nominatim.openstreetmap.org/search?${params}`
+        )
+        if (!res.ok) return null
+        const data = (await res.json()) as Array<{ lat?: string; lon?: string }>
+        const first = data[0]
+        const lat = parseFloat(first?.lat ?? "")
+        const lng = parseFloat(first?.lon ?? "")
+        if (isValidLatLng(lat, lng)) {
+            const out = { lat, lng }
+            writeFreeGeocodeCache(trimmed, out)
+            return out
+        }
+    } catch {
+        return null
+    }
+    return null
+}
+
 /** Persist opened job detail so swiping away and back does not refetch */
 const JOB_DETAIL_CACHE_STORAGE_KEY = "curastem_job_detail_cache_v2"
 const JOB_DETAIL_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -12654,6 +12764,8 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
     previewOnly = false,
     fetchEnabled = true,
     onDetailFetched,
+    onJobFieldsMerge,
+    onOpenLocationInMap,
 }: {
     job: HomepageJob
     jobsApiUrl: string
@@ -12669,6 +12781,11 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         jobId: string,
         entry: Omit<JobDetailCacheEntry, "t" | "u">
     ) => void
+    onOpenLocationInMap?: (target: {
+        lat: number
+        lng: number
+        label?: string
+    }) => void
     /** Merge API fields into parent `HomepageJob` so header meta updates after lazy load */
     onJobFieldsMerge?: (jobId: string, fields: Partial<HomepageJob>) => void
 }) {
@@ -12888,27 +13005,39 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
         if (url && typeof window !== "undefined") window.open(url, "_blank")
     }
 
-    /** HQ links */
-    const [mapsProvider, setMapsProvider] = React.useState<"apple" | "google">(
-        "google"
-    )
-    React.useEffect(() => {
-        if (typeof navigator === "undefined") return
-        const ua = navigator.userAgent
-        const appleUA =
-            /iPhone|iPad|iPod/i.test(ua) ||
-            /Macintosh/i.test(ua) ||
-            (typeof navigator.platform === "string" &&
-                navigator.platform.includes("Mac"))
-        setMapsProvider(appleUA ? "apple" : "google")
-    }, [])
-
-    
-    
     const effectiveCompany = companyOverride ?? job.company
     const effectiveSummary = job.job_summary || detailSummary
     const effectiveCompanyDesc =
         effectiveCompany.description || detailCompanyDesc
+
+    const openLocationInMap = React.useCallback(
+        async (
+            label: string,
+            savedCoords?: { lat: number | null | undefined; lng: number | null | undefined }
+        ) => {
+            if (previewOnly || !onOpenLocationInMap) return
+            const cleanLabel = label.trim()
+            if (!cleanLabel) return
+            haptic.light()
+            const savedLat =
+                typeof savedCoords?.lat === "number" ? savedCoords.lat : NaN
+            const savedLng =
+                typeof savedCoords?.lng === "number" ? savedCoords.lng : NaN
+            if (isValidLatLng(savedLat, savedLng)) {
+                onOpenLocationInMap({
+                    lat: savedLat,
+                    lng: savedLng,
+                    label: cleanLabel,
+                })
+                return
+            }
+            const fallback = await geocodeLocationFree(cleanLabel)
+            if (fallback) {
+                onOpenLocationInMap({ ...fallback, label: cleanLabel })
+            }
+        },
+        [onOpenLocationInMap, previewOnly]
+    )
 
     const hasCachedDetail = readJobDetailCache(job.id, jobsApiUrl) !== null
     const showLazyDetailBody = !loadingDesc && (fetchEnabled || hasCachedDetail)
@@ -13268,31 +13397,90 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             flexWrap: "wrap",
                         }}
                     >
-                        {metaItems.map((item, i) => (
-                            <React.Fragment key={i}>
-                                {i > 0 && (
+                        {metaItems.map((item, i) => {
+                            const isLocationItem =
+                                !!locationDisplay && item === locationDisplay
+                            const savedLocationCoords =
+                                detailLocationPoints?.[0] ??
+                                (isValidLatLng(
+                                    job.location_lat,
+                                    job.location_lng
+                                )
+                                    ? {
+                                          lat: job.location_lat!,
+                                          lng: job.location_lng!,
+                                      }
+                                    : null)
+                            return (
+                                <React.Fragment key={i}>
+                                    {i > 0 && (
+                                        <span
+                                            style={{
+                                                color: themeColors.text.primary,
+                                                fontSize: 14,
+                                            }}
+                                        >
+                                            •
+                                        </span>
+                                    )}
                                     <span
+                                        role={
+                                            isLocationItem &&
+                                            onOpenLocationInMap
+                                                ? "button"
+                                                : undefined
+                                        }
+                                        tabIndex={
+                                            isLocationItem &&
+                                            onOpenLocationInMap
+                                                ? 0
+                                                : undefined
+                                        }
+                                        onClick={
+                                            isLocationItem
+                                                ? () =>
+                                                      openLocationInMap(
+                                                          String(item),
+                                                          savedLocationCoords ??
+                                                              undefined
+                                                      )
+                                                : undefined
+                                        }
+                                        onKeyDown={
+                                            isLocationItem
+                                                ? (e) => {
+                                                      if (
+                                                          e.key === "Enter" ||
+                                                          e.key === " "
+                                                      ) {
+                                                          e.preventDefault()
+                                                          openLocationInMap(
+                                                              String(item),
+                                                              savedLocationCoords ??
+                                                                  undefined
+                                                          )
+                                                      }
+                                                  }
+                                                : undefined
+                                        }
                                         style={{
                                             color: themeColors.text.primary,
                                             fontSize: 14,
+                                            fontFamily: "Inter",
+                                            fontWeight: 400,
+                                            lineHeight: "21px",
+                                            cursor:
+                                                isLocationItem &&
+                                                onOpenLocationInMap
+                                                    ? "pointer"
+                                                    : undefined,
                                         }}
                                     >
-                                        •
+                                        {item}
                                     </span>
-                                )}
-                                <span
-                                    style={{
-                                        color: themeColors.text.primary,
-                                        fontSize: 14,
-                                        fontFamily: "Inter",
-                                        fontWeight: 400,
-                                        lineHeight: "21px",
-                                    }}
-                                >
-                                    {item}
-                                </span>
-                            </React.Fragment>
-                        ))}
+                                </React.Fragment>
+                            )
+                        })}
                     </div>
                     <div
                         style={{
@@ -14100,7 +14288,7 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             </div>
                         )}
                         {(() => {
-                            const c = job.company
+                            const c = effectiveCompany
                             const INDUSTRY_LABELS: Record<string, string> = {
                                 software: "Software",
                                 ai_ml: "AI / ML",
@@ -14201,14 +14389,13 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                 if (only === 1) return "1 employee"
                                 return `${commaNum(s)} employees`
                             }
-                            const mapsSearchUrl = (q: string) =>
-                                mapsProvider === "apple"
-                                    ? `https://maps.apple.com/?q=${encodeURIComponent(q)}`
-                                    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`
                             const rows: {
                                 label: string
                                 value: string
-                                maps?: boolean
+                                mapCoords?: {
+                                    lat: number | null | undefined
+                                    lng: number | null | undefined
+                                }
                             }[] = [
                                 c.employee_count_range
                                     ? {
@@ -14222,7 +14409,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                     ? {
                                           label: "Headquarters",
                                           value: fmtHQ(c.headquarters)!,
-                                          maps: true,
+                                          mapCoords: {
+                                              lat: c.headquarters?.lat,
+                                              lng: c.headquarters?.lng,
+                                          },
                                       }
                                     : null,
                                 c.founded_year
@@ -14267,7 +14457,10 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                             ].filter(Boolean) as {
                                 label: string
                                 value: string
-                                maps?: boolean
+                                mapCoords?: {
+                                    lat: number | null | undefined
+                                    lng: number | null | undefined
+                                }
                             }[]
                             if (!rows.length) return null
                             return (
@@ -14278,7 +14471,7 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                         gap: 16,
                                     }}
                                 >
-                                    {rows.map(({ label, value, maps }) => (
+                                    {rows.map(({ label, value, mapCoords }) => (
                                         <div
                                             key={label}
                                             style={{
@@ -14299,11 +14492,36 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                             >
                                                 {label}
                                             </span>
-                                            {maps ? (
-                                                <a
-                                                    href={mapsSearchUrl(value)}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
+                                            {mapCoords ? (
+                                                <span
+                                                    role={
+                                                        onOpenLocationInMap
+                                                            ? "button"
+                                                            : undefined
+                                                    }
+                                                    tabIndex={
+                                                        onOpenLocationInMap
+                                                            ? 0
+                                                            : undefined
+                                                    }
+                                                    onClick={() =>
+                                                        openLocationInMap(
+                                                            value,
+                                                            mapCoords
+                                                        )
+                                                    }
+                                                    onKeyDown={(e) => {
+                                                        if (
+                                                            e.key === "Enter" ||
+                                                            e.key === " "
+                                                        ) {
+                                                            e.preventDefault()
+                                                            openLocationInMap(
+                                                                value,
+                                                                mapCoords
+                                                            )
+                                                        }
+                                                    }}
                                                     style={{
                                                         color: themeColors.text
                                                             .primary,
@@ -14311,12 +14529,15 @@ const JobDetailScrollBody = React.memo(function JobDetailScrollBody({
                                                         fontFamily: "Inter",
                                                         fontWeight: 400,
                                                         lineHeight: "21px",
-                                                        cursor: "pointer",
+                                                        cursor:
+                                                            onOpenLocationInMap
+                                                                ? "pointer"
+                                                                : undefined,
                                                         textDecoration: "none",
                                                     }}
                                                 >
                                                     {value}
-                                                </a>
+                                                </span>
                                             ) : (
                                                 <span
                                                     style={{
@@ -14357,6 +14578,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
     mobileToolGestureAxis = null,
     onJobDetailFetched,
     onJobFieldsMerge,
+    onOpenLocationInMap,
 }: {
     job: HomepageJob
     jobsApiUrl: string
@@ -14374,6 +14596,11 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
         entry: Omit<JobDetailCacheEntry, "t" | "u">
     ) => void
     onJobFieldsMerge?: (jobId: string, fields: Partial<HomepageJob>) => void
+    onOpenLocationInMap?: (target: {
+        lat: number
+        lng: number
+        label?: string
+    }) => void
 }) {
     const [isShareHovered, setIsShareHovered] = React.useState(false)
     const [isCloseHovered, setIsCloseHovered] = React.useState(false)
@@ -14647,6 +14874,9 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                                         fetchEnabled
                                         onDetailFetched={onJobDetailFetched}
                                         onJobFieldsMerge={onJobFieldsMerge}
+                                        onOpenLocationInMap={
+                                            onOpenLocationInMap
+                                        }
                                     />
                                 </div>
                                 {/** Next slot */}
@@ -14686,6 +14916,7 @@ const JobDetailPanel = React.memo(function JobDetailPanel({
                             onCreateResume={onCreateResume}
                             onDetailFetched={onJobDetailFetched}
                             onJobFieldsMerge={onJobFieldsMerge}
+                            onOpenLocationInMap={onOpenLocationInMap}
                         />
                     </div>
                 )}
@@ -15233,6 +15464,7 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     defaultSearch = "",
     searchFocusRef,
     coordMergeJob = null,
+    jumpTarget = null,
     onMapJobsQueryRequest,
     onMapJobsQueryAbort,
     onMapJobsQuery,
@@ -15259,6 +15491,8 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
     searchFocusRef?: React.RefObject<(() => void) | null>
     /** When job detail is open over the map, use this copy for coords (GET /jobs/ */
     coordMergeJob?: HomepageJob | null
+    /** Parent-driven jump from job detail location/HQ clicks */
+    jumpTarget?: MapJumpTarget | null
     /* Tools debug: GET /jobs/map — pending request line (removed when superseded, aborted, or completed). */
     onMapJobsQueryRequest?: (
         reqId: number,
@@ -15786,9 +16020,11 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         const google = (window as any).google
         if (!google?.maps) return
         setMapHasIdle(false)
-        const center = userLoc ?? { lat: 37.7749, lng: -122.4194 }
+        const center = jumpTarget
+            ? { lat: jumpTarget.lat, lng: jumpTarget.lng }
+            : userLoc ?? { lat: 37.7749, lng: -122.4194 }
         const map = new google.maps.Map(mapContainerRef.current, {
-            zoom: 11,
+            zoom: jumpTarget?.zoom ?? 12,
             center,
             clickableIcons: false,
             disableDefaultUI: true,
@@ -16096,11 +16332,41 @@ const MapAgentPanel = React.memo(function MapAgentPanel({
         }
     }, [mapsReady, isStatic]) 
 
+    React.useEffect(() => {
+        if (!jumpTarget || !mapsReady || isStatic) return
+        const map = mapInstanceRef.current
+        if (!map) return
+        const loc = { lat: jumpTarget.lat, lng: jumpTarget.lng }
+        lastFetchViewportRef.current = null
+        accJobsRef.current.clear()
+        chipOfficeStickyRef.current.clear()
+        setSelectedChipEntry(null)
+        setNearbyJobCount(null)
+        setTravelTimes({})
+        setOverlayNextCursor(null)
+        overlayFetchCoordsRef.current = loc
+        setMapOverlayAnchor(loc)
+        setSelectedJobs([])
+        const zoom = jumpTarget.zoom ?? CURRENT_LOCATION_MAP_ZOOM
+        if (typeof map.moveCamera === "function") {
+            map.moveCamera({ center: loc, zoom })
+        } else {
+            map.setZoom?.(zoom)
+            map.panTo?.(loc)
+        }
+        if (isMobile) snapMobileFeed(false)
+        requestAnimationFrame(() => {
+            const google = (window as any).google
+            google?.maps?.event?.trigger(map, "idle")
+        })
+    }, [jumpTarget?.seq, mapsReady, isStatic, isMobile, snapMobileFeed])
+
     
     React.useEffect(() => {
         if (!mapInstanceRef.current || !userLoc) return
+        if (jumpTarget) return
         mapInstanceRef.current.panTo(userLoc)
-    }, [userLoc])
+    }, [userLoc, jumpTarget?.seq])
 
     React.useEffect(() => {
         filterDaysRef.current = filterDays
@@ -19418,6 +19684,10 @@ function MapPreviewCard({
 
     const bg = isDark ? themeColors.surfaceHighlight : themeColors.surface
     const gridLine = isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)"
+    const openMapsButtonBg = themeColors.surfaceHighlight
+    const openMapsButtonIcon = isDark
+        ? "rgba(255,255,255,0.95)"
+        : "rgba(0,0,0,0.85)"
     
     const g = 47
 
@@ -19468,6 +19738,42 @@ function MapPreviewCard({
                     }}
                 />
             )}
+            <div
+                data-svg-wrapper
+                data-layer="open maps button"
+                className="OpenMapsButton"
+                aria-hidden="true"
+                style={{
+                    right: isMobile ? 12 : 16,
+                    top: isMobile ? 12 : 16,
+                    position: "absolute",
+                    display: "flex",
+                    pointerEvents: "none",
+                    zIndex: 1,
+                }}
+            >
+                <svg
+                    width="40"
+                    height="40"
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <rect
+                        width="40"
+                        height="40"
+                        rx="20"
+                        fill={openMapsButtonBg}
+                    />
+                    <path
+                        d="M21.6184 13.5254L26.4745 13.5M26.4745 13.5L26.4999 18.356M26.4745 13.5L21.6438 18.3814M18.356 26.5L13.5 26.4716M13.5 26.4716L13.5284 21.6155M13.5 26.4716L18.3845 21.644"
+                        stroke={openMapsButtonIcon}
+                        strokeWidth="1.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                    />
+                </svg>
+            </div>
         </div>
     )
 }
@@ -20760,7 +21066,7 @@ const HomepageJobs = React.memo(function HomepageJobs({
                         style={{
                             flex: "1 1 0",
                             color: themeColors.text.primary,
-                            fontSize: 16,
+                            fontSize: m ? 15 : 16,
                             fontFamily: "Inter",
                             fontWeight: 400,
                             lineHeight: 1.2,
@@ -21068,6 +21374,7 @@ const ModalSheet = ({
     className,
     sheetStyle,
     mobileOnly = false,
+    instantEnter = false,
     dragY,
     anchorDataLayer,
 }: {
@@ -21079,6 +21386,7 @@ const ModalSheet = ({
     className?: string
     sheetStyle?: React.CSSProperties
     mobileOnly?: boolean
+    instantEnter?: boolean
     /** Pull-to-dismiss offset (px) */
     dragY?: ReturnType<typeof useMotionValue<number>>
     /** e */
@@ -21122,8 +21430,11 @@ const ModalSheet = ({
                     }}
                 >
                     <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1, transition: { duration: 0.2 } }}
+                        initial={instantEnter ? { opacity: 1 } : { opacity: 0 }}
+                        animate={{
+                            opacity: 1,
+                            transition: { duration: instantEnter ? 0 : 0.2 },
+                        }}
                         exit={{ opacity: 0, transition: { duration: 0.2 } }}
                         style={{
                             position: "absolute",
@@ -21138,8 +21449,11 @@ const ModalSheet = ({
                     />
                     {/** Outer */}
                     <motion.div
-                        initial={closedState}
-                        animate={{ ...openState, transition: moveTrans }}
+                        initial={instantEnter ? openState : closedState}
+                        animate={{
+                            ...openState,
+                            transition: instantEnter ? { duration: 0 } : moveTrans,
+                        }}
                         exit={{ ...closedState, transition: moveTrans }}
                         {...(anchorDataLayer
                             ? { "data-layer": anchorDataLayer }
@@ -30248,6 +30562,9 @@ export default function OmegleMentorshipUI(props: Props) {
     const [mapUrlCompany, setMapUrlCompany] = React.useState<string | null>(
         null
     )
+    const [mapJumpTarget, setMapJumpTarget] =
+        React.useState<MapJumpTarget | null>(null)
+    const mapJumpSeqRef = React.useRef(0)
 
     // True when any agent sidebar panel is open (docs, whiteboard, apps, jobs, map)
     const isAgentOpen =
@@ -35477,6 +35794,7 @@ Do not include markdown formatting or explanations.`
         if (isMapOpen) {
             setIsMapOpen(false)
         } else {
+            setMapJumpTarget(null)
             setIsMapOpen(true)
             if (isDocOpen) setIsDocOpen(false)
             if (isWhiteboardOpen) setIsWhiteboardOpen(false)
@@ -35484,6 +35802,22 @@ Do not include markdown formatting or explanations.`
             setIsJobOpen(false)
         }
     }, [isMapOpen, isDocOpen, isWhiteboardOpen, isAppOpen])
+
+    const openMapAtLocation = React.useCallback(
+        (target: { lat: number; lng: number; label?: string }) => {
+            if (!isValidLatLng(target.lat, target.lng)) return
+            setMapJumpTarget({
+                ...target,
+                zoom: 13,
+                seq: ++mapJumpSeqRef.current,
+            })
+            setIsMapOpen(true)
+            if (isDocOpen) setIsDocOpen(false)
+            if (isWhiteboardOpen) setIsWhiteboardOpen(false)
+            if (isAppOpen) setIsAppOpen(false)
+        },
+        [isDocOpen, isWhiteboardOpen, isAppOpen]
+    )
 
     
     
@@ -41138,6 +41472,7 @@ Do not include markdown formatting or explanations.`
                             })
                         }}
                         onJobFieldsMerge={mergeJobFieldsFromDetail}
+                        onOpenLocationInMap={openMapAtLocation}
                     />
                     {mobileOverlayInput}
                 </div>
@@ -41219,6 +41554,7 @@ Do not include markdown formatting or explanations.`
                             coordMergeJob={
                                 isJobOpen && selectedJob ? selectedJob : null
                             }
+                            jumpTarget={mapJumpTarget}
                             onMapJobsQueryRequest={
                                 debugPanel === "tools"
                                     ? emitMapJobsQueryRequest
@@ -41235,16 +41571,16 @@ Do not include markdown formatting or explanations.`
                                     : undefined
                             }
                         />
-                        {/** Desktop only — slides in from the right over the map, same animation as the tool panel */}
+                        {/** Desktop only — job detail appears immediately over the map */}
                         <AnimatePresence>
                             {!isMobileLayout && showJobPanel && selectedJob && (
                                 <motion.div
                                     ref={mapJobPanelRef}
-                                    initial={{ x: "100%" }}
+                                    initial={false}
                                     animate={{ x: 0 }}
                                     exit={{ x: "100%" }}
                                     transition={{
-                                        duration: 0.25,
+                                        duration: 0,
                                         ease: "easeInOut",
                                     }}
                                     style={{
@@ -41307,6 +41643,9 @@ Do not include markdown formatting or explanations.`
                                             }}
                                             onJobFieldsMerge={
                                                 mergeJobFieldsFromDetail
+                                            }
+                                            onOpenLocationInMap={
+                                                openMapAtLocation
                                             }
                                         />
                                     </div>
@@ -47570,6 +47909,7 @@ Do not include markdown formatting or explanations.`
                 themeColors={themeColors}
                 zIndex={30001}
                 mobileOnly
+                instantEnter
                 className="MapJobOverlay"
                 dragY={mapJobDragY}
                 sheetStyle={{
